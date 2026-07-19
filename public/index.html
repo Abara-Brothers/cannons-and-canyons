@@ -1,0 +1,116 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#0b1020" />
+<title>Pocket Tanks Online</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💥</text></svg>" />
+<link rel="stylesheet" href="styles.css" />
+
+<div id="app">
+  <!-- ============ HOME ============ -->
+  <section id="home" class="screen active">
+    <div class="home-card">
+      <div class="logo">💥 <span>POCKET&nbsp;TANKS</span> <em>ONLINE</em></div>
+      <p class="tagline">2-player artillery duel. Aim, fire, watch it land — live.</p>
+
+      <label class="field">
+        <span>Your name</span>
+        <input id="nameInput" maxlength="14" placeholder="Commander" autocomplete="off" />
+      </label>
+
+      <button id="createBtn" class="btn big primary">Create a game</button>
+      <button id="quickBtn" class="btn big">⚡ Quick match a stranger</button>
+
+      <div class="or"><span>or join a friend</span></div>
+
+      <div class="join-row">
+        <input id="codeInput" class="code-input" maxlength="4" placeholder="CODE" autocomplete="off" />
+        <button id="joinBtn" class="btn">Join</button>
+      </div>
+      <p id="homeError" class="error"></p>
+    </div>
+    <p class="footnote">Best on two phones. Turns are timed — hit hard, hit fast.</p>
+  </section>
+
+  <!-- ============ LOBBY / WAITING ============ -->
+  <section id="lobby" class="screen">
+    <div class="home-card">
+      <div class="logo small">💥 <span>POCKET TANKS</span></div>
+      <h2 id="lobbyHeading">Waiting for your opponent…</h2>
+      <p class="muted" id="lobbyHint">Send this link or code. The battle starts the moment they join.</p>
+
+      <div class="code-display" id="lobbyCode">----</div>
+
+      <button id="copyLinkBtn" class="btn big primary">Copy invite link</button>
+      <button id="copyCodeBtn" class="btn">Copy code</button>
+      <div class="spinner" aria-hidden="true"></div>
+      <button id="cancelBtn" class="btn ghost">Cancel</button>
+    </div>
+  </section>
+
+  <!-- ============ GAME ============ -->
+  <section id="game" class="screen">
+    <header id="hud-top">
+      <div class="pscore" id="p0">
+        <div class="pname"></div>
+        <div class="pval"><span class="score">0</span><span class="shots"></span></div>
+      </div>
+      <div class="turnbox">
+        <div class="clock" id="clock">30</div>
+        <div class="turnlabel" id="turnLabel">—</div>
+      </div>
+      <div class="pscore right" id="p1">
+        <div class="pname"></div>
+        <div class="pval"><span class="score">0</span><span class="shots"></span></div>
+      </div>
+    </header>
+
+    <div id="stage">
+      <canvas id="canvas"></canvas>
+      <button id="muteBtn" class="mute" title="Sound on/off">🔊</button>
+      <div id="toast"></div>
+      <div id="watching" class="watching hidden">Opponent's turn — watch the shot land 👀</div>
+    </div>
+
+    <footer id="dock">
+      <div id="weaponStrip" class="weapon-strip"></div>
+
+      <div class="control-rows">
+        <div class="aim-readout">
+          <div class="stepper">
+            <button class="mini" data-adj="angle" data-dir="-1">‹</button>
+            <div class="readout"><label>ANGLE</label><b id="angleVal">45°</b></div>
+            <button class="mini" data-adj="angle" data-dir="1">›</button>
+          </div>
+          <div class="stepper">
+            <button class="mini" data-adj="power" data-dir="-1">–</button>
+            <div class="readout"><label>POWER</label><b id="powerVal">60</b></div>
+            <button class="mini" data-adj="power" data-dir="1">+</button>
+          </div>
+        </div>
+
+        <div class="drive-row">
+          <button class="drive" id="moveLeft">◀</button>
+          <div class="fuel"><div class="fuel-bar" id="fuelBar"></div><span>FUEL</span></div>
+          <button class="drive" id="moveRight">▶</button>
+        </div>
+
+        <button id="fireBtn" class="btn big fire">FIRE 🔥</button>
+      </div>
+      <div id="dockLock" class="dock-lock hidden"></div>
+    </footer>
+  </section>
+
+  <!-- ============ GAME OVER ============ -->
+  <div id="overlay" class="overlay hidden">
+    <div class="overlay-card">
+      <div id="resultTitle" class="result">—</div>
+      <div id="finalScores" class="final-scores"></div>
+      <button id="rematchBtn" class="btn big primary">Rematch</button>
+      <button id="exitBtn" class="btn ghost">Back to menu</button>
+    </div>
+  </div>
+
+  <div id="connErr" class="conn-banner hidden">Reconnecting…</div>
+</div>
+
+<script src="app.js"></script>

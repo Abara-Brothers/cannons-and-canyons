@@ -1,0 +1,13 @@
+# Render.com blueprint. Push this repo to GitHub, then in Render:
+# New + → Blueprint → pick the repo. It reads this file and deploys.
+# Render injects PORT automatically and supports WebSockets on the free plan.
+services:
+  - type: web
+    name: pocket-tanks-online
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_VERSION
+        value: "22"

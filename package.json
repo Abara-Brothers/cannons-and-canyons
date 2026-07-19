@@ -1,0 +1,16 @@
+{
+  "name": "pocket-tanks-online",
+  "version": "0.1.0",
+  "description": "Pocket Tanks Online — real-time 2-player artillery duel, mobile-first, join by room link.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.21.1"
+  }
+}
