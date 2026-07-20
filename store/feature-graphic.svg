@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 500">
+  <!-- Google Play feature graphic (1024x500) — original artwork, Abara Brothers -->
+  <rect width="1024" height="100" fill="#0a0e22"/>
+  <rect y="100" width="1024" height="100" fill="#111a3c"/>
+  <rect y="200" width="1024" height="100" fill="#1a2850"/>
+  <rect y="300" width="1024" height="100" fill="#253a64"/>
+  <rect y="400" width="1024" height="100" fill="#315078"/>
+  <circle cx="880" cy="90" r="46" fill="#f4eeda"/>
+  <rect x="858" y="92" width="14" height="14" fill="#d9d2ba"/>
+  <rect x="888" y="70" width="9" height="9" fill="#d9d2ba"/>
+  <!-- mountain range -->
+  <path d="M0 500V400h40v-30h40v-30h40v30h40v30h40v100z" fill="#4a3a24"/>
+  <path d="M0 400h40v-30h40v-30h40v30h40v30h-40v-18h-40v18z" fill="#7cc24f"/>
+  <path d="M240 500V330h50v-45h50v-45h50v45h50v45h50v170z" fill="#6b5a34"/>
+  <path d="M240 330h50v-45h50v-45h50v45h50v45h-50v-28h-50v28z" fill="#7cc24f"/>
+  <path d="M340 240h50v-40h50v40h-30v25h-50v-25z" fill="#468a2e"/>
+  <path d="M700 500V360h45v-35h45v-35h45v35h45v35h44v140z" fill="#6b5a34"/>
+  <path d="M700 360h45v-35h45v-35h45v35h45v35h-45v-22h-45v22z" fill="#5da23a"/>
+  <!-- shell arc across the middle -->
+  <g fill="#ffd23f">
+    <rect x="160" y="212" width="13" height="13"/>
+    <rect x="230" y="176" width="13" height="13"/>
+    <rect x="310" y="150" width="13" height="13"/>
+    <rect x="400" y="136" width="13" height="13"/>
+    <rect x="492" y="132" width="13" height="13"/>
+    <rect x="584" y="140" width="13" height="13"/>
+    <rect x="664" y="158" width="13" height="13"/>
+    <rect x="736" y="186" width="13" height="13"/>
+  </g>
+  <circle cx="782" cy="222" r="15" fill="#ff5a52"/>
+  <!-- foreground ridge + tanks -->
+  <rect y="440" width="1024" height="60" fill="#2e2213"/>
+  <rect y="432" width="1024" height="9" fill="#7cc24f"/>
+  <g>
+    <rect x="96" y="392" width="86" height="26" rx="8" fill="#5d7050"/>
+    <rect x="84" y="412" width="110" height="21" rx="10" fill="#15181f"/>
+    <rect x="120" y="376" width="40" height="19" rx="5" fill="#38452f"/>
+    <rect x="152" y="356" width="9" height="34" transform="rotate(38 156 373)" fill="#9aa1ad"/>
+  </g>
+  <g>
+    <rect x="842" y="392" width="86" height="26" rx="8" fill="#94805d"/>
+    <rect x="830" y="412" width="110" height="21" rx="10" fill="#15181f"/>
+    <rect x="864" y="376" width="40" height="19" rx="5" fill="#5c4f39"/>
+    <rect x="862" y="356" width="9" height="34" transform="rotate(-38 866 373)" fill="#9aa1ad"/>
+  </g>
+  <!-- title -->
+  <g font-family="Arial Black, Arial, sans-serif" text-anchor="middle">
+    <text x="512" y="316" font-size="64" font-weight="900" fill="#0a0e22" opacity=".55">CANYONS &amp; CANNONS</text>
+    <text x="512" y="310" font-size="64" font-weight="900" fill="#ffffff">CANYONS <tspan fill="#ff7a2e">&amp;</tspan> CANNONS</text>
+    <text x="512" y="352" font-size="22" font-weight="700" letter-spacing="10" fill="#ffd23f">MADE BY ABARA BROTHERS</text>
+  </g>
+</svg>

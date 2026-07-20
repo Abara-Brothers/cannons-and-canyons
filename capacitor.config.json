@@ -1,0 +1,18 @@
+{
+  "appId": "com.abarabrothers.canyonsandcannons",
+  "appName": "Canyons & Cannons",
+  "webDir": "public",
+  "backgroundColor": "#0b1020",
+  "server": {
+    "_comment": "RECOMMENDED for launch: uncomment `url` to wrap the deployed game directly — every update ships instantly without app-store review. Set it to your deployed HTTPS URL.",
+    "_url": "https://YOUR-DEPLOYED-HOST.example.com"
+  },
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#0b1020"
+  },
+  "android": {
+    "backgroundColor": "#0b1020",
+    "allowMixedContent": false
+  }
+}

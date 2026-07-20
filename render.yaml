@@ -3,7 +3,7 @@
 # Render injects PORT automatically and supports WebSockets on the free plan.
 services:
   - type: web
-    name: pocket-tanks-online
+    name: canyons-and-cannons
     runtime: node
     plan: free
     buildCommand: npm install

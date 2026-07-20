@@ -1,7 +1,8 @@
 {
-  "name": "pocket-tanks-online",
-  "version": "0.1.0",
-  "description": "Pocket Tanks Online — real-time 2-player artillery duel, mobile-first, join by room link.",
+  "name": "canyons-and-cannons",
+  "version": "0.2.0",
+  "description": "Canyons & Cannons — real-time 2-player artillery duel over mountainous terrain, mobile-first, join by room link.",
+  "author": "Abara Brothers",
   "type": "module",
   "scripts": {
     "start": "node server.js",

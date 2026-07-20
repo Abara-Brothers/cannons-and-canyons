@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2732 2732">
+  <!-- Splash master (2732x2732, safe-zone centered) — original artwork, Abara Brothers -->
+  <rect width="2732" height="2732" fill="#0b1020"/>
+  <rect y="1500" width="2732" height="180" fill="#1a2850"/>
+  <rect y="1680" width="2732" height="180" fill="#253a64"/>
+  <rect y="1860" width="2732" height="180" fill="#315078"/>
+  <!-- mountain -->
+  <path d="M700 2040v-260h120v-120h120v-120h120v120h120v120h120v260z" fill="#6b5a34"/>
+  <path d="M700 1780h120v-120h120v-120h120v120h120v120h-120v-70h-120v70z" fill="#7cc24f"/>
+  <rect y="2040" width="2732" height="120" fill="#2e2213"/>
+  <rect y="2020" width="2732" height="22" fill="#7cc24f"/>
+  <!-- shell arc -->
+  <g fill="#ffd23f">
+    <rect x="1420" y="1560" width="34" height="34"/>
+    <rect x="1560" y="1490" width="34" height="34"/>
+    <rect x="1710" y="1450" width="34" height="34"/>
+    <rect x="1860" y="1450" width="34" height="34"/>
+    <rect x="2000" y="1495" width="34" height="34"/>
+  </g>
+  <circle cx="2110" cy="1580" r="40" fill="#ff5a52"/>
+  <!-- tank -->
+  <g>
+    <rect x="1050" y="1930" width="220" height="64" rx="20" fill="#5d7050"/>
+    <rect x="1020" y="1980" width="280" height="54" rx="27" fill="#15181f"/>
+    <rect x="1110" y="1890" width="102" height="48" rx="12" fill="#38452f"/>
+    <rect x="1195" y="1830" width="22" height="90" transform="rotate(38 1206 1875)" fill="#9aa1ad"/>
+  </g>
+  <!-- moon -->
+  <circle cx="2050" cy="820" r="130" fill="#f4eeda"/>
+  <rect x="1990" y="830" width="40" height="40" fill="#d9d2ba"/>
+  <rect x="2080" y="760" width="26" height="26" fill="#d9d2ba"/>
+</svg>

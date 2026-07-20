@@ -1,14 +1,17 @@
-# 💥 Pocket Tanks Online
+# ⛰️ Canyons & Cannons
 
-A real-time, mobile-first, 2-player artillery duel — a Pocket Tanks–style game you can play with a friend right now over a shared link, or against a random stranger via quick match.
+*Made by Abara Brothers.*
+
+A real-time, mobile-first, 2-player artillery duel across mountainous canyons — arc your shells over the peaks to hit your opponent. Play with a friend over a shared link, or against a random stranger via quick match.
 
 - **Fast turn-based with a live feed** — both players watch every shell arc and land on the same board in real time. A short shot-clock keeps turns snappy.
 - **Join by room link/code** (no accounts) **or Quick Match** with whoever else is looking.
-- **Gravity, no wind.** Drive left/right on your turn (limited fuel), then aim and fire.
-- **Destructible terrain** — explosions carve craters; tanks drop into them. The Dirt Mover builds walls or buries.
+- **Drag to aim + charge** — drag out from your tank in the direction you want to fire; pull distance sets power as a percentage (pull halfway → 50%). Fine-tune with the angle/power steppers.
+- **Big, mountainous map** with peaks you must lob over. **Gravity, no wind.** Drive left/right on your turn (limited fuel).
+- **Destructible terrain** — explosions carve large craters; tanks drop into them. The Dirt Mover builds walls or buries.
 - **11 weapons** including mid-air **Cluster Bomb** and **Firestorm** splits, a one-shot **Nuke**, Sniper, Digger and more — with limited ammo.
 - **Live scoreboard** — 10 shots each, highest score wins.
-- Drag-to-aim (angle + power in one gesture), synthesized sound, screen shake, particles.
+- Synthesized sound, screen shake, shockwave rings and particle explosions.
 
 ## Play locally
 
@@ -22,7 +25,7 @@ Open the URL in two tabs (or on two phones on the same Wi-Fi, using your machine
 ## How it's built
 
 - **`server.js`** — a single Node process that serves the static `public/` client **and** runs the WebSocket game server (`/ws`). Manages rooms, quick-match, turns, the shot-clock, and scoring. Only dependency: [`ws`](https://www.npmjs.com/package/ws).
-- **`game-core.js`** — authoritative, deterministic game logic (terrain generation, physics, weapons, damage). The server simulates each shot and broadcasts the resolved result; both clients replay it identically, so screens never desync.
+- **`game-core.js`** — authoritative, deterministic game logic (mountainous terrain generation, physics, weapons, damage). The server simulates each shot and broadcasts the resolved result; both clients replay it identically, so screens never desync. World size is sent to clients on match start.
 - **`public/`** — the client: vanilla HTML/CSS + a Canvas renderer (`app.js`). No build step, no framework.
 - **`test/sim.mjs`** — a headless two-client match that plays a full game and checks the pipeline. Run with the server up: `node test/sim.mjs`.
 
@@ -36,13 +39,16 @@ Static hosting (e.g. plain Netlify) can't run this — it needs a live Node serv
 3. Render reads `render.yaml`, builds, and gives you a public `https://…onrender.com` URL with WebSockets working.
 
 ### Railway / Fly.io (alternatives)
-- **Railway:** New Project → Deploy from GitHub repo. It auto-detects Node (`npm start`). Add nothing else.
+- **Railway:** New Project → Deploy from GitHub repo. It auto-detects Node (`npm start`).
 - **Fly.io:** `fly launch` (uses the included `Dockerfile`), then `fly deploy`.
 
 > Note: free tiers sleep after inactivity, so the first visit after idle can take a few seconds to wake.
 
 ## Config knobs (`game-core.js`)
 
+- `WORLD_W` / `WORLD_H` — map size (default 2600 × 1200)
+- `SPEED_PER_POWER` / `GRAVITY` — tuned so a high-power lob clears the peaks and crosses the map
+- `CRATER_MUL` — how much larger craters/blasts are than the damage radius
 - `SHOT_CLOCK` — seconds per turn (default 45)
 - `SHOTS_PER_PLAYER` — shots each before the match ends (default 10)
 - `MOVE_BUDGET` — how far a tank can drive per turn
