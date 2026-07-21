@@ -62,6 +62,11 @@ function distToTank(cx, cy, tank) {
 export const MOVE_BUDGET = 4500;  // driving distance allowed per turn — generous fuel to reposition
 export const MOVE_STEP = 60;      // distance per move tick (fast drive)
 export const MAX_HP = 100;        // tanks have health — destroy the enemy to win (no shot limit)
+// Placement rules shared by driving (handleMove) and teleporting — one source of
+// truth so the two can never drift apart. The gap keeps the (large) hitboxes from
+// overlapping, which would let a shell hit both tanks at once.
+export const EDGE_MARGIN = 200;             // closest a tank may ever sit to either map edge
+export const TANK_GAP = TANK_HW * 2 + 40;   // minimum separation — tanks can never cross
 
 // ---- Aim range -------------------------------------------------------------
 // Degrees, RELATIVE to the tank's facing (dir mirrors x only, so the vertical
@@ -94,6 +99,7 @@ export function clampAim(a) {
 //                    (fire / toxic gas) that deals damage over the next turns
 //   dig            — detonates deep below the surface (bunker buster)
 //   wall           — raises a tall earthwork rampart instead of exploding
+//   teleport       — no blast; the firing tank is moved onto the landing point
 // `radius` is the DAMAGE radius; craters and blast visuals scale by CRATER_MUL.
 export const WEAPONS = [
   { id: 'cannon',   name: 'Cannon',        color: '#ff5a52', ammo: 99,
@@ -134,6 +140,10 @@ export const WEAPONS = [
     shots: 1, spread: 0,  speedMul: 1.0, damage: 0,  radius: 0, terrain: 'wall',
     wall: { h: 2000, w: 340 },
     desc: 'Heaps up a huge mound of dirt. Deals no damage.' },
+  { id: 'teleport', name: 'Teleport',      color: '#c86bff', ammo: 2,
+    shots: 1, spread: 0,  speedMul: 1.0, damage: 0,  radius: 0, terrain: 'none',
+    teleport: true,   // on impact the FIRING tank warps to the landing point
+    desc: 'Warp to wherever the shell lands. No blast — pick your ground.' },
   { id: 'nuke',     name: 'Tactical Nuke', color: '#b6ff5a', ammo: 1,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 75, radius: 1950, terrain: 'crater',
     hazard: { type: 'gas', turns: 2, dpt: 6, dps: 5, r: 800 },
@@ -316,6 +326,37 @@ function settle(terrain, tanks) {
   for (const t of tanks) t.y = surfaceAt(terrain, t.x);
 }
 
+// ---- Teleport ---------------------------------------------------------------
+// Move the FIRING tank onto the point its shell landed on. Authoritative: it
+// mutates state.tanks, so simulateShot's `tanks` payload (and therefore both
+// clients) carries the new position. Obeys exactly the same placement rules as
+// driving (handleMove): clamped to the map edges and never through the enemy —
+// player 0 always stays left of player 1.
+//
+// LAVA: deliberately NOT special-cased. Terrain floors out ON the lava
+// (TERRAIN_FLOOR === LAVA_Y), so a nuke pit really can bottom out there, and
+// burnTick already cooks anything sitting at y >= LAVA_Y - 4. Letting the warp
+// land you in it keeps the weapon a genuine risk/reward call and needs no new
+// state; blocking it would mean inventing a "teleport refused" outcome both
+// clients would have to replay.
+export function teleportTank(state, by, landX) {
+  const tank = state.tanks[by];
+  const other = state.tanks[1 - by];
+  const fromX = tank.x, fromY = tank.y;
+  const lo = by === 0 ? EDGE_MARGIN : other.x + TANK_GAP;
+  const hi = by === 0 ? other.x - TANK_GAP : WORLD_W - EDGE_MARGIN;
+  const nx = hi < lo ? fromX : Math.max(lo, Math.min(hi, landX));   // guard: no legal ground
+  tank.x = nx;
+  tank.y = surfaceAt(state.terrain, nx);      // settle() re-derives this anyway
+  return {
+    seat: by,
+    from: [round1(fromX), round1(fromY)],
+    to: [round1(tank.x), round1(tank.y)],
+    lava: tank.y >= LAVA_Y - 4,               // landed in the lava — the burn will bite
+    fizzle: Math.abs(nx - fromX) < 1,         // clamped back onto itself — warp in place
+  };
+}
+
 // Deform terrain. 'crater' removes ground, 'dirt' mounds it, 'wall' raises a
 // tall Gaussian rampart (Earthworks).
 function deform(terrain, cx, cy, r, mode, wall) {
@@ -485,6 +526,10 @@ export function simulateShot(state, shot) {
       if (fp.hit) {
         d = det(fp.x, fp.y, w.wall ? 0 : w.radius, w.terrain, w.hazard ? w.hazard.type : null);
         boom(fp.x, fp.y, w.radius, w.terrain, w.damage, { hazard: w.hazard, dig: w.dig, wall: w.wall });
+        // Teleport rides the detonation record so the client can trigger the warp
+        // at the exact frame of impact. Must run AFTER boom() (so the tank settles
+        // onto any ground this shot reshaped) and BEFORE settle() below.
+        if (w.teleport) d.tp = teleportTank(state, by, fp.x);
       }
       projectiles.push({ path: fp.path, det: d, delay: 0 });
     }

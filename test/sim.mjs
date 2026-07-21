@@ -18,7 +18,7 @@ let code = null;
 const summary = { shots: 0, craters: 0, maxProjectiles: 0, hazardsSeen: 0, hpFinal: null, gameover: null, errors: [] };
 
 // Cycle through every weapon (splits, airstrike, hazards, wall, buster) to exercise all paths.
-const ROTATION = ['cannon', 'mortar', 'volley', 'railgun', 'cluster', 'napalm', 'gas', 'airstrike', 'buster', 'wall', 'nuke', 'cannon'];
+const ROTATION = ['cannon', 'mortar', 'volley', 'railgun', 'cluster', 'napalm', 'gas', 'airstrike', 'buster', 'wall', 'teleport', 'nuke', 'cannon'];
 function fire(c, shotIndex) {
   const power = 68 + (shotIndex % 7) * 4;
   const weapon = ROTATION[shotIndex % ROTATION.length];

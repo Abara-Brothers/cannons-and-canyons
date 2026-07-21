@@ -15,7 +15,8 @@ const fire = (weapon, angle, power) => simulateShot(fresh(), { by: 0, weapon, an
 const FLOOR = {
   cannon: 20, mortar: 40, volley: 30, railgun: 55, cluster: 40, napalm: 25,
   gas: 4, airstrike: 45, buster: 25, nuke: 65,
-  wall: 0,   // Earthworks deals no damage by design
+  wall: 0,       // Earthworks deals no damage by design
+  teleport: 0,   // Teleport deals no damage by design — it repositions the firer
 };
 
 let failures = 0;
@@ -62,7 +63,28 @@ const land = fire('cannon', 45, 60);
 const endX = land.projectiles[0].path[land.projectiles[0].path.length - 1][0];
 if (endX < 20000) fail(`cannon 45/60 landed at x=${endX}, expected ~22400 (latch ordering bug)`);
 
-// 5 — the bot must still find real solutions, not fall back to 45/60.
+// 5 — Teleport moves the FIRER onto the landing point, never crosses the enemy,
+//     never deforms terrain, and never moves the other tank.
+{
+  const st = fresh();
+  const r = simulateShot(st, { by: 0, weapon: 'teleport', angle: 45, power: 40 });
+  const tp = r.projectiles[0].det && r.projectiles[0].det.tp;
+  if (!tp) fail('teleport produced no tp payload on a landing shot');
+  else {
+    if (Math.abs(r.tanks[0].x - ME) < 1) fail('teleport did not move the firer');
+    if (r.tanks[1].x !== ENEMY) fail('teleport moved the ENEMY tank');
+    if (r.damage[0] !== 0 || r.damage[1] !== 0) fail(`teleport dealt damage ${JSON.stringify(r.damage)}`);
+    if (st.terrain.some(v => v !== FLAT_Y)) fail('teleport deformed the terrain');
+  }
+  // Overshooting the enemy must clamp short, never cross.
+  for (let p = 20; p <= 100; p += 2.5) {
+    const s2 = fresh();
+    const r2 = simulateShot(s2, { by: 0, weapon: 'teleport', angle: 45, power: p });
+    if (r2.tanks[0].x > ENEMY - 600) fail(`teleport at power ${p} crossed to x=${r2.tanks[0].x}`);
+  }
+}
+
+// 6 — the bot must still find real solutions, not fall back to 45/60.
 const terrain = generateTerrain(2024);
 const tanks = spawnTanks(terrain, 2024);
 const shot = aiShot(terrain, tanks, 1, 'hard');

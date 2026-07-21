@@ -6,7 +6,8 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import {
-  WORLD_W, WORLD_H, MOVE_BUDGET, MOVE_STEP, MAX_HP, LAVA_Y, AIM_MIN, AIM_MAX, clampAim, TANK_HW,
+  WORLD_W, WORLD_H, MOVE_BUDGET, MOVE_STEP, MAX_HP, LAVA_Y, AIM_MIN, AIM_MAX, clampAim,
+  EDGE_MARGIN, TANK_GAP,
   generateTerrain, generateTrees, spawnTanks, surfaceAt, simulateShot, terrainDiff,
   weaponMenu, startingAmmo, WEAPON_BY_ID, tickHazards, burnTick, aiShot, mergeScorch,
 } from './game-core.js';
@@ -273,9 +274,10 @@ function handleMove(room, seat, dir) {
   const other = room.tanks[1 - seat];
   // Drive anywhere along the map — the only limit is you can't cross through the
   // enemy (player 0 stays left of player 1, keeping the scoreboard sides intact).
-  const EDGE = 200, GAP = TANK_HW * 2 + 40;   // hitboxes must never overlap
-  const lo = seat === 0 ? EDGE : other.x + GAP;
-  const hi = seat === 0 ? other.x - GAP : WORLD_W - EDGE;
+  // Same EDGE_MARGIN / TANK_GAP the Teleport weapon clamps to (game-core.js), so
+  // driving and warping can never disagree about where a tank may stand.
+  const lo = seat === 0 ? EDGE_MARGIN : other.x + TANK_GAP;
+  const hi = seat === 0 ? other.x - TANK_GAP : WORLD_W - EDGE_MARGIN;
   const nx = Math.max(lo, Math.min(hi, tank.x + Math.sign(dir) * MOVE_STEP));
   const moved = Math.abs(nx - tank.x);
   if (moved <= 0) return;

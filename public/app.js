@@ -31,6 +31,7 @@ const S = {
   code: null, quick: false,
   playing: false,
   anim: null, queue: [], pendingOver: null, terrainAnim: null,
+  warp: null,                          // active Teleport warp (see startWarp)
   particles: [], floaters: [], rings: [], flash: 0, shake: 0,
   muzzle: [],                          // directional HD muzzle blasts (own render pass)
   charging: false, pullPointer: null,
@@ -88,6 +89,7 @@ const ICONS = {
   airstrike: `<svg viewBox="0 0 24 24" fill="#54c8ff"><path d="M2 13.5l9-.8 4.5-7.2 2.2.9-2.4 6 6.2-.5.5 2-7.5 1.6-3.4 5.9-2.2-.9 1.9-4.7-8.3.7z"/></svg>`,
   buster: `<svg viewBox="0 0 24 24"><path d="M12 2v9" stroke="#c98a4b" stroke-width="3" stroke-linecap="round"/><path d="M7 10l5 7.5L17 10z" fill="#c98a4b"/><path d="M3 21h18M6 18h12" stroke="#7a5a30" stroke-width="1.8" stroke-linecap="round"/></svg>`,
   wall: `<svg viewBox="0 0 24 24" fill="#8a5a2b"><rect x="3" y="5.5" width="8.6" height="4.2" rx="1"/><rect x="12.6" y="5.5" width="8.4" height="4.2" rx="1"/><rect x="3" y="14.5" width="8.6" height="4.2" rx="1"/><rect x="12.6" y="14.5" width="8.4" height="4.2" rx="1"/><rect x="7.8" y="10" width="8.6" height="4.2" rx="1" fill="#a06b35"/></svg>`,
+  teleport: `<svg viewBox="0 0 24 24"><path d="M2.6 12l3.3-5.4L9.2 12l-3.3 5.4z" fill="none" stroke="#c86bff" stroke-width="1.7" stroke-linejoin="round" opacity=".8"/><path d="M14.8 12l3.3-5.4L21.4 12l-3.3 5.4z" fill="#c86bff"/><path d="M10.6 8.7L13.9 12l-3.3 3.3" fill="none" stroke="#6be7ff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 20.6h16" stroke="#8a93a8" stroke-width="1.5" stroke-linecap="round"/></svg>`,
   nuke: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#26350f"/><g fill="#b6ff5a"><path d="M12 12L8.2 4.6a9 9 0 017.6 0z"/><path d="M12 12L8.2 4.6a9 9 0 017.6 0z" transform="rotate(120 12 12)"/><path d="M12 12L8.2 4.6a9 9 0 017.6 0z" transform="rotate(240 12 12)"/><circle cx="12" cy="12" r="2.1"/></g></svg>`,
 };
 const TRAJ = {
@@ -101,6 +103,7 @@ const TRAJ = {
   airstrike: `<svg viewBox="0 0 24 14"><path d="M2 11 Q6 3 10 5" stroke="#aeb9d6" stroke-width="1.3" fill="none"/><g stroke="#54c8ff" stroke-width="1.3" fill="none"><path d="M14 1v6"/><path d="M18 0v6"/><path d="M22 1v6"/></g><g fill="#54c8ff"><path d="M14 11l-2-3.4h4z"/><path d="M18 10l-2-3.4h4z"/><path d="M22 11l-2-3.4h4z"/></g></svg>`,
   buster: `<svg viewBox="0 0 24 14"><path d="M2 9 Q9 0 16 6" stroke="#aeb9d6" stroke-width="1.6" fill="none"/><path d="M14 9h8" stroke="#7a5a30" stroke-width="1.3"/><path d="M18 6v4" stroke="#c98a4b" stroke-width="1.8"/><path d="M18 14l-2.4-3.4h4.8z" fill="#c98a4b"/></svg>`,
   wall: `<svg viewBox="0 0 24 14"><path d="M2 12 Q9 2 15 8" stroke="#aeb9d6" stroke-width="1.6" fill="none"/><rect x="16.5" y="3.5" width="5" height="9.5" rx="1" fill="#8a5a2b"/></svg>`,
+  teleport: `<svg viewBox="0 0 24 14"><path d="M3 12 Q11 0 18 9.5" stroke="#aeb9d6" stroke-width="1.6" fill="none"/><path d="M3 12l2.1-3 2.1 3-2.1 3z" fill="none" stroke="#c86bff" stroke-width="1.2" stroke-linejoin="round"/><path d="M18 9.5l2.1-3 2.1 3-2.1 3z" fill="#c86bff"/><path d="M9.4 3.4l2.2 2.2-2.2 2.2" fill="none" stroke="#6be7ff" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   nuke: `<svg viewBox="0 0 24 14"><path d="M2 12 Q10 0 17 8" stroke="#aeb9d6" stroke-width="1.6" fill="none"/><circle cx="18" cy="9" r="4" fill="#b6ff5a" opacity=".4"/><circle cx="18" cy="9" r="1.8" fill="#b6ff5a"/></svg>`,
 };
 
@@ -135,6 +138,27 @@ const Audio = {
     o.type = 'sine'; o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(45, t + dur);
     g.gain.setValueAtTime(0.3, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
     o.connect(g).connect(c.destination); o.start(t); o.stop(t + dur);
+  },
+  warp() {
+    const c = this.ensure(); if (!c) return;
+    const t = c.currentTime;
+    const o = c.createOscillator(), g = c.createGain(), f = c.createBiquadFilter();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(120, t);
+    o.frequency.exponentialRampToValueAtTime(1800, t + 0.30);   // spin-up
+    o.frequency.exponentialRampToValueAtTime(95, t + 0.75);     // fall away
+    f.type = 'bandpass'; f.Q.value = 6;
+    f.frequency.setValueAtTime(400, t); f.frequency.exponentialRampToValueAtTime(2600, t + 0.34);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.16, t + 0.28);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.8);
+    o.connect(f).connect(g).connect(c.destination); o.start(t); o.stop(t + 0.82);
+    const s = c.createOscillator(), sg = c.createGain();   // hard snap on transit
+    s.type = 'square';
+    s.frequency.setValueAtTime(880, t + 0.30); s.frequency.exponentialRampToValueAtTime(180, t + 0.44);
+    sg.gain.setValueAtTime(0.0001, t + 0.29); sg.gain.linearRampToValueAtTime(0.14, t + 0.31);
+    sg.gain.exponentialRampToValueAtTime(0.001, t + 0.50);
+    s.connect(sg).connect(c.destination); s.start(t + 0.29); s.stop(t + 0.52);
   },
   chime(win) {
     const c = this.ensure(); if (!c) return;
@@ -442,7 +466,7 @@ function applySnapshot(m) {
   S.code = m.code || S.code;
   S.aim = [{ angle: 45, power: 60 }, { angle: 45, power: 60 }];
   S.selected = firstAvailableWeapon();
-  S.playing = true; S.quick = false; S.anim = null; S.queue = []; S.pendingOver = null;
+  S.playing = true; S.quick = false; S.anim = null; S.queue = []; S.pendingOver = null; S.warp = null;
   S.particles = []; S.floaters = []; S.rings = []; S.muzzle = []; S.flash = 0; S.shake = 0;
   S.recoil = [0, 0];
   S.charging = false; S.pullPointer = null; S.userZoom = 1; S.panY = 0;
@@ -767,6 +791,9 @@ function advanceAnim(dt) {
 }
 
 function detonate(det) {
+  // Teleport: no blast at all — the whole event IS the warp. Handled first so a
+  // teleport det never falls into the round-particle burst-puff branch below.
+  if (det.tp) { startWarp(det.tp); return; }
   if (det.kind === 'none' && det.r < 30 && !det.hz) { // burst puff / beacon flare
     for (let i = 0; i < 10; i++) {
       const ang = Math.random() * Math.PI * 2, sp = 120 + Math.random() * 200;
@@ -881,6 +908,163 @@ function applyDot(m) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Teleport warp. The firing tank shreds into horizontal slices at the old spot,
+// streaks across as a tapered beam, and reassembles at the landing spot.
+// Deliberately NO round particles anywhere: slices, shards, chevrons, diamonds.
+// The tank artwork itself is NEVER touched — drawTank() is called unmodified
+// inside clips/transforms.
+// ---------------------------------------------------------------------------
+const WARP_SLICES = 9;
+const WARP_T = { outEnd: 0.36, beam0: 0.22, beam1: 0.60, in0: 0.44, dur: 1.00 };
+const WARP_HOT = '#c86bff', WARP_COOL = '#6be7ff';
+const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+const easeOut3 = (v) => 1 - Math.pow(1 - clamp01(v), 3);
+
+function startWarp(tp) {
+  const [fx, fy] = tp.from, [tx, ty] = tp.to;
+  S.warp = { seat: tp.seat, fx, fy, tx, ty, lava: !!tp.lava, fizzle: !!tp.fizzle, t: 0, dur: WARP_T.dur, sOut: false, sIn: false };
+  S.shake = Math.min(8, S.shake + 3);
+  Audio.warp();
+  if (navigator.vibrate) navigator.vibrate([18, 40, 26]);
+  if (tp.lava) S.floaters.push({ x: tx, y: ty - 340, text: 'LAVA!', age: 0, life: 1.7, color: '#ff8a3d' });
+  if (tp.fizzle) S.floaters.push({ x: fx, y: fy - 300, text: 'BLOCKED', age: 0, life: 1.4, color: '#aeb9d6' });
+}
+
+function stepWarp(dt) {
+  const W = S.warp; if (!W) return;
+  W.t += dt;
+  if (!W.sOut && W.t > 0.05) { W.sOut = true; warpShards(W.fx, W.fy, -1); }
+  if (!W.sIn && W.t > WARP_T.in0 + 0.06) {
+    W.sIn = true; warpShards(W.tx, W.ty, 1); S.shake = Math.min(8, S.shake + 2.5);
+  }
+  if (W.t >= W.dur) S.warp = null;
+}
+
+// Angular chips only — shape:'rect' so drawParticles takes its square branch.
+function warpShards(x, y, sign) {
+  for (let k = 0; k < 26; k++) {
+    const a = -Math.PI * (0.12 + Math.random() * 0.76);
+    const sp = 420 + Math.random() * 1500;
+    S.particles.push({
+      x: x + (Math.random() - 0.5) * 150, y: y - 30 - Math.random() * 240,
+      vx: Math.cos(a) * sp * (0.4 + Math.random()) + sign * 260,
+      vy: Math.sin(a) * sp,
+      life: 0.35 + Math.random() * 0.5, age: 0,
+      r: 8 + Math.random() * 14, g: 0.25, shape: 'rect',
+      color: k % 3 === 0 ? '#ffffff' : (k % 3 === 1 ? WARP_HOT : WARP_COOL),
+    });
+  }
+}
+
+// Wraps drawTank() for the warping seat. Never modifies it.
+function drawTankWarped(i) {
+  const W = S.warp;
+  if (!W || W.seat !== i || W.t >= W.dur) { drawTank(i); return; }
+  const outK = 1 - clamp01(W.t / WARP_T.outEnd);                          // 1 → 0
+  const inK = clamp01((W.t - WARP_T.in0) / (W.dur - WARP_T.in0));         // 0 → 1
+  if (outK > 0) sliceTank(i, W.fx, 1 - outK, outK, -1);                   // shred apart
+  if (inK > 0) sliceTank(i, W.tx, 1 - inK, inK, 1);                       // converge back
+}
+
+// Draw the tank clipped into horizontal bands that shear apart. `shred` 0 =
+// intact, 1 = fully torn. Temporarily points S.tanks[i] at the end of the warp
+// being drawn — tankScreen() derives y from surfaceAt(x), so x alone is enough.
+function sliceTank(i, worldX, shred, fade, sign) {
+  const real = S.tanks[i];
+  S.tanks[i] = { x: worldX, y: surfaceAt(worldX) };
+  const { sx, sy, r } = tankScreen(i);
+  const top = sy - r * 3.0, bot = sy + r * 0.9;
+  const band = (bot - top) / WARP_SLICES;
+  for (let k = 0; k < WARP_SLICES; k++) {
+    const f = k / (WARP_SLICES - 1);
+    const lag = clamp01((shred - f * 0.30) / 0.70);
+    const jitter = 0.35 + ((k * 7919) % 100) / 100;     // stable per-slice, no RNG flicker
+    ctx.save();
+    ctx.beginPath(); ctx.rect(-64, top + k * band, view.cssW + 128, band + 1); ctx.clip();
+    ctx.globalAlpha = Math.max(0, fade * (1 - lag * 0.9));
+    ctx.translate(sign * lag * lag * r * 11 * jitter, lag * r * 0.5 * (k % 2 ? 1 : -1));
+    drawTank(i);
+    ctx.restore();
+  }
+  ctx.globalAlpha = 0.85 * fade;                        // hard scan line on the shred front
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(sx - r * 2.0, top + shred * (bot - top) - Math.max(1, r * 0.10), r * 4.0, Math.max(1.5, r * 0.20));
+  ctx.globalAlpha = 1;
+  S.tanks[i] = real;
+}
+
+function drawWarp() {
+  const W = S.warp; if (!W || W.t >= W.dur) return;
+  const t = W.t;
+  const r = Math.max(8, Math.min(18, 240 * cam.zoom));  // same rule as tankScreen
+  const ax = wx2s(W.fx), ayG = wy2s(surfaceAt(W.fx)), ay = ayG - r * 1.1;
+  const bx = wx2s(W.tx), byG = wy2s(surfaceAt(W.tx)), by = byG - r * 1.1;
+
+  // 1. Vertical light columns — rect gradients, one opening at each end.
+  const column = (cx, gy, k, tint) => {
+    if (k <= 0.001) return;
+    const h = r * 7.5 * k, w = Math.max(1.5, r * 0.34 * k);
+    const g = ctx.createLinearGradient(0, gy - h, 0, gy + r * 0.6);
+    g.addColorStop(0, 'rgba(200,107,255,0)');
+    g.addColorStop(0.35, tint);
+    g.addColorStop(1, 'rgba(255,255,255,0.95)');
+    ctx.globalAlpha = 0.85 * k; ctx.fillStyle = g;
+    ctx.fillRect(cx - w / 2, gy - h, w, h + r * 0.6);
+    ctx.globalAlpha = 1;
+  };
+  column(ax, ayG, Math.sin(Math.PI * clamp01(t / WARP_T.outEnd)), 'rgba(200,107,255,0.9)');
+  column(bx, byG, Math.sin(Math.PI * clamp01((t - WARP_T.in0) / (W.dur - WARP_T.in0))), 'rgba(107,231,255,0.9)');
+
+  // 2. The transit beam — a tapered lozenge, sharp at both ends, plus chevrons.
+  const bt = clamp01((t - WARP_T.beam0) / (WARP_T.beam1 - WARP_T.beam0));
+  if (bt > 0 && bt < 1 && !W.fizzle) {
+    const head = easeOut3(bt), tail = easeOut3(bt - 0.34);
+    const hx = ax + (bx - ax) * head, hy = ay + (by - ay) * head;
+    const px = ax + (bx - ax) * tail, py = ay + (by - ay) * tail;
+    const dx = hx - px, dy = hy - py, L = Math.hypot(dx, dy) || 1;
+    const nx = -dy / L, ny = dx / L, ux = dx / L, uy = dy / L;
+    const th = r * 0.9 * Math.sin(Math.PI * bt);
+    ctx.globalAlpha = 0.9;
+    for (const [wid, col] of [[th, WARP_HOT], [th * 0.42, '#ffffff']]) {
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      ctx.moveTo(hx, hy);
+      ctx.lineTo(px + nx * wid + dx * 0.30, py + ny * wid + dy * 0.30);
+      ctx.lineTo(px, py);
+      ctx.lineTo(px - nx * wid + dx * 0.30, py - ny * wid + dy * 0.30);
+      ctx.closePath(); ctx.fill();
+    }
+    ctx.strokeStyle = WARP_COOL; ctx.lineWidth = Math.max(1.5, r * 0.16); ctx.lineCap = 'round';
+    for (let k = 0; k < 4; k++) {
+      const f = head - k * 0.09; if (f <= tail) continue;
+      const cx = ax + (bx - ax) * f, cy = ay + (by - ay) * f, s = r * 0.85;
+      ctx.globalAlpha = 0.75 - k * 0.15;
+      ctx.beginPath();
+      ctx.moveTo(cx - ux * s + nx * s, cy - uy * s + ny * s);
+      ctx.lineTo(cx, cy);
+      ctx.lineTo(cx - ux * s - nx * s, cy - uy * s - ny * s);
+      ctx.stroke();
+    }
+    ctx.lineCap = 'butt'; ctx.globalAlpha = 1;
+  }
+
+  // 3. Diamond shockwaves — the angular stand-in for S.rings' circles.
+  const diamond = (cx, cy, k, col) => {
+    if (k <= 0 || k >= 1) return;
+    const rad = r * (0.6 + k * 5.2), fadeK = 1 - k;
+    ctx.globalAlpha = fadeK * 0.8;
+    ctx.strokeStyle = col; ctx.lineWidth = Math.max(1.5, r * 0.18 * fadeK);
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - rad * 1.25); ctx.lineTo(cx + rad, cy);
+    ctx.lineTo(cx, cy + rad * 0.55); ctx.lineTo(cx - rad, cy);
+    ctx.closePath(); ctx.stroke();
+    ctx.globalAlpha = 1;
+  };
+  diamond(ax, ay, clamp01(t / 0.42), WARP_HOT);
+  if (!W.fizzle) diamond(bx, by, clamp01((t - WARP_T.in0) / 0.45), WARP_COOL);
+}
+
 function showToast(text) {
   const t = document.createElement('div');
   t.className = 'toast-item'; t.textContent = text;
@@ -942,6 +1126,7 @@ setInterval(() => {
 }, 400);
 
 function stepEffects(dt) {
+  stepWarp(dt);
   // Barrel runs back out to battery (shaped by recAmt in drawTank).
   for (let i = 0; i < 2; i++) if (S.recoil[i] > 0) S.recoil[i] = Math.max(0, S.recoil[i] - dt * 3.4);
   // Muzzle blasts age on their own clock — they are NOT particles.
@@ -1028,7 +1213,8 @@ function draw() {
     drawTrees();
     drawHazards();
     drawParticles(true);          // soft discs (fire glow, smoke, dust) — BEHIND the tanks
-    drawTank(0); drawTank(1);
+    drawTankWarped(0); drawTankWarped(1);
+    drawWarp();
     drawEdgeIndicators();
     drawAim();
     drawProjectiles();
@@ -1630,6 +1816,9 @@ function roundedRect(x, y, w, h, r) {
 // line up your next shot while the opponent takes theirs.
 function drawAim() {
   if (!S.playing) return;
+  // Your own tank is mid-warp — the reticle would snap to the new x the moment
+  // applyResolve lands. Hide it until the tank has materialised.
+  if (S.warp && S.warp.seat === S.you && S.warp.t < S.warp.dur) return;
   const t = S.tanks[S.you]; const aim = myAim(); const dir = S.you === 0 ? 1 : -1;
   const rad = aim.angle * Math.PI / 180;
   const sx = wx2s(t.x), sy = wy2s(surfaceAt(t.x) - 24);
