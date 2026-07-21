@@ -53,7 +53,17 @@ input {
 input:focus { outline: 2px solid var(--accent); border-color: transparent; }
 
 /* ---------- Home / Lobby ---------- */
-#home, #lobby { align-items: center; justify-content: center; padding: 22px; text-align: center; }
+/* Scrollable so nothing is ever clipped on short screens; `safe center` keeps it
+   centered when it fits but falls back to top-aligned (never cuts off the top)
+   when the card is taller than the viewport. Safe-area padding clears notches. */
+#home, #lobby {
+  align-items: center;
+  justify-content: safe center;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: max(22px, env(safe-area-inset-top)) 22px max(22px, env(safe-area-inset-bottom));
+  text-align: center;
+}
 .home-card {
   width: 100%; max-width: 420px; background: var(--panel); border: 1px solid var(--line);
   border-radius: 22px; padding: 26px 22px; box-shadow: var(--shadow);
