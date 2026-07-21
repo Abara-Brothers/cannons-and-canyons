@@ -16,7 +16,7 @@ const MAX_T = 26;             // safety cap on flight time (s)
 const ARM_DIST = 100;         // projectile ignores tank collisions until it has flown this far
 const TERRAIN_TOP = 140;      // highest a peak/mound may rise (min y) — headroom for tall peaks
 const TERRAIN_FLOOR = WORLD_H - 60;
-const CRATER_MUL = 2.2;       // craters (and blast visuals) are much larger than the damage radius
+const CRATER_MUL = 0.8;       // crater/blast visual size; the DAMAGE radius now covers the whole explosion
 
 // ---- Tank hitbox (world units) ---------------------------------------------
 // The hitbox is the tank's OUTLINE: a hull/track box topped by a narrower
@@ -59,37 +59,37 @@ export const MAX_HP = 100;        // tanks have health — destroy the enemy to 
 // `radius` is the DAMAGE radius; craters and blast visuals scale by CRATER_MUL.
 export const WEAPONS = [
   { id: 'cannon',   name: 'Cannon',        color: '#ff5a52', ammo: 99,
-    shots: 1, spread: 0,  speedMul: 1.0, damage: 25, radius: 250, terrain: 'crater',
+    shots: 1, spread: 0,  speedMul: 1.0, damage: 25, radius: 750, terrain: 'crater',
     desc: 'Standard HE shell. Reliable, unlimited.' },
   { id: 'mortar',   name: 'Heavy Mortar',  color: '#ffb02e', ammo: 2,
-    shots: 1, spread: 0,  speedMul: 1.0, damage: 46, radius: 430, terrain: 'crater',
+    shots: 1, spread: 0,  speedMul: 1.0, damage: 46, radius: 1300, terrain: 'crater',
     desc: 'Massive HE round. Cracks open the landscape.' },
   { id: 'volley',   name: 'Rocket Volley', color: '#7c6cff', ammo: 3,
-    shots: 6, spread: 22, speedMul: 1.0, damage: 9, radius: 150, terrain: 'crater',
+    shots: 6, spread: 22, speedMul: 1.0, damage: 9, radius: 450, terrain: 'crater',
     desc: 'Six rockets in a fan. Saturates a whole slope.' },
   { id: 'railgun',  name: 'Railgun',       color: '#3ce88f', ammo: 2,
-    shots: 1, spread: 0,  speedMul: 1.7, gravityMul: 0.35, damage: 62, radius: 130, terrain: 'crater',
+    shots: 1, spread: 0,  speedMul: 1.7, gravityMul: 0.35, damage: 62, radius: 390, terrain: 'crater',
     pierce: true, proximity: 120,   // flat & fast; punches through terrain and detonates on the ENEMY tank
     desc: 'Hypervelocity slug — flat shot, punches through hills to the enemy.' },
   { id: 'cluster',  name: 'Cluster Bomb',  color: '#ffd23f', ammo: 2,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 0, radius: 0, terrain: 'none',
-    split: { count: 5, spreadSpeed: 700, radius: 190, damage: 14, terrain: 'crater' },
+    split: { count: 5, spreadSpeed: 700, radius: 570, damage: 14, terrain: 'crater' },
     desc: 'Bursts at the apex into five bomblets.' },
   { id: 'napalm',   name: 'Napalm',        color: '#ff6a3d', ammo: 2,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 0, radius: 0, terrain: 'none',
-    split: { count: 8, spreadSpeed: 1150, radius: 210, damage: 7, terrain: 'crater',
+    split: { count: 8, spreadSpeed: 1150, radius: 630, damage: 7, terrain: 'crater',
              hazard: { type: 'fire', turns: 2, dpt: 5, dps: 5, r: 430 } },
     desc: 'Splashes burning fuel over a wide area — the ground keeps burning.' },
   { id: 'gas',      name: 'Toxic Gas',     color: '#9dde4b', ammo: 2,
-    shots: 1, spread: 0,  speedMul: 1.0, damage: 5, radius: 220, terrain: 'none',
+    shots: 1, spread: 0,  speedMul: 1.0, damage: 5, radius: 660, terrain: 'none',
     hazard: { type: 'gas', turns: 2, dpt: 7, dps: 4, r: 500 },
     desc: 'No blast — a lingering cloud that poisons over time.' },
   { id: 'airstrike', name: 'Air Strike',   color: '#54c8ff', ammo: 2,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 0, radius: 0, terrain: 'none',
-    airstrike: { bombs: 5, spacing: 280, damage: 15, radius: 210 },
+    airstrike: { bombs: 5, spacing: 280, damage: 15, radius: 630 },
     desc: 'Fire a beacon — bombers flatten wherever it lands.' },
   { id: 'buster',   name: 'Bunker Buster', color: '#c98a4b', ammo: 2,
-    shots: 1, spread: 0,  speedMul: 1.0, damage: 30, radius: 340, terrain: 'crater',
+    shots: 1, spread: 0,  speedMul: 1.0, damage: 30, radius: 1000, terrain: 'crater',
     dig: 0.85,
     desc: 'Burrows before detonating — digs a brutal pit.' },
   { id: 'wall',     name: 'Earthworks',    color: '#8a5a2b', ammo: 3,
@@ -97,7 +97,7 @@ export const WEAPONS = [
     wall: { h: 2000, w: 340 },
     desc: 'Heaps up a huge mound of dirt. Deals no damage.' },
   { id: 'nuke',     name: 'Tactical Nuke', color: '#b6ff5a', ammo: 1,
-    shots: 1, spread: 0,  speedMul: 1.0, damage: 75, radius: 650, terrain: 'crater',
+    shots: 1, spread: 0,  speedMul: 1.0, damage: 75, radius: 1950, terrain: 'crater',
     hazard: { type: 'gas', turns: 2, dpt: 6, dps: 5, r: 800 },
     desc: 'One warhead. Leaves fallout that keeps hurting.' },
 ];
@@ -491,7 +491,7 @@ export function aiShot(terrain, tanks, by, difficulty) {
   }
 
   // Difficulty → aim jitter. Bell-ish noise from two uniforms in [-1,1].
-  const errByDiff = { easy: 11, medium: 4.5, hard: 1.2 };
+  const errByDiff = { easy: 15, medium: 8, hard: 3.5 };
   const e = errByDiff[difficulty] || errByDiff.medium;
   const noise = () => Math.random() + Math.random() - 1;
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -562,7 +562,9 @@ function integrate(terrain, tanks, ox, oy, vx, vy, opts) {
 function blastDamage(cx, cy, r, dmg, tank) {
   const d = distToTank(cx, cy, tank);
   if (d > r) return 0;
-  return dmg * (1 - d / r);
+  // Gentler-than-linear falloff so a near miss still hurts properly, tapering
+  // to zero at the edge of the blast.
+  return dmg * (1 - Math.pow(d / r, 1.5));
 }
 
 function round1(n) { return Math.round(n * 10) / 10; }
