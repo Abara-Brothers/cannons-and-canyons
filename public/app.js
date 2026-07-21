@@ -1123,6 +1123,16 @@ function tankScreen(i) {
 
 // Compact military AFV in the player's chosen paint. Damaged tanks blacken
 // with scorch (plus smoke and flames from stepEffects).
+// "Clean Sweep" tank palette + barrel geometry. Shared by drawTank and the
+// muzzle-blast helper so the shot always leaves the very end of the gun.
+const TANK_G = {
+  track: '#121418', wheel: '#252931', skirt: '#2e333b', skirtDk: '#262b32',
+  hull: '#3a3f47', hullLite: '#474d57', turret: '#31363d', hatch: '#3e444d',
+  mantlet: '#4b525c', barrel: '#5b626c', barrelLite: '#6d747f',
+  brake: '#434952', brakeSlot: '#23272e',
+};
+const BARREL = { ox: 0.47, oy: -0.72, len: 1.45, brake: 0.26 };
+
 // Local slope the tank sits on (also used for the muzzle position).
 function tankTilt(i, r) {
   const wx = S.tanks[i].x;
@@ -1138,14 +1148,13 @@ function muzzleTipWorld(i) {
   const { sx, sy, r } = tankScreen(i);
   const front = i === 0 ? 1 : -1, dir = front;
   const tilt = tankTilt(i, r), LIFT = r * 0.42;
-  const tb = sy - r * 0.52;
-  const px = sx + front * r * 0.45, py = tb - r * 0.2;
+  const px = sx + front * r * BARREL.ox, py = sy + r * BARREL.oy;
   const rad = (S.aim[i] ? S.aim[i].angle : 45) * Math.PI / 180;
   const wcos = Math.cos(rad) * dir, wsin = -Math.sin(rad);
   const ct = Math.cos(tilt), st = Math.sin(tilt);
   const vx0 = px - sx, vy0 = py - sy - LIFT;
   const ox = sx + vx0 * ct - vy0 * st, oy = sy + vx0 * st + vy0 * ct;
-  const bLen = r * 1.55;
+  const bLen = r * (BARREL.len + BARREL.brake);   // out to the tip of the muzzle brake
   const tipX = ox + wcos * bLen, tipY = oy + wsin * bLen;
   return {
     x: (tipX - view.cssW / 2) / cam.zoom + cam.cx,
@@ -1227,86 +1236,109 @@ function drawTank(i) {
   ctx.save();
   ctx.translate(sx, sy); ctx.rotate(tilt); ctx.translate(-sx, -sy - LIFT);
 
-  ctx.fillStyle = '#15181f';
-  roundedRect(sx - r * 1.35, sy - r * 0.1, r * 2.7, r * 0.62, r * 0.28); ctx.fill();
-  ctx.fillStyle = '#05070c';
-  for (let k = 0; k < 7; k++) {
-    const wx = sx - r * 1.08 + (k / 6) * r * 2.16;
-    ctx.beginPath(); ctx.arc(wx, sy + r * 0.28, r * 0.13, 0, Math.PI * 2); ctx.fill();
+  // ── "Clean Sweep": low dark-grey wedge hull, skirted running gear ────────
+  // Tracks + road wheels
+  ctx.fillStyle = TANK_G.track;
+  roundedRect(sx - r * 1.33, sy - r * 0.06, r * 2.66, r * 0.58, r * 0.26); ctx.fill();
+  ctx.fillStyle = TANK_G.wheel;
+  for (let k = 0; k < 6; k++) {
+    const wx = sx - r * 1.04 + (k / 5) * r * 2.08;
+    ctx.beginPath(); ctx.arc(wx, sy + r * 0.24, r * 0.155, 0, Math.PI * 2); ctx.fill();
   }
+  // Side skirt with panel breaks
+  ctx.fillStyle = TANK_G.skirt;
+  ctx.fillRect(sx - r * 1.26, sy - r * 0.20, r * 2.52, r * 0.30);
+  ctx.fillStyle = TANK_G.skirtDk;
+  for (let k = 0; k < 3; k++) ctx.fillRect(sx - r * 0.96 + k * r * 0.66, sy - r * 0.15, r * 0.46, r * 0.17);
 
-  ctx.fillStyle = P.dark;
-  ctx.beginPath();
-  ctx.moveTo(sx - r * 1.32, sy - r * 0.08);
-  ctx.lineTo(sx + r * 1.32, sy - r * 0.08);
-  ctx.lineTo(sx + r * 1.22, sy + r * 0.16);
-  ctx.lineTo(sx - r * 1.22, sy + r * 0.16);
-  ctx.closePath(); ctx.fill();
-
+  // Low wedge hull
   const hullPath = () => {
     ctx.beginPath();
-    ctx.moveTo(sx - front * r * 1.35, sy - r * 0.08);
-    ctx.lineTo(sx - front * r * 1.18, sy - r * 0.52);
-    ctx.lineTo(sx + front * r * 0.95, sy - r * 0.52);
-    ctx.lineTo(sx + front * r * 1.35, sy - r * 0.08);
+    ctx.moveTo(sx - r * 1.35, sy - r * 0.18);
+    ctx.lineTo(sx - r * 0.99, sy - r * 0.58);
+    ctx.lineTo(sx + r * 0.99, sy - r * 0.58);
+    ctx.lineTo(sx + r * 1.35, sy - r * 0.18);
     ctx.closePath();
   };
-  const hg = ctx.createLinearGradient(0, sy - r * 0.78, 0, sy);
-  hg.addColorStop(0, P.lite); hg.addColorStop(0.5, P.mid); hg.addColorStop(1, P.dark);
-  ctx.fillStyle = hg; hullPath(); ctx.fill();
-  ctx.strokeStyle = 'rgba(0,0,0,.3)'; ctx.lineWidth = Math.max(1, r * 0.06);
-  ctx.beginPath(); ctx.moveTo(sx - front * r * 1.18, sy - r * 0.52); ctx.lineTo(sx + front * r * 0.95, sy - r * 0.52); ctx.stroke();
-
-  const tb = sy - r * 0.52;
-  const tg = ctx.createLinearGradient(0, tb - r * 0.55, 0, tb);
-  tg.addColorStop(0, P.lite); tg.addColorStop(1, P.dark);
-  ctx.fillStyle = tg;
+  ctx.fillStyle = TANK_G.hull; hullPath(); ctx.fill();
+  ctx.fillStyle = TANK_G.hullLite;                     // lighter rear quarter
   ctx.beginPath();
-  ctx.moveTo(sx - front * r * 0.85, tb);
-  ctx.lineTo(sx - front * r * 0.7, tb - r * 0.42);
-  ctx.lineTo(sx + front * r * 0.28, tb - r * 0.42);
-  ctx.lineTo(sx + front * r * 0.62, tb);
+  ctx.moveTo(sx - front * r * 1.35, sy - r * 0.18);
+  ctx.lineTo(sx - front * r * 0.99, sy - r * 0.58);
+  ctx.lineTo(sx - front * r * 0.16, sy - r * 0.58);
+  ctx.lineTo(sx - front * r * 0.29, sy - r * 0.18);
   ctx.closePath(); ctx.fill();
-  ctx.fillStyle = P.dark;
-  roundedRect(sx - front * r * 0.5 - r * 0.14, tb - r * 0.52, r * 0.28, r * 0.12, r * 0.05); ctx.fill();
+
+  // Low flat turret
+  const tb = sy - r * 0.58;
+  ctx.fillStyle = TANK_G.turret;
+  ctx.beginPath();
+  ctx.moveTo(sx - front * r * 0.76, tb);
+  ctx.lineTo(sx - front * r * 0.52, tb - r * 0.36);
+  ctx.lineTo(sx + front * r * 0.41, tb - r * 0.36);
+  ctx.lineTo(sx + front * r * 0.65, tb);
+  ctx.closePath(); ctx.fill();
+  // Player paint reads as a turret band so the two tanks stay tellable apart
+  ctx.fillStyle = P.mid;
+  ctx.fillRect(sx - front * r * 0.50, tb - r * 0.30, r * 0.84, r * 0.10);
+  ctx.fillStyle = TANK_G.hatch;                        // commander hatch
+  roundedRect(sx - front * r * 0.34, tb - r * 0.49, r * 0.30, r * 0.13, r * 0.05); ctx.fill();
 
   if (hp < 70) {
-    ctx.fillStyle = `rgba(16,13,10,${Math.min(0.55, (70 - hp) / 110)})`;
+    ctx.fillStyle = `rgba(10,11,14,${Math.min(0.55, (70 - hp) / 110)})`;
     hullPath(); ctx.fill();
   }
 
-  const antX = sx - front * r * 0.78, antTop = tb - r * 1.15;
-  ctx.strokeStyle = 'rgba(220,228,240,.6)'; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(antX, tb - r * 0.4); ctx.lineTo(antX, antTop); ctx.stroke();
+  // Whip antenna + player pennant
+  const antX = sx - front * r * 0.66, antTop = tb - r * 1.02;
+  ctx.strokeStyle = 'rgba(220,228,240,.55)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(antX, tb - r * 0.3); ctx.lineTo(antX, antTop); ctx.stroke();
   ctx.fillStyle = P.accent;
   ctx.beginPath();
   ctx.moveTo(antX, antTop);
-  ctx.lineTo(antX + front * r * 0.34, antTop + r * 0.11);
-  ctx.lineTo(antX, antTop + r * 0.22);
+  ctx.lineTo(antX + front * r * 0.30, antTop + r * 0.10);
+  ctx.lineTo(antX, antTop + r * 0.20);
   ctx.closePath(); ctx.fill();
 
   const aim = S.aim[i]; const dir = i === 0 ? 1 : -1;
   const rad = aim.angle * Math.PI / 180;
-  const px = sx + front * r * 0.45, py = tb - r * 0.2;
+  const px = sx + front * r * BARREL.ox, py = sy + r * BARREL.oy;
   // Barrel aims at the ABSOLUTE angle regardless of body tilt — rotate the aim
   // vector by −tilt so the surrounding +tilt context cancels out.
   const wcos = Math.cos(rad) * dir, wsin = -Math.sin(rad);
   const ct = Math.cos(tilt), st = Math.sin(tilt);
   const cosA = wcos * ct + wsin * st, sinA = -wcos * st + wsin * ct;
-  const bLen = r * 1.55;
-  // Recoil: the barrel slides back into the turret on firing, then returns.
-  const rec = r * 0.62 * (S.recoil[i] || 0);
+  const bLen = r * BARREL.len;
+  // Recoil: the heavy barrel slides back into the mantlet, then returns.
+  const rec = r * 0.55 * (S.recoil[i] || 0);
   const bx = px - cosA * rec, by = py - sinA * rec;
-  ctx.lineCap = 'round';
-  ctx.strokeStyle = steelDk; ctx.lineWidth = Math.max(2.5, r * 0.24);
+  const nx = -sinA, ny = cosA;                       // perpendicular to the barrel
+
+  ctx.lineCap = 'butt';
+  ctx.fillStyle = TANK_G.mantlet;                    // mantlet collar
+  ctx.beginPath(); ctx.arc(bx, by, r * 0.23, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = TANK_G.barrel; ctx.lineWidth = Math.max(3, r * 0.30);
   ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx + cosA * bLen, by + sinA * bLen); ctx.stroke();
-  ctx.strokeStyle = steel; ctx.lineWidth = Math.max(1.5, r * 0.12);
-  ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx + cosA * bLen * 0.94, by + sinA * bLen * 0.94); ctx.stroke();
-  ctx.strokeStyle = steelDk; ctx.lineWidth = Math.max(3, r * 0.3);
+  ctx.strokeStyle = TANK_G.barrelLite; ctx.lineWidth = Math.max(1, r * 0.07);
   ctx.beginPath();
-  ctx.moveTo(bx + cosA * bLen * 0.88, by + sinA * bLen * 0.88);
-  ctx.lineTo(bx + cosA * bLen, by + sinA * bLen);
+  ctx.moveTo(bx + cosA * r * 0.18 + nx * r * 0.08, by + sinA * r * 0.18 + ny * r * 0.08);
+  ctx.lineTo(bx + cosA * bLen * 0.94 + nx * r * 0.08, by + sinA * bLen * 0.94 + ny * r * 0.08);
   ctx.stroke();
+  // Chunky slotted muzzle brake on the end
+  const mb = r * BARREL.brake;
+  ctx.strokeStyle = TANK_G.brake; ctx.lineWidth = Math.max(4, r * 0.46);
+  ctx.beginPath();
+  ctx.moveTo(bx + cosA * (bLen - r * 0.02), by + sinA * (bLen - r * 0.02));
+  ctx.lineTo(bx + cosA * (bLen + mb), by + sinA * (bLen + mb));
+  ctx.stroke();
+  ctx.strokeStyle = TANK_G.brakeSlot; ctx.lineWidth = Math.max(1, r * 0.05);
+  for (const f of [0.30, 0.66]) {
+    const d = bLen + mb * f;
+    ctx.beginPath();
+    ctx.moveTo(bx + cosA * d + nx * r * 0.22, by + sinA * d + ny * r * 0.22);
+    ctx.lineTo(bx + cosA * d - nx * r * 0.22, by + sinA * d - ny * r * 0.22);
+    ctx.stroke();
+  }
   ctx.restore();
 }
 function roundedRect(x, y, w, h, r) {
