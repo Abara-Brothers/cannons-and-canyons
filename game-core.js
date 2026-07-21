@@ -68,8 +68,8 @@ export const WEAPONS = [
     shots: 6, spread: 22, speedMul: 1.0, damage: 9, radius: 150, terrain: 'crater',
     desc: 'Six rockets in a fan. Saturates a whole slope.' },
   { id: 'railgun',  name: 'Railgun',       color: '#3ce88f', ammo: 2,
-    shots: 1, spread: 0,  speedMul: 1.7, gravityMul: 0.12, damage: 62, radius: 120, terrain: 'crater',
-    pierce: true,   // shoots flat & fast with very little drop, punching through terrain to the ENEMY tank
+    shots: 1, spread: 0,  speedMul: 1.7, gravityMul: 0.35, damage: 62, radius: 130, terrain: 'crater',
+    pierce: true, proximity: 120,   // flat & fast; punches through terrain and detonates on the ENEMY tank
     desc: 'Hypervelocity slug — flat shot, punches through hills to the enemy.' },
   { id: 'cluster',  name: 'Cluster Bomb',  color: '#ffd23f', ammo: 2,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 0, radius: 0, terrain: 'none',
@@ -422,7 +422,7 @@ export function simulateShot(state, shot) {
         }
       }
     } else {
-      const fp = integrate(state.terrain, state.tanks, ox, oy, vx, vy, w.pierce ? { pierce: true, pierceBy: by, gravMul } : { gravMul });
+      const fp = integrate(state.terrain, state.tanks, ox, oy, vx, vy, w.pierce ? { pierce: true, pierceBy: by, proximity: w.proximity || 0, gravMul } : { gravMul });
       let d = null;
       if (fp.hit) {
         d = det(fp.x, fp.y, w.wall ? 0 : w.radius, w.terrain, w.hazard ? w.hazard.type : null);
@@ -520,16 +520,21 @@ function integrate(terrain, tanks, ox, oy, vx, vy, opts) {
     const armed = Math.hypot(x - ox, y - oy) > ARM_DIST;
     if (opts.pierce) {
       // Railgun: ignore terrain and the firer entirely — punch straight through
-      // everything until the slug strikes the ENEMY tank. Sub-sample the step so
-      // the hypervelocity slug can't tunnel through the thin hitbox between steps.
+      // everything until the slug reaches the ENEMY tank. Sub-sample the step so
+      // the hypervelocity slug can't tunnel past between steps, and detonate when
+      // it passes within `proximity` of the tank (a flat slug rarely lands a
+      // pixel-perfect hitbox touch), snapping the blast onto the tank for damage.
       const enemy = tanks[1 - opts.pierceBy];
       if (armed && enemy) {
+        const prox = opts.proximity || 0;
         const px = x - vx * DT, py = y - vy * DT;
         const n = Math.max(2, Math.ceil(Math.hypot(x - px, y - py) / 8));
         for (let s = 1; s <= n; s++) {
           const f = s / n, ix = px + (x - px) * f, iy = py + (y - py) * f;
-          if (pointHitsTank(ix, iy, enemy)) {
-            path.push([round1(ix), round1(iy)]); return { path, hit: true, x: ix, y: iy, vx, vy };
+          const rx = Math.max(enemy.x - TANK_HW, Math.min(ix, enemy.x + TANK_HW));   // closest point on the hull box
+          const ry = Math.max(enemy.y - TANK_TOP, Math.min(iy, enemy.y));
+          if (Math.hypot(ix - rx, iy - ry) <= prox) {
+            path.push([round1(ix), round1(iy)]); return { path, hit: true, x: rx, y: ry, vx, vy };
           }
         }
       }

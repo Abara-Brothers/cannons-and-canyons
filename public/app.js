@@ -31,7 +31,7 @@ const S = {
   anim: null, queue: [], pendingOver: null, terrainAnim: null,
   particles: [], floaters: [], rings: [], flash: 0, shake: 0,
   charging: false, pullPointer: null,
-  userZoom: 1,
+  userZoom: 1, panY: 0,
 };
 const WW = () => S.world.w, WH = () => S.world.h;
 const MOVE_MIN = 60;
@@ -160,8 +160,10 @@ let view = { cssW: 0, cssH: 0, dispW: 0, dispH: 0, pix: 1 };
 const cam = { zoom: 0.05, cx: 9000, cy: 6000 };
 
 function resize() {
-  const stage = $('stage');
-  const dw = stage.clientWidth, dh = stage.clientHeight;
+  // Size to the CANVAS's own box, not the stage — the canvas is inset from the
+  // notch/speaker on iPhones (CSS safe-area), so this keeps the world un-squished.
+  const dw = canvas.clientWidth || $('stage').clientWidth;
+  const dh = canvas.clientHeight || $('stage').clientHeight;
   const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
   view.cssW = Math.max(2, dw);
   view.cssH = Math.max(2, dh);
@@ -213,8 +215,11 @@ function cameraTarget() {
   const surveyMix = Math.max(0, Math.min(1, (mz * 1.6 - tz) / (mz * 0.6)));
   const other = S.tanks[1 - S.you] || focus;
   const framedY = focus.y - vh * 0.18;
-  const surveyY = (focus.y + other.y) / 2;
-  let ty = framedY + (surveyY - framedY) * surveyMix;
+  // On landscape, sit the tanks lower in the frame by default so you see more sky
+  // (and less of the terrain wall). Then apply the user's vertical pan (S.panY).
+  const skyBias = view.cssW > view.cssH ? vh * 0.13 : 0;
+  const surveyY = (focus.y + other.y) / 2 - skyBias;
+  let ty = framedY + (surveyY - framedY) * surveyMix + (S.panY || 0);
   tx = vw >= WW() ? WW() / 2 : Math.min(WW() - vw / 2, Math.max(vw / 2, tx));
   ty = vh >= WH() ? WH() - vh / 2 : Math.min(WH() - vh / 2, Math.max(vh / 2, ty));
   return { tz: finite(tz, 0.05), tx: finite(tx, WW() / 2), ty: finite(ty, WH() * 0.72) };
@@ -255,6 +260,23 @@ function computeMinY() {
 // ---------------------------------------------------------------------------
 $('zoomIn').onclick = () => { S.userZoom = clampUserZoom(S.userZoom * 1.35); };
 $('zoomOut').onclick = () => { S.userZoom = clampUserZoom(S.userZoom / 1.35); };
+// Pan the camera up/down (dir -1 = up/more sky). Hold to keep panning. Also works
+// via two-finger vertical drag on the battlefield.
+function holdPan(btn, dir) {
+  let iv = null;
+  const step = () => {
+    const amt = (view.cssH / Math.max(cam.zoom, 1e-4)) * 0.05 * dir;
+    S.panY = Math.max(-WH() * 0.7, Math.min(WH() * 0.7, (S.panY || 0) + amt));
+  };
+  const start = (e) => { e.preventDefault(); step(); iv = setInterval(step, 55); };
+  const stop = () => { clearInterval(iv); iv = null; };
+  btn.addEventListener('pointerdown', start);
+  btn.addEventListener('pointerup', stop);
+  btn.addEventListener('pointerleave', stop);
+  btn.addEventListener('pointercancel', stop);
+}
+holdPan($('panUp'), -1);
+holdPan($('panDown'), 1);
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
   S.userZoom = clampUserZoom(S.userZoom * (e.deltaY > 0 ? 0.9 : 1.111));
@@ -409,7 +431,7 @@ function applySnapshot(m) {
   S.selected = firstAvailableWeapon();
   S.playing = true; S.quick = false; S.anim = null; S.queue = []; S.pendingOver = null;
   S.particles = []; S.floaters = []; S.rings = []; S.flash = 0; S.shake = 0;
-  S.charging = false; S.pullPointer = null; S.userZoom = 1;
+  S.charging = false; S.pullPointer = null; S.userZoom = 1; S.panY = 0;
   computeMinY();
   $('overlay').classList.add('hidden');
   showScreen('game');
@@ -541,7 +563,7 @@ canvas.addEventListener('pointerdown', (e) => {
   if (pointers.size === 2) {
     S.charging = false; S.pullPointer = null;
     const [a, b] = [...pointers.values()];
-    pinchStart = { d: Math.hypot(a.x - b.x, a.y - b.y), zoom: S.userZoom };
+    pinchStart = { d: Math.hypot(a.x - b.x, a.y - b.y), zoom: S.userZoom, cy: (a.y + b.y) / 2, panY: S.panY || 0 };
     return;
   }
   if (!canAim()) return;
@@ -555,6 +577,9 @@ canvas.addEventListener('pointermove', (e) => {
     const [a, b] = [...pointers.values()];
     const d = Math.hypot(a.x - b.x, a.y - b.y);
     if (pinchStart.d > 0) S.userZoom = clampUserZoom(pinchStart.zoom * (d / pinchStart.d));
+    // Two-finger vertical drag pans the camera up/down (see more sky / terrain).
+    const dcy = (a.y + b.y) / 2 - pinchStart.cy;
+    if (cam.zoom > 0) S.panY = Math.max(-WH() * 0.7, Math.min(WH() * 0.7, pinchStart.panY - dcy / cam.zoom));
     return;
   }
   if (S.charging && canAim()) aimFromPointer(evX(e), evY(e));
@@ -876,7 +901,7 @@ function stepEffects(dt) {
 }
 
 function draw() {
-  if (view.dispW !== $('stage').clientWidth || view.dispH !== $('stage').clientHeight) resize();
+  if (view.dispW !== (canvas.clientWidth || 0) || view.dispH !== (canvas.clientHeight || 0)) resize();
   const { cssW, cssH } = view;
   ctx.save();
   if (S.shake > 0.15) ctx.translate((Math.random() - 0.5) * S.shake, (Math.random() - 0.5) * S.shake);
@@ -1069,8 +1094,18 @@ function drawTank(i) {
     ctx.beginPath(); ctx.moveTo(sx, by + 9); ctx.lineTo(sx - 7, by); ctx.lineTo(sx + 7, by); ctx.closePath(); ctx.fill();
   }
 
+  // Tilt the tank to sit flush on the terrain slope, and lift it so the tracks
+  // rest ON the surface instead of sinking into the mountain.
+  const wSpan = Math.max(30, (r * 1.15) / Math.max(cam.zoom, 1e-4));
+  let tilt = Math.atan2(surfaceAt(S.tanks[i].x + wSpan) - surfaceAt(S.tanks[i].x - wSpan), 2 * wSpan);
+  tilt = Math.max(-0.6, Math.min(0.6, tilt));       // clamp to ±34° so cliffs don't look silly
+  const LIFT = r * 0.42;
+
   ctx.fillStyle = 'rgba(0,0,0,.32)';
-  ctx.beginPath(); ctx.ellipse(sx, sy + r * 0.45, r * 1.5, r * 0.35, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(sx, sy, r * 1.5, r * 0.32, tilt, 0, Math.PI * 2); ctx.fill();
+
+  ctx.save();
+  ctx.translate(sx, sy); ctx.rotate(tilt); ctx.translate(-sx, -sy - LIFT);
 
   ctx.fillStyle = '#15181f';
   roundedRect(sx - r * 1.35, sy - r * 0.1, r * 2.7, r * 0.62, r * 0.28); ctx.fill();
@@ -1133,7 +1168,11 @@ function drawTank(i) {
   const aim = S.aim[i]; const dir = i === 0 ? 1 : -1;
   const rad = aim.angle * Math.PI / 180;
   const px = sx + front * r * 0.45, py = tb - r * 0.2;
-  const cosA = Math.cos(rad) * dir, sinA = -Math.sin(rad);
+  // Barrel aims at the ABSOLUTE angle regardless of body tilt — rotate the aim
+  // vector by −tilt so the surrounding +tilt context cancels out.
+  const wcos = Math.cos(rad) * dir, wsin = -Math.sin(rad);
+  const ct = Math.cos(tilt), st = Math.sin(tilt);
+  const cosA = wcos * ct + wsin * st, sinA = -wcos * st + wsin * ct;
   const bLen = r * 1.55;
   ctx.lineCap = 'round';
   ctx.strokeStyle = steelDk; ctx.lineWidth = Math.max(2.5, r * 0.24);
@@ -1145,6 +1184,7 @@ function drawTank(i) {
   ctx.moveTo(px + cosA * bLen * 0.88, py + sinA * bLen * 0.88);
   ctx.lineTo(px + cosA * bLen, py + sinA * bLen);
   ctx.stroke();
+  ctx.restore();
 }
 function roundedRect(x, y, w, h, r) {
   ctx.beginPath(); ctx.moveTo(x + r, y);
