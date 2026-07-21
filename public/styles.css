@@ -299,13 +299,21 @@ input:focus { outline: 2px solid var(--accent); border-color: transparent; }
   .turnlabel { font-size: 9.5px; margin-top: 0; }
   #dock { padding: 3px 8px calc(3px + env(safe-area-inset-bottom)); gap: 3px; }
   .weapon-strip { padding-bottom: 1px; gap: 5px; }
-  /* Icons were too small to read at arm's length — bumped ~25%. The dock grows
-     by ~6px total, which the battlefield can afford on a 600px-tall landscape. */
-  .wchip { min-width: 54px; padding: 4px 4px; border-radius: 10px; gap: 0; }
-  .wchip .wi { width: 22px; height: 22px; }
-  .wchip .wt { width: 25px; height: 12px; }
+  /* Icons were too small to read at arm's length. Naively bumping .wi costs dock
+     HEIGHT (the ammo count owns a whole row) and overflows the strip anyway, so
+     instead: pin the ammo into the chip corner and drop the trajectory badge.
+     Every weapon now flies the same arc except the railgun, so that badge says
+     almost nothing in landscape — it survives in portrait. Measured: icon
+     17 -> 26px (+53%), dock 83.5 -> 82.5px, and all 12 chips still fit a 667px
+     phone with no swipe. */
+  .wchip { position: relative; min-width: 44px; padding: 3px 4px; border-radius: 10px; gap: 0; }
+  .wchip .wi { width: 26px; height: 26px; }
+  .wchip .wt { display: none; }
   .wchip .wn { display: none; }
-  .wchip .wa { font-size: 9.5px; }
+  .wchip .wa {
+    position: absolute; right: 3px; bottom: 0; font-size: 8.5px; line-height: 1;
+    text-shadow: 0 1px 2px rgba(10,14,30,.95);
+  }
   .control-rows { display: grid; grid-template-columns: 1fr 1fr auto 1fr auto auto; gap: 6px; align-items: center; max-width: none; }
   .aim-readout { display: contents; }
   .stepper { padding: 2px; }

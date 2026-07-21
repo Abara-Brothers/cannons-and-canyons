@@ -586,7 +586,12 @@ export function simulateShot(state, shot) {
           const bf = integrate(state.terrain, state.tanks, sx, -400, dir * 650, 120, {});
           let bdet = null;
           if (bf.hit) { bdet = det(bf.x, bf.y, a.radius, 'crater'); boom(bf.x, bf.y, a.radius, 'crater', a.damage); }
-          projectiles.push({ path: bf.path, det: bdet, delay: parentLen + 14 + k * 10 });
+          // Delays are PRESENTATION ONLY (no physics rides on them). The lead-in
+          // gives the client's delivery aircraft a run-in before the first bomb
+          // leaves the bay; the spacing sets the drop rhythm — and, because the
+          // client derives the plane's ground speed from (spacing / delay spacing),
+          // it also sets how fast the plane crosses. See armAirstrike() in app.js.
+          projectiles.push({ path: bf.path, det: bdet, delay: parentLen + 72 + k * 12 });
         }
       }
     } else {

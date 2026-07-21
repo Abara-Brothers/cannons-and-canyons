@@ -35,8 +35,10 @@ const S = {
   anim: null, queue: [], pendingOver: null, terrainAnim: null,
   deferred: [],                        // HP/elimination work held until the shell in flight lands
   warp: null,                          // active Teleport warp (see startWarp)
+  mush: null,                          // active Tactical Nuke mushroom cloud (see startMushroom)
   particles: [], floaters: [], rings: [], flash: 0, shake: 0,
   muzzle: [],                          // directional HD muzzle blasts (own render pass)
+  plane: null,                         // Air Strike delivery aircraft (cosmetic, own render pass)
   charging: false, pullPointer: null,
   userZoom: 1, panY: 0,
   recoil: [0, 0],                      // barrel kick when firing (1 → 0)
@@ -88,18 +90,18 @@ function buildSkinRow() {
 // Custom weapon icons + trajectory badges (inline SVG, one per weapon)
 // ---------------------------------------------------------------------------
 const ICONS = {
-  cannon: `<svg viewBox="0 0 24 24"><circle cx="15" cy="12" r="5.5" fill="#ff5a52"/><path d="M2 12h7M4 8l4 1.5M4 16l4-1.5" stroke="#ffcf9e" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg>`,
-  mortar: `<svg viewBox="0 0 24 24"><path d="M12 21c-3.3 0-6-2.7-6-6 0-4 3-6 6-11 3 5 6 7 6 11 0 3.3-2.7 6-6 6z" fill="#ffb02e"/><circle cx="12" cy="15" r="2.2" fill="#7a4d00"/></svg>`,
-  volley: `<svg viewBox="0 0 24 24"><path d="M6 20L9 8M12 20V6M18 20L15 8" stroke="#7c6cff" stroke-width="2.6" stroke-linecap="round" fill="none"/><g fill="#ffd23f"><circle cx="9" cy="6.5" r="1.7"/><circle cx="12" cy="4.5" r="1.7"/><circle cx="15" cy="6.5" r="1.7"/></g></svg>`,
-  railgun: `<svg viewBox="0 0 24 24"><path d="M2 12h12" stroke="#3ce88f" stroke-width="2.4" stroke-linecap="round"/><path d="M13 6.8l8 5.2-8 5.2 2.6-5.2z" fill="#3ce88f"/></svg>`,
-  cluster: `<svg viewBox="0 0 24 24"><circle cx="12" cy="7.5" r="4" fill="#ffd23f"/><path d="M10 11l-4 4.5M12 12v5.5M14 11l4 4" stroke="#ffd23f" stroke-width="1.2" opacity=".65" fill="none"/><g fill="#ff9d3d"><circle cx="5.5" cy="17.5" r="2.1"/><circle cx="12" cy="19.5" r="2.1"/><circle cx="18.5" cy="17" r="2.1"/></g></svg>`,
+  cannon: `<svg viewBox="0 0 24 24"><path d="M3.4 8.6h8.2l4.1 1.9a2.6 2.6 0 010 3l-4.1 1.9H3.4z" fill="#b8c2d2"/><path d="M3.4 8.6h8.2l3.4 1.6H3.4z" fill="#dde4ee"/><rect x="4.6" y="8.1" width="2.1" height="7.8" rx=".5" fill="#c98a4b"/><path d="M15.7 9.6l4.9 1.6a1 1 0 010 1.6l-4.9 1.6a2.6 2.6 0 000-4.8z" fill="#ff5a52"/><path d="M1.6 8.1h1.9v7.8H1.6z" fill="#7c8698"/></svg>`,
+  mortar: `<svg viewBox="0 0 24 24"><path d="M12 1.6c2.5 3 3.9 5.6 3.9 8.6v6.3H8.1V10.2c0-3 1.4-5.6 3.9-8.6z" fill="#4d5a44"/><path d="M12 1.6c1.2 1.5 2.1 2.8 2.7 4.1l-1 1.8H8.9C9.7 5.5 10.7 3.7 12 1.6z" fill="#ffb02e"/><rect x="7.8" y="11.4" width="8.4" height="1.9" fill="#2f3a2b"/><path d="M9.2 16.5h5.6l1.9 5.9-2.5-1.7-2.2 1.9-2.2-1.9-2.5 1.7z" fill="#3a4436"/></svg>`,
+  volley: `<svg viewBox="0 0 24 24"><path d="M4.6 3.6c1.3 1.3 2 2.7 2 4.3v6.4H2.6V7.9c0-1.6.7-3 2-4.3z" fill="#7c6cff"/><path d="M2.6 14.3h4L4.6 18z" fill="#4a3fb0"/><path d="M12 1.6c1.4 1.5 2.1 3 2.1 4.7v7.6h-4.2V6.3c0-1.7.7-3.2 2.1-4.7z" fill="#a99cff"/><path d="M9.9 13.9h4.2L12 18z" fill="#4a3fb0"/><path d="M19.4 3.6c1.3 1.3 2 2.7 2 4.3v6.4h-4V7.9c0-1.6.7-3 2-4.3z" fill="#7c6cff"/><path d="M17.4 14.3h4L19.4 18z" fill="#4a3fb0"/><g fill="#ffd23f" opacity=".9"><path d="M4.6 22l-1.3-3.2h2.6z"/><path d="M12 22.4l-1.5-3.6h3z"/><path d="M19.4 22l-1.3-3.2h2.6z"/></g></svg>`,
+  railgun: `<svg viewBox="0 0 24 24"><rect x="1.4" y="6" width="12" height="2.4" rx="1.2" fill="#2f6b4e"/><rect x="1.4" y="15.6" width="12" height="2.4" rx="1.2" fill="#2f6b4e"/><g stroke="#3ce88f" stroke-width="1.6" stroke-linecap="round" opacity=".95" fill="none"><path d="M4 8.6v6.8"/><path d="M8.4 8.6v6.8"/><path d="M12.4 8.6v6.8"/></g><path d="M3.4 10.4h9.8l9.4 1.4a.2.2 0 010 .4l-9.4 1.4H3.4z" fill="#d6ffe9"/><path d="M3.4 10.4h4.2v3.2H3.4z" fill="#3ce88f"/></svg>`,
+  cluster: `<svg viewBox="0 0 24 24"><path d="M12 1.3c1.7 1.7 2.6 3.3 2.6 4.9v.9H9.4v-.9c0-1.6.9-3.2 2.6-4.9z" fill="#e0e6f0"/><path d="M8.7 7.1h6.6v6.1H8.7z" fill="#ffd23f"/><path d="M8.7 7.1h6.6v1.5H8.7z" fill="#fff0a8"/><g fill="#b8890f"><rect x="10.6" y="7.1" width=".9" height="6.1"/><rect x="12.6" y="7.1" width=".9" height="6.1"/></g><path d="M8.7 13.2h6.6l-1 2-1.3-1.2-1.3 1.4-1.3-1.4-1.7 1.2z" fill="#8a6c14"/><g fill="#ff9d3d"><rect x="2.6" y="16.4" width="3.2" height="4.2" rx="1" transform="rotate(-20 4.2 18.5)"/><rect x="10.4" y="17.8" width="3.2" height="4.2" rx="1"/><rect x="18.2" y="16.4" width="3.2" height="4.2" rx="1" transform="rotate(20 19.8 18.5)"/></g><g stroke="#ffd23f" stroke-width="1" fill="none" opacity=".6"><path d="M10 15.4L5.2 16.6"/><path d="M12 15.6v1.9"/><path d="M14 15.4l4.8 1.2"/></g></svg>`,
   napalm: `<svg viewBox="0 0 24 24"><path d="M12 22c-4 0-7-2.6-7-6.5C5 10 9 8.5 9 4c2.5 1.5 3.6 4 3.2 6.2C14 9 15 7.5 15 5.5c3 2.3 4 5.5 4 8 0 5-3 8.5-7 8.5z" fill="#ff6a3d"/><path d="M12 22c-2 0-3.5-1.6-3.5-3.7 0-2.4 2-3.5 3.2-5.8 1.6 1.8 3.8 3.2 3.8 5.7S14 22 12 22z" fill="#ffd23f"/></svg>`,
   gas: `<svg viewBox="0 0 24 24"><g fill="#9dde4b"><circle cx="8" cy="10" r="4"/><circle cx="14" cy="8" r="4.6"/><circle cx="17" cy="12" r="3.4"/><circle cx="11" cy="12.5" r="4"/></g><g fill="#6fae2b"><circle cx="8" cy="18" r="1.2"/><circle cx="13" cy="19.5" r="1.4"/><circle cx="17" cy="17.5" r="1.1"/></g></svg>`,
-  airstrike: `<svg viewBox="0 0 24 24" fill="#54c8ff"><path d="M2 13.5l9-.8 4.5-7.2 2.2.9-2.4 6 6.2-.5.5 2-7.5 1.6-3.4 5.9-2.2-.9 1.9-4.7-8.3.7z"/></svg>`,
-  buster: `<svg viewBox="0 0 24 24"><path d="M12 2v9" stroke="#c98a4b" stroke-width="3" stroke-linecap="round"/><path d="M7 10l5 7.5L17 10z" fill="#c98a4b"/><path d="M3 21h18M6 18h12" stroke="#7a5a30" stroke-width="1.8" stroke-linecap="round"/></svg>`,
-  wall: `<svg viewBox="0 0 24 24" fill="#8a5a2b"><rect x="3" y="5.5" width="8.6" height="4.2" rx="1"/><rect x="12.6" y="5.5" width="8.4" height="4.2" rx="1"/><rect x="3" y="14.5" width="8.6" height="4.2" rx="1"/><rect x="12.6" y="14.5" width="8.4" height="4.2" rx="1"/><rect x="7.8" y="10" width="8.6" height="4.2" rx="1" fill="#a06b35"/></svg>`,
+  airstrike: `<svg viewBox="0 0 24 24"><path d="M1.4 6.9l7.6 1.2 3.1-3.4 1.9.5-1.2 3.4 6.4 1-.4-2.1 1.7.3.9 3.2-19.2 1.1z" fill="#54c8ff"/><g fill="#9fdcff"><path d="M6.6 14.2l-1.2 3.9-1.2-3.9z"/><path d="M12 15.6l-1.3 4.3-1.3-4.3z"/><path d="M17.4 14.2l-1.2 3.9-1.2-3.9z"/></g><path d="M2.6 21.8h18.8" stroke="#54c8ff" stroke-width="1.4" stroke-linecap="round" opacity=".55" fill="none"/></svg>`,
+  buster: `<svg viewBox="0 0 24 24"><path d="M10.4 1.6h3.2v3.2h-3.2z" fill="#c98a4b"/><path d="M8.9 1.6h1.5v3.6L8 6.6zM15.1 1.6h-1.5v3.6L16 6.6z" fill="#7a5a30"/><rect x="10.2" y="4.6" width="3.6" height="6.2" fill="#c98a4b"/><rect x="10.2" y="4.6" width="1.3" height="6.2" fill="#e0a668"/><path d="M10.2 10.6h3.6L12 15.4z" fill="#8e969f"/><path d="M2.6 12.4h6.5l2.4 4.6-1.6 4.9H2.6z" fill="#6b5a34"/><path d="M21.4 12.4h-6.5l-2.4 4.6 1.6 4.9h7.3z" fill="#6b5a34"/><path d="M2.6 12.4h6.5l1 1.9H2.6zM21.4 12.4h-6.5l-1 1.9h7.5z" fill="#a6d878"/></svg>`,
+  wall: `<svg viewBox="0 0 24 24"><path d="M1.4 20.4c1.9 0 3.1-2.6 4.6-5.6C7.9 10.9 9.6 6.6 12 6.6s4.1 4.3 6 8.2c1.5 3 2.7 5.6 4.6 5.6z" fill="#8a5a2b"/><path d="M1.4 20.4c1.9 0 3.1-2.6 4.6-5.6C7.9 10.9 9.6 6.6 12 6.6v13.8z" fill="#a06b35"/><path d="M12 6.6c-1.2 0-2.2 1.1-3.1 2.6h6.2C14.2 7.7 13.2 6.6 12 6.6z" fill="#6fb04a"/><g stroke="#6b451f" stroke-width=".9" stroke-linecap="round" fill="none" opacity=".65"><path d="M6.9 16.4h3.4"/><path d="M13.7 16.4h3.4"/><path d="M9.6 12.6h4.8"/></g><path d="M1.4 20.4h21.2v1.9H1.4z" fill="#5d3c1c"/></svg>`,
   teleport: `<svg viewBox="0 0 24 24"><path d="M2.6 12l3.3-5.4L9.2 12l-3.3 5.4z" fill="none" stroke="#c86bff" stroke-width="1.7" stroke-linejoin="round" opacity=".8"/><path d="M14.8 12l3.3-5.4L21.4 12l-3.3 5.4z" fill="#c86bff"/><path d="M10.6 8.7L13.9 12l-3.3 3.3" fill="none" stroke="#6be7ff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 20.6h16" stroke="#8a93a8" stroke-width="1.5" stroke-linecap="round"/></svg>`,
-  nuke: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#26350f"/><g fill="#b6ff5a"><path d="M12 12L8.2 4.6a9 9 0 017.6 0z"/><path d="M12 12L8.2 4.6a9 9 0 017.6 0z" transform="rotate(120 12 12)"/><path d="M12 12L8.2 4.6a9 9 0 017.6 0z" transform="rotate(240 12 12)"/><circle cx="12" cy="12" r="2.1"/></g></svg>`,
+  nuke: `<svg viewBox="0 0 24 24"><path d="M8.4 18.1L5.2 22.5h3.2zM15.6 18.1l3.2 4.4h-3.2z" fill="#2b323c"/><path d="M8.7 17.4h6.6l1.6 5.1H7.1z" fill="#3d4652"/><path d="M12 1.5c3.4 3.4 5.3 7.1 5.3 10.4 0 2.4-.8 4.4-1.9 5.9H8.6c-1.1-1.5-1.9-3.5-1.9-5.9C6.7 8.6 8.6 4.9 12 1.5z" fill="#aeb9c9"/><path d="M12 1.5C8.6 4.9 6.7 8.6 6.7 11.9c0 1.6.4 3.1 1 4.3V5.4z" fill="#d7e0ec"/><path d="M6.9 8.5h10.2v6.6H6.9z" fill="#26350f"/><g fill="#b6ff5a"><path d="M12 11.8l-1.6-3.1a3.6 3.6 0 013.2 0z"/><path d="M12 11.8l-1.6-3.1a3.6 3.6 0 013.2 0z" transform="rotate(120 12 11.8)"/><path d="M12 11.8l-1.6-3.1a3.6 3.6 0 013.2 0z" transform="rotate(240 12 11.8)"/><circle cx="12" cy="11.8" r=".9"/></g></svg>`,
 };
 const TRAJ = {
   cannon: `<svg viewBox="0 0 24 14"><path d="M2 12 Q12 1 22 12" stroke="#aeb9d6" stroke-width="1.6" fill="none"/><circle cx="22" cy="12" r="1.9" fill="#ff5a52"/></svg>`,
@@ -168,6 +170,50 @@ const Audio = {
     sg.gain.setValueAtTime(0.0001, t + 0.29); sg.gain.linearRampToValueAtTime(0.14, t + 0.31);
     sg.gain.exponentialRampToValueAtTime(0.001, t + 0.50);
     s.connect(sg).connect(c.destination); s.start(t + 0.29); s.stop(t + 0.52);
+  },
+  // Air Strike delivery — a turbine drone that swells as the bomber runs in and
+  // falls away behind it. `dur` is the aircraft's wall-clock life, in seconds.
+  plane(dur) {
+    const c = this.ensure(); if (!c) return;
+    const t = c.currentTime, d = Math.max(1.2, Math.min(9, dur || 4));
+    const n = c.createBufferSource();
+    const buf = c.createBuffer(1, Math.max(1, Math.floor(c.sampleRate * d)), c.sampleRate);
+    const ch = buf.getChannelData(0);
+    for (let i = 0; i < ch.length; i++) ch[i] = Math.random() * 2 - 1;
+    n.buffer = buf;
+    const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 1.4;
+    bp.frequency.setValueAtTime(240, t);
+    bp.frequency.linearRampToValueAtTime(760, t + d * 0.55);      // closing
+    bp.frequency.linearRampToValueAtTime(190, t + d);             // and away
+    const ng = c.createGain();
+    ng.gain.setValueAtTime(0.0001, t);
+    ng.gain.linearRampToValueAtTime(0.085, t + d * 0.35);
+    ng.gain.setValueAtTime(0.085, t + d * 0.62);
+    ng.gain.exponentialRampToValueAtTime(0.0005, t + d);
+    n.connect(bp).connect(ng).connect(c.destination); n.start(t); n.stop(t + d);
+    const o = c.createOscillator(), g = c.createGain();          // low turbine beat
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(74, t);
+    o.frequency.linearRampToValueAtTime(96, t + d * 0.55);
+    o.frequency.linearRampToValueAtTime(62, t + d);
+    const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 340;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.07, t + d * 0.35);
+    g.gain.exponentialRampToValueAtTime(0.0005, t + d);
+    o.connect(lp).connect(g).connect(c.destination); o.start(t); o.stop(t + d);
+  },
+  // One bomb leaving the bay — a short descending whistle. Deliberately quiet:
+  // five of these overlap during a stick.
+  whistle() {
+    const c = this.ensure(); if (!c) return;
+    const t = c.currentTime, o = c.createOscillator(), g = c.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(1500, t + 0.05);
+    o.frequency.exponentialRampToValueAtTime(420, t + 0.72);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.045, t + 0.12);
+    g.gain.exponentialRampToValueAtTime(0.0006, t + 0.78);
+    o.connect(g).connect(c.destination); o.start(t); o.stop(t + 0.8);
   },
   chime(win) {
     const c = this.ensure(); if (!c) return;
@@ -559,6 +605,8 @@ function applySnapshot(m) {
   S.playing = true; S.quick = false; S.anim = null; S.queue = []; S.pendingOver = null; S.warp = null;
   S.deferred = [];                     // start/restore hp+alive win outright — discard held work
   S.particles = []; S.floaters = []; S.rings = []; S.muzzle = []; S.flash = 0; S.shake = 0;
+  S.plane = null;
+  S.mush = null;                       // a nuke cloud must never survive into the next match
   S.recoil = [0, 0];
   S.charging = false; S.pullPointer = null; S.userZoom = 1; S.panY = 0;
   computeMinY();
@@ -901,7 +949,10 @@ function startNextShot() {
     if (S.pendingOver) { const o = S.pendingOver; S.pendingOver = null; onGameOver(o); }
     return;
   }
-  const projectiles = m.projectiles.map(p => ({ path: p.path, det: p.det, delay: p.delay || 0, beacon: !!p.beacon, pos: 0, done: false, exploded: false, trail: [] }));
+  S.plane = null;             // any previous delivery run is over
+  // `from` is the path index a projectile becomes VISIBLE at. 0 for everything
+  // except Air Strike bombs, whose long fall starts far above the frame.
+  const projectiles = m.projectiles.map(p => ({ path: p.path, det: p.det, delay: p.delay || 0, from: 0, beacon: !!p.beacon, pos: 0, done: false, exploded: false, trail: [] }));
   // Which impact owns the damage. `hp`, `damage`, `terrainDiff` and `tanks` are
   // ONE aggregate for the whole salvo (game-core sums every sub-blast into
   // damageDealt and settles the terrain once), so there is no per-bomblet split
@@ -915,22 +966,38 @@ function startNextShot() {
     const end = pr.delay + Math.max(0, pr.path.length - 1);
     if (end >= lastEnd) { lastEnd = end; lastDet = i; }
   }
-  S.anim = { m, elapsed: 0, projectiles, lastDet, settleTimer: 0, resolved: false };
+  S.anim = { m, elapsed: 0, projectiles, lastDet, settleTimer: 0, resolved: false, strike: null };
+  armAirstrike(S.anim, m);    // slow-motion window + the delivery aircraft
   muzzleBlast(m.by);          // barrel recoil + flash out of the cannon
   Audio.fire();
   updateDock();
 }
 
-const PLAYBACK = 115; // path points per second
+// One path point = 1/30 s of simulated flight (game-core: DT 1/120, SAMPLE_EVERY 4),
+// so 115 points/s replays the world at ~3.8x real time.
+const PLAYBACK = 115;      // path points per second — normal shots
+const STRIKE_RATE = 42;    // ...during an Air Strike bomb run (~1.4x real time)
+const STRIKE_RAMP = 16;    // points over which playback eases down into it
+
+// Playback speed for THIS frame. Only the Air Strike bends it: the beacon shell
+// arcs at full speed, then the shot tucks into slow motion as the beacon lands so
+// the bomber and the falling stick are actually readable. Everything keyed off
+// A.elapsed (delays, projectile positions) stays consistent automatically.
+function playbackRate(A) {
+  const st = A.strike; if (!st) return PLAYBACK;
+  const k = clamp01((A.elapsed - (st.slowAt - STRIKE_RAMP)) / STRIKE_RAMP);
+  return PLAYBACK + (STRIKE_RATE - PLAYBACK) * (k * k * (3 - 2 * k));   // smoothstep
+}
+
 function advanceAnim(dt) {
   const A = S.anim; if (!A) return;
-  A.elapsed += PLAYBACK * dt;
+  A.elapsed += playbackRate(A) * dt;
   let allDone = true, resolveNow = false;
   for (let i = 0; i < A.projectiles.length; i++) {
     const pr = A.projectiles[i];
     if (pr.done) continue;
     const local = A.elapsed - pr.delay;
-    if (local < 0) { allDone = false; continue; }
+    if (local < pr.from) { allDone = false; continue; }
     if (local >= pr.path.length - 1) {
       pr.pos = pr.path.length - 1; pr.done = true;
       if (pr.det && !pr.exploded) {
@@ -970,6 +1037,10 @@ function detonate(det) {
   S.rings.push({ x: det.x, y: det.y, r: det.r * 0.15, rMax: det.r * 1.4, age: 0, life: 0.32, color: '#fff2c0' });
   Audio.boom(det.r);
   if (navigator.vibrate) navigator.vibrate(Math.min(80, det.r / 6));
+  // Tactical Nuke: the blast also raises a mushroom cloud. It runs on its OWN
+  // clock in S.mush, so it long outlives this shot's animation without holding
+  // up the turn handover (nothing in myTurn()/advanceAnim reads S.mush).
+  if (isNukeDet(det)) startMushroom(det);
   // fireball flash particles (weapon-coloured)
   const base = det.hz === 'gas' ? '#9dde4b' : det.kind === 'dirt' || det.kind === 'wall' ? '#8a5a2b' : det.color;
   const n = Math.round(8 + det.r / 60);
@@ -1252,6 +1323,304 @@ function drawWarp() {
   if (!W.fizzle) diamond(bx, by, clamp01((t - WARP_T.in0) / 0.45), WARP_COOL);
 }
 
+// ---------------------------------------------------------------------------
+// Tactical Nuke — mushroom cloud. Its own render pass with its own state slot
+// and lifetime (exactly like S.muzzle / S.warp), so it long outlives the shot
+// animation and can NEVER delay the turn handover.
+//
+// House style: every silhouette here is built from quadratic curves and filled
+// with a gradient. There is not one ctx.arc / ctx.ellipse in this section — see
+// mzPuff() for the same "lumpy mass, no disc" trick, and drawMuzzleFlashes()'
+// bloom for "gradient to alpha 0 inside a rect reads as glare, not a circle".
+// The whole pass draws BEHIND the tanks (see the call site in draw()), because
+// the cloud is enormous and a tank must never get lost inside it.
+// ---------------------------------------------------------------------------
+const MUSH = {
+  life:   6.6,    // total seconds on screen
+  rise:   2.7,    // seconds for the cap to reach full height
+  hgt:    3.15,   // cap-centre height at full rise, in blast radii
+  capR:   1.55,   // cap radius at full billow, in blast radii
+  billow: 3.0,    // seconds for the cap to reach full radius
+  flash:  0.34,   // seconds of white-hot ground-zero glare
+  hot:    1.55,   // seconds the fireball keeps glowing inside the column
+  ring0:  0.26,   // condensation shell window (seconds)
+  ring1:  2.30,
+  skirt:  3.40,   // seconds the ground-hugging base surge lives
+  fade:   0.60,   // fraction of `life` before the fade-out starts
+};
+const MUSH_DARK = [92, 85, 78];      // shadowed ash
+const MUSH_LIT  = [206, 197, 182];   // sunlit ash
+// k = 0 shadow … 1 sunlit. Returns the "r,g,b" body of an rgba() string.
+function ashRGB(k) {
+  const t = k < 0 ? 0 : k > 1 ? 1 : k;
+  return `${(MUSH_DARK[0] + (MUSH_LIT[0] - MUSH_DARK[0]) * t) | 0},` +
+         `${(MUSH_DARK[1] + (MUSH_LIT[1] - MUSH_DARK[1]) * t) | 0},` +
+         `${(MUSH_DARK[2] + (MUSH_LIT[2] - MUSH_DARK[2]) * t) | 0}`;
+}
+function hexRGB(hex, fb) {
+  const n = parseInt(String(hex || '').slice(1), 16);
+  return Number.isFinite(n) ? `${(n >> 16) & 255},${(n >> 8) & 255},${n & 255}` : fb;
+}
+
+// The det payload carries no weapon id (game-core stays pure), so identify the
+// nuke from the shot that is currently playing — exact — and fall back on its
+// unique signature: the only weapon that CRATERS and leaves a GAS hazard.
+function isNukeDet(det) {
+  const wid = S.anim && S.anim.m && S.anim.m.weapon;
+  if (wid) return wid === 'nuke';
+  return det.kind === 'crater' && det.hz === 'gas';
+}
+
+function startMushroom(det) {
+  S.mush = {
+    x: det.x,
+    gy: surfaceAt(det.x),                       // ground zero, on the local heightmap
+    r: Math.max(240, det.r),                    // world units — everything scales off this
+    tint: hexRGB(det.color, '182,255,90'),      // weapon colour, used only as a glow tint
+    wind: (Math.random() < 0.5 ? -1 : 1) * (0.10 + Math.random() * 0.10),
+    seed: Math.random() * 1000,
+    t: 0, life: MUSH.life,
+  };
+}
+
+// dt can be up to 2s when this is driven by the hidden-tab interval, so the cull
+// is a plain ">=" on the accumulated clock — a big jump can never step over it.
+function stepMushroom(dt) {
+  const M = S.mush; if (!M) return;
+  M.t += dt;
+  if (M.t >= M.life) { S.mush = null; return; }
+  if (M.t < 0.9) S.shake = Math.max(S.shake, 5 * (1 - M.t / 0.9));   // the ground keeps rolling
+}
+
+// Ellipse-ish lens from four quadratics. Deliberately a touch over-bulged so it
+// reads as a cloud shell rather than a drawn circle.
+function mushLens(cx, cy, rx, ry) {
+  ctx.moveTo(cx - rx, cy);
+  ctx.quadraticCurveTo(cx - rx, cy - ry * 1.06, cx, cy - ry);
+  ctx.quadraticCurveTo(cx + rx, cy - ry * 1.06, cx + rx, cy);
+  ctx.quadraticCurveTo(cx + rx, cy + ry * 1.06, cx, cy + ry);
+  ctx.quadraticCurveTo(cx - rx, cy + ry * 1.06, cx - rx, cy);
+  ctx.closePath();
+}
+
+// Lumpy, non-circular mass — mzPuff's idiom with independent rx/ry and a
+// caller-supplied colour ramp, so the same helper does ash, dust and hot gas.
+function mushBlob(cx, cy, rx, ry, seed, stops, lift) {
+  if (!(rx > 0.6) || !(ry > 0.6)) return;
+  const N = 9;
+  const fAt = (th) => 0.82 + 0.20 * Math.sin(th * 3 + seed) + 0.11 * Math.sin(th * 5 - seed * 1.7);
+  ctx.beginPath();
+  for (let k = 0; k <= N; k++) {
+    const th = (k / N) * Math.PI * 2, f = fAt(th);
+    const x = cx + Math.cos(th) * rx * f, y = cy + Math.sin(th) * ry * f;
+    if (k === 0) { ctx.moveTo(x, y); continue; }
+    const tm = ((k - 0.5) / N) * Math.PI * 2, fm = fAt(tm) * 1.10;
+    ctx.quadraticCurveTo(cx + Math.cos(tm) * rx * fm, cy + Math.sin(tm) * ry * fm, x, y);
+  }
+  ctx.closePath();
+  const g = ctx.createRadialGradient(cx, cy - ry * (lift ?? 0.28), Math.max(0.5, rx * 0.06),
+                                     cx, cy, Math.max(rx, ry) * 1.04);
+  for (const [p, c] of stops) g.addColorStop(p, c);
+  ctx.fillStyle = g; ctx.fill();
+}
+
+function drawMushroom() {
+  const M = S.mush; if (!M || M.t >= M.life) return;
+  const t = M.t, tn = t / M.life;
+  const U = Math.max(9, M.r * cam.zoom);            // one blast radius, in screen px
+  const gx = wx2s(M.x), gy = wy2s(M.gy);
+  if (gx + U * 5.4 < 0 || gx - U * 5.4 > view.cssW || gy - U * 6.6 > view.cssH) return;
+
+  const rise = 1 - Math.pow(1 - clamp01(t / MUSH.rise), 2.4);   // fast then decelerating
+  const bil  = Math.pow(clamp01(t / MUSH.billow), 0.62);
+  const flat = 1 + 0.30 * clamp01((t - MUSH.rise) / Math.max(0.1, M.life - MUSH.rise));
+  const H  = U * MUSH.hgt * rise;                              // cap centre above ground
+  const CR = U * (0.30 + (MUSH.capR - 0.30) * bil);            // cap radius
+  const drift = U * M.wind * 1.9 * Math.pow(tn, 1.35);         // downwind lean (0 at t=0)
+  const cx = gx + drift, cy = gy - H;
+  const boil = t * 1.15 + M.seed;
+
+  const fadeK = t < M.life * MUSH.fade ? 1
+              : 1 - (t - M.life * MUSH.fade) / (M.life * (1 - MUSH.fade));
+  // Zoomed hard in, the cap can be bigger than the screen; thin it out so the
+  // battlefield stays readable instead of going flat grey.
+  const over = clamp01((CR - view.cssH * 0.55) / Math.max(1, view.cssH * 0.9));
+  const A = Math.max(0, fadeK) * (1 - 0.45 * over);
+  if (A <= 0.01) return;
+  // Deep zoom-in only: the cloud is then far bigger than the screen, so trade a
+  // couple of lobes for fillrate. Normal play never crosses this.
+  const lod = U > view.cssH * 0.80 ? 1 : 0;
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'source-over';
+
+  // 1. Condensation shell (Wilson cloud) — a thin lens BAND racing outward past
+  //    the cap and thinning away. Two lens subpaths + evenodd, never a stroke.
+  const rt = clamp01((t - MUSH.ring0) / (MUSH.ring1 - MUSH.ring0));
+  if (rt > 0 && rt < 1) {
+    const k = Math.pow(rt, 0.55);
+    const rx = CR * (0.90 + 3.10 * k), ry = rx * (0.42 + 0.16 * k);
+    const th = Math.max(1.2, CR * 0.20 * (1 - rt));
+    ctx.beginPath();
+    mushLens(cx, cy + CR * 0.15, rx, ry);
+    mushLens(cx, cy + CR * 0.15, Math.max(1, rx - th), Math.max(1, ry - th * 0.6));
+    ctx.fillStyle = `rgba(232,244,255,${A * 0.30 * Math.sin(Math.PI * Math.pow(rt, 0.72))})`;
+    ctx.fill('evenodd');
+  }
+
+  // 2. Stem — one closed hourglass silhouette, sheared downwind at the top so
+  //    the column bends the way a real one does.
+  if (H > U * 0.10) {
+    const wB = U * 0.52, wW = U * 0.30, wT = Math.min(U * 0.66, CR * 0.80);
+    const sxAt = (hf) => gx + drift * hf * hf;          // bends more the higher it goes
+    ctx.beginPath();
+    ctx.moveTo(sxAt(0) - wB, gy);
+    ctx.quadraticCurveTo(sxAt(0.24) - wB * 0.92, gy - H * 0.24, sxAt(0.48) - wW, gy - H * 0.48);
+    ctx.quadraticCurveTo(sxAt(0.76) - wW * 1.05, gy - H * 0.76, sxAt(1) - wT, gy - H);
+    ctx.lineTo(sxAt(1) + wT, gy - H);
+    ctx.quadraticCurveTo(sxAt(0.76) + wW * 1.05, gy - H * 0.76, sxAt(0.48) + wW, gy - H * 0.48);
+    ctx.quadraticCurveTo(sxAt(0.24) + wB * 0.92, gy - H * 0.24, sxAt(0) + wB, gy);
+    ctx.closePath();
+    const sg = ctx.createLinearGradient(gx, gy, cx, cy);
+    sg.addColorStop(0,    `rgba(120,104,84,${A * 0.86})`);
+    sg.addColorStop(0.42, `rgba(138,128,116,${A * 0.80})`);
+    sg.addColorStop(1,    `rgba(176,166,152,${A * 0.72})`);
+    ctx.fillStyle = sg; ctx.fill();
+
+    const hotK = Math.max(0, 1 - t / MUSH.hot);
+    if (hotK > 0.02) {                                  // fireball still lighting the column
+      ctx.globalCompositeOperation = 'lighter';
+      const hg = ctx.createLinearGradient(gx, gy, cx, cy);
+      hg.addColorStop(0,    `rgba(255,170,60,${A * 0.42 * hotK})`);
+      hg.addColorStop(0.35, `rgba(230,110,30,${A * 0.24 * hotK})`);
+      hg.addColorStop(1,    'rgba(160,60,20,0)');
+      ctx.fillStyle = hg; ctx.fill();                   // same path — no beginPath between
+      ctx.globalCompositeOperation = 'source-over';
+    }
+
+    // Striations scrolling upward — the only cue that the column is MOVING
+    // rather than merely growing. Kept inside the waist so no clip is needed.
+    for (let k = 0; k < 3 - lod; k++) {
+      const ph = (t * 0.5 + k * 0.34 + (M.seed % 1)) % 1;
+      const y0 = gy - H * ph, y1 = gy - H * Math.min(1, ph + 0.26);
+      const hw = U * (0.07 + 0.035 * k);
+      const ox = sxAt(ph) + (k - 1) * U * 0.12;
+      ctx.beginPath();
+      ctx.moveTo(ox - hw, y0);
+      ctx.quadraticCurveTo(ox - hw * 0.5, (y0 + y1) / 2, ox, y1);
+      ctx.quadraticCurveTo(ox + hw * 0.5, (y0 + y1) / 2, ox + hw, y0);
+      ctx.closePath();
+      ctx.fillStyle = `rgba(86,78,70,${A * 0.16 * (1 - ph)})`;
+      ctx.fill();
+    }
+  }
+
+  // 3. Base surge — dust rolling outward along the ground. Sampled against the
+  //    real heightmap so it hugs the terrain instead of floating over it.
+  const st = clamp01(t / MUSH.skirt);
+  if (st < 1) {
+    const sa = A * 0.42 * (1 - st) * Math.min(1, t / 0.16);
+    const spread = U * (0.55 + 2.35 * Math.pow(st, 0.45));
+    const nS = 3 - lod;                                  // lobes run -nS .. nS
+    for (let k = -nS; k <= nS; k++) {
+      const f = k / nS;
+      const sx = gx + f * spread;
+      if (sx < -U || sx > view.cssW + U) continue;
+      const sy = wy2s(surfaceAt(M.x + (f * spread) / Math.max(cam.zoom, 1e-4)));
+      const rr = U * (0.62 - 0.20 * Math.abs(f)) * (0.70 + st * 0.90);
+      mushBlob(sx, sy - rr * 0.45, rr * 1.35, rr * 0.72, M.seed + k * 3.1, [
+        [0,   `rgba(178,152,112,${sa})`],
+        [0.6, `rgba(140,116,84,${sa * 0.7})`],
+        [1,   'rgba(110,92,68,0)'],
+      ], 0.20);
+    }
+  }
+
+  // 4. Cap — a rolling, billowing mass that curls under at the rim.
+  {
+    const cA = A * Math.min(1, t / 0.20);
+    // shadowed underside first, so the body and the crown overlap it
+    mushBlob(cx, cy + CR * 0.30, CR * 1.28 * flat, CR * 0.52, M.seed + 11, [
+      [0,    `rgba(74,68,62,${cA * 0.80})`],
+      [0.62, `rgba(58,53,49,${cA * 0.55})`],
+      [1,    'rgba(46,42,39,0)'],
+    ], 0.05);
+    // main mass — flattens and spreads as it tops out
+    mushBlob(cx, cy, CR * 1.34 * flat, (CR * 0.80) / flat, M.seed + 3, [
+      [0,    `rgba(${ashRGB(0.92)},${cA * 0.92})`],
+      [0.52, `rgba(${ashRGB(0.46)},${cA * 0.88})`],
+      [1,    `rgba(${ashRGB(0.10)},${cA * 0.30})`],
+    ], 0.42);
+    // the roll-under: two dense lobes tucking beneath the outer edges
+    for (const s of [-1, 1]) {
+      mushBlob(cx + s * CR * 1.02 * flat, cy + CR * 0.40, CR * 0.46, CR * 0.36,
+               M.seed + 7 + s, [
+        [0,    `rgba(104,96,88,${cA * 0.80})`],
+        [0.55, `rgba(72,66,61,${cA * 0.62})`],
+        [1,    'rgba(54,49,45,0)'],
+      ], -0.30);
+    }
+    // crown billows, boiling on their own slow clock
+    const nB = lod ? 4 : 6;
+    for (let k = 0; k < nB; k++) {
+      const th = -Math.PI * (0.10 + 0.80 * (k / (nB - 1)));
+      const pu = 0.86 + 0.16 * Math.sin(boil * 1.7 + k * 2.1);
+      const bx = cx + Math.cos(th) * CR * 1.00 * flat;
+      const by = cy + Math.sin(th) * CR * 0.62;
+      const br = CR * 0.44 * pu;
+      const lit = 0.50 - 0.50 * Math.sin(th);            // 1 at the crown, 0.5 at the rim
+      mushBlob(bx, by, br * 1.18, br, M.seed + k * 4.3, [
+        [0,    `rgba(${ashRGB(lit)},${cA * 0.90})`],
+        [0.58, `rgba(${ashRGB(lit * 0.55)},${cA * 0.70})`],
+        [1,    `rgba(${ashRGB(0)},0)`],
+      ], 0.34);
+    }
+    // still burning inside — additive, composite restored immediately after.
+    const hk = Math.max(0, 1 - t / MUSH.hot);
+    if (hk > 0.02) {
+      ctx.globalCompositeOperation = 'lighter';
+      const hy = cy + CR * 0.22, hr = CR * (0.95 + 0.50 * (1 - hk));
+      const hg = ctx.createRadialGradient(cx, hy, 0, cx, hy, hr);
+      hg.addColorStop(0,    `rgba(255,236,180,${A * 0.55 * hk})`);
+      hg.addColorStop(0.38, `rgba(255,152,48,${A * 0.34 * hk})`);
+      hg.addColorStop(0.72, `rgba(${M.tint},${A * 0.16 * hk})`);
+      hg.addColorStop(1,    'rgba(120,40,10,0)');
+      ctx.fillStyle = hg;
+      ctx.fillRect(cx - hr, hy - hr, hr * 2, hr * 2);   // dies to alpha 0: glare, no rim
+      ctx.globalCompositeOperation = 'source-over';
+    }
+  }
+
+  // 5. Ground zero — the initial flash. Glare is a radial gradient inside a RECT
+  //    (no rim, so it reads as light, not a disc) plus mzLanceFill light lances,
+  //    the exact shapes the muzzle blast uses.
+  const ft = clamp01(t / MUSH.flash);
+  if (ft < 1) {
+    const fa = Math.pow(1 - ft, 1.5);
+    const fy = gy - U * 0.25;
+    ctx.globalCompositeOperation = 'lighter';
+    const bl = U * (1.10 + 2.40 * Math.pow(ft, 0.40));
+    const bg = ctx.createRadialGradient(gx, fy, 0, gx, fy, bl);
+    bg.addColorStop(0,    `rgba(255,255,250,${0.92 * fa})`);
+    bg.addColorStop(0.30, `rgba(255,238,176,${0.55 * fa})`);
+    bg.addColorStop(0.62, `rgba(${M.tint},${0.24 * fa})`);
+    bg.addColorStop(1,    'rgba(255,120,30,0)');
+    ctx.fillStyle = bg;
+    ctx.fillRect(gx - bl, fy - bl, bl * 2, bl * 2);
+    const len = U * (1.60 + 3.00 * ft), hw = U * 0.30 * (1 - ft * 0.60);
+    for (const [dx, dy, lf] of [[1, 0, 1], [-1, 0, 1], [0, -1, 1.25],
+                                [0.71, -0.71, 0.7], [-0.71, -0.71, 0.7]]) {
+      mzLanceFill(gx, gy - U * 0.15, dx, dy, len * lf, hw, [
+        [0,   `rgba(255,252,232,${0.55 * fa})`],
+        [0.4, `rgba(255,196,90,${0.30 * fa})`],
+        [1,   'rgba(210,80,20,0)'],
+      ]);
+    }
+  }
+
+  ctx.restore();          // restores composite, fillStyle and globalAlpha
+}
+
 function showToast(text) {
   const t = document.createElement('div');
   t.className = 'toast-item'; t.textContent = text;
@@ -1315,6 +1684,8 @@ setInterval(() => {
 
 function stepEffects(dt) {
   stepWarp(dt);
+  stepMushroom(dt);
+  stepPlane(dt);
   // Barrel runs back out to battery (shaped by recAmt in drawTank).
   for (let i = 0; i < S.n; i++) if (S.recoil[i] > 0) S.recoil[i] = Math.max(0, S.recoil[i] - dt * 3.4);
   // Muzzle blasts age on their own clock — they are NOT particles.
@@ -1396,10 +1767,12 @@ function draw() {
 
   drawSky(cssW, cssH);
   if (S.terrain) {
+    drawPlane();              // in the sky, BEFORE the terrain — peaks occlude it
     drawTerrain(cssW, cssH);
     drawLava(cssW, cssH);
     drawTrees();
     drawHazards();
+    drawMushroom();               // nuke column — biggest and furthest back, BEHIND the tanks
     drawParticles(true);          // soft discs (fire glow, smoke, dust) — BEHIND the tanks
     // Tanks may now share an x (crossing is legal), and a hull is 648 world units
     // wide — so draw the tank that matters LAST: the acting seat on top, then
@@ -1835,6 +2208,248 @@ function drawMuzzleFlashes() {
   ctx.restore();                                 // restores composite + fillStyle
 }
 
+// ---------------------------------------------------------------------------
+// Air Strike delivery aircraft.
+//
+// PURELY COSMETIC and PURELY DERIVED. The server already sends five bombs with
+// authoritative paths; the plane is reconstructed from them and decides nothing.
+// It works because every bomb shares identical vertical motion (spawn y -400,
+// vy 120, same g), so they all cross any altitude at the same flight time — which
+// makes the release points exactly collinear in (elapsed, x). A constant-velocity
+// aircraft therefore passes through every bomb bay release on the exact frame.
+//
+// House style, per drawMuzzleFlashes: own state (S.plane), own step (stepPlane),
+// own draw pass (drawPlane). Polygons, quadratics and gradients only — there is
+// not one ctx.arc in here.
+// ---------------------------------------------------------------------------
+const PLANE_RUNIN = 60;      // elapsed points of run-in before the first release
+const PLANE_RUNIN_K = 2.4;   // run-in covers K x cruise distance, easing onto the run
+const PLANE_CLEAR = 1200;    // world units the plane must clear the highest impact by
+const PLANE_TRAIL = 26;      // contrail samples kept
+const PLANE_BODY = '#2b323c', PLANE_LITE = '#48525f', PLANE_DARK = '#1b2028';
+const PLANE_GLASS = '#8fd4ff';
+
+// First fractional path index at which a path descends past world-y `py`.
+// null when it never does (an edge-clamped bomb that flies straight off the map).
+function crossIndex(path, py) {
+  for (let i = 1; i < path.length; i++) {
+    const y0 = path[i - 1][1], y1 = path[i][1];
+    if (y0 < py && y1 >= py) return (i - 1) + (py - y0) / Math.max(1e-6, y1 - y0);
+  }
+  return null;
+}
+function pathXAt(path, idx) {
+  const i = Math.floor(idx), f = idx - i;
+  if (i >= path.length - 1) return path[path.length - 1][0];
+  return path[i][0] * (1 - f) + path[i + 1][0] * f;
+}
+
+// Called once per shot from startNextShot(). No-op unless this shot is an Air Strike.
+function armAirstrike(A, m) {
+  if (m.weapon !== 'airstrike') return;
+  const bombs = A.projectiles.filter(p => !p.beacon && p.path && p.path.length > 1);
+  if (!bombs.length) return;                      // beacon missed — nothing is coming
+  const beacon = A.projectiles.find(p => p.beacon);
+
+  // Slow motion starts as the beacon lands and holds for the whole bomb run.
+  A.strike = { slowAt: beacon ? beacon.path.length - 1 : 0 };
+
+  // Altitude: high in the CURRENT frame, but always clear of the highest bomb
+  // impact so every bomb is guaranteed to cross it (the crossing IS the release).
+  const viewH = view.cssH / Math.max(cam.zoom, 1e-4);
+  let top = Infinity;
+  for (const b of bombs) top = Math.min(top, b.path[b.path.length - 1][1]);
+  let py = cam.cy - viewH * 0.35;                 // ~15% down from the top of the view
+  py = Math.min(py, top - PLANE_CLEAR);
+  py = Math.max(py, -300);                        // bombs spawn at y -400; stay below it
+
+  // Release events. Skipping each bomb forward to the release index deletes the
+  // 100+ points of fall that happen above the top of the screen; the bomb still
+  // becomes visible at exactly its original delay, right under the aircraft.
+  const rel = [];
+  for (const b of bombs) {
+    const idx = crossIndex(b.path, py);
+    if (idx == null) continue;                    // never reaches altitude — leave it alone
+    const at = b.delay;                           // its ORIGINAL delay = its release moment
+    b.from = idx;
+    b.delay = at - idx;                           // so pos == idx when elapsed == at
+    rel.push({ e: at, x: pathXAt(b.path, idx) });
+  }
+  if (rel.length < 1) return;
+  rel.sort((p, q) => p.e - q.e);
+
+  const first = rel[0], last = rel[rel.length - 1];
+  const span = last.e - first.e;
+  // World units per elapsed point along the drop line — EXACT, so every bomb
+  // leaves the bay. Degenerate sticks (map-edge clamped spawns) get a sane default.
+  let v = span > 0.5 ? (last.x - first.x) / span : 0;
+  if (!Number.isFinite(v) || Math.abs(v) < 1) v = (m.by != null && S.tanks[m.by] && last.x < S.tanks[m.by].x) ? -23 : 23;
+
+  S.plane = {
+    y: py, v, dir: v >= 0 ? 1 : -1,
+    x0: first.x, e0: first.e, eEnd: last.e,
+    born: first.e - PLANE_RUNIN,
+    e: 0, life: 0, alpha: 0, x: 0,
+    seed: Math.random() * 6.283,
+    drops: rel.map(r => ({ e: r.e, done: false })),
+    trail: [],
+  };
+  S.plane.x = planeX(S.plane, S.plane.born);
+  Audio.plane(((last.e - first.e) + PLANE_RUNIN * 2.5) / STRIKE_RATE);
+}
+
+// Position along the run. Past e0 it is exactly the drop line. Before e0 it eases
+// out of a faster approach into that line, so the plane settles onto its bomb run
+// instead of materialising at cruise speed.
+function planeX(P, e) {
+  const d = e - P.e0;
+  if (d >= 0) return P.x0 + P.v * d;
+  const u = Math.min(1, -d / PLANE_RUNIN);
+  return P.x0 - P.v * PLANE_RUNIN * (u + (PLANE_RUNIN_K - 1) * u * u);
+}
+
+function stepPlane(dt) {
+  const P = S.plane; if (!P) return;
+  // Rides the SHOT clock while the shot plays, so releases land on the exact
+  // frame each bomb appears; coasts out on its own once the shot is resolved.
+  P.e = S.anim ? S.anim.elapsed : P.e + STRIKE_RATE * dt;
+  if (P.e < P.born) { P.alpha = 0; P.x = planeX(P, P.born); return; }
+  P.life += dt;
+  P.x = planeX(P, P.e);
+
+  // Fades up out of the altitude haze, and away once the stick is gone. If the
+  // run-in happens to start beyond the view edge the fade is simply invisible.
+  const outFor = P.e - (P.eEnd + PLANE_RUNIN * 0.8);
+  P.alpha = Math.min(1, P.life / 0.35) *
+            (outFor > 0 ? Math.max(0, 1 - outFor / (PLANE_RUNIN * 0.7)) : 1);
+
+  const step = 10 / Math.max(cam.zoom, 1e-4);     // one contrail sample per ~10 css px
+  const tail = P.trail[P.trail.length - 1];
+  if (!tail || Math.abs(P.x - tail[0]) > step) {
+    P.trail.push([P.x, P.y]);
+    if (P.trail.length > PLANE_TRAIL) P.trail.shift();
+  }
+
+  // Bomb-bay cues, fired on the exact frame each bomb becomes visible. Sparks
+  // only — shape:'spark' is the sanctioned front-layer primitive, never a disc.
+  for (const d of P.drops) {
+    if (d.done || P.e < d.e) continue;
+    d.done = true;
+    Audio.whistle();
+    for (let k = 0; k < 4; k++) {
+      S.particles.push({
+        x: P.x + (Math.random() - 0.5) * 60, y: P.y + 26,
+        vx: (Math.random() - 0.5) * 180 + P.v * 8,
+        vy: 40 + Math.random() * 130,
+        life: 0.3, age: 0, r: 1.8, g: 0.15, shape: 'spark', color: '#dfe9f5',
+      });
+    }
+  }
+  if (P.alpha <= 0 && P.life > 1) S.plane = null;
+}
+
+// One "plane unit" in css px. Small: it is high up, and a compact silhouette
+// reads as flying far better than a big one at this ground speed.
+function planeUnit() { return Math.max(4, Math.min(8, 130 * cam.zoom)); }
+
+function planePoly(pts) {
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let k = 1; k < pts.length; k++) ctx.lineTo(pts[k][0], pts[k][1]);
+  ctx.closePath(); ctx.fill();
+}
+
+// Twin vapour ribbons built from straight quads — no round caps anywhere.
+function drawContrail(P, u) {
+  const T = P.trail, n = T.length; if (n < 3) return;
+  ctx.fillStyle = 'rgb(238,246,255)';
+  for (const off of [-0.42, 0.42]) {
+    for (let k = 1; k < n; k++) {
+      const f0 = (k - 1) / (n - 1), f1 = k / (n - 1);      // 0 = oldest, 1 = at the plane
+      const a = Math.pow(f1, 1.6) * 0.30;
+      if (a < 0.012) continue;
+      const x0 = wx2s(T[k - 1][0]), x1 = wx2s(T[k][0]);
+      const y0 = wy2s(T[k - 1][1]) + off * u * (1.7 - f0);
+      const y1 = wy2s(T[k][1]) + off * u * (1.7 - f1);
+      const h0 = u * (0.09 + 0.24 * (1 - f0)), h1 = u * (0.09 + 0.24 * (1 - f1));
+      ctx.globalAlpha = P.alpha * a;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0 - h0); ctx.lineTo(x1, y1 - h1);
+      ctx.lineTo(x1, y1 + h1); ctx.lineTo(x0, y0 + h0);
+      ctx.closePath(); ctx.fill();
+    }
+  }
+  ctx.globalAlpha = P.alpha;
+}
+
+// Swept-wing attack jet, side on, nose at local +x. Far surfaces first so the
+// fuselage overlaps them, then near surfaces on top: reads solid at 38 px long.
+function drawPlaneBody(u, P) {
+  const U = (a, b) => [a * u, b * u];
+  // far wing + far tailplane (behind the body)
+  ctx.fillStyle = PLANE_DARK;
+  planePoly([U(0.95, -0.12), U(-1.55, -1.50), U(-2.25, -1.44), U(-0.55, -0.02)]);
+  planePoly([U(-2.35, -0.05), U(-3.25, -0.60), U(-3.48, -0.55), U(-2.85, -0.02)]);
+  // fuselage: one closed curve, nose to tail
+  ctx.beginPath();
+  ctx.moveTo(...U(3.40, 0));
+  ctx.quadraticCurveTo(...U(1.30, -0.62), ...U(-1.60, -0.52));
+  ctx.lineTo(...U(-3.00, -0.30));
+  ctx.lineTo(...U(-3.00, 0.30));
+  ctx.lineTo(...U(-1.60, 0.50));
+  ctx.quadraticCurveTo(...U(1.30, 0.64), ...U(3.40, 0));
+  ctx.closePath();
+  const gf = ctx.createLinearGradient(0, -0.7 * u, 0, 0.7 * u);
+  gf.addColorStop(0, PLANE_LITE);
+  gf.addColorStop(0.45, PLANE_BODY);
+  gf.addColorStop(1, PLANE_DARK);
+  ctx.fillStyle = gf; ctx.fill();
+  // tail fin
+  ctx.fillStyle = PLANE_BODY;
+  planePoly([U(-2.05, -0.28), U(-3.05, -1.40), U(-3.40, -1.36), U(-2.72, -0.26)]);
+  // near wing + near tailplane
+  ctx.fillStyle = PLANE_LITE;
+  planePoly([U(1.05, 0.10), U(-1.45, 1.58), U(-2.20, 1.52), U(-0.45, 0.14)]);
+  planePoly([U(-2.35, 0.06), U(-3.28, 0.66), U(-3.50, 0.61), U(-2.85, 0.04)]);
+  // canopy — a faceted bubble with a glint, never a disc
+  ctx.beginPath();
+  ctx.moveTo(...U(2.42, -0.30));
+  ctx.quadraticCurveTo(...U(1.95, -0.74), ...U(1.20, -0.60));
+  ctx.lineTo(...U(1.48, -0.26));
+  ctx.closePath();
+  const gc = ctx.createLinearGradient(1.2 * u, -0.74 * u, 2.42 * u, -0.20 * u);
+  gc.addColorStop(0, 'rgba(255,255,255,0.92)');
+  gc.addColorStop(0.55, PLANE_GLASS);
+  gc.addColorStop(1, 'rgba(60,110,150,0.9)');
+  ctx.fillStyle = gc; ctx.fill();
+  // exhaust — the muzzle-blast lance, reused verbatim. Gradient, no rim, no arc.
+  const fl = 1.0 + 0.5 * (0.5 + 0.5 * Math.sin(P.e * 1.7 + P.seed * 3.1));
+  ctx.globalCompositeOperation = 'lighter';
+  mzLanceFill(-3.0 * u, 0.04 * u, -1, 0, u * 2.4 * fl, u * 0.24, [
+    [0, 'rgba(255,247,214,0.85)'],
+    [0.30, 'rgba(140,205,255,0.55)'],
+    [0.70, 'rgba(84,150,255,0.24)'],
+    [1, 'rgba(40,80,200,0)'],
+  ]);
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+function drawPlane() {
+  const P = S.plane; if (!P || P.alpha <= 0.01) return;
+  const u = planeUnit();
+  ctx.save();
+  ctx.globalAlpha = P.alpha;
+  drawContrail(P, u);                     // always: it trails off-screen behind the plane
+  const sx = wx2s(P.x), sy = wy2s(P.y);
+  if (sx > -24 * u && sx < view.cssW + 24 * u && sy > -24 * u && sy < view.cssH + 24 * u) {
+    ctx.translate(sx, sy);
+    ctx.scale(P.dir, 1);                                       // nose points along travel
+    ctx.rotate(Math.sin(P.e * 0.09 + P.seed) * 0.025);         // lazy bob at altitude
+    drawPlaneBody(u, P);
+  }
+  ctx.restore();
+}
+
 // Thin indestructible lava floor at the very bottom of the map. Drawn over the
 // terrain fill so it shows through anything blasted down to it.
 function drawLava(w, h) {
@@ -2076,23 +2691,277 @@ function lerpColor(a, b, t) {
   return `rgb(${Math.round(a[0] + (b[0] - a[0]) * t)},${Math.round(a[1] + (b[1] - a[1]) * t)},${Math.round(a[2] + (b[2] - a[2]) * t)})`;
 }
 
+// ---------------------------------------------------------------------------
+// IN-FLIGHT ORDNANCE
+// Every weapon flies its own round. Each sprite is drawn in a LOCAL frame:
+// origin at the middle of the round, +x along the velocity vector (so it always
+// points where it is going), +y "down" relative to the round. Polygons, rects
+// and linear gradients ONLY — there is not one ctx.arc in here, so a round in
+// front of a tank can never read as a blob (same house rule as drawParticles
+// and drawMuzzleFlashes). R = half-length of the round in screen px.
+// ---------------------------------------------------------------------------
+function oRect(xa, xb, h, f) { ctx.fillStyle = f; ctx.fillRect(xa, -h, xb - xa, h * 2); }
+function oPoly(f, ...p) {
+  ctx.beginPath(); ctx.moveTo(p[0], p[1]);
+  for (let i = 2; i < p.length; i += 2) ctx.lineTo(p[i], p[i + 1]);
+  ctx.closePath(); ctx.fillStyle = f; ctx.fill();
+}
+// Cylinder + ogive nose: rear x0, shoulder x1, tip x2, half-height h.
+function oOgive(x0, x1, x2, h, f) {
+  ctx.beginPath();
+  ctx.moveTo(x0, -h); ctx.lineTo(x1, -h);
+  ctx.quadraticCurveTo(x1 + (x2 - x1) * 0.62, -h * 0.66, x2, 0);
+  ctx.quadraticCurveTo(x1 + (x2 - x1) * 0.62,  h * 0.66, x1,  h);
+  ctx.lineTo(x0, h); ctx.closePath();
+  ctx.fillStyle = f; ctx.fill();
+}
+// Flared fin can — the flat side-on silhouette every bomb/mortar round has.
+function oTail(x0, x1, h, f) { oPoly(f, x0, -h, x1, -h * 0.42, x1, h * 0.42, x0, h); }
+// Tapered lance along +x (pass a negative len for an exhaust plume). Same
+// spearhead trick as mzLanceFill, so plumes never read round.
+function oLance(x0, len, h, stops) {
+  ctx.beginPath();
+  ctx.moveTo(x0, 0);
+  ctx.quadraticCurveTo(x0 + len * 0.35, -h, x0 + len, 0);
+  ctx.quadraticCurveTo(x0 + len * 0.35,  h, x0, 0);
+  ctx.closePath();
+  const g = ctx.createLinearGradient(x0, 0, x0 + len, 0);
+  for (const [s, c] of stops) g.addColorStop(s, c);
+  ctx.fillStyle = g; ctx.fill();
+}
+
+// One drawer per kind. `ph` is pr.pos (playback points) — a monotonic, RNG-free
+// phase for the few sprites that pulse.
+const ORD = {
+  // Steel HE shell: ogive nose, copper driving band, red ballistic cap.
+  cannon(R) {
+    oOgive(-1.05 * R, 0.25 * R, 1.25 * R, 0.40 * R, '#aab4c4');
+    ctx.fillStyle = '#d7dfea'; ctx.fillRect(-1.05 * R, -0.40 * R, 1.30 * R, 0.20 * R);
+    oRect(-0.88 * R, -0.60 * R, 0.44 * R, '#c98a4b');
+    oRect(-1.18 * R, -1.05 * R, 0.34 * R, '#7c8698');
+    oPoly('#ff5a52', 0.72 * R, -0.29 * R, 1.25 * R, 0, 0.72 * R, 0.29 * R);
+  },
+  // Heavy mortar bomb: fat olive body, big fin can, orange fuze.
+  mortar(R) {
+    oTail(-1.45 * R, -0.75 * R, 0.62 * R, '#3a4436');
+    oRect(-1.48 * R, -1.20 * R, 0.86 * R, '#2f3a2b');
+    oOgive(-0.80 * R, 0.10 * R, 1.15 * R, 0.54 * R, '#4d5a44');
+    ctx.fillStyle = '#66755b'; ctx.fillRect(-0.80 * R, -0.54 * R, 0.90 * R, 0.24 * R);
+    oRect(-0.58 * R, -0.34 * R, 0.58 * R, '#2f3a2b');
+    oPoly('#ffb02e', 0.70 * R, -0.30 * R, 1.15 * R, 0, 0.70 * R, 0.30 * R);
+  },
+  // Rocket: slim tube, white nose cone, swept fins, live motor plume.
+  volley(R) {
+    oLance(-0.95 * R, -1.6 * R, 0.34 * R, [[0, 'rgba(255,236,190,.95)'], [0.45, 'rgba(255,150,60,.5)'], [1, 'rgba(255,90,40,0)']]);
+    oPoly('#4a3fb0', -0.95 * R, -0.30 * R, -0.40 * R, -0.78 * R, -0.28 * R, -0.30 * R);
+    oPoly('#4a3fb0', -0.95 * R,  0.30 * R, -0.40 * R,  0.78 * R, -0.28 * R,  0.30 * R);
+    oRect(-0.95 * R, 0.55 * R, 0.30 * R, '#7c6cff');
+    ctx.fillStyle = '#a99cff'; ctx.fillRect(-0.95 * R, -0.30 * R, 1.50 * R, 0.13 * R);
+    oPoly('#eceaff', 0.55 * R, -0.30 * R, 1.25 * R, 0, 0.55 * R, 0.30 * R);
+  },
+  // Hypervelocity sabot dart inside a plasma sheath. Long, thin, no arc.
+  railgun(R) {
+    oLance(-2.2 * R, 3.7 * R, 0.30 * R, [[0, 'rgba(60,232,143,0)'], [0.5, 'rgba(60,232,143,.5)'], [0.85, 'rgba(214,255,233,.95)'], [1, 'rgba(255,255,255,0)']]);
+    oPoly('#0f2a1e', -1.25 * R, -0.12 * R, -0.60 * R, -0.34 * R, -0.60 * R, 0.34 * R, -1.25 * R, 0.12 * R);
+    oPoly('#d6ffe9', -1.15 * R, -0.14 * R, 0.95 * R, -0.09 * R, 1.50 * R, 0, 0.95 * R, 0.09 * R, -1.15 * R, 0.14 * R);
+  },
+  // Cluster dispenser: segmented canister with a steel nose cap and fuze probe.
+  cluster(R) {
+    oTail(-1.35 * R, -0.85 * R, 0.64 * R, '#8a6c14');
+    oRect(-1.38 * R, -1.12 * R, 0.86 * R, '#6d5510');
+    oRect(-0.92 * R, 0.62 * R, 0.54 * R, '#ffd23f');
+    ctx.fillStyle = '#fff0a8'; ctx.fillRect(-0.92 * R, -0.54 * R, 1.54 * R, 0.20 * R);
+    ctx.fillStyle = '#b8890f';
+    ctx.fillRect(-0.46 * R, -0.54 * R, 0.11 * R, 1.08 * R);
+    ctx.fillRect( 0.02 * R, -0.54 * R, 0.11 * R, 1.08 * R);
+    oPoly('#e0e6f0', 0.62 * R, -0.54 * R, 1.08 * R, -0.24 * R, 1.08 * R, 0.24 * R, 0.62 * R, 0.54 * R);
+    oRect(1.08 * R, 1.34 * R, 0.13 * R, '#8a93a8');
+  },
+  // Sub-munition: ribbon-tailed bomblet. Tumbles (see ORD_SPIN).
+  bomblet(R) {
+    oPoly('rgba(255,210,63,.7)', -0.34 * R, 0, -1.30 * R, -0.46 * R, -1.02 * R, 0, -1.30 * R, 0.46 * R);
+    oRect(-0.36 * R, 0.34 * R, 0.38 * R, '#ffd23f');
+    ctx.fillStyle = '#b8890f'; ctx.fillRect(-0.36 * R, 0.12 * R, 0.70 * R, 0.26 * R);
+    oPoly('#e0e6f0', 0.34 * R, -0.30 * R, 0.70 * R, 0, 0.34 * R, 0.30 * R);
+  },
+  // Napalm tank: a fat, blunt, deliberately un-aerodynamic drum with strapping.
+  napalm(R) {
+    oPoly('#3a2018', -1.00 * R, -0.62 * R, -1.36 * R, -0.34 * R, -1.36 * R, 0.34 * R, -1.00 * R, 0.62 * R);
+    oRect(-1.00 * R, 0.74 * R, 0.62 * R, '#c4503a');
+    ctx.fillStyle = '#ff6a3d'; ctx.fillRect(-1.00 * R, -0.62 * R, 1.74 * R, 0.26 * R);
+    ctx.fillStyle = '#7a2a18';
+    ctx.fillRect(-0.62 * R, -0.62 * R, 0.13 * R, 1.24 * R);
+    ctx.fillRect( 0.18 * R, -0.62 * R, 0.13 * R, 1.24 * R);
+    oPoly('#8a93a8', 0.74 * R, -0.62 * R, 1.16 * R, -0.26 * R, 1.16 * R, 0.26 * R, 0.74 * R, 0.62 * R);
+  },
+  // Burning gobbet thrown out by the napalm burst — a tapered flame, not a disc.
+  firebomb(R) {
+    oLance(-1.5 * R, 2.7 * R, 0.58 * R, [[0, 'rgba(120,20,0,0)'], [0.35, 'rgba(255,106,61,.72)'], [0.8, 'rgba(255,210,63,.92)'], [1, 'rgba(255,255,235,0)']]);
+    oPoly('#fff1c0', -0.32 * R, -0.26 * R, 0.80 * R, 0, -0.32 * R, 0.26 * R);
+  },
+  // Chemical shell: hazard bands and a weeping vapour trail, no fireball tip.
+  gas(R) {
+    oLance(-0.95 * R, -2.0 * R, 0.52 * R, [[0, 'rgba(157,222,75,.5)'], [0.55, 'rgba(157,222,75,.2)'], [1, 'rgba(157,222,75,0)']]);
+    oOgive(-0.95 * R, 0.35 * R, 1.08 * R, 0.44 * R, '#6c7a55');
+    ctx.fillStyle = '#8b9b6e'; ctx.fillRect(-0.95 * R, -0.44 * R, 1.30 * R, 0.20 * R);
+    oRect(-0.58 * R, -0.24 * R, 0.48 * R, '#9dde4b');
+    oRect( 0.08 * R,  0.34 * R, 0.48 * R, '#9dde4b');
+    oRect(-1.08 * R, -0.95 * R, 0.36 * R, '#4d5741');
+  },
+  // Air-strike marker: a target dart with a strobing red flare.
+  beacon(R, ph) {
+    const k = 0.55 + 0.45 * Math.sin(ph * 0.9);
+    oLance(-0.85 * R, -2.3 * R, 0.44 * R, [[0, `rgba(255,90,82,${0.85 * k})`], [0.5, `rgba(255,150,60,${0.35 * k})`], [1, 'rgba(255,90,82,0)']]);
+    oPoly('#54c8ff', -0.85 * R, -0.24 * R, -0.32 * R, -0.78 * R, -0.20 * R, -0.24 * R);
+    oPoly('#54c8ff', -0.85 * R,  0.24 * R, -0.32 * R,  0.78 * R, -0.20 * R,  0.24 * R);
+    oRect(-0.85 * R, 0.52 * R, 0.24 * R, '#e6edf8');
+    oPoly('#ff5a52', 0.52 * R, -0.24 * R, 1.22 * R, 0, 0.52 * R, 0.24 * R);
+  },
+  // The stick that follows the beacon: classic aerial bomb, boxed tail.
+  bomb(R) {
+    oTail(-1.42 * R, -0.72 * R, 0.68 * R, '#465165');
+    oRect(-1.45 * R, -1.18 * R, 0.84 * R, '#2f394a');
+    oOgive(-0.72 * R, 0.15 * R, 1.18 * R, 0.52 * R, '#5d6a7d');
+    ctx.fillStyle = '#7d8b9f'; ctx.fillRect(-0.72 * R, -0.52 * R, 0.87 * R, 0.22 * R);
+    oRect(-0.32 * R, -0.06 * R, 0.56 * R, '#3c4657');
+    oPoly('#54c8ff', 0.80 * R, -0.24 * R, 1.18 * R, 0, 0.80 * R, 0.24 * R);
+  },
+  // Bunker buster: long slim penetrator with a hardened steel nose.
+  buster(R) {
+    oTail(-1.50 * R, -0.88 * R, 0.56 * R, '#7a5a30');
+    oRect(-1.52 * R, -1.24 * R, 0.74 * R, '#5c421f');
+    oRect(-1.08 * R, 0.35 * R, 0.34 * R, '#c98a4b');
+    ctx.fillStyle = '#e0a668'; ctx.fillRect(-1.08 * R, -0.34 * R, 1.43 * R, 0.13 * R);
+    oPoly('#8e969f', 0.35 * R, -0.34 * R, 1.50 * R, 0, 0.35 * R, 0.34 * R);
+    oPoly('#5a6069', 0.35 * R,  0.05 * R, 1.50 * R, 0, 0.35 * R, 0.34 * R);
+  },
+  // Earthworks charge: a strapped earth drum. No fuze glow — it is not HE.
+  wall(R) {
+    oPoly('#6b451f', -0.85 * R, -0.64 * R, -1.20 * R, -0.30 * R, -1.20 * R, 0.30 * R, -0.85 * R, 0.64 * R);
+    oRect(-0.85 * R, 0.85 * R, 0.64 * R, '#8a5a2b');
+    ctx.fillStyle = '#a06b35'; ctx.fillRect(-0.85 * R, -0.64 * R, 1.70 * R, 0.26 * R);
+    ctx.fillStyle = '#5d3c1c';
+    ctx.fillRect(-0.42 * R, -0.64 * R, 0.15 * R, 1.28 * R);
+    ctx.fillRect( 0.22 * R, -0.64 * R, 0.15 * R, 1.28 * R);
+    oPoly('#6b451f', 0.85 * R, -0.64 * R, 1.20 * R, -0.30 * R, 1.20 * R, 0.30 * R, 0.85 * R, 0.64 * R);
+  },
+  // Warp probe: the same violet/cyan lozenge the teleport effect uses.
+  teleport(R, ph) {
+    const k = 0.6 + 0.4 * Math.sin(ph * 0.9);
+    oPoly(`rgba(200,107,255,${0.28 * k})`, -1.95 * R, 0, -0.70 * R, -0.72 * R, 1.65 * R, 0, -0.70 * R, 0.72 * R);
+    oPoly('#c86bff', -1.15 * R, 0, -0.15 * R, -0.46 * R, 1.32 * R, 0, -0.15 * R, 0.46 * R);
+    oPoly('#6be7ff', -0.55 * R, 0,  0.05 * R, -0.22 * R, 0.98 * R, 0,  0.05 * R, 0.22 * R);
+    ctx.fillStyle = `rgba(255,255,255,${0.8 * k})`;
+    ctx.fillRect(-0.10 * R, -0.10 * R, 0.58 * R, 0.20 * R);
+    ctx.strokeStyle = `rgba(107,231,255,${0.55 * k})`; ctx.lineWidth = Math.max(1, R * 0.12);
+    ctx.beginPath();
+    ctx.moveTo(-1.38 * R, -0.44 * R); ctx.lineTo(-1.02 * R, 0); ctx.lineTo(-1.38 * R, 0.44 * R);
+    ctx.moveTo(-2.05 * R, -0.44 * R); ctx.lineTo(-1.70 * R, 0); ctx.lineTo(-2.05 * R, 0.44 * R);
+    ctx.stroke();
+  },
+  // Tactical nuke: fat casing, boxed tail, trefoil warhead band. Reads as THE one.
+  nuke(R) {
+    oTail(-1.58 * R, -0.88 * R, 0.88 * R, '#3d4652');
+    oRect(-1.60 * R, -1.32 * R, 1.02 * R, '#2b323c');
+    oOgive(-0.95 * R, 0.30 * R, 1.38 * R, 0.74 * R, '#aeb9c9');
+    ctx.fillStyle = '#d7e0ec'; ctx.fillRect(-0.95 * R, -0.74 * R, 1.25 * R, 0.30 * R);
+    oRect(-0.64 * R, -0.26 * R, 0.78 * R, '#b6ff5a');
+    ctx.fillStyle = '#26350f';
+    ctx.fillRect(-0.52 * R, -0.24 * R, 0.11 * R, 0.48 * R);
+    ctx.fillRect(-0.16 * R, -0.24 * R, 0.11 * R, 0.48 * R);
+    oPoly('#8a93a8', 0.98 * R, -0.30 * R, 1.38 * R, 0, 0.98 * R, 0.30 * R);
+  },
+};
+
+// Sub-munitions and the airstrike stick are a DIFFERENT object from the round
+// that was fired, so they get their own key. game-core gives every child a
+// non-zero `delay` (parent path length), which is the only signal needed.
+function ordnanceKind(A, pr) {
+  if (pr.beacon) return 'beacon';
+  const w = A.m.weapon;
+  if (w === 'airstrike') return 'bomb';
+  if (w === 'cluster')   return pr.delay > 0 ? 'bomblet'  : 'cluster';
+  if (w === 'napalm')    return pr.delay > 0 ? 'firebomb' : 'napalm';
+  return ORD[w] ? w : 'cannon';          // cannon is the sensible default round
+}
+const ORD_SCALE = { nuke: 1.30, mortar: 1.12, buster: 1.10, bomb: 0.92, firebomb: 0.85, bomblet: 0.72 };
+const ORD_SPIN  = { bomblet: 0.16, firebomb: 0.10, wall: 0.07 };   // radians per path point
+const ORD_TRAIL = {
+  cannon: 'rgba(255,220,150,.5)', mortar: 'rgba(255,190,110,.5)', volley: 'rgba(180,170,255,.55)',
+  railgun: 'rgba(60,232,143,.75)', cluster: 'rgba(255,210,63,.45)', napalm: 'rgba(255,120,70,.55)',
+  gas: 'rgba(157,222,75,.45)', airstrike: 'rgba(84,200,255,.5)', buster: 'rgba(201,138,75,.5)',
+  wall: 'rgba(160,120,70,.45)', teleport: 'rgba(200,107,255,.55)', nuke: 'rgba(182,255,90,.5)',
+};
+
+// Heading straight off the server's path — the client never decides anything.
+// Screen space is a positive-scale affine map of world space (wx2s/wy2s), so the
+// world angle IS the screen angle.
+function projAngle(pr) {
+  const path = pr.path;
+  if (!path || path.length < 2) return 0;
+  let i = Math.floor(pr.pos);
+  if (i > path.length - 2) i = path.length - 2;
+  if (i < 0) i = 0;
+  let dx = path[i + 1][0] - path[i][0], dy = path[i + 1][1] - path[i][1];
+  if (dx === 0 && dy === 0) {                       // degenerate step — widen the window
+    const j = Math.max(0, i - 1);
+    dx = path[i + 1][0] - path[j][0]; dy = path[i + 1][1] - path[j][1];
+  }
+  return (dx === 0 && dy === 0) ? 0 : Math.atan2(dy, dx);
+}
+
 function drawProjectiles() {
   const A = S.anim; if (!A) return;
+  const wid = A.m.weapon || 'cannon';
+  const trail = ORD_TRAIL[wid] || 'rgba(255,220,150,.5)';
+  // Fixed screen size (the camera spans a 12x zoom range — a world-scaled round
+  // would vanish when zoomed out). Same clamping idea as tankScreen's radius.
+  const R0 = Math.max(6, Math.min(11, 150 * cam.zoom));
   for (const pr of A.projectiles) {
-    if (A.elapsed < pr.delay) continue;
+    if (A.elapsed - pr.delay < pr.from) continue;
     if (pr.done && pr.exploded) continue;
     const p = projPos(pr); if (!p) continue;
     pr.trail.push([p.x, p.y]); if (pr.trail.length > 10) pr.trail.shift();
-    ctx.strokeStyle = 'rgba(255,220,150,.5)'; ctx.lineWidth = 2;
+    ctx.strokeStyle = trail; ctx.lineWidth = 2;
     ctx.beginPath();
     pr.trail.forEach((pt, idx) => { const x = wx2s(pt[0]), y = wy2s(pt[1]); idx ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
     ctx.stroke();
-    const sx = wx2s(p.x), sy = wy2s(p.y);
-    ctx.fillStyle = pr.beacon ? '#ff5a52' : '#fff2c0';
-    ctx.beginPath(); ctx.arc(sx, sy, pr.beacon ? 5 : 4, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = 'rgba(255,180,60,.5)'; ctx.beginPath(); ctx.arc(sx, sy, 8, 0, Math.PI * 2); ctx.fill();
+    const kind = ordnanceKind(A, pr);
+    ctx.save();
+    ctx.translate(wx2s(p.x), wy2s(p.y));
+    ctx.rotate(projAngle(pr) + (ORD_SPIN[kind] || 0) * pr.pos);
+    ORD[kind](R0 * (ORD_SCALE[kind] || 1), pr.pos);
+    ctx.restore();
   }
 }
+// A falling bomb: tapered body + boxed tail fins, canted along its own velocity.
+// Polygons and one quadratic — no arcs.
+function drawBomb(sx, sy, trail) {
+  const u = Math.max(2.2, Math.min(5, 200 * cam.zoom));
+  const a = trail.length >= 2
+    ? Math.atan2(trail[trail.length - 1][1] - trail[trail.length - 2][1],
+                 trail[trail.length - 1][0] - trail[trail.length - 2][0])
+    : Math.PI / 2;
+  ctx.save();
+  ctx.translate(sx, sy);
+  ctx.rotate(a - Math.PI / 2);                    // local +y = direction of travel
+  ctx.fillStyle = '#596374';                      // fins
+  ctx.beginPath();
+  ctx.moveTo(-u * 0.42, -u * 0.70); ctx.lineTo(-u * 0.92, -u * 1.55);
+  ctx.lineTo(u * 0.92, -u * 1.55); ctx.lineTo(u * 0.42, -u * 0.70);
+  ctx.closePath(); ctx.fill();
+  const g = ctx.createLinearGradient(-u * 0.5, 0, u * 0.5, 0);
+  g.addColorStop(0, '#20262e'); g.addColorStop(0.5, '#454e5a'); g.addColorStop(1, '#20262e');
+  ctx.fillStyle = g;                              // body
+  ctx.beginPath();
+  ctx.moveTo(0, u * 1.5);
+  ctx.quadraticCurveTo(u * 0.52, u * 0.20, u * 0.42, -u * 0.85);
+  ctx.lineTo(-u * 0.42, -u * 0.85);
+  ctx.quadraticCurveTo(-u * 0.52, u * 0.20, 0, u * 1.5);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
 function projPos(pr) {
   const path = pr.path; if (!path.length) return null;
   const i = Math.floor(pr.pos), f = pr.pos - i;
