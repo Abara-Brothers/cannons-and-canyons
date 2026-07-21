@@ -138,6 +138,12 @@
         <button id="fireBtn" class="btn big fire">FIRE 🔥</button>
       </div>
     </footer>
+
+    <!-- Transient weapon-name flash. Deliberately OUTSIDE #dock: .weapon-strip is
+         a horizontal scroller (which clips vertically too) and #dock's
+         backdrop-filter would trap position:fixed and force this under the
+         stage buttons. -->
+    <div id="weaponPop" class="wpop" aria-hidden="true"></div>
   </section>
 
   <!-- ============ GAME OVER ============ -->

@@ -21,20 +21,33 @@ export const LAVA_Y = WORLD_H - 300;   // top surface of the lava
 export const LAVA_DPS = 9;             // damage per second while a tank touches it
 const TERRAIN_FLOOR = LAVA_Y;          // craters bottom out ON the lava, never through it
 const CRATER_MUL = 0.8;       // crater/blast visual size; the DAMAGE radius now covers the whole explosion
+const SCORCH_MUL = 0.8;       // scorch half-width vs damage radius — same footprint the crater used to have
+export const SCORCH_MAX = 40; // hard cap on stored scorch ranges (bounds the wire payload)
 
 // ---- Tank hitbox (world units) ---------------------------------------------
 // The hitbox is the tank's OUTLINE: a hull/track box topped by a narrower
 // turret box, anchored at the tank's ground point (tank.x, tank.y).
-const TANK_HW = 27;           // hull half-width (tanks shrunk ~0.6× for the vast map)
-const TANK_HULL_H = 24;       // hull top, above the ground point
-const TANK_TUR_HW = 13;       // turret half-width
-const TANK_TOP = 40;          // turret top, above the ground point
-const TANK_CY = 24;           // turret pivot height (barrel origin)
+// SINGLE SOURCE OF TRUTH for how big a tank is in the world. Derived from the
+// client's drawTank() geometry so the hitbox IS the tank you see. drawTank works
+// in multiples of `r` screen px; at the game's design zoom band (cam.zoom
+// 0.033..0.075) r == TANK_R world units. Body extents in multiples of r, after
+// drawTank's LIFT of 0.42r:
+//   hull half-width 1.35 | hull top 1.00 | turret half-width 0.76
+//   turret top 1.36 | track bottom 0.10 BELOW the ground point
+// The tank art is LOCKED. If drawTank's proportions ever change, retune these
+// multipliers to match it — never the other way round.
+export const TANK_R = 240;
+export const TANK_HW  = Math.round(1.35 * TANK_R);   // 324 — hull/track half-width
+const TANK_HULL_H     = Math.round(1.00 * TANK_R);   // 240 — hull top above the ground point
+const TANK_TUR_HW     = Math.round(0.76 * TANK_R);   // 182 — turret half-width
+export const TANK_TOP = Math.round(1.36 * TANK_R);   // 326 — turret top above the ground point
+const TANK_BELOW      = Math.round(0.10 * TANK_R);   //  24 — tracks sit this far below the ground point
+const TANK_CY = 24;           // turret pivot height (barrel origin) — deliberately unchanged
 
 export function pointHitsTank(x, y, tank) {
   const dx = x - tank.x;
   const up = tank.y - y;                       // height above the ground point
-  if (Math.abs(dx) <= TANK_HW && up >= -6 && up <= TANK_HULL_H) return true;   // hull + tracks
+  if (Math.abs(dx) <= TANK_HW && up >= -TANK_BELOW && up <= TANK_HULL_H) return true;   // hull + tracks
   if (Math.abs(dx) <= TANK_TUR_HW && up > TANK_HULL_H && up <= TANK_TOP) return true; // turret
   return false;
 }
@@ -42,13 +55,34 @@ export function pointHitsTank(x, y, tank) {
 // Distance from a point to the nearest point of the tank outline.
 function distToTank(cx, cy, tank) {
   const rx = Math.max(tank.x - TANK_HW, Math.min(cx, tank.x + TANK_HW));
-  const ry = Math.max(tank.y - TANK_TOP, Math.min(cy, tank.y));
+  const ry = Math.max(tank.y - TANK_TOP, Math.min(cy, tank.y + TANK_BELOW));
   return Math.hypot(cx - rx, cy - ry);
 }
 
 export const MOVE_BUDGET = 4500;  // driving distance allowed per turn — generous fuel to reposition
 export const MOVE_STEP = 60;      // distance per move tick (fast drive)
 export const MAX_HP = 100;        // tanks have health — destroy the enemy to win (no shot limit)
+
+// ---- Aim range -------------------------------------------------------------
+// Degrees, RELATIVE to the tank's facing (dir mirrors x only, so the vertical
+// meaning is identical for both seats). 0 = level toward the enemy, 90 = straight
+// up, 180 = level backwards, 240 = 60° below backwards, -60 = 60° below forwards.
+// [-60, 240] is 300° of travel; the excluded (240, 300) ≡ (-120, -60) is a 60°
+// dead cone centred on straight down (270 ≡ -90), so the barrel can never point
+// straight at the ground under itself.
+export const AIM_MIN = -60;
+export const AIM_MAX = 240;
+
+// Fold any number onto [AIM_MIN, AIM_MAX]. Idempotent, NaN-safe, and it splits
+// the dead cone at straight-down so each half snaps to the nearer limit.
+export function clampAim(a) {
+  a = Number(a);
+  if (!Number.isFinite(a)) return 45;
+  a = (((a + 180) % 360) + 360) % 360 - 180;   // → [-180, 180)
+  if (a < AIM_MIN) a += 360;                   // → [-60, 300)
+  if (a >= 270) return AIM_MIN;                // past straight-down → forward-down limit
+  return Math.max(AIM_MIN, Math.min(AIM_MAX, a));
+}
 
 // ---- Weapons ---------------------------------------------------------------
 // A modern military arsenal. Each entry is data-driven:
@@ -81,9 +115,9 @@ export const WEAPONS = [
     desc: 'Bursts at the apex into five bomblets.' },
   { id: 'napalm',   name: 'Napalm',        color: '#ff6a3d', ammo: 2,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 0, radius: 0, terrain: 'none',
-    split: { count: 8, spreadSpeed: 1150, radius: 630, damage: 7, terrain: 'crater',
+    split: { count: 8, spreadSpeed: 1150, radius: 630, damage: 7, terrain: 'scorch',
              hazard: { type: 'fire', turns: 2, dpt: 5, dps: 5, r: 430 } },
-    desc: 'Splashes burning fuel over a wide area — the ground keeps burning.' },
+    desc: 'Splashes burning fuel over a wide area — burns the ground black, never moves it.' },
   { id: 'gas',      name: 'Toxic Gas',     color: '#9dde4b', ammo: 2,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 5, radius: 660, terrain: 'none',
     hazard: { type: 'gas', turns: 2, dpt: 7, dps: 4, r: 500 },
@@ -340,7 +374,7 @@ export function burnTick(hazards, tanks) {
 }
 
 // ---- Shot simulation -------------------------------------------------------
-// state: { terrain, tanks }. shot: { by, weapon, angle (0..180), power (0..100) }
+// state: { terrain, tanks }. shot: { by, weapon, angle (AIM_MIN..AIM_MAX), power (0..100) }
 // Returns a fully resolved shot the clients replay verbatim, plus any new
 // lingering hazards this shot created. Each projectile carries an optional
 // `delay` (playback points to wait) so bomblets/bombs animate in sequence.
@@ -348,18 +382,25 @@ export function simulateShot(state, shot) {
   const w = WEAPON_BY_ID[shot.weapon] || WEAPON_BY_ID.cannon;
   const by = shot.by;
   const dir = by === 0 ? 1 : -1;
-  const power = Math.max(1, Math.min(100, shot.power));
-  const angle = Math.max(0, Math.min(180, shot.angle));
+  const power = Math.max(1, Math.min(100, Number.isFinite(Number(shot.power)) ? Number(shot.power) : 60));
+  const angle = clampAim(shot.angle);
   const speed = power * SPEED_PER_POWER * w.speedMul;
   const gravMul = w.gravityMul || 1;   // railgun ≈ flat; every other weapon shares one trajectory
   const tank = state.tanks[by];
   const damageDealt = [0, 0];
   const projectiles = [];
   const newHazards = [];
+  const newScorches = [];
 
   // rDmg = damage radius. Craters + blast visuals use rDmg * CRATER_MUL.
   const boom = (x, y, rDmg, kind, dmg, opts = {}) => {
-    if (kind === 'wall') deform(state.terrain, x, y, 0, 'wall', opts.wall);
+    if (kind === 'wall') deform(state.terrain, x, surfaceAt(state.terrain, x), 0, 'wall', opts.wall);
+    else if (kind === 'scorch') {
+      // Fire BURNS the ground — it never moves it. Record a surface scorch range;
+      // the terrain heightmap is left completely untouched.
+      const sr = Math.max(60, rDmg * SCORCH_MUL);
+      newScorches.push({ a: round1(x - sr), b: round1(x + sr) });
+    }
     else if (kind !== 'none') {
       const cy = y + (opts.dig ? rDmg * CRATER_MUL * opts.dig : 0);   // bunker buster digs deep
       deform(state.terrain, x, cy, rDmg * CRATER_MUL, kind);
@@ -385,7 +426,7 @@ export function simulateShot(state, shot) {
     const oy = (tank.y - TANK_CY) - Math.sin(rad) * BARREL_LEN;
 
     if (w.split) {
-      const fp = integrate(state.terrain, state.tanks, ox, oy, vx, vy, { stopAtApex: true });
+      const fp = integrate(state.terrain, state.tanks, ox, oy, vx, vy, { stopAtApex: true, by });
       if (fp.apex) {
         projectiles.push({ path: fp.path, det: det(fp.x, fp.y, 20, 'none'), delay: 0 }); // burst puff
         const parentLen = fp.path.length;
@@ -402,16 +443,27 @@ export function simulateShot(state, shot) {
           projectiles.push({ path: cf.path, det: cdet, delay: parentLen });
         }
       } else {
-        let d = null;
+        // Burst on contact too — a flat/downhill shot that never reaches apex used
+        // to pay out a single bomblet's damage instead of the whole payload.
+        projectiles.push({ path: fp.path, det: det(fp.x, fp.y, 20, 'none'), delay: 0 });
         if (fp.hit) {
-          d = det(fp.x, fp.y, w.split.radius, w.split.terrain, w.split.hazard ? w.split.hazard.type : null);
-          boom(fp.x, fp.y, w.split.radius, w.split.terrain, w.split.damage, { hazard: w.split.hazard });
+          const parentLen = fp.path.length, s = w.split;
+          for (let k = 0; k < s.count; k++) {
+            const frac = s.count === 1 ? 0.5 : k / (s.count - 1);
+            const cvx = fp.vx * 0.25 + (frac * 2 - 1) * s.spreadSpeed;
+            const cf = integrate(state.terrain, state.tanks, fp.x, fp.y - 30, cvx, -260, {});
+            let cdet = null;
+            if (cf.hit) {
+              cdet = det(cf.x, cf.y, s.radius, s.terrain, s.hazard ? s.hazard.type : null);
+              boom(cf.x, cf.y, s.radius, s.terrain, s.damage, { hazard: s.hazard });
+            }
+            projectiles.push({ path: cf.path, det: cdet, delay: parentLen });
+          }
         }
-        projectiles.push({ path: fp.path, det: d, delay: 0 });
       }
     } else if (w.airstrike) {
       // The shell is a target beacon. Where it lands, a stick of bombs sweeps in.
-      const fp = integrate(state.terrain, state.tanks, ox, oy, vx, vy, {});
+      const fp = integrate(state.terrain, state.tanks, ox, oy, vx, vy, { by });
       const beaconDet = fp.hit ? det(fp.x, fp.y, 24, 'none') : null;
       projectiles.push({ path: fp.path, det: beaconDet, delay: 0, beacon: true });
       if (fp.hit) {
@@ -428,7 +480,7 @@ export function simulateShot(state, shot) {
         }
       }
     } else {
-      const fp = integrate(state.terrain, state.tanks, ox, oy, vx, vy, w.pierce ? { pierce: true, pierceBy: by, proximity: w.proximity || 0, gravMul } : { gravMul });
+      const fp = integrate(state.terrain, state.tanks, ox, oy, vx, vy, w.pierce ? { pierce: true, pierceBy: by, proximity: w.proximity || 0, gravMul, by } : { gravMul, by });
       let d = null;
       if (fp.hit) {
         d = det(fp.x, fp.y, w.wall ? 0 : w.radius, w.terrain, w.hazard ? w.hazard.type : null);
@@ -443,6 +495,7 @@ export function simulateShot(state, shot) {
   return {
     projectiles,
     newHazards,
+    newScorches,
     tanks: state.tanks.map(t => ({ x: round1(t.x), y: round1(t.y) })),
     scoreDelta: Math.round(damageDealt[opp]),
     damage: damageDealt.map(d => Math.round(d)),
@@ -469,12 +522,17 @@ export function aiShot(terrain, tanks, by, difficulty) {
     const ox = me.x + Math.cos(rad) * dir * BARREL_LEN;
     const oy = (me.y - TANK_CY) - Math.sin(rad) * BARREL_LEN;
     let x = ox, y = oy, vx = Math.cos(rad) * speed * dir, vy = -Math.sin(rad) * speed, t = 0;
+    // The muzzle now sits inside the firer's own hitbox, so mirror integrate()'s
+    // latch — without it every candidate trajectory is rejected as a self-clip and
+    // the bot falls back to a fixed 45/60.
+    let leftOwn = !pointHitsTank(ox, oy, me);
     while (t < MAX_T) {
       vy += GRAVITY * DT; x += vx * DT; y += vy * DT; t += DT;
       if (x < 0 || x > WORLD_W) return Math.abs(x - enemy.x) + 1e5;          // flew off the map
       const armed = Math.hypot(x - ox, y - oy) > ARM_DIST;
       if (armed && pointHitsTank(x, y, enemy)) return 0;                     // direct hit
-      if (armed && pointHitsTank(x, y, me)) return Math.abs(x - me.x) + 1e5; // would clip itself
+      if (armed && leftOwn && pointHitsTank(x, y, me)) return Math.abs(x - me.x) + 1e5; // would clip itself
+      if (!leftOwn && !pointHitsTank(x, y, me)) leftOwn = true;
       if (y >= surfaceAt(terrain, x)) return Math.abs(x - enemy.x);         // hit ground
     }
     return Math.abs(x - enemy.x) + 1e5;
@@ -510,6 +568,9 @@ function integrate(terrain, tanks, ox, oy, vx, vy, opts) {
   const path = [[round1(ox), round1(oy)]];
   const grav = GRAVITY * (opts.gravMul || 1);
   let x = ox, y = oy, t = 0, step = 0, prevVy = vy;
+  // The muzzle now sits INSIDE the firer's own (much larger) hitbox, so the shell
+  // must be allowed to leave its own tank before it can collide with it.
+  let leftOwn = (opts.by == null) || !pointHitsTank(ox, oy, tanks[opts.by]);
   while (t < MAX_T) {
     vy += grav * DT;
     x += vx * DT;
@@ -547,15 +608,25 @@ function integrate(terrain, tanks, ox, oy, vx, vy, opts) {
     } else {
       const gy = surfaceAt(terrain, x);
       if (y >= gy) { path.push([round1(x), round1(gy)]); return { path, hit: true, x, y: gy, vx, vy }; }
-      // Direct tank hit — tested against the tank OUTLINE (hull + turret boxes),
-      // after the shell has armed away from the muzzle.
+      // Direct tank hit — tested against the tank OUTLINE (hull + turret boxes).
+      // SWEPT: one physics step is up to ~91 world units, so sub-sample the
+      // segment or a fast shell tunnels clean through the box.
       if (armed) {
-        for (const tk of tanks) {
-          if (pointHitsTank(x, y, tk)) {
-            path.push([round1(x), round1(y)]); return { path, hit: true, x, y, vx, vy };
+        const px = x - vx * DT, py = y - vy * DT;
+        const n = Math.max(1, Math.ceil(Math.hypot(x - px, y - py) / 12));
+        for (let s = 1; s <= n; s++) {
+          const f = s / n, ix = px + (x - px) * f, iy = py + (y - py) * f;
+          for (let ti = 0; ti < tanks.length; ti++) {
+            if (ti === opts.by && !leftOwn) continue;   // still inside its own hull
+            if (pointHitsTank(ix, iy, tanks[ti])) {
+              path.push([round1(ix), round1(iy)]); return { path, hit: true, x: ix, y: iy, vx, vy };
+            }
           }
         }
       }
+      // Latch AFTER the sweep — flipping it first lets the same step self-detonate
+      // on the box boundary the shell is in the act of leaving.
+      if (!leftOwn && !pointHitsTank(x, y, tanks[opts.by])) leftOwn = true;
     }
     if (++step % SAMPLE_EVERY === 0) path.push([round1(x), round1(y)]);
   }
@@ -588,4 +659,31 @@ export function terrainDiff(before, after) {
   const values = [];
   for (let x = from; x <= to; x++) values.push(round1(after[x]));
   return { from, values };
+}
+
+// ---- Scorch marks (persistent burn scars) -----------------------------------
+// Fire leaves 1-D world-x ranges [a,b] on the surface, not height changes.
+// Overlapping ranges merge, so a napalm run leaves ONE continuous burnt strip.
+// Pure and deterministic; the server owns the list and snapshots it, so both
+// clients (and a resumed client) render an identical battlefield.
+export function mergeScorch(list, marks) {
+  const all = [];
+  for (const s of (list || [])) all.push({ a: s.a, b: s.b });
+  for (const m of (marks || [])) all.push({ a: Math.max(0, m.a), b: Math.min(WORLD_W, m.b) });
+  all.sort((p, q) => p.a - q.a);
+  const merged = [];
+  for (const s of all) {
+    if (!(s.b > s.a)) continue;
+    const last = merged[merged.length - 1];
+    if (last && s.a <= last.b) last.b = Math.max(last.b, s.b);
+    else merged.push({ a: s.a, b: s.b });
+  }
+  while (merged.length > SCORCH_MAX) {          // shouldn't happen; drop the narrowest scar
+    let wi = 0;
+    for (let i = 1; i < merged.length; i++) {
+      if (merged[i].b - merged[i].a < merged[wi].b - merged[wi].a) wi = i;
+    }
+    merged.splice(wi, 1);
+  }
+  return merged.map(s => ({ a: round1(s.a), b: round1(s.b) }));
 }

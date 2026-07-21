@@ -178,6 +178,38 @@ input:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .wchip .wa { font-size: 10px; color: var(--muted); }
 .wchip.empty { opacity: .35; pointer-events: none; }
 
+/* Transient weapon-name flash — appears above the chip you just tapped, fades
+   after ~1.2s. position:fixed and placed from the chip's getBoundingClientRect
+   because .weapon-strip is overflow-x:auto (which clips its children vertically
+   too) and #dock's backdrop-filter would trap a fixed child. z-index 12 clears
+   the stage buttons (4) and scanlines (3), stays under .overlay (20). It never
+   affects layout, so the dock does not shift when it shows. */
+.wpop {
+  position: fixed; left: 0; top: 0; z-index: 12;
+  transform: translate(-50%, -100%);
+  pointer-events: none; opacity: 0; visibility: hidden;
+  padding: 4px 10px; border-radius: 999px; white-space: nowrap;
+  font-size: 12.5px; font-weight: 800; line-height: 1.25;
+  color: var(--text); background: rgba(10,14,30,.94);
+  border: 1px solid var(--primary); box-shadow: 0 6px 18px rgba(0,0,0,.45);
+}
+.wpop::after {           /* little pointer down at the chip */
+  content: ""; position: absolute; left: 50%; top: 100%; margin-left: -4px;
+  border: 4px solid transparent; border-top-color: var(--primary);
+}
+.wpop.show { visibility: visible; animation: wpop 1.2s ease-out forwards; }
+@keyframes wpop {
+  0%   { opacity: 0; transform: translate(-50%, calc(-100% + 6px)); }
+  12%  { opacity: 1; transform: translate(-50%, -100%); }
+  72%  { opacity: 1; transform: translate(-50%, -100%); }
+  100% { opacity: 0; transform: translate(-50%, calc(-100% - 8px)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wpop.show { animation: wpopFade 1.2s linear forwards; }
+}
+@keyframes wpopFade { 0%, 82% { opacity: 1; transform: translate(-50%, -100%); }
+                      100%    { opacity: 0; transform: translate(-50%, -100%); } }
+
 .control-rows { display: flex; flex-direction: column; gap: 8px; }
 .aim-readout { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .stepper { display: flex; align-items: center; justify-content: space-between; gap: 6px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 4px; }
@@ -258,4 +290,7 @@ input:focus { outline: 2px solid var(--accent); border-color: transparent; }
   .btn.fire { font-size: 15px; padding: 8px 18px; width: auto; }
   .mute, .zbtn { width: 32px; height: 32px; font-size: 15px; border-radius: 9px; }
   .zoomctl { top: 48px; }
+  /* .wchip .wn is hidden up here, so this popup is the ONLY place the weapon
+     name is readable in landscape — keep it legible but compact. */
+  .wpop { font-size: 11px; padding: 3px 8px; }
 }

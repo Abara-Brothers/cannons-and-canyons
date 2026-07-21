@@ -6,9 +6,9 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import {
-  WORLD_W, WORLD_H, MOVE_BUDGET, MOVE_STEP, MAX_HP, LAVA_Y,
+  WORLD_W, WORLD_H, MOVE_BUDGET, MOVE_STEP, MAX_HP, LAVA_Y, AIM_MIN, AIM_MAX, clampAim, TANK_HW,
   generateTerrain, generateTrees, spawnTanks, surfaceAt, simulateShot, terrainDiff,
-  weaponMenu, startingAmmo, WEAPON_BY_ID, tickHazards, burnTick, aiShot,
+  weaponMenu, startingAmmo, WEAPON_BY_ID, tickHazards, burnTick, aiShot, mergeScorch,
 } from './game-core.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -84,6 +84,7 @@ function createRoom(hostWs, name, skin) {
     clock: null,                       // only used to pace the post-shot handover
     aim: { angle: 45, power: 60 },
     hazards: [], hazardSeq: 1,         // lingering fire / gas areas
+    scorch: [],                        // permanent burn scars: merged world-x ranges [{a,b}]
     trees: [],
   };
   rooms.set(code, room);
@@ -103,7 +104,9 @@ function snapshot(room, seat) {
     skins: [room.players[0].skin, room.players[1].skin],
     hp: room.hp.map(h => Math.max(0, Math.round(h))), maxHp: MAX_HP,
     hazards: room.hazards,
+    scorch: room.scorch || [],
     moveBudget: MOVE_BUDGET,
+    aimRange: [AIM_MIN, AIM_MAX],
     turn: room.turn, fuel: room.fuel,
     you: seat,
     ammo: room.ammo[seat],
@@ -119,7 +122,7 @@ function startGame(room) {
   room.tanks = spawnTanks(room.terrain, room.seed);
   room.hp = [MAX_HP, MAX_HP];
   room.ammo = [startingAmmo(), startingAmmo()];
-  room.hazards = []; room.hazardSeq = 1;
+  room.hazards = []; room.hazardSeq = 1; room.scorch = [];
   room.turn = Math.random() < 0.5 ? 0 : 1;
   room.state = 'playing';
   for (let i = 0; i < 2; i++) send(room.players[i].ws, { type: 'start', ...snapshot(room, i) });
@@ -209,6 +212,10 @@ function resolveFire(room, seat, weaponId, angle, power) {
     room.hazards.push({ id: room.hazardSeq++, owner: seat, ...hz });
   }
   if (room.hazards.length > 12) room.hazards.splice(0, room.hazards.length - 12);
+  // Burn scars are permanent for the match — merge this shot's scorch into the list.
+  if (result.newScorches && result.newScorches.length) {
+    room.scorch = mergeScorch(room.scorch || [], result.newScorches);
+  }
   room.hp[0] = Math.max(0, Math.round(room.hp[0] * 10) / 10);
   room.hp[1] = Math.max(0, Math.round(room.hp[1] * 10) / 10);
 
@@ -222,6 +229,7 @@ function resolveFire(room, seat, weaponId, angle, power) {
     hp: room.hp.map(h => Math.max(0, Math.round(h))),
     damage: result.damage,
     hazards: room.hazards,
+    scorch: room.scorch || [],
     hazardDamage: [0, 0],
     ammo: room.ammo[seat],
     ammoSeat: seat,
@@ -265,7 +273,7 @@ function handleMove(room, seat, dir) {
   const other = room.tanks[1 - seat];
   // Drive anywhere along the map — the only limit is you can't cross through the
   // enemy (player 0 stays left of player 1, keeping the scoreboard sides intact).
-  const EDGE = 200, GAP = 160;
+  const EDGE = 200, GAP = TANK_HW * 2 + 40;   // hitboxes must never overlap
   const lo = seat === 0 ? EDGE : other.x + GAP;
   const hi = seat === 0 ? other.x - GAP : WORLD_W - EDGE;
   const nx = Math.max(lo, Math.min(hi, tank.x + Math.sign(dir) * MOVE_STEP));
@@ -391,7 +399,8 @@ wss.on('connection', (ws) => {
         if (!room || room.state !== 'playing') return;
         // Relay both players' aims so barrels track live (pre-aiming included).
         const opp = room.players[1 - ws.seat];
-        if (opp && opp.ws) send(opp.ws, { type: 'aim', seat: ws.seat, angle: msg.angle, power: msg.power, weapon: msg.weapon });
+        const relayPow = Math.max(1, Math.min(100, Number.isFinite(Number(msg.power)) ? Number(msg.power) : 60));
+        if (opp && opp.ws) send(opp.ws, { type: 'aim', seat: ws.seat, angle: clampAim(msg.angle), power: relayPow, weapon: msg.weapon });
         break;
       }
       case 'move': if (room) handleMove(room, ws.seat, msg.dir); break;

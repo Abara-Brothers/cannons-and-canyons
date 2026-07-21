@@ -20,16 +20,19 @@ const S = {
   terrain: null, minY: 0,
   trees: [],
   hazards: [],
+  scorch: [],                          // permanent burn scars from fire: [{a,b}] world-x ranges
   tanks: [{ x: 900, y: 9720 }, { x: 23100, y: 9720 }],
   hp: [100, 100], maxHp: 100,
   ammo: {},
   turn: 0, fuel: 4500, moveBudget: 4500,
   selected: 'cannon',
   aim: [{ angle: 45, power: 60 }, { angle: 45, power: 60 }],   // persists between turns
+  aimMin: -60, aimMax: 240,            // overwritten by the server snapshot (aimRange)
   code: null, quick: false,
   playing: false,
   anim: null, queue: [], pendingOver: null, terrainAnim: null,
   particles: [], floaters: [], rings: [], flash: 0, shake: 0,
+  muzzle: [],                          // directional HD muzzle blasts (own render pass)
   charging: false, pullPointer: null,
   userZoom: 1, panY: 0,
   recoil: [0, 0],                      // barrel kick when firing (1 → 0)
@@ -338,7 +341,7 @@ function handle(m) {
       showToast(m.connected ? 'Opponent reconnected' : 'Opponent lost connection — holding their seat…');
       break;
     case 'turn': onTurn(m); break;
-    case 'aim': if (m.seat !== S.you) { S.aim[m.seat] = { angle: m.angle, power: m.power }; } break;
+    case 'aim': if (m.seat !== S.you) { S.aim[m.seat] = { angle: clampAimC(m.angle), power: Number(m.power) || 60 }; } break;
     case 'move': {
       const prev = S.tanks[m.seat] ? S.tanks[m.seat].x : m.x;
       S.tanks[m.seat] = { x: m.x, y: m.y };
@@ -430,15 +433,18 @@ function applySnapshot(m) {
   S.terrain = m.terrain.slice();
   S.trees = (m.trees || []).map(t => ({ ...t }));
   S.hazards = m.hazards || [];
+  S.scorch = m.scorch || [];
   S.tanks = m.tanks.map(t => ({ x: t.x, y: t.y }));
   S.hp = (m.hp || [100, 100]).slice(); S.maxHp = m.maxHp || 100;
   S.ammo = m.ammo; S.moveBudget = m.moveBudget;
+  if (Array.isArray(m.aimRange) && m.aimRange.length === 2) { S.aimMin = m.aimRange[0]; S.aimMax = m.aimRange[1]; }
   S.turn = m.turn; S.fuel = m.fuel ?? m.moveBudget;
   S.code = m.code || S.code;
   S.aim = [{ angle: 45, power: 60 }, { angle: 45, power: 60 }];
   S.selected = firstAvailableWeapon();
   S.playing = true; S.quick = false; S.anim = null; S.queue = []; S.pendingOver = null;
-  S.particles = []; S.floaters = []; S.rings = []; S.flash = 0; S.shake = 0;
+  S.particles = []; S.floaters = []; S.rings = []; S.muzzle = []; S.flash = 0; S.shake = 0;
+  S.recoil = [0, 0];
   S.charging = false; S.pullPointer = null; S.userZoom = 1; S.panY = 0;
   computeMinY();
   $('overlay').classList.add('hidden');
@@ -500,14 +506,54 @@ function buildWeaponStrip() {
   for (const w of S.weapons) {
     const left = S.ammo[w.id] ?? w.ammo;
     const chip = document.createElement('button');
+    chip.dataset.wid = w.id;
     chip.className = 'wchip' + (w.id === S.selected ? ' sel' : '') + (left <= 0 ? ' empty' : '');
     const ammoTxt = w.ammo >= 99 ? '∞' : `×${left}`;
     chip.innerHTML = `<span class="wrow"><span class="wi">${ICONS[w.id] || ''}</span><span class="wt">${TRAJ[w.id] || ''}</span></span><span class="wn">${w.name}</span><span class="wa">${ammoTxt}</span>`;
     chip.title = w.desc;
-    chip.onclick = () => { if (left > 0 && canAim()) { S.selected = w.id; buildWeaponStrip(); } };
+    chip.onclick = () => {
+      if (left > 0 && canAim()) { S.selected = w.id; buildWeaponStrip(); flashWeaponName(w.id); }
+    };
     strip.appendChild(chip);
   }
 }
+
+// Briefly show the weapon's name above the chip that was just selected.
+// buildWeaponStrip() rebuilds every chip, so this MUST run after the rebuild and
+// read the fresh node's viewport rect (innerHTML='' also resets the strip's
+// scrollLeft, so a stale rect would point at the wrong place). The popup is a
+// fixed-position sibling of the dock — the strip would clip it.
+let wpopTimer = null;
+function flashWeaponName(id) {
+  const pop = $('weaponPop');
+  const chip = $('weaponStrip').querySelector(`.wchip[data-wid="${id}"]`);
+  const w = S.weaponById[id];
+  if (!pop || !chip || !w) return;
+
+  pop.textContent = w.name;
+  clearTimeout(wpopTimer);
+  pop.classList.remove('show');
+  void pop.offsetWidth;              // force reflow so the animation replays on re-tap
+
+  const r = chip.getBoundingClientRect();
+  const half = pop.offsetWidth / 2;  // measured while visibility:hidden — still laid out
+  const pad = 8;
+  const cx = Math.max(pad + half, Math.min(window.innerWidth - pad - half, r.left + r.width / 2));
+  pop.style.left = Math.round(cx) + 'px';
+  pop.style.top = Math.round(r.top - 6) + 'px';   // translate(-50%,-100%) lifts it clear
+  pop.classList.add('show');
+  wpopTimer = setTimeout(() => pop.classList.remove('show'), 1250);
+}
+
+function hideWeaponName() {
+  const pop = $('weaponPop');
+  if (!pop) return;
+  clearTimeout(wpopTimer);
+  pop.classList.remove('show');
+}
+// A stale fixed position after a rotate/resize would float in mid-air — just drop it.
+window.addEventListener('resize', hideWeaponName);
+window.addEventListener('orientationchange', hideWeaponName);
 
 // ---------------------------------------------------------------------------
 // Aim controls (available even while waiting for your turn)
@@ -526,9 +572,19 @@ function relayAim() {
   const a = myAim();
   sendMsg({ type: 'aim', angle: a.angle, power: a.power, weapon: S.selected });
 }
+// Mirror of clampAim() in game-core.js. UX only — the server re-clamps every
+// shot in simulateShot(), so a drift here can never desync the physics.
+function clampAimC(a) {
+  a = Number(a);
+  if (!Number.isFinite(a)) return 45;
+  a = (((a + 180) % 360) + 360) % 360 - 180;
+  if (a < S.aimMin) a += 360;
+  if (a >= 270) return S.aimMin;
+  return Math.max(S.aimMin, Math.min(S.aimMax, a));
+}
 function setAim(angle, power) {
   const a = myAim();
-  a.angle = Math.max(1, Math.min(179, angle));
+  a.angle = clampAimC(angle);
   a.power = Math.max(5, Math.min(100, power));
   updateAimUI(); relayAim();
 }
@@ -541,7 +597,11 @@ document.querySelectorAll('.mini').forEach(btn => {
     if (btn.dataset.adj === 'angle') setAim(a.angle + dir, a.power);
     else setAim(a.angle, a.power + dir);
   };
-  const start = (e) => { e.preventDefault(); step(); iv = setInterval(step, 110); };
+  // 300° of travel at 1°/110ms would be a 33-second sweep — ramp up while held.
+  const start = (e) => {
+    e.preventDefault(); step(); let held = 0;
+    iv = setInterval(() => { held++; const n = held > 24 ? 5 : held > 10 ? 2 : 1; for (let k = 0; k < n; k++) step(); }, 110);
+  };
   const stop = () => { clearInterval(iv); iv = null; };
   btn.addEventListener('pointerdown', start);
   btn.addEventListener('pointerup', stop);
@@ -710,7 +770,7 @@ function detonate(det) {
   if (det.kind === 'none' && det.r < 30 && !det.hz) { // burst puff / beacon flare
     for (let i = 0; i < 10; i++) {
       const ang = Math.random() * Math.PI * 2, sp = 120 + Math.random() * 200;
-      S.particles.push({ x: det.x, y: det.y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, life: 0.4, age: 0, r: 14, color: det.color });
+      S.particles.push({ x: det.x, y: det.y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, life: 0.4, age: 0, r: 2.2, shape: 'spark', color: det.color });
     }
     S.rings.push({ x: det.x, y: det.y, r: 20, rMax: 160, age: 0, life: 0.4, color: det.color });
     return;
@@ -727,7 +787,15 @@ function detonate(det) {
   for (let i = 0; i < n; i++) {
     const ang = Math.random() * Math.PI * 2;
     const sp = (0.4 + Math.random()) * det.r * 3.0;
-    S.particles.push({ x: det.x, y: det.y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp - det.r * 1.1, life: 0.5 + Math.random() * 0.5, age: 0, r: 9 + Math.random() * (det.r / 16), color: base });
+    // Fireball: a few soft discs for mass (back layer) plus bright sparks in front.
+    const spark = i % 2 === 0;
+    S.particles.push({
+      x: det.x, y: det.y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp - det.r * 1.1,
+      life: 0.5 + Math.random() * 0.5, age: 0,
+      r: spark ? 2 + Math.random() * 2.4 : 9 + Math.random() * (det.r / 22),
+      shape: spark ? 'spark' : undefined,
+      color: base,
+    });
   }
   // Terrain debris — the soil itself blows out. TOPSOIL is loose: lots of
   // small green/grass clods that launch fast and scatter far. DEEP SOIL is
@@ -782,6 +850,7 @@ function applyResolve(m) {
   // already arrived can't be undone by this (higher) pre-burn snapshot.
   S.hp = (m.hp || S.hp).map((h, i) => Math.min(S.hp[i] ?? h, h));
   S.hazards = m.hazards || [];
+  if (m.scorch) S.scorch = m.scorch;
   if (m.ammoSeat === S.you && m.ammo) S.ammo = m.ammo;
   updateHud(); buildWeaponStrip();
   for (let i = 0; i < 2; i++) {
@@ -800,12 +869,13 @@ function applyDot(m) {
     const d = (m.damage && m.damage[i]) || 0;
     if (d <= 0) continue;
     S.floaters.push({ x: S.tanks[i].x, y: S.tanks[i].y - 200, text: `-${d}`, age: 0, life: 1.1, color: '#ff8a3d' });
-    for (let k = 0; k < 5; k++) {
+    for (let k = 0; k < 7; k++) {   // sparks, not blobs — the tank stays visible while it cooks
       S.particles.push({
         x: S.tanks[i].x + (Math.random() - 0.5) * 70, y: S.tanks[i].y - 10,
         vx: (Math.random() - 0.5) * 50, vy: -120 - Math.random() * 120,
-        life: 0.5 + Math.random() * 0.4, age: 0, r: 8 + Math.random() * 9, g: 0.05,
-        color: Math.random() < 0.6 ? 'rgba(255,140,40,0.9)' : 'rgba(255,80,30,0.85)',
+        life: 0.5 + Math.random() * 0.4, age: 0, r: 1.8 + Math.random() * 2, g: 0.05,
+        shape: 'spark',
+        color: Math.random() < 0.6 ? 'rgba(255,170,60,0.95)' : 'rgba(255,90,35,0.9)',
       });
     }
   }
@@ -872,8 +942,13 @@ setInterval(() => {
 }, 400);
 
 function stepEffects(dt) {
-  // Barrel recoil springs back after firing.
-  for (let i = 0; i < 2; i++) if (S.recoil[i] > 0) S.recoil[i] = Math.max(0, S.recoil[i] - dt * 4.2);
+  // Barrel runs back out to battery (shaped by recAmt in drawTank).
+  for (let i = 0; i < 2; i++) if (S.recoil[i] > 0) S.recoil[i] = Math.max(0, S.recoil[i] - dt * 3.4);
+  // Muzzle blasts age on their own clock — they are NOT particles.
+  if (S.muzzle.length) {
+    for (const mz of S.muzzle) mz.age += dt;
+    S.muzzle = S.muzzle.filter(mz => mz.age < mz.life);
+  }
   // Drive lean: the hull leans into the direction of travel, then rocks back and
   // settles when you stop (a damped spring — so movement never looks stale).
   const now = performance.now();
@@ -899,16 +974,20 @@ function stepEffects(dt) {
         for (let n = 0; n < 3; n++) {
           if (Math.random() > dt * 16) continue;
           const fx = h.x + (Math.random() - 0.5) * h.r * 1.8;
-          const ember = Math.random() < 0.72;
+          // The blaze itself is the flame TONGUES in drawHazards(); these are only
+          // sparks and a little back-layer haze, so a tank standing in the fire
+          // stays fully readable.
+          const ember = Math.random() < 0.82;
           S.particles.push({
             x: fx, y: surfaceAt(fx) - 10,
             vx: (Math.random() - 0.5) * 190, vy: -300 - Math.random() * 320,
             life: ember ? 0.55 + Math.random() * 0.5 : 1.0 + Math.random() * 0.7, age: 0,
-            r: ember ? 22 + Math.random() * 34 : 36 + Math.random() * 46,
+            r: ember ? 1.6 + Math.random() * 2.2 : 10 + Math.random() * 12,
             g: ember ? 0.12 : 0.05,
+            shape: ember ? 'spark' : undefined,
             color: ember
-              ? (Math.random() < 0.5 ? 'rgba(255,196,60,0.95)' : 'rgba(255,110,30,0.9)')
-              : 'rgba(70,62,58,0.45)',
+              ? (Math.random() < 0.5 ? 'rgba(255,208,90,0.95)' : 'rgba(255,130,40,0.9)')
+              : 'rgba(70,62,58,0.28)',
           });
         }
       }
@@ -924,11 +1003,11 @@ function stepEffects(dt) {
             x: t.x + (Math.random() - 0.5) * 50, y: t.y - 60,
             vx: (Math.random() - 0.5) * 40 + 15, vy: -140 - Math.random() * 130,
             life: 1.1 + Math.random() * 0.7, age: 0,
-            r: heavy ? 26 : 15,
-            color: heavy ? 'rgba(35,35,42,0.8)' : 'rgba(105,105,115,0.55)',
+            r: heavy ? 9 : 6,
+            color: heavy ? 'rgba(35,35,42,0.5)' : 'rgba(105,105,115,0.38)',
           });
-          if (heavy && Math.random() < 0.4) {
-            S.particles.push({ x: t.x + (Math.random() - 0.5) * 40, y: t.y - 45, vx: (Math.random() - 0.5) * 60, vy: -110, life: 0.45, age: 0, r: 13, color: '#ff8a3d' });
+          if (heavy && Math.random() < 0.5) {
+            S.particles.push({ x: t.x + (Math.random() - 0.5) * 40, y: t.y - 45, vx: (Math.random() - 0.5) * 60, vy: -110, life: 0.45, age: 0, r: 2.4, shape: 'spark', color: '#ffb45a' });
           }
         }
       }
@@ -948,12 +1027,14 @@ function draw() {
     drawLava(cssW, cssH);
     drawTrees();
     drawHazards();
+    drawParticles(true);          // soft discs (fire glow, smoke, dust) — BEHIND the tanks
     drawTank(0); drawTank(1);
     drawEdgeIndicators();
     drawAim();
     drawProjectiles();
+    drawMuzzleFlashes();      // over the gun and the shell, under damage numbers
     drawRings();
-    drawParticles();
+    drawParticles(false);     // soil chips + sparks — too small to ever hide a tank
     drawFloaters();
   }
   ctx.restore();
@@ -999,20 +1080,62 @@ const TLAYERS = [
   [820,       '#6b4d28'],   // brown soil
   [Infinity,  '#3a2a14'],   // deep dirt to the base
 ];
+// ---- Burn scars -------------------------------------------------------------
+// Fire never moves dirt — it blackens it. The server sends merged world-x ranges
+// (S.scorch); each terrain column inside one has its TOP layers tinted toward
+// charcoal, hardest at the grass cap and fading with depth, plus a thin crust
+// line right on the surface. Every tint string is precomputed at load, so the
+// per-column loop only ever does a fillStyle swap — no per-frame allocation.
+const SCORCH_FEATHER = 300;                    // world units of soft edge each side
+const SCORCH_STEPS = 6;                        // quantised tint levels
+const SCORCH_TINT = [0.90, 0.62, 0.24, 0.06];  // how hard each TLAYER chars
+const SCORCH_CHAR = [24, 19, 16];              // charcoal target colour
+function mixToward(hex, rgb, t) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return `rgb(${Math.round(r + (rgb[0] - r) * t)},${Math.round(g + (rgb[1] - g) * t)},${Math.round(b + (rgb[2] - b) * t)})`;
+}
+// TCHAR[layer][step] — step 0 is byte-identical to the clean colour.
+const TCHAR = TLAYERS.map((L, li) =>
+  Array.from({ length: SCORCH_STEPS + 1 }, (_, s) =>
+    mixToward(L[1], SCORCH_CHAR, (s / SCORCH_STEPS) * SCORCH_TINT[li])));
+const SCORCH_CRUST = Array.from({ length: SCORCH_STEPS + 1 },
+  (_, s) => `rgba(12,10,8,${((s / SCORCH_STEPS) * 0.6).toFixed(3)})`);
+
+// Burn intensity 0 (clean) .. 1 (fully charred) at a world x.
+function scorchAt(wx) {
+  let k = 0;
+  for (const s of S.scorch) {
+    if (wx < s.a - SCORCH_FEATHER || wx > s.b + SCORCH_FEATHER) continue;
+    const d = wx < s.a ? s.a - wx : (wx > s.b ? wx - s.b : 0);
+    const v = d <= 0 ? 1 : 1 - d / SCORCH_FEATHER;
+    if (v > k) { k = v; if (k >= 1) break; }
+  }
+  return k;
+}
+
 function drawTerrain(w, h) {
   const z = cam.zoom;                            // low-res px per world unit
+  const burnt = S.scorch && S.scorch.length > 0;
+  const crustPx = Math.max(1, Math.round(26 * z));
   for (let sx = 0; sx < w; sx++) {
     const wxc = s2wx(sx + 0.5);
     if (wxc < 0 || wxc > WW()) continue;         // letterbox when zoomed out past the map
     const surf = wy2s(surfaceAt(wxc));
     if (surf >= h) continue;
+    const sc = burnt ? Math.round(scorchAt(wxc) * SCORCH_STEPS) : 0;
     let top = surf;
     for (let li = 0; li < TLAYERS.length; li++) {
       const bottom = TLAYERS[li][0] === Infinity ? h : surf + TLAYERS[li][0] * z;
       const y0 = Math.max(0, Math.round(top)), y1 = Math.min(h, Math.round(bottom));
-      if (y1 > y0) { ctx.fillStyle = TLAYERS[li][1]; ctx.fillRect(sx, y0, 1, y1 - y0); }
+      if (y1 > y0) { ctx.fillStyle = TCHAR[li][sc]; ctx.fillRect(sx, y0, 1, y1 - y0); }
       top = bottom;
       if (top >= h) break;
+    }
+    if (sc > 0) {                                // charred crust right on the surface
+      const cy0 = Math.max(0, Math.round(surf));
+      const ch = Math.min(h - cy0, crustPx);
+      if (ch > 0) { ctx.fillStyle = SCORCH_CRUST[sc]; ctx.fillRect(sx, cy0, 1, ch); }
     }
   }
 }
@@ -1030,7 +1153,10 @@ function drawTrees() {
     const u = hgt / 6;
     ctx.fillStyle = '#4a3320';
     ctx.fillRect(sx - u * 0.35, sy - u * 1.5, u * 0.7, u * 1.6);
-    const rows = [[5, '#2f5a2b'], [4, '#3a6f34'], [2.9, '#2f5a2b'], [1.7, '#3a6f34']];
+    const burn = (S.scorch && S.scorch.length) ? scorchAt(t.x) : 0;
+    const rows = burn > 0.45
+      ? [[5, '#2a241d'], [4, '#332c23'], [2.9, '#2a241d'], [1.7, '#332c23']]   // burnt to a black skeleton
+      : [[5, '#2f5a2b'], [4, '#3a6f34'], [2.9, '#2f5a2b'], [1.7, '#3a6f34']];
     let y = sy - u * 1.4;
     for (const [wMul, col] of rows) {
       const rw = u * wMul;
@@ -1132,6 +1258,10 @@ const TANK_G = {
   brake: '#434952', brakeSlot: '#23272e',
 };
 const BARREL = { ox: 0.47, oy: -0.72, len: 1.45, brake: 0.26 };
+// Recoil: how far the gun tube telescopes back INTO the mantlet, in tank radii,
+// and the shape of the run-out. Kept here so drawTank and the muzzle pass agree.
+const REC_MAX = 0.55;
+const recAmt = (i) => Math.pow(S.recoil[i] || 0, 1.8);   // slams back, eases into battery
 
 // Local slope the tank sits on (also used for the muzzle position).
 function tankTilt(i, r) {
@@ -1163,27 +1293,162 @@ function muzzleTipWorld(i) {
   };
 }
 
-// Kick the barrel back and blast fire/smoke out of the muzzle.
+// Kick the gun back and blast a directional flash out of the bore. NO particles:
+// the flash is its own polygon/gradient pass (drawMuzzleFlashes), so nothing
+// round is ever drawn. Anchored at the barrel tip AT REST — the gas leaves
+// before the tube has moved.
 function muzzleBlast(i) {
   S.recoil[i] = 1;
   const tip = muzzleTipWorld(i);
   if (!tip) return;
-  for (let k = 0; k < 18; k++) {
-    const a = (Math.random() - 0.5) * 0.55;
-    const ca = Math.cos(a), sa = Math.sin(a);
-    const sp = 300 + Math.random() * 900;
-    const vx = (tip.dx * ca - tip.dy * sa) * sp;
-    const vy = (tip.dx * sa + tip.dy * ca) * sp;
-    const hot = k < 11;
-    S.particles.push({
-      x: tip.x, y: tip.y, vx, vy,
-      life: hot ? 0.16 + Math.random() * 0.18 : 0.35 + Math.random() * 0.4, age: 0,
-      r: hot ? 34 + Math.random() * 46 : 30 + Math.random() * 48, g: hot ? 0.06 : 0.2,
-      color: hot
-        ? (Math.random() < 0.5 ? 'rgba(255,240,170,0.95)' : 'rgba(255,168,40,0.9)')
-        : 'rgba(120,112,108,0.45)',
-    });
+  const { r } = tankScreen(i);
+  S.muzzle.push({
+    seat: i,
+    x: tip.x, y: tip.y,                        // world position of the muzzle brake tip
+    dx: tip.dx, dy: tip.dy,                    // ABSOLUTE aim vector (not tilt-compensated)
+    w: r / Math.max(cam.zoom, 1e-4),           // one tank-radius in WORLD units
+    age: 0, life: 0.62,                        // fire ~0.16s, smoke rides out the rest
+    seed: Math.random() * 1000,
+  });
+  S.flash = Math.min(0.5, S.flash + 0.05);     // the blast lights the scene
+  S.shake = Math.min(8, S.shake + 2.2);        // ~0.07s of kick
+}
+
+// ---------------------------------------------------------------------------
+// HD muzzle blast. A flame lance along the bore — hot-white core into yellow
+// into orange into smoke — plus star spikes and the slotted brake's side jets.
+// Every shape is a polygon or a gradient; there is not one ctx.arc in here.
+// Drawn in SCREEN space, so it uses the entry's absolute dx/dy, never cosA/sinA.
+// ---------------------------------------------------------------------------
+const MZ_FLAME = 0.155;                     // seconds of visible fire
+const MZ_SPIKES = [                         // [angle off bore, length x, half-width x]
+  [0, 1.34, 0.075], [0.30, 0.70, 0.055], [-0.30, 0.70, 0.055],
+  [0.66, 0.44, 0.045], [-0.66, 0.44, 0.045],
+];
+
+// Tapered spearhead along (dx,dy): quadratic curves only, so nothing reads round.
+function mzLancePath(x, y, dx, dy, len, hw) {
+  const nx = -dy, ny = dx;
+  const p = (a, n) => [x + dx * a + nx * n, y + dy * a + ny * n];
+  ctx.beginPath();
+  ctx.moveTo(...p(-len * 0.12, 0));
+  ctx.quadraticCurveTo(...p(len * 0.10, hw * 0.95), ...p(len * 0.40, hw));
+  ctx.quadraticCurveTo(...p(len * 0.76, hw * 0.50), ...p(len, 0));
+  ctx.quadraticCurveTo(...p(len * 0.76, -hw * 0.50), ...p(len * 0.40, -hw));
+  ctx.quadraticCurveTo(...p(len * 0.10, -hw * 0.95), ...p(-len * 0.12, 0));
+  ctx.closePath();
+}
+function mzLanceFill(x, y, dx, dy, len, hw, stops) {
+  mzLancePath(x, y, dx, dy, len, hw);
+  const g = ctx.createLinearGradient(x, y, x + dx * len, y + dy * len);
+  for (const [p, c] of stops) g.addColorStop(p, c);
+  ctx.fillStyle = g; ctx.fill();
+}
+function mzSpike(x, y, dx, dy, ang, len, hw, col) {
+  const c = Math.cos(ang), s = Math.sin(ang);
+  const sx = dx * c - dy * s, sy = dx * s + dy * c;
+  const px = -sy, py = sx;
+  ctx.beginPath();
+  ctx.moveTo(x + px * hw, y + py * hw);
+  ctx.lineTo(x + sx * len, y + sy * len);
+  ctx.lineTo(x - px * hw, y - py * hw);
+  ctx.closePath();
+  ctx.fillStyle = col; ctx.fill();
+}
+// Lumpy smoke puff — an irregular closed curve with a soft gradient fill, so it
+// never reads as a disc.
+function mzPuff(cx, cy, rad, seed, alpha) {
+  if (alpha <= 0.01 || rad <= 0.5) return;
+  const N = 8;
+  const rAt = (th) => rad * (0.80 + 0.22 * Math.sin(th * 3 + seed) + 0.13 * Math.sin(th * 5 - seed * 1.7));
+  ctx.beginPath();
+  for (let k = 0; k <= N; k++) {
+    const th = (k / N) * Math.PI * 2, r0 = rAt(th);
+    const x = cx + Math.cos(th) * r0, y = cy + Math.sin(th) * r0;
+    if (k === 0) { ctx.moveTo(x, y); continue; }
+    const tm = ((k - 0.5) / N) * Math.PI * 2, rm = rAt(tm) * 1.10;
+    ctx.quadraticCurveTo(cx + Math.cos(tm) * rm, cy + Math.sin(tm) * rm, x, y);
   }
+  ctx.closePath();
+  const g = ctx.createRadialGradient(cx, cy, rad * 0.10, cx, cy, rad * 1.05);
+  g.addColorStop(0, `rgba(126,120,116,${0.40 * alpha})`);
+  g.addColorStop(0.6, `rgba(96,91,88,${0.26 * alpha})`);
+  g.addColorStop(1, 'rgba(70,66,64,0)');
+  ctx.fillStyle = g; ctx.fill();
+}
+
+function drawMuzzleFlashes() {
+  if (!S.muzzle.length) return;
+  ctx.save();
+  for (const m of S.muzzle) {
+    const ox = wx2s(m.x), oy = wy2s(m.y);
+    const R = Math.max(6, m.w * cam.zoom);       // one tank-radius, in screen px
+    const ax = m.dx, ay = m.dy;                  // along the bore
+    const nx = -ay, ny = ax;                     // across the bore
+    const at = (a, n) => [ox + ax * a + nx * n, oy + ay * a + ny * n];
+
+    // -- Smoke first: it sits behind the fire and outlives it -----------------
+    const st = Math.min(1, m.age / m.life);
+    const sa = Math.pow(1 - st, 1.7) * Math.min(1, m.age / 0.045);
+    if (sa > 0.01) {
+      ctx.globalCompositeOperation = 'source-over';
+      for (let k = 0; k < 3; k++) {
+        const d = R * (0.9 + k * 1.25) * (0.4 + st * 1.6);
+        const [cx, cy] = at(d, (k - 1) * R * 0.38 * (0.5 + st));
+        mzPuff(cx, cy - R * st * (0.7 + k * 0.3),
+               R * (0.8 + k * 0.3) * (0.5 + st * 1.5),
+               m.seed + k * 2.7, sa * (0.9 - k * 0.2));
+      }
+    }
+
+    // -- Fire -----------------------------------------------------------------
+    const ft = m.age / MZ_FLAME;
+    if (ft < 1) {
+      const g = Math.pow(ft, 0.38);              // punches out fast, then holds
+      const a = Math.pow(1 - ft, 1.25);          // and dies quickly
+      const len = R * (1.8 + 2.0 * g);
+      const hw = R * (0.55 + 0.50 * g);
+      ctx.globalCompositeOperation = 'lighter';  // overlaps burn to white
+
+      for (const [sang, lf, wf] of MZ_SPIKES) {
+        mzSpike(ox, oy, ax, ay, sang, len * lf, R * wf * (0.6 + 0.4 * a),
+                `rgba(255,241,196,${0.42 * a})`);
+      }
+      // Brake side jets — this gun has a slotted muzzle brake, gas vents sideways
+      for (const s of [1, -1]) {
+        const sang = s * 1.62, c = Math.cos(sang), si = Math.sin(sang);
+        const jx = ax * c - ay * si, jy = ax * si + ay * c;
+        mzLanceFill(ox - ax * R * 0.30, oy - ay * R * 0.30, jx, jy, len * 0.42, hw * 0.85, [
+          [0, `rgba(255,238,190,${0.55 * a})`],
+          [0.5, `rgba(255,164,52,${0.34 * a})`],
+          [1, 'rgba(220,80,16,0)'],
+        ]);
+      }
+      // Outer orange body
+      mzLanceFill(ox, oy, ax, ay, len, hw, [
+        [0, `rgba(255,252,226,${0.90 * a})`],
+        [0.22, `rgba(255,206,92,${0.82 * a})`],
+        [0.58, `rgba(255,134,28,${0.55 * a})`],
+        [1, 'rgba(190,52,10,0)'],
+      ]);
+      // Inner white-hot core
+      mzLanceFill(ox, oy, ax, ay, len * 0.52, hw * 0.44, [
+        [0, `rgba(255,255,255,${0.98 * a})`],
+        [0.55, `rgba(255,250,222,${0.75 * a})`],
+        [1, 'rgba(255,214,120,0)'],
+      ]);
+      // Soft bloom at the bore. Radial gradient fading to alpha 0 inside a rect —
+      // there is no rim, so it reads as glare, not as a circle.
+      const bl = R * (1.5 + 0.9 * g);
+      const bg = ctx.createRadialGradient(ox, oy, 0, ox, oy, bl);
+      bg.addColorStop(0, `rgba(255,255,246,${0.62 * a})`);
+      bg.addColorStop(0.45, `rgba(255,196,92,${0.30 * a})`);
+      bg.addColorStop(1, 'rgba(255,120,30,0)');
+      ctx.fillStyle = bg;
+      ctx.fillRect(ox - bl, oy - bl, bl * 2, bl * 2);
+    }
+  }
+  ctx.restore();                                 // restores composite + fillStyle
 }
 
 // Thin indestructible lava floor at the very bottom of the map. Drawn over the
@@ -1309,31 +1574,45 @@ function drawTank(i) {
   const ct = Math.cos(tilt), st = Math.sin(tilt);
   const cosA = wcos * ct + wsin * st, sinA = -wcos * st + wsin * ct;
   const bLen = r * BARREL.len;
-  // Recoil: the heavy barrel slides back into the mantlet, then returns.
-  const rec = r * 0.55 * (S.recoil[i] || 0);
-  const bx = px - cosA * rec, by = py - sinA * rec;
+  // Recoil: the gun tube telescopes BACK INTO the mantlet — the base stays put
+  // and the DRAWN length shortens, then runs back out to battery. At rest
+  // (S.recoil = 0) bLenR === bLen and bx,by === px,py, so the tank renders
+  // exactly as before.
+  const rc = S.recoil[i] || 0;
+  const bLenR = Math.max(r * 0.78, bLen - r * REC_MAX * recAmt(i));
+  const bx = px, by = py;                            // mantlet mouth — fixed
   const nx = -sinA, ny = cosA;                       // perpendicular to the barrel
 
   ctx.lineCap = 'butt';
   ctx.fillStyle = TANK_G.mantlet;                    // mantlet collar
   ctx.beginPath(); ctx.arc(bx, by, r * 0.23, 0, Math.PI * 2); ctx.fill();
   ctx.strokeStyle = TANK_G.barrel; ctx.lineWidth = Math.max(3, r * 0.30);
-  ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx + cosA * bLen, by + sinA * bLen); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx + cosA * bLenR, by + sinA * bLenR); ctx.stroke();
   ctx.strokeStyle = TANK_G.barrelLite; ctx.lineWidth = Math.max(1, r * 0.07);
   ctx.beginPath();
   ctx.moveTo(bx + cosA * r * 0.18 + nx * r * 0.08, by + sinA * r * 0.18 + ny * r * 0.08);
-  ctx.lineTo(bx + cosA * bLen * 0.94 + nx * r * 0.08, by + sinA * bLen * 0.94 + ny * r * 0.08);
+  ctx.lineTo(bx + cosA * bLenR * 0.94 + nx * r * 0.08, by + sinA * bLenR * 0.94 + ny * r * 0.08);
   ctx.stroke();
+  // Shadowed gap at the mantlet mouth where the tube has run in. Alpha is 0 at
+  // rest, so the resting silhouette is untouched.
+  if (rc > 0.002) {
+    ctx.strokeStyle = `rgba(12,14,18,${0.55 * rc})`;
+    ctx.lineWidth = Math.max(2, r * 0.30);
+    ctx.beginPath();
+    ctx.moveTo(bx + cosA * r * 0.16, by + sinA * r * 0.16);
+    ctx.lineTo(bx + cosA * r * 0.34, by + sinA * r * 0.34);
+    ctx.stroke();
+  }
   // Chunky slotted muzzle brake on the end
   const mb = r * BARREL.brake;
   ctx.strokeStyle = TANK_G.brake; ctx.lineWidth = Math.max(4, r * 0.46);
   ctx.beginPath();
-  ctx.moveTo(bx + cosA * (bLen - r * 0.02), by + sinA * (bLen - r * 0.02));
-  ctx.lineTo(bx + cosA * (bLen + mb), by + sinA * (bLen + mb));
+  ctx.moveTo(bx + cosA * (bLenR - r * 0.02), by + sinA * (bLenR - r * 0.02));
+  ctx.lineTo(bx + cosA * (bLenR + mb), by + sinA * (bLenR + mb));
   ctx.stroke();
   ctx.strokeStyle = TANK_G.brakeSlot; ctx.lineWidth = Math.max(1, r * 0.05);
   for (const f of [0.30, 0.66]) {
-    const d = bLen + mb * f;
+    const d = bLenR + mb * f;
     ctx.beginPath();
     ctx.moveTo(bx + cosA * d + nx * r * 0.22, by + sinA * d + ny * r * 0.22);
     ctx.lineTo(bx + cosA * d - nx * r * 0.22, by + sinA * d - ny * r * 0.22);
@@ -1355,14 +1634,21 @@ function drawAim() {
   const rad = aim.angle * Math.PI / 180;
   const sx = wx2s(t.x), sy = wy2s(surfaceAt(t.x) - 24);
   const pct = aim.power / 100;
+  // Mirrors game-core's muzzle origin (TANK_CY 24, BARREL_LEN 42). If the muzzle
+  // is at or under the local surface the shell detonates in your own lap — now
+  // reachable since the aim range opened up to 300°, so warn in red.
+  const mox = t.x + Math.cos(rad) * dir * 42;
+  const moy = (t.y - 24) - Math.sin(rad) * 42;
+  const danger = moy >= surfaceAt(mox) - 8;
 
   const len = 30 + pct * 130;
   const ex = sx + Math.cos(rad) * dir * len, ey = sy - Math.sin(rad) * len;
   ctx.save();
-  ctx.setLineDash([5, 6]); ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,210,63,.9)';
+  ctx.setLineDash([5, 6]); ctx.lineWidth = 2;
+  ctx.strokeStyle = danger ? 'rgba(255,90,82,.95)' : 'rgba(255,210,63,.9)';
   ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke();
   ctx.setLineDash([]);
-  ctx.fillStyle = 'rgba(255,210,63,.95)';
+  ctx.fillStyle = danger ? 'rgba(255,90,82,.95)' : 'rgba(255,210,63,.95)';
   const ah = 7, aa = Math.atan2(-(ey - sy), (ex - sx));
   ctx.beginPath();
   ctx.moveTo(ex, ey);
@@ -1433,8 +1719,16 @@ function drawRings() {
   }
   ctx.globalAlpha = 1;
 }
-function drawParticles() {
+// Two passes, so fire can NEVER hide a tank:
+//   back  — soft discs (fire glow, smoke, dust) draw behind the tanks.
+//   front — 'rect' soil chips and 'spark' embers only; both are capped to a few
+//           pixels, so they read as detail on top of the tank, not a blob over it.
+// The shape alone decides the layer — no per-particle flag to forget at a spawn site.
+function drawParticles(back) {
+  const wantDisc = !!back;
   for (const p of S.particles) {
+    const isDisc = p.shape !== 'rect' && p.shape !== 'spark';
+    if (isDisc !== wantDisc) continue;
     const a = 1 - p.age / p.life;
     ctx.globalAlpha = Math.max(0, a);
     ctx.fillStyle = p.color;
@@ -1442,6 +1736,12 @@ function drawParticles() {
       // square soil chunks — crisp pixel-art debris
       const s = Math.max(2, p.r * cam.zoom * 6 * (0.55 + a * 0.45));
       ctx.fillRect(Math.round(wx2s(p.x) - s / 2), Math.round(wy2s(p.y) - s / 2), Math.round(s), Math.round(s));
+    } else if (p.shape === 'spark') {
+      // Embers: 1..3px motes with a short motion streak. Never a disc.
+      const s = Math.max(1, Math.min(3, p.r * cam.zoom * 6));
+      const x = Math.round(wx2s(p.x)), y = Math.round(wy2s(p.y));
+      const tail = Math.min(8, Math.hypot(p.vx, p.vy) * cam.zoom * 0.045);
+      ctx.fillRect(x, y, Math.round(s), Math.round(s + tail));
     } else {
       ctx.beginPath(); ctx.arc(wx2s(p.x), wy2s(p.y), Math.max(1, p.r * cam.zoom * (0.6 + a) * 6), 0, Math.PI * 2); ctx.fill();
     }
