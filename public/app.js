@@ -32,6 +32,8 @@ const S = {
   particles: [], floaters: [], rings: [], flash: 0, shake: 0,
   charging: false, pullPointer: null,
   userZoom: 1, panY: 0,
+  recoil: [0, 0],                      // barrel kick when firing (1 → 0)
+  lean: [0, 0], leanV: [0, 0], leanTarget: [0, 0], moveAt: [0, 0],  // drive lean + settle rock
 };
 const WW = () => S.world.w, WH = () => S.world.h;
 const MOVE_MIN = 60;
@@ -337,10 +339,15 @@ function handle(m) {
       break;
     case 'turn': onTurn(m); break;
     case 'aim': if (m.seat !== S.you) { S.aim[m.seat] = { angle: m.angle, power: m.power }; } break;
-    case 'move':
+    case 'move': {
+      const prev = S.tanks[m.seat] ? S.tanks[m.seat].x : m.x;
       S.tanks[m.seat] = { x: m.x, y: m.y };
+      // Lean into the direction of travel; stopping springs it back with a rock.
+      const d = Math.sign(m.x - prev);
+      if (d) { S.leanTarget[m.seat] = d * 0.11; S.moveAt[m.seat] = performance.now(); }
       if (m.seat === S.you) { S.fuel = m.fuel; updateFuel(); }
       break;
+    }
     case 'shot': enqueueShot(m); break;
     case 'dot': applyDot(m); break;
     case 'gameover':
@@ -416,6 +423,7 @@ function showLobby(mode) {
 // ---------------------------------------------------------------------------
 function applySnapshot(m) {
   S.world = m.world || S.world;
+  S.lavaY = m.lavaY ?? (S.world.h - 300);
   S.you = m.you; S.names = m.names; S.weapons = m.weapons;
   S.skins = m.skins || S.skins;
   S.weaponById = Object.fromEntries(m.weapons.map(w => [w.id, w]));
@@ -672,6 +680,7 @@ function startNextShot() {
     projectiles: m.projectiles.map(p => ({ path: p.path, det: p.det, delay: p.delay || 0, beacon: !!p.beacon, pos: 0, done: false, exploded: false, trail: [] })),
     settleTimer: 0, resolved: false,
   };
+  muzzleBlast(m.by);          // barrel recoil + flash out of the cannon
   Audio.fire();
   updateDock();
 }
@@ -863,6 +872,18 @@ setInterval(() => {
 }, 400);
 
 function stepEffects(dt) {
+  // Barrel recoil springs back after firing.
+  for (let i = 0; i < 2; i++) if (S.recoil[i] > 0) S.recoil[i] = Math.max(0, S.recoil[i] - dt * 4.2);
+  // Drive lean: the hull leans into the direction of travel, then rocks back and
+  // settles when you stop (a damped spring — so movement never looks stale).
+  const now = performance.now();
+  for (let i = 0; i < 2; i++) {
+    if (now - (S.moveAt[i] || 0) > 130) S.leanTarget[i] = 0;    // stopped driving
+    const k = 150, damp = 9.5;
+    S.leanV[i] += ((S.leanTarget[i] || 0) - S.lean[i]) * k * dt;
+    S.leanV[i] -= S.leanV[i] * damp * dt;
+    S.lean[i] += S.leanV[i] * dt;
+  }
   S.flash = Math.max(0, S.flash - dt * 1.6);
   S.shake = Math.max(0, S.shake - dt * 30);
   for (const p of S.particles) { p.age += dt; p.vy += 900 * (p.g ?? 1) * dt; p.x += p.vx * dt; p.y += p.vy * dt; }
@@ -873,8 +894,23 @@ function stepEffects(dt) {
   S.rings = S.rings.filter(r => r.age < r.life);
   if (S.particles.length < 220) {
     for (const h of S.hazards) {
-      if (h.type === 'fire' && Math.random() < dt * 6) {
-        S.particles.push({ x: h.x + (Math.random() - 0.5) * h.r * 1.4, y: surfaceAt(h.x) - 10, vx: (Math.random() - 0.5) * 60, vy: -220 - Math.random() * 160, life: 0.8, age: 0, r: 12, color: '#ff9d3d' });
+      if (h.type === 'fire') {
+        // Embers + rolling smoke pouring off the blaze.
+        for (let n = 0; n < 3; n++) {
+          if (Math.random() > dt * 16) continue;
+          const fx = h.x + (Math.random() - 0.5) * h.r * 1.8;
+          const ember = Math.random() < 0.72;
+          S.particles.push({
+            x: fx, y: surfaceAt(fx) - 10,
+            vx: (Math.random() - 0.5) * 190, vy: -300 - Math.random() * 320,
+            life: ember ? 0.55 + Math.random() * 0.5 : 1.0 + Math.random() * 0.7, age: 0,
+            r: ember ? 22 + Math.random() * 34 : 36 + Math.random() * 46,
+            g: ember ? 0.12 : 0.05,
+            color: ember
+              ? (Math.random() < 0.5 ? 'rgba(255,196,60,0.95)' : 'rgba(255,110,30,0.9)')
+              : 'rgba(70,62,58,0.45)',
+          });
+        }
       }
     }
     if (S.playing) {
@@ -909,6 +945,7 @@ function draw() {
   drawSky(cssW, cssH);
   if (S.terrain) {
     drawTerrain(cssW, cssH);
+    drawLava(cssW, cssH);
     drawTrees();
     drawHazards();
     drawTank(0); drawTank(1);
@@ -1011,19 +1048,25 @@ function drawHazards() {
     const scx = wx2s(h.x);
     if (scx < -view.cssW || scx > view.cssW * 2) continue;
     if (h.type === 'fire') {
-      const n = 7;
+      // Big, hectic blaze: many tongues, each flickering on its own rhythm and
+      // wavering side to side so the fire never looks static.
+      const n = 13;
       for (let k = 0; k < n; k++) {
-        const fx = h.x + ((k / (n - 1)) * 2 - 1) * h.r * 0.8;
+        const seed = k * 2.393 + h.id;
+        const fx = h.x + ((k / (n - 1)) * 2 - 1) * h.r * 0.92 + Math.sin(t * 3.1 + seed) * h.r * 0.07;
         const fy = surfaceAt(fx);
+        const sway = Math.sin(t * 6.3 + seed * 1.7) * 0.28;
+        const flick = 0.55 + 0.45 * Math.abs(Math.sin(t * 13 + seed * 2.1)) + 0.18 * Math.sin(t * 27 + seed);
         const sx = wx2s(fx), sy = wy2s(fy);
-        const flick = 0.75 + 0.25 * Math.sin(t * 11 + k * 1.7 + h.id);
-        const fh = Math.max(6, h.r * 0.55 * cam.zoom) * flick;
-        const fw = fh * 0.44;
-        ctx.globalAlpha = 0.85;
-        ctx.fillStyle = '#ff6a3d';
-        ctx.beginPath(); ctx.moveTo(sx, sy - fh); ctx.quadraticCurveTo(sx + fw, sy - fh * 0.4, sx, sy); ctx.quadraticCurveTo(sx - fw, sy - fh * 0.4, sx, sy - fh); ctx.fill();
-        ctx.fillStyle = '#ffd23f';
-        ctx.beginPath(); ctx.moveTo(sx, sy - fh * 0.55); ctx.quadraticCurveTo(sx + fw * 0.45, sy - fh * 0.2, sx, sy); ctx.quadraticCurveTo(sx - fw * 0.45, sy - fh * 0.2, sx, sy - fh * 0.55); ctx.fill();
+        const fh = Math.max(10, h.r * 1.05 * cam.zoom) * flick;
+        const fw = fh * 0.42;
+        ctx.globalAlpha = 0.9;
+        ctx.fillStyle = '#e0350c';                       // deep red outer
+        ctx.beginPath(); ctx.moveTo(sx + sway * fw * 2, sy - fh); ctx.quadraticCurveTo(sx + fw * 1.25, sy - fh * 0.42, sx, sy); ctx.quadraticCurveTo(sx - fw * 1.25, sy - fh * 0.42, sx + sway * fw * 2, sy - fh); ctx.fill();
+        ctx.fillStyle = '#ff7a1e';                       // orange body
+        ctx.beginPath(); ctx.moveTo(sx + sway * fw * 1.5, sy - fh * 0.74); ctx.quadraticCurveTo(sx + fw * 0.8, sy - fh * 0.3, sx, sy); ctx.quadraticCurveTo(sx - fw * 0.8, sy - fh * 0.3, sx + sway * fw * 1.5, sy - fh * 0.74); ctx.fill();
+        ctx.fillStyle = '#ffe066';                       // white-hot core
+        ctx.beginPath(); ctx.moveTo(sx + sway * fw, sy - fh * 0.42); ctx.quadraticCurveTo(sx + fw * 0.4, sy - fh * 0.16, sx, sy); ctx.quadraticCurveTo(sx - fw * 0.4, sy - fh * 0.16, sx + sway * fw, sy - fh * 0.42); ctx.fill();
       }
       ctx.globalAlpha = 1;
     } else { // gas
@@ -1080,6 +1123,85 @@ function tankScreen(i) {
 
 // Compact military AFV in the player's chosen paint. Damaged tanks blacken
 // with scorch (plus smoke and flames from stepEffects).
+// Local slope the tank sits on (also used for the muzzle position).
+function tankTilt(i, r) {
+  const wx = S.tanks[i].x;
+  const wSpan = Math.max(30, (r * 1.15) / Math.max(cam.zoom, 1e-4));
+  const t = Math.atan2(surfaceAt(wx + wSpan) - surfaceAt(wx - wSpan), 2 * wSpan);
+  return Math.max(-0.6, Math.min(0.6, t)) + (S.lean[i] || 0);
+}
+
+// World position of the very end of the barrel — where shots and the muzzle
+// blast come from. Mirrors drawTank's tilt/lift transform.
+function muzzleTipWorld(i) {
+  if (!S.tanks[i] || !cam.zoom) return null;
+  const { sx, sy, r } = tankScreen(i);
+  const front = i === 0 ? 1 : -1, dir = front;
+  const tilt = tankTilt(i, r), LIFT = r * 0.42;
+  const tb = sy - r * 0.52;
+  const px = sx + front * r * 0.45, py = tb - r * 0.2;
+  const rad = (S.aim[i] ? S.aim[i].angle : 45) * Math.PI / 180;
+  const wcos = Math.cos(rad) * dir, wsin = -Math.sin(rad);
+  const ct = Math.cos(tilt), st = Math.sin(tilt);
+  const vx0 = px - sx, vy0 = py - sy - LIFT;
+  const ox = sx + vx0 * ct - vy0 * st, oy = sy + vx0 * st + vy0 * ct;
+  const bLen = r * 1.55;
+  const tipX = ox + wcos * bLen, tipY = oy + wsin * bLen;
+  return {
+    x: (tipX - view.cssW / 2) / cam.zoom + cam.cx,
+    y: (tipY - view.cssH / 2) / cam.zoom + cam.cy,
+    dx: wcos, dy: wsin,
+  };
+}
+
+// Kick the barrel back and blast fire/smoke out of the muzzle.
+function muzzleBlast(i) {
+  S.recoil[i] = 1;
+  const tip = muzzleTipWorld(i);
+  if (!tip) return;
+  for (let k = 0; k < 18; k++) {
+    const a = (Math.random() - 0.5) * 0.55;
+    const ca = Math.cos(a), sa = Math.sin(a);
+    const sp = 300 + Math.random() * 900;
+    const vx = (tip.dx * ca - tip.dy * sa) * sp;
+    const vy = (tip.dx * sa + tip.dy * ca) * sp;
+    const hot = k < 11;
+    S.particles.push({
+      x: tip.x, y: tip.y, vx, vy,
+      life: hot ? 0.16 + Math.random() * 0.18 : 0.35 + Math.random() * 0.4, age: 0,
+      r: hot ? 34 + Math.random() * 46 : 30 + Math.random() * 48, g: hot ? 0.06 : 0.2,
+      color: hot
+        ? (Math.random() < 0.5 ? 'rgba(255,240,170,0.95)' : 'rgba(255,168,40,0.9)')
+        : 'rgba(120,112,108,0.45)',
+    });
+  }
+}
+
+// Thin indestructible lava floor at the very bottom of the map. Drawn over the
+// terrain fill so it shows through anything blasted down to it.
+function drawLava(w, h) {
+  const lavaY = S.lavaY || (WH() - 300);
+  const top = wy2s(lavaY);
+  if (top > h) return;                     // lava is off the bottom of the view
+  const y0 = Math.max(0, top);
+  const g = ctx.createLinearGradient(0, y0, 0, h);
+  g.addColorStop(0, '#ffd24a');
+  g.addColorStop(0.18, '#ff8a1e');
+  g.addColorStop(0.6, '#e0350c');
+  g.addColorStop(1, '#7d1405');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, y0, w, h - y0);
+  // molten shimmer along the surface
+  const t = performance.now() / 620;
+  ctx.fillStyle = 'rgba(255,236,150,0.75)';
+  for (let sx = 0; sx < w; sx += 12) {
+    const bob = Math.sin(t + sx * 0.05) * 2.2 + Math.sin(t * 1.7 + sx * 0.013) * 1.6;
+    ctx.fillRect(sx, y0 + bob - 1.5, 12, 3);
+  }
+  ctx.fillStyle = 'rgba(255,120,30,0.30)';
+  ctx.fillRect(0, Math.max(0, y0 - 10), w, 10);   // heat glow above the surface
+}
+
 function drawTank(i) {
   const { sx, sy, r } = tankScreen(i);
   const front = i === 0 ? 1 : -1;
@@ -1096,9 +1218,7 @@ function drawTank(i) {
 
   // Tilt the tank to sit flush on the terrain slope, and lift it so the tracks
   // rest ON the surface instead of sinking into the mountain.
-  const wSpan = Math.max(30, (r * 1.15) / Math.max(cam.zoom, 1e-4));
-  let tilt = Math.atan2(surfaceAt(S.tanks[i].x + wSpan) - surfaceAt(S.tanks[i].x - wSpan), 2 * wSpan);
-  tilt = Math.max(-0.6, Math.min(0.6, tilt));       // clamp to ±34° so cliffs don't look silly
+  const tilt = tankTilt(i, r);        // terrain slope + drive lean / settle rock
   const LIFT = r * 0.42;
 
   ctx.fillStyle = 'rgba(0,0,0,.32)';
@@ -1174,15 +1294,18 @@ function drawTank(i) {
   const ct = Math.cos(tilt), st = Math.sin(tilt);
   const cosA = wcos * ct + wsin * st, sinA = -wcos * st + wsin * ct;
   const bLen = r * 1.55;
+  // Recoil: the barrel slides back into the turret on firing, then returns.
+  const rec = r * 0.62 * (S.recoil[i] || 0);
+  const bx = px - cosA * rec, by = py - sinA * rec;
   ctx.lineCap = 'round';
   ctx.strokeStyle = steelDk; ctx.lineWidth = Math.max(2.5, r * 0.24);
-  ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px + cosA * bLen, py + sinA * bLen); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx + cosA * bLen, by + sinA * bLen); ctx.stroke();
   ctx.strokeStyle = steel; ctx.lineWidth = Math.max(1.5, r * 0.12);
-  ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px + cosA * bLen * 0.94, py + sinA * bLen * 0.94); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx + cosA * bLen * 0.94, by + sinA * bLen * 0.94); ctx.stroke();
   ctx.strokeStyle = steelDk; ctx.lineWidth = Math.max(3, r * 0.3);
   ctx.beginPath();
-  ctx.moveTo(px + cosA * bLen * 0.88, py + sinA * bLen * 0.88);
-  ctx.lineTo(px + cosA * bLen, py + sinA * bLen);
+  ctx.moveTo(bx + cosA * bLen * 0.88, by + sinA * bLen * 0.88);
+  ctx.lineTo(bx + cosA * bLen, by + sinA * bLen);
   ctx.stroke();
   ctx.restore();
 }

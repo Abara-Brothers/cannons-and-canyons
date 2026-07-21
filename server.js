@@ -6,7 +6,7 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import {
-  WORLD_W, WORLD_H, MOVE_BUDGET, MOVE_STEP, MAX_HP,
+  WORLD_W, WORLD_H, MOVE_BUDGET, MOVE_STEP, MAX_HP, LAVA_Y,
   generateTerrain, generateTrees, spawnTanks, surfaceAt, simulateShot, terrainDiff,
   weaponMenu, startingAmmo, WEAPON_BY_ID, tickHazards, burnTick, aiShot,
 } from './game-core.js';
@@ -94,7 +94,7 @@ function createRoom(hostWs, name, skin) {
 // Current-state snapshot — used both for match start and for resume.
 function snapshot(room, seat) {
   return {
-    world: { w: WORLD_W, h: WORLD_H },
+    world: { w: WORLD_W, h: WORLD_H }, lavaY: LAVA_Y,
     terrain: room.terrain.map(v => Math.round(v * 10) / 10),
     trees: room.trees,
     tanks: room.tanks.map(t => ({ x: Math.round(t.x * 10) / 10, y: Math.round(t.y * 10) / 10 })),

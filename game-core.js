@@ -15,7 +15,11 @@ const SAMPLE_EVERY = 4;       // record a trajectory point every N steps (~30fps
 const MAX_T = 26;             // safety cap on flight time (s)
 const ARM_DIST = 100;         // projectile ignores tank collisions until it has flown this far
 const TERRAIN_TOP = 140;      // highest a peak/mound may rise (min y) — headroom for tall peaks
-const TERRAIN_FLOOR = WORLD_H - 60;
+// A thin INDESTRUCTIBLE lava layer floors the map: terrain can never be dug below
+// LAVA_Y, and any tank that ends up sitting in it burns.
+export const LAVA_Y = WORLD_H - 300;   // top surface of the lava
+export const LAVA_DPS = 9;             // damage per second while a tank touches it
+const TERRAIN_FLOOR = LAVA_Y;          // craters bottom out ON the lava, never through it
 const CRATER_MUL = 0.8;       // crater/blast visual size; the DAMAGE radius now covers the whole explosion
 
 // ---- Tank hitbox (world units) ---------------------------------------------
@@ -136,24 +140,24 @@ export function generateTerrain(seed) {
   const rng = mulberry32(seed);
   const base = WORLD_H * 0.72;   // surface baseline; peaks rise into the sky above, valleys drop below
   const terrain = new Array(WORLD_W + 1);
-  const rough = 0.6 + rng() * 0.85;  // per-map ruggedness → varied terrain (capped so big rolls don't clip peaks)
+  const rough = 0.7 + rng() * 0.45;  // per-map ruggedness (tightened: soil stays an even depth, no extreme highs/lows)
 
   // BIG rolling relief — broad, deep valleys and rises (retuned for the 24k map).
   const layers = [
-    { a: (400 + rng() * 460) * rough, f: 0.00020 + rng() * 0.00016, p: rng() * 6.2832 }, // huge broad valleys
-    { a: (240 + rng() * 300) * rough, f: 0.00060 + rng() * 0.00045, p: rng() * 6.2832 }, // medium valleys
-    { a: (110 + rng() * 150) * rough, f: 0.00160 + rng() * 0.00120, p: rng() * 6.2832 }, // hills
-    { a: (50  + rng() * 78)  * rough, f: 0.00440 + rng() * 0.00320, p: rng() * 6.2832 }, // detail
+    { a: (230 + rng() * 250) * rough, f: 0.00020 + rng() * 0.00016, p: rng() * 6.2832 }, // huge broad valleys
+    { a: (150 + rng() * 175) * rough, f: 0.00060 + rng() * 0.00045, p: rng() * 6.2832 }, // medium valleys
+    { a: (80  + rng() * 100) * rough, f: 0.00160 + rng() * 0.00120, p: rng() * 6.2832 }, // hills
+    { a: (40  + rng() * 55)  * rough, f: 0.00440 + rng() * 0.00320, p: rng() * 6.2832 }, // detail
   ];
   // Craggy ridged octave — sharp crests / canyon edges, like real eroded rock.
-  const ridge = { a: (170 + rng() * 220) * rough, f: 0.0011 + rng() * 0.0009, p: rng() * 6.2832 };
+  const ridge = { a: (110 + rng() * 140) * rough, f: 0.0011 + rng() * 0.0009, p: rng() * 6.2832 };
 
   const peakCount = 4 + Math.floor(rng() * 4);     // 4..7 BIG distinct massifs (space between = valleys/canyons)
   const peaks = [];
   for (let i = 0; i < peakCount; i++) {
     peaks.push({
       cx: WORLD_W * (0.20 + rng() * 0.60),         // central band, well clear of both tanks
-      h: 3800 + rng() * 2100,                      // 3800..5900 tall — big peaks
+      h: 2600 + rng() * 1500,                      // 2600..4100 — dramatic but leaves sky above in landscape
       w: WORLD_W * (0.050 + rng() * 0.100),        // BROAD alpine massifs (1200..3600 wide)
       sharp: rng() < 0.4,                          // some peaks are jagged spires
     });
@@ -164,7 +168,7 @@ export function generateTerrain(seed) {
   for (let i = 0; i < cliffCount; i++) {
     cliffs.push({
       cx: WORLD_W * (0.16 + rng() * 0.68),
-      drop: (1100 + rng() * 1700) * (rng() < 0.5 ? 1 : -1),  // 1100..2800 deep canyon steps
+      drop: (400 + rng() * 800) * (rng() < 0.5 ? 1 : -1),  // 1100..2800 deep canyon steps
       w: 70 + rng() * 130,                         // steepness of the step (steeper = more canyon-like)
     });
   }
@@ -330,6 +334,8 @@ export function burnTick(hazards, tanks) {
       if (distToTank(h.x, h.y, tanks[ti]) <= h.r) dmg[ti] += h.dps;
     }
   }
+  // The lava floor cooks anything standing in it.
+  for (let ti = 0; ti < 2; ti++) if (tanks[ti].y >= LAVA_Y - 4) dmg[ti] += LAVA_DPS;
   return dmg;
 }
 
