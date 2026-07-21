@@ -116,7 +116,7 @@ function startGame(room) {
   room.seed = (Math.floor(Math.random() * 1e9)) >>> 0;
   room.terrain = generateTerrain(room.seed);
   room.trees = generateTrees(room.terrain, room.seed);
-  room.tanks = spawnTanks(room.terrain);
+  room.tanks = spawnTanks(room.terrain, room.seed);
   room.hp = [MAX_HP, MAX_HP];
   room.ammo = [startingAmmo(), startingAmmo()];
   room.hazards = []; room.hazardSeq = 1;

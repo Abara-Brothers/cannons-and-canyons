@@ -811,6 +811,12 @@ function showOverlay(title, hp, cls, hideRematch) {
 $('rematchBtn').onclick = () => sendMsg({ type: 'rematch' });
 $('exitBtn').onclick = () => { clearResume(); sendMsg({ type: 'leave' }); location.href = location.origin; };
 
+// Leave mid-game — always behind an "are you sure?" so a stray tap can't quit.
+$('leaveBtn').onclick = () => $('confirmLeave').classList.remove('hidden');
+$('stayBtn').onclick = () => $('confirmLeave').classList.add('hidden');
+$('confirmLeave').onclick = (e) => { if (e.target.id === 'confirmLeave') $('confirmLeave').classList.add('hidden'); };
+$('leaveYesBtn').onclick = () => { clearResume(); sendMsg({ type: 'leave' }); location.href = location.origin; };
+
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------

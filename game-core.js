@@ -62,15 +62,15 @@ export const WEAPONS = [
     shots: 1, spread: 0,  speedMul: 1.0, damage: 25, radius: 250, terrain: 'crater',
     desc: 'Standard HE shell. Reliable, unlimited.' },
   { id: 'mortar',   name: 'Heavy Mortar',  color: '#ffb02e', ammo: 2,
-    shots: 1, spread: 0,  speedMul: 0.9, damage: 46, radius: 430, terrain: 'crater',
+    shots: 1, spread: 0,  speedMul: 1.0, damage: 46, radius: 430, terrain: 'crater',
     desc: 'Massive HE round. Cracks open the landscape.' },
   { id: 'volley',   name: 'Rocket Volley', color: '#7c6cff', ammo: 3,
-    shots: 6, spread: 22, speedMul: 1.05, damage: 9, radius: 150, terrain: 'crater',
+    shots: 6, spread: 22, speedMul: 1.0, damage: 9, radius: 150, terrain: 'crater',
     desc: 'Six rockets in a fan. Saturates a whole slope.' },
   { id: 'railgun',  name: 'Railgun',       color: '#3ce88f', ammo: 2,
-    shots: 1, spread: 0,  speedMul: 1.7, damage: 62, radius: 120, terrain: 'crater',
-    pierce: true,   // punches straight through terrain until it strikes the ENEMY tank
-    desc: 'Hypervelocity slug — punches through hills to the enemy.' },
+    shots: 1, spread: 0,  speedMul: 1.7, gravityMul: 0.12, damage: 62, radius: 120, terrain: 'crater',
+    pierce: true,   // shoots flat & fast with very little drop, punching through terrain to the ENEMY tank
+    desc: 'Hypervelocity slug — flat shot, punches through hills to the enemy.' },
   { id: 'cluster',  name: 'Cluster Bomb',  color: '#ffd23f', ammo: 2,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 0, radius: 0, terrain: 'none',
     split: { count: 5, spreadSpeed: 700, radius: 190, damage: 14, terrain: 'crater' },
@@ -81,23 +81,23 @@ export const WEAPONS = [
              hazard: { type: 'fire', turns: 2, dpt: 5, dps: 5, r: 430 } },
     desc: 'Splashes burning fuel over a wide area — the ground keeps burning.' },
   { id: 'gas',      name: 'Toxic Gas',     color: '#9dde4b', ammo: 2,
-    shots: 1, spread: 0,  speedMul: 0.95, damage: 5, radius: 220, terrain: 'none',
+    shots: 1, spread: 0,  speedMul: 1.0, damage: 5, radius: 220, terrain: 'none',
     hazard: { type: 'gas', turns: 2, dpt: 7, dps: 4, r: 500 },
     desc: 'No blast — a lingering cloud that poisons over time.' },
   { id: 'airstrike', name: 'Air Strike',   color: '#54c8ff', ammo: 2,
-    shots: 1, spread: 0,  speedMul: 1.1, damage: 0, radius: 0, terrain: 'none',
+    shots: 1, spread: 0,  speedMul: 1.0, damage: 0, radius: 0, terrain: 'none',
     airstrike: { bombs: 5, spacing: 280, damage: 15, radius: 210 },
     desc: 'Fire a beacon — bombers flatten wherever it lands.' },
   { id: 'buster',   name: 'Bunker Buster', color: '#c98a4b', ammo: 2,
-    shots: 1, spread: 0,  speedMul: 1.1, damage: 30, radius: 340, terrain: 'crater',
+    shots: 1, spread: 0,  speedMul: 1.0, damage: 30, radius: 340, terrain: 'crater',
     dig: 0.85,
     desc: 'Burrows before detonating — digs a brutal pit.' },
   { id: 'wall',     name: 'Earthworks',    color: '#8a5a2b', ammo: 3,
-    shots: 1, spread: 0,  speedMul: 0.9, damage: 0,  radius: 0, terrain: 'wall',
+    shots: 1, spread: 0,  speedMul: 1.0, damage: 0,  radius: 0, terrain: 'wall',
     wall: { h: 2000, w: 340 },
     desc: 'Heaps up a huge mound of dirt. Deals no damage.' },
   { id: 'nuke',     name: 'Tactical Nuke', color: '#b6ff5a', ammo: 1,
-    shots: 1, spread: 0,  speedMul: 0.9, damage: 75, radius: 650, terrain: 'crater',
+    shots: 1, spread: 0,  speedMul: 1.0, damage: 75, radius: 650, terrain: 'crater',
     hazard: { type: 'gas', turns: 2, dpt: 6, dps: 5, r: 800 },
     desc: 'One warhead. Leaves fallout that keeps hurting.' },
 ];
@@ -187,8 +187,9 @@ export function generateTerrain(seed) {
     terrain[x] = clampY(y);
   }
 
-  flattenZone(terrain, 900, 700);
-  flattenZone(terrain, WORLD_W - 900, 700);
+  const [sx0, sx1] = pickSpawns(seed);   // flatten a pocket wherever each tank will spawn
+  flattenZone(terrain, sx0, 700);
+  flattenZone(terrain, sx1, 700);
   smooth(terrain, 1);
   return terrain;
 }
@@ -198,12 +199,13 @@ export function generateTerrain(seed) {
 // blasted away dies.
 export function generateTrees(terrain, seed) {
   const rng = mulberry32((seed ^ 0x5eed) >>> 0);
+  const [sx0, sx1] = pickSpawns(seed);                            // keep the tank pockets clear of trees
   const trees = [];
   const tries = 11000;
   const MIN_GAP = 85;                                             // world units between trees
   for (let i = 0; i < tries && trees.length < 240; i++) {
     const x = Math.round(600 + rng() * (WORLD_W - 1200));
-    if (Math.abs(x - 900) < 1400 || Math.abs(x - (WORLD_W - 900)) < 1400) continue; // keep tank pockets clear
+    if (Math.abs(x - sx0) < 1400 || Math.abs(x - sx1) < 1400) continue; // keep tank pockets clear
     const slope = Math.abs(surfaceAt(terrain, x + 25) - surfaceAt(terrain, x - 25));
     if (slope > 85) continue;                                     // too steep for trees
     if (trees.some(t => Math.abs(t.x - x) < MIN_GAP)) continue;   // keep them spaced out
@@ -249,8 +251,23 @@ export const HALF = {
   1: [WORLD_W * 0.5 + 800, WORLD_W - 200],
 };
 
-export function spawnTanks(terrain) {
-  const x0 = 900, x1 = WORLD_W - 900;
+// Random spawn positions, deterministic from the seed. Player 0 always lands in
+// the LEFT half and player 1 in the RIGHT half (matching the scoreboard sides),
+// and they're always at least a quarter of the map apart. Terrain flattening,
+// tree placement and the tanks all call this so they agree on the pockets.
+export function pickSpawns(seed) {
+  const rng = mulberry32((seed ^ 0x5adf00d) >>> 0);
+  const mid = WORLD_W / 2;
+  const gap = WORLD_W / 4;               // required minimum separation
+  const margin = 1600;                   // keep clear of the map edges and the centre line
+  const x0 = Math.round(margin + rng() * (mid - 2 * margin));            // somewhere in the left half
+  const rMin = Math.max(mid + margin, x0 + gap);                         // right half, and ≥ gap from x0
+  const x1 = Math.round(rMin + rng() * (WORLD_W - margin - rMin));
+  return [x0, x1];
+}
+
+export function spawnTanks(terrain, seed) {
+  const [x0, x1] = pickSpawns(seed);
   return [
     { x: x0, y: surfaceAt(terrain, x0) },
     { x: x1, y: surfaceAt(terrain, x1) },
@@ -328,6 +345,7 @@ export function simulateShot(state, shot) {
   const power = Math.max(1, Math.min(100, shot.power));
   const angle = Math.max(0, Math.min(180, shot.angle));
   const speed = power * SPEED_PER_POWER * w.speedMul;
+  const gravMul = w.gravityMul || 1;   // railgun ≈ flat; every other weapon shares one trajectory
   const tank = state.tanks[by];
   const damageDealt = [0, 0];
   const projectiles = [];
@@ -404,7 +422,7 @@ export function simulateShot(state, shot) {
         }
       }
     } else {
-      const fp = integrate(state.terrain, state.tanks, ox, oy, vx, vy, w.pierce ? { pierce: true, pierceBy: by } : {});
+      const fp = integrate(state.terrain, state.tanks, ox, oy, vx, vy, w.pierce ? { pierce: true, pierceBy: by, gravMul } : { gravMul });
       let d = null;
       if (fp.hit) {
         d = det(fp.x, fp.y, w.wall ? 0 : w.radius, w.terrain, w.hazard ? w.hazard.type : null);
@@ -484,9 +502,10 @@ export function aiShot(terrain, tanks, by, difficulty) {
 
 function integrate(terrain, tanks, ox, oy, vx, vy, opts) {
   const path = [[round1(ox), round1(oy)]];
+  const grav = GRAVITY * (opts.gravMul || 1);
   let x = ox, y = oy, t = 0, step = 0, prevVy = vy;
   while (t < MAX_T) {
-    vy += GRAVITY * DT;
+    vy += grav * DT;
     x += vx * DT;
     y += vy * DT;
     t += DT;
