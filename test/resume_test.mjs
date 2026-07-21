@@ -73,7 +73,15 @@ function resumeA() {
 }
 
 function checkDone() {
-  if (restored && bSawDrop && bSawBack) {
+  // A must come back with correct state, and B must end up knowing A is present.
+  // Seeing the DROP first is NOT required: if A reconnects before the server has
+  // noticed the dead socket (routine behind a proxy — Render takes ~20s to report
+  // one), the seat is handed straight back and the opponent is never told anything
+  // went wrong. That is the desired outcome, not a missed event.
+  if (restored && bSawBack) {
+    step(bSawDrop
+      ? 'B saw the full drop → return cycle'
+      : 'A was back before the server noticed the drop — B never saw an interruption');
     step('ALL GOOD');
     finish();
   }
