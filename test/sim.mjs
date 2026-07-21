@@ -3,7 +3,7 @@
 // (cycling every weapon) and checks the pipeline stays consistent; it also
 // ends early if someone is destroyed.
 import WebSocket from 'ws';
-const URL = 'ws://localhost:3000/ws';
+const URL = process.env.WS || 'ws://localhost:3000/ws';
 const MAX_SHOTS = 24;
 
 function client(name) {

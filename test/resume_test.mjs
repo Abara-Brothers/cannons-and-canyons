@@ -2,7 +2,7 @@
 // abruptly. A reconnects with its token and must receive a full 'restore'
 // snapshot; B must see oppConn false→true. Exits 0 on success.
 import WebSocket from 'ws';
-const URL = 'ws://localhost:3000/ws';
+const URL = process.env.WS || 'ws://localhost:3000/ws';
 
 const out = { steps: [], errors: [] };
 const step = (s) => out.steps.push(s);

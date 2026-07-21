@@ -410,11 +410,20 @@ function handleResume(ws, msg) {
   const room = rooms.get((msg.code || '').toUpperCase().trim());
   if (!room || room.state !== 'playing') return send(ws, { type: 'resumeError' });
   const seat = room.players.findIndex(p => p && p.token === msg.token);
-  if (seat < 0 || room.players[seat].connected) return send(ws, { type: 'resumeError' });
+  if (seat < 0) return send(ws, { type: 'resumeError' });
   const player = room.players[seat];
+  // The token is the secret, so whoever presents it IS this player — TAKE OVER the
+  // seat even if it still looks connected. Behind a proxy that holds dead upstream
+  // sockets open (Render takes ~20s to report a drop, measured) the seat is still
+  // 'connected' when its owner is already back; refusing here made a brief blip
+  // cost the player the whole match. Reassign player.ws BEFORE killing the ghost:
+  // handleClose ignores a socket that is no longer player.ws, so the stale close
+  // can't clobber this new connection.
+  const stale = player.ws;
   clearTimeout(player.dropTimer);
   player.ws = ws; player.connected = true;
   ws.roomCode = room.code; ws.seat = seat;
+  if (stale && stale !== ws) { try { stale.terminate(); } catch { /* already gone */ } }
   send(ws, { type: 'restore', ...snapshot(room, seat) });
   broadcast(room, { type: 'oppConn', seat, connected: true });
   scheduleBot(room);   // if it was the CPU's turn, resume its thinking

@@ -10,6 +10,7 @@
     "test:hitbox": "node test/hitbox.mjs",
     "test:sim": "node test/sim.mjs",
     "test:resume": "node test/resume_test.mjs",
+    "test:takeover": "node test/resume_takeover.mjs",
     "test:ffa": "node test/ffa.mjs",
     "test:ffa-elim": "node test/ffa_elim.mjs"
   },
