@@ -180,7 +180,7 @@ function mulberry32(seed) {
 // Gaussian peaks (some sharp, some broad), and 2..5 true CLIFFS (sigmoid
 // elevation steps). Flattened pockets under each tank. Peak height is capped
 // so a high-power lob always clears them (verified against SPEED_PER_POWER).
-export function generateTerrain(seed) {
+export function generateTerrain(seed, n = 2) {
   const rng = mulberry32(seed);
   const base = WORLD_H * 0.72;   // surface baseline; peaks rise into the sky above, valleys drop below
   const terrain = new Array(WORLD_W + 1);
@@ -235,9 +235,8 @@ export function generateTerrain(seed) {
     terrain[x] = clampY(y);
   }
 
-  const [sx0, sx1] = pickSpawns(seed);   // flatten a pocket wherever each tank will spawn
-  flattenZone(terrain, sx0, 700);
-  flattenZone(terrain, sx1, 700);
+  // flatten a pocket wherever each tank will spawn
+  for (const sx of pickSpawns(seed, n)) flattenZone(terrain, sx, 700);
   smooth(terrain, 1);
   return terrain;
 }
@@ -245,15 +244,16 @@ export function generateTerrain(seed) {
 // Scatter trees across the slopes — well spaced (min gap), not near the
 // tanks, not on sheer walls. Sent to clients once; a tree whose ground gets
 // blasted away dies.
-export function generateTrees(terrain, seed) {
+export function generateTrees(terrain, seed, n = 2) {
   const rng = mulberry32((seed ^ 0x5eed) >>> 0);
-  const [sx0, sx1] = pickSpawns(seed);                            // keep the tank pockets clear of trees
+  const spawns = pickSpawns(seed, n);                             // keep the tank pockets clear of trees
+  const CLEAR = n >= 3 ? 1100 : 1400;                             // smaller pockets when the map is busier
   const trees = [];
   const tries = 11000;
   const MIN_GAP = 85;                                             // world units between trees
   for (let i = 0; i < tries && trees.length < 240; i++) {
     const x = Math.round(600 + rng() * (WORLD_W - 1200));
-    if (Math.abs(x - sx0) < 1400 || Math.abs(x - sx1) < 1400) continue; // keep tank pockets clear
+    if (spawns.some(sx => Math.abs(x - sx) < CLEAR)) continue;      // keep tank pockets clear
     const slope = Math.abs(surfaceAt(terrain, x + 25) - surfaceAt(terrain, x - 25));
     if (slope > 85) continue;                                     // too steep for trees
     if (trees.some(t => Math.abs(t.x - x) < MIN_GAP)) continue;   // keep them spaced out
@@ -293,33 +293,26 @@ export function surfaceAt(terrain, x) {
   return terrain[i] * (1 - f) + terrain[i + 1] * f;
 }
 
-// Left tank half and right tank half bounds (kept apart so they can't collide).
-export const HALF = {
-  0: [200, WORLD_W * 0.5 - 800],
-  1: [WORLD_W * 0.5 + 800, WORLD_W - 200],
-};
-
 // Random spawn positions, deterministic from the seed. Player 0 always lands in
 // the LEFT half and player 1 in the RIGHT half (matching the scoreboard sides),
 // and they're always at least a quarter of the map apart. Terrain flattening,
 // tree placement and the tanks all call this so they agree on the pockets.
-export function pickSpawns(seed) {
+export function pickSpawns(seed, n = 2) {
   const rng = mulberry32((seed ^ 0x5adf00d) >>> 0);
-  const mid = WORLD_W / 2;
-  const gap = WORLD_W / 4;               // required minimum separation
-  const margin = 1600;                   // keep clear of the map edges and the centre line
-  const x0 = Math.round(margin + rng() * (mid - 2 * margin));            // somewhere in the left half
-  const rMin = Math.max(mid + margin, x0 + gap);                         // right half, and ≥ gap from x0
-  const x1 = Math.round(rMin + rng() * (WORLD_W - margin - rMin));
-  return [x0, x1];
+  const margin = 1600;                       // keep clear of the map edges
+  const slot = (WORLD_W - 2 * margin) / n;   // one lane per player
+  const jitter = slot * 0.22;                // guarantees a slot*0.56 neighbour gap
+  const xs = [];
+  for (let i = 0; i < n; i++) {
+    xs.push(Math.round(margin + slot * (i + 0.5) + (rng() * 2 - 1) * jitter));
+  }
+  return xs;
 }
 
-export function spawnTanks(terrain, seed) {
-  const [x0, x1] = pickSpawns(seed);
-  return [
-    { x: x0, y: surfaceAt(terrain, x0) },
-    { x: x1, y: surfaceAt(terrain, x1) },
-  ];
+// Tanks carry `alive` so the shot integrator, blast damage and the burn tick can all
+// skip destroyed wrecks without a second parallel array.
+export function spawnTanks(terrain, seed, n = 2) {
+  return pickSpawns(seed, n).map(x => ({ x, y: surfaceAt(terrain, x), alive: true }));
 }
 
 function settle(terrain, tanks) {
@@ -339,12 +332,24 @@ function settle(terrain, tanks) {
 // land you in it keeps the weapon a genuine risk/reward call and needs no new
 // state; blocking it would mean inventing a "teleport refused" outcome both
 // clients would have to replay.
+// How far seat `by` may legally travel, by driving OR teleporting. Seats are
+// ordered left→right, so a tank is fenced in by its nearest LIVING neighbour on
+// each side (wrecks are drivable-through) and by the map edges. Shared by
+// teleportTank here and handleMove in server.js so the two can never disagree.
+export function laneBounds(tanks, by) {
+  let lo = EDGE_MARGIN, hi = WORLD_W - EDGE_MARGIN;
+  for (let i = 0; i < tanks.length; i++) {
+    if (i === by || tanks[i].alive === false) continue;
+    if (i < by) lo = Math.max(lo, tanks[i].x + TANK_GAP);   // neighbour on the left
+    else        hi = Math.min(hi, tanks[i].x - TANK_GAP);   // neighbour on the right
+  }
+  return [lo, hi];
+}
+
 export function teleportTank(state, by, landX) {
   const tank = state.tanks[by];
-  const other = state.tanks[1 - by];
   const fromX = tank.x, fromY = tank.y;
-  const lo = by === 0 ? EDGE_MARGIN : other.x + TANK_GAP;
-  const hi = by === 0 ? other.x - TANK_GAP : WORLD_W - EDGE_MARGIN;
+  const [lo, hi] = laneBounds(state.tanks, by);
   const nx = hi < lo ? fromX : Math.max(lo, Math.min(hi, landX));   // guard: no legal ground
   tank.x = nx;
   tank.y = surfaceAt(state.terrain, nx);      // settle() re-derives this anyway
@@ -385,10 +390,12 @@ function deform(terrain, cx, cy, r, mode, wall) {
 // Ticked once after every shot: any tank inside a hazard takes its per-turn
 // damage; the hazard's owner scores those points when the victim is the enemy.
 export function tickHazards(hazards, tanks) {
-  const dmgTaken = [0, 0];
-  const points = [0, 0];
+  const n = tanks.length;
+  const dmgTaken = new Array(n).fill(0);
+  const points = new Array(n).fill(0);
   for (const h of hazards) {
-    for (let ti = 0; ti < 2; ti++) {
+    for (let ti = 0; ti < n; ti++) {
+      if (tanks[ti].alive === false) continue;
       if (distToTank(h.x, h.y, tanks[ti]) <= h.r) {
         dmgTaken[ti] += h.dpt;
         if (h.owner !== ti) points[h.owner] += h.dpt;
@@ -402,15 +409,20 @@ export function tickHazards(hazards, tanks) {
 // Real-time damage-over-time: one tick of the 5-second burn. Every fire/gas
 // hazard damages any tank standing inside it by its per-second `dps`.
 export function burnTick(hazards, tanks) {
-  const dmg = [0, 0];
+  const n = tanks.length;
+  const dmg = new Array(n).fill(0);
   for (const h of hazards) {
     if (!h.dps) continue;
-    for (let ti = 0; ti < 2; ti++) {
+    for (let ti = 0; ti < n; ti++) {
+      if (tanks[ti].alive === false) continue;
       if (distToTank(h.x, h.y, tanks[ti]) <= h.r) dmg[ti] += h.dps;
     }
   }
   // The lava floor cooks anything standing in it.
-  for (let ti = 0; ti < 2; ti++) if (tanks[ti].y >= LAVA_Y - 4) dmg[ti] += LAVA_DPS;
+  for (let ti = 0; ti < n; ti++) {
+    if (tanks[ti].alive === false) continue;
+    if (tanks[ti].y >= LAVA_Y - 4) dmg[ti] += LAVA_DPS;
+  }
   return dmg;
 }
 
@@ -422,13 +434,15 @@ export function burnTick(hazards, tanks) {
 export function simulateShot(state, shot) {
   const w = WEAPON_BY_ID[shot.weapon] || WEAPON_BY_ID.cannon;
   const by = shot.by;
-  const dir = by === 0 ? 1 : -1;
+  // Facing is server state (room.facing[seat]), not seat parity — in a free-for-all a
+  // tank may be turned either way.
+  const dir = shot.dir === -1 ? -1 : 1;
   const power = Math.max(1, Math.min(100, Number.isFinite(Number(shot.power)) ? Number(shot.power) : 60));
   const angle = clampAim(shot.angle);
   const speed = power * SPEED_PER_POWER * w.speedMul;
   const gravMul = w.gravityMul || 1;   // railgun ≈ flat; every other weapon shares one trajectory
   const tank = state.tanks[by];
-  const damageDealt = [0, 0];
+  const damageDealt = new Array(state.tanks.length).fill(0);
   const projectiles = [];
   const newHazards = [];
   const newScorches = [];
@@ -446,7 +460,10 @@ export function simulateShot(state, shot) {
       const cy = y + (opts.dig ? rDmg * CRATER_MUL * opts.dig : 0);   // bunker buster digs deep
       deform(state.terrain, x, cy, rDmg * CRATER_MUL, kind);
     }
-    if (dmg > 0) for (let ti = 0; ti < 2; ti++) damageDealt[ti] += blastDamage(x, y, rDmg, dmg, state.tanks[ti]);
+    if (dmg > 0) for (let ti = 0; ti < state.tanks.length; ti++) {
+      if (state.tanks[ti].alive === false) continue;      // wrecks take no further damage
+      damageDealt[ti] += blastDamage(x, y, rDmg, dmg, state.tanks[ti]);
+    }
     if (opts.hazard) {
       newHazards.push({ type: opts.hazard.type, x: round1(x), y: round1(y), r: opts.hazard.r, turnsLeft: opts.hazard.turns, dpt: opts.hazard.dpt, dps: opts.hazard.dps || 0 });
     }
@@ -536,13 +553,13 @@ export function simulateShot(state, shot) {
   }
 
   settle(state.terrain, state.tanks);
-  const opp = 1 - by;
   return {
     projectiles,
     newHazards,
     newScorches,
     tanks: state.tanks.map(t => ({ x: round1(t.x), y: round1(t.y) })),
-    scoreDelta: Math.round(damageDealt[opp]),
+    // total damage dealt to everyone who isn't you (self-damage excluded)
+    scoreDelta: Math.round(damageDealt.reduce((sum, d, i) => (i === by ? sum : sum + d), 0)),
     damage: damageDealt.map(d => Math.round(d)),
     weapon: w.id, by,
   };
@@ -554,10 +571,17 @@ export function simulateShot(state, shot) {
 // so it's cheap enough to run inline on a turn) and returns { weapon, angle,
 // power }. `difficulty` scales the random aim error added to the best solution:
 // easy = wild, medium = loose, hard = crisp.
-export function aiShot(terrain, tanks, by, difficulty) {
-  const dir = by === 0 ? 1 : -1;
+export function aiShot(terrain, tanks, by, difficulty, facing) {
   const me = tanks[by];
-  const enemy = tanks[1 - by];
+  // Nearest LIVING opponent. (Duel: identical to the old tanks[1 - by].)
+  let enemy = null, bestD = Infinity;
+  for (let i = 0; i < tanks.length; i++) {
+    if (i === by || tanks[i].alive === false) continue;
+    const d = Math.abs(tanks[i].x - me.x);
+    if (d < bestD) { bestD = d; enemy = tanks[i]; }
+  }
+  if (!enemy) return { weapon: 'cannon', angle: 45, power: 60, dir: facing === -1 ? -1 : 1 };
+  const dir = enemy.x >= me.x ? 1 : -1;            // turn the turret toward the target
   const speedMul = WEAPON_BY_ID.cannon.speedMul;   // cannon = 1.0, unlimited ammo
 
   // Fly one cannon shell read-only; return |landing.x − enemy.x| (0 = direct hit).
@@ -606,7 +630,7 @@ export function aiShot(terrain, tanks, by, difficulty) {
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   const angle = clamp(best.angle + noise() * e, 8, 88);
   const power = clamp(best.power + noise() * e * 1.4, 12, 100);
-  return { weapon: 'cannon', angle: round1(angle), power: round1(power) };
+  return { weapon: 'cannon', angle: round1(angle), power: round1(power), dir };
 }
 
 function integrate(terrain, tanks, ox, oy, vx, vy, opts) {
@@ -636,17 +660,23 @@ function integrate(terrain, tanks, ox, oy, vx, vy, opts) {
       // the hypervelocity slug can't tunnel past between steps, and detonate when
       // it passes within `proximity` of the tank (a flat slug rarely lands a
       // pixel-perfect hitbox touch), snapping the blast onto the tank for damage.
-      const enemy = tanks[1 - opts.pierceBy];
-      if (armed && enemy) {
+      if (armed) {
         const prox = opts.proximity || 0;
         const px = x - vx * DT, py = y - vy * DT;
         const n = Math.max(2, Math.ceil(Math.hypot(x - px, y - py) / 8));
+        // Sub-steps OUTSIDE the tank loop: whichever living tank the slug reaches
+        // first along this segment is the one it detonates on.
         for (let s = 1; s <= n; s++) {
           const f = s / n, ix = px + (x - px) * f, iy = py + (y - py) * f;
-          const rx = Math.max(enemy.x - TANK_HW, Math.min(ix, enemy.x + TANK_HW));   // closest point on the hull box
-          const ry = Math.max(enemy.y - TANK_TOP, Math.min(iy, enemy.y));
-          if (Math.hypot(ix - rx, iy - ry) <= prox) {
-            path.push([round1(ix), round1(iy)]); return { path, hit: true, x: rx, y: ry, vx, vy };
+          for (let ti = 0; ti < tanks.length; ti++) {
+            if (ti === opts.pierceBy) continue;                   // never your own tank
+            const tk = tanks[ti];
+            if (tk.alive === false) continue;
+            const rx = Math.max(tk.x - TANK_HW, Math.min(ix, tk.x + TANK_HW));   // closest point on the hull box
+            const ry = Math.max(tk.y - TANK_TOP, Math.min(iy, tk.y));
+            if (Math.hypot(ix - rx, iy - ry) <= prox) {
+              path.push([round1(ix), round1(iy)]); return { path, hit: true, x: rx, y: ry, vx, vy };
+            }
           }
         }
       }
@@ -663,6 +693,7 @@ function integrate(terrain, tanks, ox, oy, vx, vy, opts) {
           const f = s / n, ix = px + (x - px) * f, iy = py + (y - py) * f;
           for (let ti = 0; ti < tanks.length; ti++) {
             if (ti === opts.by && !leftOwn) continue;   // still inside its own hull
+            if (tanks[ti].alive === false) continue;    // shells pass through wrecks
             if (pointHitsTank(ix, iy, tanks[ti])) {
               path.push([round1(ix), round1(iy)]); return { path, hit: true, x: ix, y: iy, vx, vy };
             }

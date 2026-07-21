@@ -27,6 +27,14 @@
         <input id="nameInput" maxlength="14" placeholder="Commander" autocomplete="off" />
       </label>
 
+      <div class="modrow" id="modeRow" role="group" aria-label="Game mode">
+        <button type="button" class="mode active" data-mode="duel">⚔️ Duel</button>
+        <button type="button" class="mode" data-mode="ffa">💥 Free-for-all</button>
+      </div>
+      <div class="countrow hidden" id="countRow" role="group" aria-label="Players">
+        <button type="button" class="cnt" data-max="3">3 players</button>
+        <button type="button" class="cnt active" data-max="4">4 players</button>
+      </div>
       <button id="createBtn" class="btn big primary">Create a game</button>
       <button id="quickBtn" class="btn big">⚡ Quick match a stranger</button>
 
@@ -63,6 +71,8 @@
 
       <div class="code-display" id="lobbyCode">----</div>
 
+      <div class="roster" id="roster"></div>
+      <button id="startMatchBtn" class="btn big primary hidden">Start battle</button>
       <button id="copyLinkBtn" class="btn big primary">Copy invite link</button>
       <button id="copyCodeBtn" class="btn">Copy code</button>
       <div class="spinner" aria-hidden="true"></div>
@@ -73,19 +83,9 @@
   <!-- ============ GAME ============ -->
   <section id="game" class="screen">
     <header id="hud-top">
-      <div class="pscore" id="p0">
-        <div class="pname"></div>
-        <div class="pval"><span class="score">100</span><span class="shots">HP</span></div>
-        <div class="hpbar"><i></i></div>
-      </div>
+      <div id="scoreRow" class="score-row n2"></div>
       <div class="turnbox">
-        <div class="clock" id="clock" style="display:none">—</div>
         <div class="turnlabel" id="turnLabel">—</div>
-      </div>
-      <div class="pscore right" id="p1">
-        <div class="pname"></div>
-        <div class="pval"><span class="score">100</span><span class="shots">HP</span></div>
-        <div class="hpbar"><i></i></div>
       </div>
     </header>
 
@@ -132,6 +132,7 @@
         <div class="drive-row">
           <button class="drive" id="moveLeft">◀</button>
           <div class="fuel"><div class="fuel-bar" id="fuelBar"></div><span>FUEL</span></div>
+          <button class="drive" id="flipBtn" title="Turn the turret around">⇄</button>
           <button class="drive" id="moveRight">▶</button>
         </div>
 

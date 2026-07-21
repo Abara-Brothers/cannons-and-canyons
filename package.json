@@ -1,12 +1,17 @@
 {
   "name": "canyons-and-cannons",
   "version": "0.2.0",
-  "description": "Canyons & Cannons — real-time 2-player artillery duel over mountainous terrain, mobile-first, join by room link.",
+  "description": "Canyons & Cannons — real-time artillery combat over mountainous terrain: 2-player duel or up to 4-player free-for-all, mobile-first, join by room link.",
   "author": "Abara Brothers",
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "test:hitbox": "node test/hitbox.mjs",
+    "test:sim": "node test/sim.mjs",
+    "test:resume": "node test/resume_test.mjs",
+    "test:ffa": "node test/ffa.mjs",
+    "test:ffa-elim": "node test/ffa_elim.mjs"
   },
   "engines": {
     "node": ">=18"

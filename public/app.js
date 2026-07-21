@@ -14,8 +14,10 @@ const $ = (id) => document.getElementById(id);
 const S = {
   ws: null, connected: false,
   world: { w: 24000, h: 13500 },
-  you: 0, names: ['Player 1', 'Player 2'],
+  you: 0, n: 2, mode: 'duel',
+  names: ['Player 1', 'Player 2'],
   skins: ['olive', 'desert'],
+  facing: [1, -1], alive: [true, true],
   weapons: [], weaponById: {},
   terrain: null, minY: 0,
   trees: [],
@@ -41,6 +43,12 @@ const S = {
 };
 const WW = () => S.world.w, WH = () => S.world.h;
 const MOVE_MIN = 60;
+// Seat identity: colour + fallback paint. Must stay in sync with --p0..--p3 in
+// styles.css and SEAT_SKIN in server.js.
+const SEAT_COLORS = ['#54c8ff', '#ff6b6b', '#ffd23f', '#b6ff5a'];
+const seatColor = (i) => SEAT_COLORS[i % SEAT_COLORS.length];
+const SEAT_SKIN = ['olive', 'desert', 'jungle', 'midnight'];
+const facingOf = (i) => (S.facing && S.facing[i] === -1 ? -1 : 1);
 
 // ---------------------------------------------------------------------------
 // Tank paints (cosmetics). Locked ones are part of the Supporter Pack.
@@ -242,12 +250,17 @@ function cameraTarget() {
   // the zoom level alone: 1 at min zoom → 0 once zoomed to 1.6× min (aiming).
   const mz = minMapZoom();
   const surveyMix = Math.max(0, Math.min(1, (mz * 1.6 - tz) / (mz * 0.6)));
-  const other = S.tanks[1 - S.you] || focus;
   const framedY = focus.y - vh * 0.18;
   // On landscape, sit the tanks lower in the frame by default so you see more sky
   // (and less of the terrain wall). Then apply the user's vertical pan (S.panY).
   const skyBias = view.cssW > view.cssH ? vh * 0.13 : 0;
-  const surveyY = (focus.y + other.y) / 2 - skyBias;
+  // Survey framing centres on the mean height of everyone still fighting.
+  let ysum = 0, ycnt = 0;
+  for (let i = 0; i < S.n; i++) {
+    if (S.alive[i] === false || !S.tanks[i]) continue;
+    ysum += S.tanks[i].y; ycnt++;
+  }
+  const surveyY = (ycnt ? ysum / ycnt : focus.y) - skyBias;
   let ty = framedY + (surveyY - framedY) * surveyMix + (S.panY || 0);
   tx = vw >= WW() ? WW() / 2 : Math.min(WW() - vw / 2, Math.max(vw / 2, tx));
   ty = vh >= WH() ? WH() - vh / 2 : Math.min(WH() - vh / 2, Math.max(vh / 2, ty));
@@ -353,6 +366,7 @@ function intent(m) { if (S.connected) sendMsg(m); else pendingIntent = m; }
 function handle(m) {
   switch (m.type) {
     case 'created': S.code = m.code; $('lobbyCode').textContent = m.code; showLobby('host'); break;
+    case 'lobby': renderLobby(m); break;
     case 'queued': showLobby('search'); break;
     case 'joinError': $('homeError').textContent = m.reason; break;
     case 'start': applySnapshot(m); saveResume(m.code, m.token); break;
@@ -361,10 +375,19 @@ function handle(m) {
       showToast('Reconnected — battle on!');
       break;
     case 'resumeError': clearResume(); break;
-    case 'oppConn':
-      showToast(m.connected ? 'Opponent reconnected' : 'Opponent lost connection — holding their seat…');
+    case 'oppConn': {
+      const who = S.names[m.seat] || 'Opponent';
+      showToast(m.connected ? `${who} reconnected` : `${who} lost connection — holding their seat…`);
       break;
+    }
     case 'turn': onTurn(m); break;
+    case 'face': if (m.seat !== S.you) S.facing[m.seat] = m.dir; break;
+    case 'forfeit':
+      if (m.hp) S.hp = m.hp.map((h, i) => Math.min(S.hp[i] ?? h, h));
+      if (m.alive) S.alive = m.alive.slice();
+      updateHud();
+      showToast(`${S.names[m.seat] || 'A player'} left — tank scuttled`);
+      break;
     case 'aim': if (m.seat !== S.you) { S.aim[m.seat] = { angle: clampAimC(m.angle), power: Number(m.power) || 60 }; } break;
     case 'move': {
       const prev = S.tanks[m.seat] ? S.tanks[m.seat].x : m.x;
@@ -398,7 +421,25 @@ function myName() {
   return n;
 }
 
-$('createBtn').onclick = () => { Audio.ensure(); $('homeError').textContent = ''; intent({ type: 'create', name: myName(), skin: mySkin() }); };
+let ccMode = 'duel', ccMax = 4;
+(function initMode() {
+  const mr = $('modeRow'), cr = $('countRow');
+  mr.addEventListener('click', (e) => {
+    const b = e.target.closest('.mode'); if (!b) return;
+    ccMode = b.dataset.mode;
+    for (const el of mr.querySelectorAll('.mode')) el.classList.toggle('active', el === b);
+    cr.classList.toggle('hidden', ccMode !== 'ffa');
+  });
+  cr.addEventListener('click', (e) => {
+    const b = e.target.closest('.cnt'); if (!b) return;
+    ccMax = +b.dataset.max;
+    for (const el of cr.querySelectorAll('.cnt')) el.classList.toggle('active', el === b);
+  });
+})();
+$('createBtn').onclick = () => {
+  Audio.ensure(); $('homeError').textContent = '';
+  intent({ type: 'create', name: myName(), skin: mySkin(), mode: ccMode, max: ccMode === 'ffa' ? ccMax : 2 });
+};
 $('quickBtn').onclick = () => { Audio.ensure(); S.quick = true; $('homeError').textContent = ''; intent({ type: 'quick', name: myName(), skin: mySkin() }); };
 
 // Single-player vs CPU, with a difficulty selector.
@@ -442,8 +483,46 @@ function showLobby(mode) {
   $('lobbyCode').style.display = searching ? 'none' : '';
   $('copyLinkBtn').style.display = searching ? 'none' : '';
   $('copyCodeBtn').style.display = searching ? 'none' : '';
+  if (searching) { $('roster').innerHTML = ''; $('startMatchBtn').classList.add('hidden'); }
   showScreen('lobby');
 }
+
+// FFA lobby: live roster + host-only "Start battle". A duel still auto-starts the
+// moment the second player joins, so this mostly matters for free-for-all.
+function renderLobby(m) {
+  S.code = m.code; $('lobbyCode').textContent = m.code;
+  const isHost = m.you === m.host;
+  const filled = m.players.filter(Boolean).length;
+  $('lobbyHeading').textContent = m.mode === 'ffa'
+    ? `Free-for-all — ${filled}/${m.max} commanders`
+    : 'Waiting for your opponent…';
+  $('lobbyHint').textContent = m.mode === 'ffa'
+    ? (isHost ? "Send the link. Start whenever you have enough players — you don't have to wait for a full lobby."
+              : 'Waiting for the host to start the battle…')
+    : 'Send this link or code. The battle starts the moment they join.';
+  const r = $('roster'); r.innerHTML = '';
+  for (let i = 0; i < m.max; i++) {
+    const p = m.players[i];
+    const el = document.createElement('div');
+    el.className = 'rp' + (p ? '' : ' empty');
+    el.style.setProperty('--seat', seatColor(i));
+    if (p) {
+      const tag = (i === m.host ? 'HOST' : '') + (i === m.you ? (i === m.host ? ' · YOU' : 'YOU') : '');
+      el.innerHTML = '<span class="dot"></span><span class="rn"></span><span class="tag"></span>';
+      el.querySelector('.rn').textContent = p.name;
+      el.querySelector('.tag').textContent = tag;
+    } else {
+      el.innerHTML = '<span class="dot"></span><span>Open slot</span>';
+    }
+    r.appendChild(el);
+  }
+  const btn = $('startMatchBtn');
+  btn.classList.toggle('hidden', !(isHost && m.mode === 'ffa'));
+  btn.disabled = filled < 2;
+  btn.textContent = filled < 2 ? 'Start battle (need 2)' : `Start battle (${filled})`;
+  showScreen('lobby');
+}
+$('startMatchBtn').onclick = () => sendMsg({ type: 'startMatch' });
 
 // ---------------------------------------------------------------------------
 // Game setup (also used to restore a resumed match)
@@ -452,19 +531,27 @@ function applySnapshot(m) {
   S.world = m.world || S.world;
   S.lavaY = m.lavaY ?? (S.world.h - 300);
   S.you = m.you; S.names = m.names; S.weapons = m.weapons;
+  S.n = m.n || (m.names ? m.names.length : 2);
+  S.mode = m.mode || 'duel';
   S.skins = m.skins || S.skins;
+  S.facing = (m.facing || []).slice();
+  while (S.facing.length < S.n) S.facing.push(S.facing.length < S.n / 2 ? 1 : -1);
+  S.alive = (m.alive || new Array(S.n).fill(true)).slice();
   S.weaponById = Object.fromEntries(m.weapons.map(w => [w.id, w]));
   S.terrain = m.terrain.slice();
   S.trees = (m.trees || []).map(t => ({ ...t }));
   S.hazards = m.hazards || [];
   S.scorch = m.scorch || [];
   S.tanks = m.tanks.map(t => ({ x: t.x, y: t.y }));
-  S.hp = (m.hp || [100, 100]).slice(); S.maxHp = m.maxHp || 100;
+  S.hp = (m.hp || new Array(S.n).fill(100)).slice(); S.maxHp = m.maxHp || 100;
   S.ammo = m.ammo; S.moveBudget = m.moveBudget;
   if (Array.isArray(m.aimRange) && m.aimRange.length === 2) { S.aimMin = m.aimRange[0]; S.aimMax = m.aimRange[1]; }
   S.turn = m.turn; S.fuel = m.fuel ?? m.moveBudget;
   S.code = m.code || S.code;
-  S.aim = [{ angle: 45, power: 60 }, { angle: 45, power: 60 }];
+  S.aim = Array.from({ length: S.n }, () => ({ angle: 45, power: 60 }));
+  S.recoil = new Array(S.n).fill(0);
+  S.lean = new Array(S.n).fill(0); S.leanV = new Array(S.n).fill(0);
+  S.leanTarget = new Array(S.n).fill(0); S.moveAt = new Array(S.n).fill(0);
   S.selected = firstAvailableWeapon();
   S.playing = true; S.quick = false; S.anim = null; S.queue = []; S.pendingOver = null; S.warp = null;
   S.particles = []; S.floaters = []; S.rings = []; S.muzzle = []; S.flash = 0; S.shake = 0;
@@ -476,13 +563,13 @@ function applySnapshot(m) {
   resize();
   snapCamera();
   buildWeaponStrip();
-  $('p0').querySelector('.pname').textContent = m.names[0] + (S.you === 0 ? ' (you)' : '');
-  $('p1').querySelector('.pname').textContent = m.names[1] + (S.you === 1 ? ' (you)' : '');
+  buildScoreboard();
   updateHud(); updateAimUI(); updateFuel(); updateDock();
 }
 
 function onTurn(m) {
   S.turn = m.turn; S.fuel = m.fuel;
+  if (m.alive) { S.alive = m.alive.slice(); updateHud(); }
   if (m.turn === S.you && (S.ammo[S.selected] ?? 99) <= 0) S.selected = firstAvailableWeapon();
   updateFuel(); updateDock(); buildWeaponStrip();
 }
@@ -496,11 +583,35 @@ function firstAvailableWeapon() {
 // HUD (health bars — destroy the enemy tank to win)
 // ---------------------------------------------------------------------------
 function hpColor(pct) { return pct > 0.6 ? '#3ce88f' : pct > 0.3 ? '#ffd23f' : '#ff5a52'; }
+// Build one scoreboard card per seat. Called on every snapshot, since n can change
+// between matches (duel -> FFA rematch).
+function buildScoreboard() {
+  const row = $('scoreRow');
+  row.className = 'score-row n' + S.n;
+  row.style.setProperty('--n', S.n);
+  row.innerHTML = '';
+  for (let i = 0; i < S.n; i++) {
+    const el = document.createElement('div');
+    el.className = 'pscore';
+    el.id = 'p' + i;
+    el.style.setProperty('--seat', seatColor(i));
+    el.innerHTML =
+      '<div class="pname"></div>' +
+      '<div class="pval"><span class="score">100</span><span class="shots">HP</span></div>' +
+      '<div class="hpbar"><i></i></div>';
+    el.querySelector('.pname').textContent = (S.names[i] || `Player ${i + 1}`) + (i === S.you ? ' (you)' : '');
+    row.appendChild(el);
+  }
+}
+
 function updateHud() {
-  for (let i = 0; i < 2; i++) {
-    const el = $(i === 0 ? 'p0' : 'p1');
-    const hp = Math.max(0, Math.round(S.hp[i]));
-    el.querySelector('.score').textContent = hp;
+  for (let i = 0; i < S.n; i++) {
+    const el = $('p' + i); if (!el) continue;
+    const hp = Math.max(0, Math.round(S.hp[i] ?? 0));
+    const dead = S.alive[i] === false || hp <= 0;
+    el.classList.toggle('dead', dead);
+    el.classList.toggle('acting', !!S.playing && S.turn === i && !dead);
+    el.querySelector('.score').textContent = dead ? '\u2620' : hp;
     el.querySelector('.shots').textContent = 'HP';
     const bar = el.querySelector('.hpbar i');
     const pct = Math.max(0, Math.min(1, hp / S.maxHp));
@@ -639,7 +750,7 @@ function aimFromPointer(sx, sy) {
   const tank = S.tanks[S.you];
   const ax = wx2s(tank.x), ay = wy2s(surfaceAt(tank.x) - 24);
   const dx = sx - ax, dy = sy - ay;
-  const dir = S.you === 0 ? 1 : -1;
+  const dir = facingOf(S.you);
   const raw = Math.atan2(-dy, dx * dir) * 180 / Math.PI;
   const power = (Math.hypot(dx, dy) / maxPull()) * 100;
   S.pullPointer = { sx, sy };
@@ -696,6 +807,14 @@ function holdMove(btn, dir) {
 }
 holdMove($('moveLeft'), -1);
 holdMove($('moveRight'), 1);
+// Turn the turret around. A convenience only — dragging past the far side of your
+// tank already produces a backwards shot, since the aim range covers 0..180+.
+$('flipBtn').onclick = () => {
+  if (!canAim()) return;
+  S.facing[S.you] = -facingOf(S.you);
+  sendMsg({ type: 'face', dir: S.facing[S.you] });
+  updateAimUI();
+};
 
 $('fireBtn').onclick = () => {
   if (!myTurn()) return;
@@ -876,11 +995,21 @@ function applyResolve(m) {
   // HP only ever falls within a match — take the min so a burn 'dot' that
   // already arrived can't be undone by this (higher) pre-burn snapshot.
   S.hp = (m.hp || S.hp).map((h, i) => Math.min(S.hp[i] ?? h, h));
+  // Apply elimination HERE, in animation order — never from an out-of-band message,
+  // or the scoreboard shows a kill while the shell is still in the air.
+  if (m.alive) {
+    for (let i = 0; i < m.alive.length; i++) {
+      if (m.alive[i] === false && S.alive[i] !== false) {
+        S.alive[i] = false;
+        showToast(`${S.names[i]} destroyed!`);
+      }
+    }
+  }
   S.hazards = m.hazards || [];
   if (m.scorch) S.scorch = m.scorch;
   if (m.ammoSeat === S.you && m.ammo) S.ammo = m.ammo;
   updateHud(); buildWeaponStrip();
-  for (let i = 0; i < 2; i++) {
+  for (let i = 0; i < S.n; i++) {
     const blast = (m.damage && m.damage[i]) || 0;
     const dot = (m.hazardDamage && m.hazardDamage[i]) || 0;
     if (blast > 0) S.floaters.push({ x: S.tanks[i].x, y: S.tanks[i].y - 160, text: `-${blast}`, age: 0, life: 1.3, color: '#ff6b6b' });
@@ -891,8 +1020,16 @@ function applyResolve(m) {
 // A tick of the real-time fire/toxic burn (server 'dot' message).
 function applyDot(m) {
   if (m.hp) S.hp = m.hp.map((h, i) => Math.min(S.hp[i], h));
+  if (m.alive) {
+    for (let i = 0; i < m.alive.length; i++) {
+      if (m.alive[i] === false && S.alive[i] !== false) {
+        S.alive[i] = false;
+        showToast(`${S.names[i]} destroyed!`);
+      }
+    }
+  }
   updateHud();
-  for (let i = 0; i < 2; i++) {
+  for (let i = 0; i < S.n; i++) {
     const d = (m.damage && m.damage[i]) || 0;
     if (d <= 0) continue;
     S.floaters.push({ x: S.tanks[i].x, y: S.tanks[i].y - 200, text: `-${d}`, age: 0, life: 1.1, color: '#ff8a3d' });
@@ -1077,10 +1214,13 @@ function showToast(text) {
 // ---------------------------------------------------------------------------
 function onGameOver(m) {
   S.playing = false;
-  if (m.hp) { S.hp = m.hp.slice(); updateHud(); }
+  if (m.hp) S.hp = m.hp.slice();
+  if (m.alive) S.alive = m.alive.slice();
+  updateHud();
   let title, cls, win = false;
   if (m.winner === -1) { title = 'Mutual destruction!'; cls = 'draw'; }
-  else if (m.winner === S.you) { title = 'Enemy destroyed! 🏆'; cls = 'win'; win = true; }
+  else if (m.winner === S.you) { title = S.n > 2 ? 'Last tank standing! \u{1F3C6}' : 'Enemy destroyed! \u{1F3C6}'; cls = 'win'; win = true; }
+  else if (S.n > 2) { title = `${S.names[m.winner]} takes the canyon`; cls = 'lose'; }
   else { title = 'Your tank was destroyed'; cls = 'lose'; }
   Audio.chime(win);
   showOverlay(title, m.hp, cls, false);
@@ -1088,11 +1228,9 @@ function onGameOver(m) {
 function showOverlay(title, hp, cls, hideRematch) {
   const rt = $('resultTitle'); rt.textContent = title; rt.className = 'result ' + cls;
   const fs = $('finalScores');
-  if (hp) {
-    fs.innerHTML =
-      `<div class="fs a"><b>${Math.max(0, hp[0])}</b><span>${S.names[0]} HP</span></div>` +
-      `<div class="fs b"><b>${Math.max(0, hp[1])}</b><span>${S.names[1]} HP</span></div>`;
-  } else fs.innerHTML = '';
+  fs.innerHTML = hp ? hp.map((h, i) =>
+    `<div class="fs" style="--seat:${seatColor(i)}"><b>${Math.max(0, h)}</b><span>${(S.names[i] || '')} HP</span></div>`
+  ).join('') : '';
   $('rematchBtn').style.display = hideRematch ? 'none' : '';
   $('overlay').classList.remove('hidden');
 }
@@ -1128,7 +1266,7 @@ setInterval(() => {
 function stepEffects(dt) {
   stepWarp(dt);
   // Barrel runs back out to battery (shaped by recAmt in drawTank).
-  for (let i = 0; i < 2; i++) if (S.recoil[i] > 0) S.recoil[i] = Math.max(0, S.recoil[i] - dt * 3.4);
+  for (let i = 0; i < S.n; i++) if (S.recoil[i] > 0) S.recoil[i] = Math.max(0, S.recoil[i] - dt * 3.4);
   // Muzzle blasts age on their own clock — they are NOT particles.
   if (S.muzzle.length) {
     for (const mz of S.muzzle) mz.age += dt;
@@ -1137,7 +1275,7 @@ function stepEffects(dt) {
   // Drive lean: the hull leans into the direction of travel, then rocks back and
   // settles when you stop (a damped spring — so movement never looks stale).
   const now = performance.now();
-  for (let i = 0; i < 2; i++) {
+  for (let i = 0; i < S.n; i++) {
     if (now - (S.moveAt[i] || 0) > 130) S.leanTarget[i] = 0;    // stopped driving
     const k = 150, damp = 9.5;
     S.leanV[i] += ((S.leanTarget[i] || 0) - S.lean[i]) * k * dt;
@@ -1178,9 +1316,9 @@ function stepEffects(dt) {
       }
     }
     if (S.playing) {
-      for (let i = 0; i < 2; i++) {
+      for (let i = 0; i < S.n; i++) {
         const hp = S.hp[i];
-        if (hp > 65 || hp <= 0) continue;
+        if (S.alive[i] === false || hp > 65 || hp <= 0) continue;
         const heavy = hp <= 30;
         if (Math.random() < dt * (heavy ? 13 : 5)) {
           const t = S.tanks[i];
@@ -1213,7 +1351,7 @@ function draw() {
     drawTrees();
     drawHazards();
     drawParticles(true);          // soft discs (fire glow, smoke, dust) — BEHIND the tanks
-    drawTankWarped(0); drawTankWarped(1);
+    for (let i = 0; i < S.n; i++) if (S.alive[i] !== false) drawTankWarped(i);
     drawWarp();
     drawEdgeIndicators();
     drawAim();
@@ -1400,14 +1538,16 @@ function drawHazards() {
 
 // When a tank is off-screen, point to it from the screen edge.
 function drawEdgeIndicators() {
-  for (let i = 0; i < 2; i++) {
+  for (let i = 0; i < S.n; i++) {
     const t = S.tanks[i];
+    if (!t || S.alive[i] === false) continue;
     const sx = wx2s(t.x);
     if (sx >= -10 && sx <= view.cssW + 10) continue;
     const left = sx < 0;
     const ex = left ? 14 : view.cssW - 14;
-    const ey = Math.min(view.cssH - 60, Math.max(70, wy2s(t.y - 300)));
-    const c = i === 0 ? '#54c8ff' : '#ff6b6b';
+    // Stagger by seat so two off-screen tanks on the same edge don't overlap.
+    const ey = Math.min(view.cssH - 60, Math.max(70, wy2s(t.y - 300))) + i * 22;
+    const c = seatColor(i);
     ctx.fillStyle = c;
     ctx.beginPath();
     if (left) { ctx.moveTo(ex - 8, ey); ctx.lineTo(ex + 8, ey - 8); ctx.lineTo(ex + 8, ey + 8); }
@@ -1462,7 +1602,7 @@ function tankTilt(i, r) {
 function muzzleTipWorld(i) {
   if (!S.tanks[i] || !cam.zoom) return null;
   const { sx, sy, r } = tankScreen(i);
-  const front = i === 0 ? 1 : -1, dir = front;
+  const front = facingOf(i), dir = front;
   const tilt = tankTilt(i, r), LIFT = r * 0.42;
   const px = sx + front * r * BARREL.ox, py = sy + r * BARREL.oy;
   const rad = (S.aim[i] ? S.aim[i].angle : 45) * Math.PI / 180;
@@ -1663,10 +1803,14 @@ function drawLava(w, h) {
 }
 
 function drawTank(i) {
+  if (!S.tanks[i]) return;
   const { sx, sy, r } = tankScreen(i);
-  const front = i === 0 ? 1 : -1;
-  const sk = SKINS[S.skins[i]] || (i === 0 ? SKINS.olive : SKINS.desert);
-  const P = { lite: sk.lite, mid: sk.mid, dark: sk.dark, accent: i === 0 ? '#54c8ff' : '#ff6b6b' };
+  const front = facingOf(i);
+  const sk = SKINS[S.skins[i]] || SKINS[SEAT_SKIN[i % SEAT_SKIN.length]];
+  // Seat accent (pennant/turret band). SEAT_COLORS[0..1] are the exact old duel
+  // colours, so a 2-player match renders identically — this only gives seats 2
+  // and 3 their own colour instead of both drawing as seat 1. No geometry change.
+  const P = { lite: sk.lite, mid: sk.mid, dark: sk.dark, accent: seatColor(i) };
   const steel = '#9aa1ad', steelDk = '#565d68';
   const hp = S.hp[i];
 
@@ -1751,7 +1895,7 @@ function drawTank(i) {
   ctx.lineTo(antX, antTop + r * 0.20);
   ctx.closePath(); ctx.fill();
 
-  const aim = S.aim[i]; const dir = i === 0 ? 1 : -1;
+  const aim = S.aim[i] || { angle: 45, power: 60 }; const dir = front;
   const rad = aim.angle * Math.PI / 180;
   const px = sx + front * r * BARREL.ox, py = sy + r * BARREL.oy;
   // Barrel aims at the ABSOLUTE angle regardless of body tilt — rotate the aim
@@ -1819,7 +1963,7 @@ function drawAim() {
   // Your own tank is mid-warp — the reticle would snap to the new x the moment
   // applyResolve lands. Hide it until the tank has materialised.
   if (S.warp && S.warp.seat === S.you && S.warp.t < S.warp.dur) return;
-  const t = S.tanks[S.you]; const aim = myAim(); const dir = S.you === 0 ? 1 : -1;
+  const t = S.tanks[S.you]; const aim = myAim(); const dir = facingOf(S.you);
   const rad = aim.angle * Math.PI / 180;
   const sx = wx2s(t.x), sy = wy2s(surfaceAt(t.x) - 24);
   const pct = aim.power / 100;
