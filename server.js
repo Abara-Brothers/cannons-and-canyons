@@ -7,9 +7,10 @@ import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import {
   WORLD_W, WORLD_H, MOVE_BUDGET, MOVE_STEP, MAX_HP, LAVA_Y, AIM_MIN, AIM_MAX, clampAim,
-  EDGE_MARGIN, TANK_GAP, laneBounds,
+  laneBounds,
   generateTerrain, generateTrees, spawnTanks, surfaceAt, simulateShot, terrainDiff,
   weaponMenu, startingAmmo, WEAPON_BY_ID, tickHazards, burnTick, aiShot, mergeScorch,
+  fireDamage, FIRE_TICK,
 } from './game-core.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -129,6 +130,7 @@ function createRoom(hostWs, name, skin, opts = {}) {
     turn: 0, fuel: MOVE_BUDGET, seed: 0,
     clock: null,                       // only used to pace the post-shot handover
     hazards: [], hazardSeq: 1,         // lingering fire / gas areas
+    fireTimer: null,                   // fire burns on its OWN clock, across turns
     scorch: [],                        // permanent burn scars: merged world-x ranges [{a,b}]
     trees: [],
   };
@@ -232,6 +234,7 @@ function endGame(room) {
   clearTimeout(room.clock);
   clearTimeout(room.botTimer);
   clearInterval(room.dotTimer); room.dotTimer = null;
+  clearInterval(room.fireTimer); room.fireTimer = null;
   killDead(room);
   const live = aliveSeats(room);
   const winner = live.length === 1 ? live[0] : -1;   // 0 left = mutual destruction
@@ -268,12 +271,18 @@ function resolveFire(room, seat, weaponId, angle, power) {
 
   // Age out expired hazard areas, then add the ones this shot just created.
   // (Fire/gas damage is NOT applied here — it's the real-time burn below.)
-  const tick = tickHazards(room.hazards, room.tanks);
+  const now = Date.now();
+  const tick = tickHazards(room.hazards, room.tanks, now);
   room.hazards = tick.alive;
   for (const hz of (result.newHazards || [])) {
-    room.hazards.push({ id: room.hazardSeq++, owner: seat, ...hz });
+    const rec = { id: room.hazardSeq++, owner: seat, ...hz };
+    // The ONE place a wall-clock deadline is minted. game-core emits a duration
+    // (`ms`); the server owns the clock, so game-core stays pure.
+    if (rec.ms) { rec.until = now + rec.ms; delete rec.ms; }
+    room.hazards.push(rec);
   }
   if (room.hazards.length > 12) room.hazards.splice(0, room.hazards.length - 12);
+  startFire(room);   // fire ticks on its own clock; it does NOT hold the turn
   // Burn scars are permanent for the match — merge this shot's scorch into the list.
   if (result.newScorches && result.newScorches.length) {
     room.scorch = mergeScorch(room.scorch || [], result.newScorches);
@@ -300,7 +309,9 @@ function resolveFire(room, seat, weaponId, angle, power) {
   // Give the shot animation a beat, then play out any fire/toxic burn before the
   // next turn (real-time damage-over-time; the turn holds until it finishes).
   clearTimeout(room.clock);
-  room.clock = setTimeout(() => startBurn(room, seat), 300);
+  // Null the handle when it runs: the fire clock uses `room.clock` as a
+  // "handover already pending" flag, so a stale fired-Timeout must not read busy.
+  room.clock = setTimeout(() => { room.clock = null; startBurn(room, seat); }, 300);
 }
 
 // Real-time 5-second damage-over-time: any tank sitting in a fire/gas area loses
@@ -335,14 +346,60 @@ function startBurn(room, seat) {
   }, 1000);
 }
 
+// ---- Fire: real-time, turn-INDEPENDENT ---------------------------------------
+// Fire lives 6s from the instant it is lit and bites for 8 every 2s. It does NOT
+// hold the turn open — the napalm victim burns while the next player is already
+// aiming, and the blaze goes out on its own schedule. (Gas and the lava floor are
+// unchanged: they still ride burnTick + startBurn's turn hold.)
+function stopFire(room) { clearInterval(room.fireTimer); room.fireTimer = null; }
+
+function startFire(room) {
+  if (!room.hazards.some(h => h.until != null)) return stopFire(room);
+  if (room.fireTimer) return;          // an existing blaze keeps its cadence
+  room.fireTimer = setInterval(() => fireBite(room), FIRE_TICK);
+}
+
+function fireBite(room) {
+  if (room.state !== 'playing') return stopFire(room);
+  const now = Date.now();
+  const dmg = fireDamage(room.hazards, room.tanks);      // spends one bite per blaze
+  const before = room.hazards.length;
+  room.hazards = room.hazards.filter(h => h.until == null || h.until > now);
+  let hurt = false;
+  for (let ti = 0; ti < room.hp.length; ti++) {
+    if (dmg[ti] <= 0) continue;
+    hurt = true;
+    room.hp[ti] = Math.max(0, Math.round((room.hp[ti] - dmg[ti]) * 10) / 10);
+  }
+  killDead(room);
+  // Always ship `hazards` so a burnt-out blaze disappears on the clients even
+  // when nobody was standing in it (the client only renders what we send).
+  if (hurt || room.hazards.length !== before) {
+    broadcast(room, {
+      type: 'dot', tick: 0, src: 'fire',
+      hp: room.hp.map(h => Math.max(0, Math.round(h))),
+      alive: aliveFlags(room),
+      damage: dmg.map(d => Math.round(d)),
+      hazards: room.hazards,
+    });
+  }
+  if (!room.hazards.some(h => h.until != null)) stopFire(room);
+  if (aliveSeats(room).length <= 1) { stopFire(room); return endGame(room); }
+  // Burned to death on their own turn: nothing else will move the game on, so do
+  // it here — but only if no handover is already in flight (post-shot beat or the
+  // gas/lava burn hold), or the turn would advance twice.
+  const cur = room.tanks[room.turn];
+  if (cur && cur.alive === false && !room.clock && !room.dotTimer) advance(room, room.turn);
+}
+
 function handleMove(room, seat, dir) {
   if (room.state !== 'playing' || room.turn !== seat) return;
   if (room.fuel < MOVE_STEP) return;
   const tank = room.tanks[seat];
   if (tank.alive === false) return;
-  // Drive anywhere along the map — the only limit is you can't cross through a
-  // LIVING neighbour, which preserves the left->right seat order the scoreboard
-  // depends on. Wrecks are not obstacles. Shared with the Teleport weapon.
+  // Drive anywhere along the map. Tanks are not obstacles — you may drive clean
+  // past an opponent (and even stop on top of one); only the map edges stop you.
+  // Shared with the Teleport weapon via laneBounds so the two can never disagree.
   const [lo, hi] = laneBounds(room.tanks, seat);
   if (hi < lo) return;                     // boxed in — nowhere legal to go
   const nx = Math.max(lo, Math.min(hi, tank.x + Math.sign(dir) * MOVE_STEP));
@@ -362,6 +419,7 @@ function teardown(room, notify) {
   clearTimeout(room.clock);
   clearTimeout(room.botTimer);
   clearInterval(room.dotTimer);
+  clearInterval(room.fireTimer);
   for (const p of room.players) if (p) clearTimeout(p.dropTimer);
   if (notify) broadcast(room, { type: 'opponentLeft' });
   rooms.delete(room.code);
@@ -516,6 +574,10 @@ wss.on('connection', (ws) => {
         break;
       }
       case 'move': if (room) handleMove(room, ws.seat, msg.dir); break;
+      // Legacy inbound: no current client sends this — the flip button is gone.
+      // Kept because packaged Capacitor builds bundle their own app.js and older
+      // installs still have the button; dropping the case would desync their aim
+      // preview from the shot they actually fire.
       case 'face': {
         if (!room || room.state !== 'playing') break;
         room.facing[ws.seat] = msg.dir < 0 ? -1 : 1;

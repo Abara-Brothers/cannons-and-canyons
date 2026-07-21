@@ -2,7 +2,7 @@
 // deterministic battlefield and assert real damage lands. Guards the three ways
 // this has broken: hitbox too small to hit, shell detonating on its own tank,
 // and fast shells tunnelling through the box.
-import { WEAPONS, simulateShot, pointHitsTank, aiShot, generateTerrain, spawnTanks } from '../game-core.js';
+import { WEAPONS, simulateShot, pointHitsTank, aiShot, generateTerrain, spawnTanks, laneBounds } from '../game-core.js';
 
 const FLAT_Y = 9000, ME = 4000, ENEMY = 16000;
 const flat = () => new Array(24001).fill(FLAT_Y);
@@ -63,7 +63,7 @@ const land = fire('cannon', 45, 60);
 const endX = land.projectiles[0].path[land.projectiles[0].path.length - 1][0];
 if (endX < 20000) fail(`cannon 45/60 landed at x=${endX}, expected ~22400 (latch ordering bug)`);
 
-// 5 — Teleport moves the FIRER onto the landing point, never crosses the enemy,
+// 5 — Teleport moves the FIRER onto the landing point, MAY cross the enemy,
 //     never deforms terrain, and never moves the other tank.
 {
   const st = fresh();
@@ -76,15 +76,42 @@ if (endX < 20000) fail(`cannon 45/60 landed at x=${endX}, expected ~22400 (latch
     if (r.damage[0] !== 0 || r.damage[1] !== 0) fail(`teleport dealt damage ${JSON.stringify(r.damage)}`);
     if (st.terrain.some(v => v !== FLAT_Y)) fail('teleport deformed the terrain');
   }
-  // Overshooting the enemy must clamp short, never cross.
-  for (let p = 20; p <= 100; p += 2.5) {
+  // Crossing is now LEGAL: a long warp must land PAST the enemy, not clamp short
+  // of them — but it must still never leave the map.
+  {
     const s2 = fresh();
-    const r2 = simulateShot(s2, { by: 0, weapon: 'teleport', angle: 45, power: p });
-    if (r2.tanks[0].x > ENEMY - 600) fail(`teleport at power ${p} crossed to x=${r2.tanks[0].x}`);
+    const r2 = simulateShot(s2, { by: 0, weapon: 'teleport', angle: 45, power: 60 });
+    if (!(r2.tanks[0].x > ENEMY + 1000)) fail(`teleport 45/60 landed at x=${r2.tanks[0].x}, expected past the enemy at ${ENEMY}`);
+    if (r2.tanks[1].x !== ENEMY) fail('a crossing teleport moved the ENEMY tank');
+    for (let p = 20; p <= 100; p += 2.5) {
+      const s3 = fresh();
+      const r3 = simulateShot(s3, { by: 0, weapon: 'teleport', angle: 45, power: p });
+      if (r3.tanks[0].x < 200 || r3.tanks[0].x > 23800) fail(`teleport at power ${p} left the map: x=${r3.tanks[0].x}`);
+    }
   }
 }
 
-// 6 — the bot must still find real solutions, not fall back to 45/60.
+// 6 — tanks are NOT obstacles: laneBounds must ignore every other tank and return
+//     the map edges, whatever the layout. This is what lets you drive/warp past an
+//     opponent, and handleMove clamps to exactly this.
+{
+  const layouts = [
+    [{ x: 4000, alive: true }, { x: 16000, alive: true }],
+    [{ x: 16000, alive: true }, { x: 4000, alive: true }],                       // already crossed
+    [{ x: 9000, alive: true }, { x: 9000, alive: true }],                        // perfectly overlapped
+    [{ x: 2000, alive: true }, { x: 8000, alive: false }, { x: 9000, alive: true }, { x: 20000, alive: true }],
+  ];
+  for (const tanks of layouts) {
+    for (let i = 0; i < tanks.length; i++) {
+      const [lo, hi] = laneBounds(tanks, i);
+      if (lo !== 200 || hi !== 23800) {
+        fail(`laneBounds fenced seat ${i} to [${lo}, ${hi}] — tanks must not block each other`);
+      }
+    }
+  }
+}
+
+// 7 — the bot must still find real solutions, not fall back to 45/60.
 const terrain = generateTerrain(2024);
 const tanks = spawnTanks(terrain, 2024);
 const shot = aiShot(terrain, tanks, 1, 'hard');

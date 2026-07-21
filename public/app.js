@@ -33,6 +33,7 @@ const S = {
   code: null, quick: false,
   playing: false,
   anim: null, queue: [], pendingOver: null, terrainAnim: null,
+  deferred: [],                        // HP/elimination work held until the shell in flight lands
   warp: null,                          // active Teleport warp (see startWarp)
   particles: [], floaters: [], rings: [], flash: 0, shake: 0,
   muzzle: [],                          // directional HD muzzle blasts (own render pass)
@@ -383,9 +384,11 @@ function handle(m) {
     case 'turn': onTurn(m); break;
     case 'face': if (m.seat !== S.you) S.facing[m.seat] = m.dir; break;
     case 'forfeit':
-      if (m.hp) S.hp = m.hp.map((h, i) => Math.min(S.hp[i] ?? h, h));
-      if (m.alive) S.alive = m.alive.slice();
-      updateHud();
+      deferHp(() => {
+        if (m.hp) S.hp = m.hp.map((h, i) => Math.min(S.hp[i] ?? h, h));
+        if (m.alive) S.alive = m.alive.slice();
+        updateHud();
+      });
       showToast(`${S.names[m.seat] || 'A player'} left — tank scuttled`);
       break;
     case 'aim': if (m.seat !== S.you) { S.aim[m.seat] = { angle: clampAimC(m.angle), power: Number(m.power) || 60 }; } break;
@@ -554,6 +557,7 @@ function applySnapshot(m) {
   S.leanTarget = new Array(S.n).fill(0); S.moveAt = new Array(S.n).fill(0);
   S.selected = firstAvailableWeapon();
   S.playing = true; S.quick = false; S.anim = null; S.queue = []; S.pendingOver = null; S.warp = null;
+  S.deferred = [];                     // start/restore hp+alive win outright — discard held work
   S.particles = []; S.floaters = []; S.rings = []; S.muzzle = []; S.flash = 0; S.shake = 0;
   S.recoil = [0, 0];
   S.charging = false; S.pullPointer = null; S.userZoom = 1; S.panY = 0;
@@ -569,7 +573,12 @@ function applySnapshot(m) {
 
 function onTurn(m) {
   S.turn = m.turn; S.fuel = m.fuel;
-  if (m.alive) { S.alive = m.alive.slice(); updateHud(); }
+  // 'turn' arrives ~300ms after the server resolved the shot, long before the
+  // client finishes replaying the flight. In FFA these flags carry the kill —
+  // applied here they grey the scoreboard card AND delete the tank from the
+  // canvas (the draw loop skips S.alive[i] === false) while the shell is still
+  // in the air. Elimination belongs to the blast; hold it behind the same gate.
+  if (m.alive) deferHp(() => { S.alive = m.alive.slice(); updateHud(); });
   if (m.turn === S.you && (S.ammo[S.selected] ?? 99) <= 0) S.selected = firstAvailableWeapon();
   updateFuel(); updateDock(); buildWeaponStrip();
 }
@@ -807,14 +816,9 @@ function holdMove(btn, dir) {
 }
 holdMove($('moveLeft'), -1);
 holdMove($('moveRight'), 1);
-// Turn the turret around. A convenience only — dragging past the far side of your
-// tank already produces a backwards shot, since the aim range covers 0..180+.
-$('flipBtn').onclick = () => {
-  if (!canAim()) return;
-  S.facing[S.you] = -facingOf(S.you);
-  sendMsg({ type: 'face', dir: S.facing[S.you] });
-  updateAimUI();
-};
+// No turret-flip control by design. Your hull facing is fixed for the match
+// (server state, room.facing); the 300° aim range covers backwards on its own —
+// drag past the far side of your tank, or step the ANGLE readout past 90°.
 
 $('fireBtn').onclick = () => {
   if (!myTurn()) return;
@@ -870,19 +874,48 @@ function stepTerrainAnim(dt) {
 // ---------------------------------------------------------------------------
 // Shot animation queue (the camera does NOT follow — it stays on your tank)
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// HP gate. The server resolves a shot instantly and then sends 'turn' 300ms and
+// 'dot' 1300ms later on a wall clock — but the client is still replaying the
+// flight (playback runs ~3.8x real time; napalm/airstrike take 1s+). Anything
+// that lowers a health bar, prints a damage floater or marks a tank destroyed
+// must land ON the blast, so it is held here while a shot is in the air and
+// flushed the instant that shot detonates.
+// ---------------------------------------------------------------------------
+function deferHp(fn) {
+  if (S.anim && !S.anim.resolved) { S.deferred.push(fn); return; }
+  fn();
+}
+function flushDeferred() {
+  if (!S.deferred.length) return;
+  const q = S.deferred; S.deferred = [];
+  for (const fn of q) fn();
+}
+
 function enqueueShot(m) { S.queue.push(m); if (!S.anim) startNextShot(); }
 function startNextShot() {
   const m = S.queue.shift();
   if (!m) {
+    flushDeferred();          // nothing left in the air — never strand held HP
     updateDock();
     if (S.pendingOver) { const o = S.pendingOver; S.pendingOver = null; onGameOver(o); }
     return;
   }
-  S.anim = {
-    m, elapsed: 0,
-    projectiles: m.projectiles.map(p => ({ path: p.path, det: p.det, delay: p.delay || 0, beacon: !!p.beacon, pos: 0, done: false, exploded: false, trail: [] })),
-    settleTimer: 0, resolved: false,
-  };
+  const projectiles = m.projectiles.map(p => ({ path: p.path, det: p.det, delay: p.delay || 0, beacon: !!p.beacon, pos: 0, done: false, exploded: false, trail: [] }));
+  // Which impact owns the damage. `hp`, `damage`, `terrainDiff` and `tanks` are
+  // ONE aggregate for the whole salvo (game-core sums every sub-blast into
+  // damageDealt and settles the terrain once), so there is no per-bomblet split
+  // on the wire and the client must never invent one. The payload therefore
+  // lands on the LAST projectile that actually detonates — a shell that flew off
+  // the map owns nothing.
+  let lastDet = -1, lastEnd = -Infinity;
+  for (let i = 0; i < projectiles.length; i++) {
+    const pr = projectiles[i];
+    if (!pr.det) continue;
+    const end = pr.delay + Math.max(0, pr.path.length - 1);
+    if (end >= lastEnd) { lastEnd = end; lastDet = i; }
+  }
+  S.anim = { m, elapsed: 0, projectiles, lastDet, settleTimer: 0, resolved: false };
   muzzleBlast(m.by);          // barrel recoil + flash out of the cannon
   Audio.fire();
   updateDock();
@@ -892,19 +925,29 @@ const PLAYBACK = 115; // path points per second
 function advanceAnim(dt) {
   const A = S.anim; if (!A) return;
   A.elapsed += PLAYBACK * dt;
-  let allDone = true;
-  for (const pr of A.projectiles) {
+  let allDone = true, resolveNow = false;
+  for (let i = 0; i < A.projectiles.length; i++) {
+    const pr = A.projectiles[i];
     if (pr.done) continue;
     const local = A.elapsed - pr.delay;
     if (local < 0) { allDone = false; continue; }
     if (local >= pr.path.length - 1) {
       pr.pos = pr.path.length - 1; pr.done = true;
-      if (pr.det && !pr.exploded) { detonate(pr.det); pr.exploded = true; }
+      if (pr.det && !pr.exploded) {
+        detonate(pr.det); pr.exploded = true;
+        if (i === A.lastDet) resolveNow = true;
+      }
     } else { pr.pos = local; allDone = false; }
   }
+  // Damage lands ON the last blast, not on a timer. Run it after the loop so
+  // every detonation in this frame still reads the pre-collapse terrain, then
+  // release anything ('dot' / 'turn' / 'forfeit') that arrived mid-flight.
+  if (resolveNow && !A.resolved) { applyResolve(A.m); A.resolved = true; flushDeferred(); }
   if (allDone) {
     A.settleTimer += dt;
-    if (!A.resolved && A.settleTimer > 0.22) { applyResolve(A.m); A.resolved = true; }
+    // Fallback: a shot where NOTHING detonated (every shell left the map) still
+    // has to apply its payload, and held HP must never be stranded.
+    if (!A.resolved && A.settleTimer > 0.22) { applyResolve(A.m); A.resolved = true; flushDeferred(); }
     if (A.settleTimer > 0.6) { S.anim = null; startNextShot(); }
   }
 }
@@ -1017,8 +1060,15 @@ function applyResolve(m) {
   }
 }
 
-// A tick of the real-time fire/toxic burn (server 'dot' message).
-function applyDot(m) {
+// A tick of the real-time fire/toxic burn (server 'dot' message). The first tick
+// is broadcast 1.3s after the shot resolved — often while the client is still
+// replaying it — and its `hp` already includes the BLAST damage, so applying it
+// on arrival is what makes the bar drop before impact. Gate it.
+function applyDot(m) { deferHp(() => applyDotNow(m)); }
+function applyDotNow(m) {
+  // Fire ticks carry the live hazard list so a blaze that has burned out (6s)
+  // vanishes here instead of lingering until the next shot lands.
+  if (m.hazards) S.hazards = m.hazards;
   if (m.hp) S.hp = m.hp.map((h, i) => Math.min(S.hp[i], h));
   if (m.alive) {
     for (let i = 0; i < m.alive.length; i++) {
@@ -1351,7 +1401,15 @@ function draw() {
     drawTrees();
     drawHazards();
     drawParticles(true);          // soft discs (fire glow, smoke, dust) — BEHIND the tanks
-    for (let i = 0; i < S.n; i++) if (S.alive[i] !== false) drawTankWarped(i);
+    // Tanks may now share an x (crossing is legal), and a hull is 648 world units
+    // wide — so draw the tank that matters LAST: the acting seat on top, then
+    // yours. Cosmetic only; no state, no geometry change, drawTank untouched.
+    {
+      const order = [];
+      for (let i = 0; i < S.n; i++) if (S.alive[i] !== false) order.push(i);
+      order.sort((a, b) => (a === S.turn) - (b === S.turn) || (a === S.you) - (b === S.you));
+      for (const i of order) drawTankWarped(i);
+    }
     drawWarp();
     drawEdgeIndicators();
     drawAim();

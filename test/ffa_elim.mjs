@@ -110,7 +110,10 @@ try {
     log(`closed ${victim.name}; only one tank should remain`);
     const f = await wait(host, 'forfeit', GRACE * 4 + 5000);
     if (f.alive.filter(Boolean).length !== 1) fail(`expected 1 survivor, alive=[${f.alive}]`);
-    const g = await wait(host, 'gameover', 6000);
+    // Generous: endGame follows the forfeit immediately, but this test usually runs
+    // right after the rest of the suite and a loaded box has been seen to blow a
+    // 6s budget. A flaky test is worse than no test.
+    const g = await wait(host, 'gameover', 20000);
     if (g.winner !== seatOf.get(host)) fail(`winner should be the host's seat ${seatOf.get(host)}, got ${g.winner}`);
     if (g.alive.filter(Boolean).length !== 1) fail(`gameover alive=[${g.alive}], expected exactly 1`);
     log(`last tank standing: seat ${g.winner} wins with ${g.hp[g.winner]} HP`);

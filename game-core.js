@@ -15,6 +15,21 @@ const SAMPLE_EVERY = 4;       // record a trajectory point every N steps (~30fps
 const MAX_T = 26;             // safety cap on flight time (s)
 const ARM_DIST = 100;         // projectile ignores tank collisions until it has flown this far
 const TERRAIN_TOP = 140;      // highest a peak/mound may rise (min y) — headroom for tall peaks
+// Earthworks-only ceiling. Natural terrain never gets near TERRAIN_TOP (the
+// tallest generated peak lands around y≈2900), but a player CAN ladder into it
+// by firing Earthworks at their own feet: the rampart is centred on the impact
+// point and settle() re-seats the tank on the new crest. Capping wall crests
+// here keeps a laddered tank's turret (TANK_TOP above its ground point) inside
+// the world, where cameraTarget() can still frame it.
+const WALL_TOP = 1200;
+// ---- Fire (real-time hazard) ------------------------------------------------
+// Fire is NOT turn-based: it lives FIRE_MS from the instant it is lit and bites
+// FIRE_BITES times, FIRE_DMG each. game-core stays clock-free — the server
+// stamps the wall-clock deadline when it takes ownership of the hazard.
+export const FIRE_MS    = 6000;   // 6 seconds of burning
+export const FIRE_TICK  = 2000;   // one bite every 2 seconds
+export const FIRE_DMG   = 8;      // 8 damage per bite  → 3 bites, 24 total
+export const FIRE_BITES = Math.round(FIRE_MS / FIRE_TICK);   // 3
 // A thin INDESTRUCTIBLE lava layer floors the map: terrain can never be dug below
 // LAVA_Y, and any tank that ends up sitting in it burns.
 export const LAVA_Y = WORLD_H - 300;   // top surface of the lava
@@ -63,10 +78,10 @@ export const MOVE_BUDGET = 4500;  // driving distance allowed per turn — gener
 export const MOVE_STEP = 60;      // distance per move tick (fast drive)
 export const MAX_HP = 100;        // tanks have health — destroy the enemy to win (no shot limit)
 // Placement rules shared by driving (handleMove) and teleporting — one source of
-// truth so the two can never drift apart. The gap keeps the (large) hitboxes from
-// overlapping, which would let a shell hit both tanks at once.
+// truth so the two can never drift apart. Tanks are NOT obstacles to each other:
+// you may drive or warp clean past an opponent, and may even come to rest on top
+// of one. The map edges are the entire rule.
 export const EDGE_MARGIN = 200;             // closest a tank may ever sit to either map edge
-export const TANK_GAP = TANK_HW * 2 + 40;   // minimum separation — tanks can never cross
 
 // ---- Aim range -------------------------------------------------------------
 // Degrees, RELATIVE to the tank's facing (dir mirrors x only, so the vertical
@@ -122,7 +137,7 @@ export const WEAPONS = [
   { id: 'napalm',   name: 'Napalm',        color: '#ff6a3d', ammo: 2,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 0, radius: 0, terrain: 'none',
     split: { count: 8, spreadSpeed: 1150, radius: 630, damage: 7, terrain: 'scorch',
-             hazard: { type: 'fire', turns: 2, dpt: 5, dps: 5, r: 430 } },
+             hazard: { type: 'fire', ms: FIRE_MS, bites: FIRE_BITES, r: 430 } },
     desc: 'Splashes burning fuel over a wide area — burns the ground black, never moves it.' },
   { id: 'gas',      name: 'Toxic Gas',     color: '#9dde4b', ammo: 2,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 5, radius: 660, terrain: 'none',
@@ -138,7 +153,7 @@ export const WEAPONS = [
     desc: 'Burrows before detonating — digs a brutal pit.' },
   { id: 'wall',     name: 'Earthworks',    color: '#8a5a2b', ammo: 3,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 0,  radius: 0, terrain: 'wall',
-    wall: { h: 2000, w: 340 },
+    wall: { h: 2600, w: 560 },
     desc: 'Heaps up a huge mound of dirt. Deals no damage.' },
   { id: 'teleport', name: 'Teleport',      color: '#c86bff', ammo: 2,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 0,  radius: 0, terrain: 'none',
@@ -323,8 +338,8 @@ function settle(terrain, tanks) {
 // Move the FIRING tank onto the point its shell landed on. Authoritative: it
 // mutates state.tanks, so simulateShot's `tanks` payload (and therefore both
 // clients) carries the new position. Obeys exactly the same placement rules as
-// driving (handleMove): clamped to the map edges and never through the enemy —
-// player 0 always stays left of player 1.
+// driving (handleMove): clamped to the map edges, and nothing else. A warp may
+// land PAST an opponent, or on top of one.
 //
 // LAVA: deliberately NOT special-cased. Terrain floors out ON the lava
 // (TERRAIN_FLOOR === LAVA_Y), so a nuke pit really can bottom out there, and
@@ -332,18 +347,16 @@ function settle(terrain, tanks) {
 // land you in it keeps the weapon a genuine risk/reward call and needs no new
 // state; blocking it would mean inventing a "teleport refused" outcome both
 // clients would have to replay.
-// How far seat `by` may legally travel, by driving OR teleporting. Seats are
-// ordered left→right, so a tank is fenced in by its nearest LIVING neighbour on
-// each side (wrecks are drivable-through) and by the map edges. Shared by
-// teleportTank here and handleMove in server.js so the two can never disagree.
+// How far seat `by` may legally travel, by driving OR teleporting. Tanks are NOT
+// obstacles: you may drive or warp straight past an opponent, so the map edges
+// are the whole rule. Seats therefore do NOT stay ordered left→right after spawn
+// — pickSpawns lays them out L→R and nothing may assume it still holds. Kept as
+// a function with the same signature and the same [lo, hi] shape so teleportTank
+// here and handleMove in server.js still share one source of truth and can never
+// disagree; `tanks`/`by` are deliberately unused, and are the hook if a future
+// placement rule ever needs to consult the other tanks again.
 export function laneBounds(tanks, by) {
-  let lo = EDGE_MARGIN, hi = WORLD_W - EDGE_MARGIN;
-  for (let i = 0; i < tanks.length; i++) {
-    if (i === by || tanks[i].alive === false) continue;
-    if (i < by) lo = Math.max(lo, tanks[i].x + TANK_GAP);   // neighbour on the left
-    else        hi = Math.min(hi, tanks[i].x - TANK_GAP);   // neighbour on the right
-  }
-  return [lo, hi];
+  return [EDGE_MARGIN, WORLD_W - EDGE_MARGIN];
 }
 
 export function teleportTank(state, by, landX) {
@@ -370,7 +383,10 @@ function deform(terrain, cx, cy, r, mode, wall) {
     const x0 = Math.max(0, Math.floor(cx - span)), x1 = Math.min(WORLD_W, Math.ceil(cx + span));
     for (let x = x0; x <= x1; x++) {
       const d = (x - cx) / wall.w;
-      const target = cy - wall.h * Math.exp(-d * d);
+      // Math.max(WALL_TOP, …): a rampart may never crest above WALL_TOP, so the
+      // "fire it at your own feet and ride the mound up" ladder tops out with the
+      // tank still inside the world. Ground below WALL_TOP is unaffected.
+      const target = Math.max(WALL_TOP, cy - wall.h * Math.exp(-d * d));
       terrain[x] = clampY(Math.min(terrain[x], target));
     }
     return;
@@ -389,11 +405,14 @@ function deform(terrain, cx, cy, r, mode, wall) {
 // ---- Lingering hazards (fire / toxic gas) -----------------------------------
 // Ticked once after every shot: any tank inside a hazard takes its per-turn
 // damage; the hazard's owner scores those points when the victim is the enemy.
-export function tickHazards(hazards, tanks) {
+// `now` is passed in (never read from the clock here) so this stays pure: fire
+// expires on wall-clock, gas expires on turns, and the two never touch.
+export function tickHazards(hazards, tanks, now = 0) {
   const n = tanks.length;
   const dmgTaken = new Array(n).fill(0);
   const points = new Array(n).fill(0);
   for (const h of hazards) {
+    if (h.until != null) continue;            // real-time (fire) — turns mean nothing to it
     for (let ti = 0; ti < n; ti++) {
       if (tanks[ti].alive === false) continue;
       if (distToTank(h.x, h.y, tanks[ti]) <= h.r) {
@@ -403,15 +422,22 @@ export function tickHazards(hazards, tanks) {
     }
     h.turnsLeft--;
   }
-  return { dmgTaken, points, alive: hazards.filter(h => h.turnsLeft > 0) };
+  return {
+    dmgTaken, points,
+    alive: hazards.filter(h => (h.until != null ? h.until > now : h.turnsLeft > 0)),
+  };
 }
 
 // Real-time damage-over-time: one tick of the 5-second burn. Every fire/gas
 // hazard damages any tank standing inside it by its per-second `dps`.
+// GAS clouds damage any tank standing inside them by their per-second `dps`, and
+// the lava floor cooks anything sitting in it. FIRE is NOT here — it runs on its
+// own 2-second clock in fireDamage() and does not hold the turn open.
 export function burnTick(hazards, tanks) {
   const n = tanks.length;
   const dmg = new Array(n).fill(0);
   for (const h of hazards) {
+    if (h.until != null) continue;   // fire — handled by fireDamage()
     if (!h.dps) continue;
     for (let ti = 0; ti < n; ti++) {
       if (tanks[ti].alive === false) continue;
@@ -422,6 +448,24 @@ export function burnTick(hazards, tanks) {
   for (let ti = 0; ti < n; ti++) {
     if (tanks[ti].alive === false) continue;
     if (tanks[ti].y >= LAVA_Y - 4) dmg[ti] += LAVA_DPS;
+  }
+  return dmg;
+}
+
+// One 2-second BITE of fire. Every fire hazard spends one of its FIRE_BITES and
+// burns anything standing in it for FIRE_DMG. Overlapping patches deliberately
+// do NOT stack (`=`, not `+=`): standing in fire is standing in fire, so an
+// 8-bomblet napalm still only does 8 per bite, 24 over its 6-second life.
+export function fireDamage(hazards, tanks) {
+  const n = tanks.length;
+  const dmg = new Array(n).fill(0);
+  for (const h of hazards) {
+    if (h.until == null || !(h.bites > 0)) continue;
+    h.bites--;
+    for (let ti = 0; ti < n; ti++) {
+      if (tanks[ti].alive === false) continue;
+      if (distToTank(h.x, h.y, tanks[ti]) <= h.r) dmg[ti] = FIRE_DMG;
+    }
   }
   return dmg;
 }
@@ -465,7 +509,15 @@ export function simulateShot(state, shot) {
       damageDealt[ti] += blastDamage(x, y, rDmg, dmg, state.tanks[ti]);
     }
     if (opts.hazard) {
-      newHazards.push({ type: opts.hazard.type, x: round1(x), y: round1(y), r: opts.hazard.r, turnsLeft: opts.hazard.turns, dpt: opts.hazard.dpt, dps: opts.hazard.dps || 0 });
+      const hz = opts.hazard;
+      const rec = { type: hz.type, x: round1(x), y: round1(y), r: hz.r };
+      // REAL-TIME hazard (fire): carries a duration + a bite budget. The server
+      // stamps `until` from its own clock when it adopts the hazard, so this
+      // function stays pure and clock-free.
+      if (hz.ms) { rec.ms = hz.ms; rec.bites = hz.bites; }
+      // TURN-BASED hazard (gas): unchanged.
+      else { rec.turnsLeft = hz.turns; rec.dpt = hz.dpt; rec.dps = hz.dps || 0; }
+      newHazards.push(rec);
     }
   };
   const det = (x, y, rDmg, kind, hazardType) => ({
