@@ -63,7 +63,8 @@ input:focus { outline: 2px solid var(--accent); border-color: transparent; }
   justify-content: safe center;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: max(22px, env(safe-area-inset-top)) 22px max(22px, env(safe-area-inset-bottom));
+  padding: max(22px, env(safe-area-inset-top)) max(22px, env(safe-area-inset-right))
+           max(22px, env(safe-area-inset-bottom)) max(22px, env(safe-area-inset-left));
   text-align: center;
 }
 .home-card {
@@ -80,9 +81,7 @@ input:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .or { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 12px; margin: 6px 0; text-transform: uppercase; letter-spacing: .1em; }
 .or::before, .or::after { content: ""; height: 1px; background: var(--line); flex: 1; }
 .join-row { display: flex; gap: 10px; }
-/* CPU opponent + difficulty selector */
-.cpu-block { display: flex; flex-direction: column; gap: 8px; }
-.cpu-block .btn.big { margin: 0; }
+/* CPU difficulty selector (now lives inside the "Play the computer" tile) */
 .diffrow { display: flex; gap: 6px; }
 .diff {
   flex: 1; appearance: none; cursor: pointer; padding: 9px 0; border-radius: 10px;
@@ -121,6 +120,183 @@ input:focus { outline: 2px solid var(--accent); border-color: transparent; }
 }
 .spinner { width: 30px; height: 30px; border: 3px solid var(--line); border-top-color: var(--primary); border-radius: 50%; margin: 8px auto 0; animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ==========================================================================
+   TITLE SCREEN
+   The menu screens sit on a live canyon backdrop; the card above it is a
+   three-part composition (.hero / .deck / .loadout) that reflows into two
+   columns in landscape. #home itself is untouched as a scroller — everything
+   here is inside .home-card or in a pointer-transparent layer behind it.
+   ========================================================================== */
+
+/* ---- Animated backdrop --------------------------------------------------- */
+.bg-canyon { position: absolute; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+.bg-canyon svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+/* Dropped entirely in-match: #hud-top / #dock use backdrop-filter and would
+   otherwise blur the canyon art instead of nothing. Also saves the GPU. */
+body.in-game .bg-canyon { display: none; }
+/* Vignette so the card always has contrast, whatever the ridges are doing. */
+.bg-canyon::after {
+  content: ""; position: absolute; inset: 0;
+  background: radial-gradient(110% 78% at 50% 42%, rgba(8,12,26,0) 0%, rgba(8,12,26,.55) 62%, rgba(8,12,26,.86) 100%);
+}
+/* Parallax. Transform units on an SVG <g> are viewBox user units, so the drift
+   is the same proportion of the artwork on every device. */
+.bg-canyon .ridge { will-change: transform; }
+@keyframes driftFar  { from { transform: translate3d(-9px, 0, 0);  } to { transform: translate3d(9px, 0, 0);  } }
+@keyframes driftMid  { from { transform: translate3d(-20px, 0, 0); } to { transform: translate3d(20px, 0, 0); } }
+@keyframes driftNear { from { transform: translate3d(-34px, 0, 0); } to { transform: translate3d(34px, 0, 0); } }
+.bg-canyon .r3 { animation: driftFar  86s ease-in-out infinite alternate; }
+.bg-canyon .r2 { animation: driftMid  61s ease-in-out infinite alternate-reverse; }
+.bg-canyon .r1 { animation: driftNear 44s ease-in-out infinite alternate; }
+/* A short dash running a ballistic path — a streak, never a blob. */
+.bg-canyon .tracer {
+  fill: none; stroke-linecap: round; stroke-dasharray: 84 1600;
+}
+.bg-canyon .t1 { stroke: #ffb45a; stroke-width: 3.4; animation: tracer 11s cubic-bezier(.32,0,.66,1) infinite; }
+.bg-canyon .t2 { stroke: #54c8ff; stroke-width: 2.4; opacity: .55; animation: tracer 15s cubic-bezier(.32,0,.66,1) 5.5s infinite; }
+@keyframes tracer {
+  0%        { stroke-dashoffset: 84;    opacity: 0; }
+  5%        { opacity: 1; }
+  62%       { opacity: 1; }
+  76%, 100% { stroke-dashoffset: -1560; opacity: 0; }
+}
+
+/* ---- Title treatment ----------------------------------------------------- */
+/* NOTE: .logo / .logo.small still belong to #lobby — do not fold these in. */
+.gtitle {
+  margin: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+  gap: 0 .1em; line-height: .94; text-transform: uppercase;
+  font-size: clamp(30px, 8.4vw, 48px); font-weight: 900; letter-spacing: .015em;
+}
+/* Extruded gradient lettering: background-clip paints the face, two hard
+   drop-shadows are the bevel, the third is the cast shadow. */
+.gtitle .w {
+  background: linear-gradient(180deg, #ffffff 0%, #ffe2c6 38%, #ff9a4a 74%, #d9500f 100%);
+  -webkit-background-clip: text; background-clip: text;
+  color: transparent; -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 2px 0 #8d3208) drop-shadow(0 4px 0 #4d1a03) drop-shadow(0 12px 20px rgba(0,0,0,.6));
+}
+.gtitle .amp {
+  font-size: .38em; font-weight: 900; color: #2a0d00;
+  width: 1.55em; height: 1.55em; line-height: 1.55em; text-align: center;
+  border-radius: .32em; transform: rotate(-7deg);
+  background: linear-gradient(180deg, #ffb45a, var(--primary));
+  box-shadow: 0 3px 0 #8b3708, 0 8px 18px rgba(0,0,0,.5);
+}
+.title-rule {
+  height: 3px; width: min(280px, 72%); margin: 9px auto 0; border-radius: 2px;
+  background: linear-gradient(90deg, transparent, var(--primary) 20%, #ffd9a8 50%, var(--primary) 80%, transparent);
+  box-shadow: 0 0 14px rgba(255,122,46,.45);
+}
+
+/* ---- Card composition ---------------------------------------------------- */
+#home .home-card { max-width: 440px; background: rgba(20,27,51,.86); backdrop-filter: blur(10px); }
+#home .hero    { display: flex; flex-direction: column; gap: 5px; }
+#home .deck    { display: flex; flex-direction: column; gap: 9px; }
+#home .loadout { display: flex; flex-direction: column; gap: 8px; text-align: left; }
+#home .tagline { margin: 4px 0 2px; }
+
+/* ---- Callsign field ------------------------------------------------------ */
+.callsign {
+  display: flex; align-items: center; gap: 8px; text-align: left; margin-top: 8px;
+  background: #0e142b; border: 1px solid var(--line); border-radius: 14px; padding: 5px 5px 5px 12px;
+}
+.callsign:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(84,200,255,.22); }
+.callsign .cs-label { flex: 0 0 auto; font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.callsign input {
+  flex: 1 1 auto; width: auto; min-width: 0;
+  background: transparent; border: 0; padding: 8px 0; font-size: 17px; font-weight: 800;
+}
+.callsign input:focus { outline: none; }        /* beats the global input:focus ring */
+.reroll {
+  flex: 0 0 auto; width: 40px; height: 40px; padding: 0; border-radius: 11px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--accent);
+  display: flex; align-items: center; justify-content: center;
+}
+.reroll svg { width: 20px; height: 20px; display: block; }
+.reroll:active { transform: scale(.94); }
+
+/* ---- Play deck ----------------------------------------------------------- */
+.playdeck { display: flex; flex-direction: column; gap: 10px; }
+/* A tile is ONE object: the action plus its own options, so the options never
+   read as a separate decision. Buttons cannot nest, hence the wrapper. */
+.tile { border: 1px solid var(--line); border-radius: 16px; background: var(--panel-2); overflow: hidden; }
+.playcard {
+  appearance: none; width: 100%; border: 0; background: transparent; color: var(--text);
+  font: inherit; text-align: left; cursor: pointer;
+  display: flex; align-items: center; gap: 12px; padding: 13px 14px;
+  transition: transform .05s ease;
+}
+.playcard:active { transform: translateY(1px); }
+.playcard .pc-ico {
+  flex: 0 0 auto; width: 34px; height: 34px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,.07);
+}
+.playcard .pc-ico svg { width: 21px; height: 21px; display: block; }
+.playcard .pc-txt { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.playcard .pc-txt b { font-size: 16.5px; font-weight: 800; }
+.playcard .pc-txt i { font-style: normal; font-size: 11.5px; line-height: 1.25; color: var(--muted); }
+.playcard .pc-go { flex: 0 0 auto; display: flex; color: var(--muted); }
+.playcard .pc-go svg { width: 18px; height: 18px; display: block; }
+.tile .suboptions { display: flex; flex-direction: column; gap: 6px; padding: 0 10px 10px; }
+
+/* PRIMARY call to action — the only saturated element on the screen. */
+.tile.hot {
+  border-color: transparent;
+  background: linear-gradient(180deg, var(--primary), var(--primary-2));
+  box-shadow: 0 10px 26px rgba(255,90,60,.30);
+}
+.tile.hot .playcard { color: #240a00; padding: 16px 14px; }
+.tile.hot .pc-ico   { background: rgba(255,255,255,.28); }
+.tile.hot .pc-txt b { font-size: 19px; }
+.tile.hot .pc-txt i { color: rgba(36,10,0,.72); }
+.tile.hot .pc-go    { color: rgba(36,10,0,.78); }
+
+/* ---- Loadout strip ------------------------------------------------------- */
+.opt-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: .16em; color: var(--muted); }
+.optline { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+#home .skinrow { flex-wrap: wrap; }
+.orientrow { display: flex; gap: 6px; flex: 0 0 auto; }
+.orient {
+  appearance: none; cursor: pointer; padding: 8px 11px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--muted);
+  font-weight: 800; font-size: 12px; display: flex; align-items: center; gap: 6px;
+  transition: border-color .12s, color .12s, background .12s;
+}
+.orient svg { width: 14px; height: 14px; display: block; }
+.orient:active { transform: scale(.97); }
+.orient.active { color: #0a1020; background: var(--accent); border-color: var(--accent); }
+
+/* ---- Rotate prompt ------------------------------------------------------- */
+.rotate-hint { display: none; }
+@media (orientation: portrait) and (max-width: 900px) {
+  body.in-game:not(.portrait-ok) .rotate-hint {
+    display: flex; position: absolute; inset: 0; z-index: 18;
+    align-items: center; justify-content: center; text-align: center;
+    padding: max(24px, env(safe-area-inset-top)) 26px max(24px, env(safe-area-inset-bottom));
+    background: rgba(6,9,20,.94); backdrop-filter: blur(6px);
+  }
+}
+.rh-card { max-width: 320px; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.rh-phone { width: 104px; height: 104px; transform-origin: 50% 50%; animation: rhTurn 3.4s ease-in-out infinite; }
+.rh-body   { fill: none; stroke: var(--primary); stroke-width: 4; }
+.rh-screen { fill: rgba(255,122,46,.16); }
+@keyframes rhTurn {
+  0%, 16%   { transform: rotate(0deg); }
+  44%, 80%  { transform: rotate(-90deg); }
+  100%      { transform: rotate(0deg); }
+}
+.rh-title { font-size: 21px; font-weight: 900; }
+.rh-sub   { color: var(--muted); font-size: 14px; margin: 0; line-height: 1.4; }
+
+/* ---- Reduced motion ------------------------------------------------------ */
+@media (prefers-reduced-motion: reduce) {
+  .bg-canyon .ridge, .bg-canyon .tracer, .rh-phone { animation: none !important; }
+  .bg-canyon .t1 { stroke-dashoffset: -760; opacity: .8; }
+  .bg-canyon .t2 { stroke-dashoffset: -900; opacity: .4; }
+  .rh-phone { transform: rotate(-90deg); }
+}
 
 /* ---------- Game: top HUD ---------- */
 #game { display: none; }
@@ -275,6 +451,13 @@ input:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .conn-banner { position: absolute; top: 0; left: 0; right: 0; text-align: center; background: var(--primary-2); color: #fff; font-size: 13px; font-weight: 700; padding: 6px; z-index: 30; }
 .conn-banner.hidden { display: none; }
 
+/* ---------- Killcam ---------- */
+/* Transitions live on the BASE selectors so the chrome fades back in too. */
+#hud-top, #dock { transition: opacity .25s ease, filter .25s ease; }
+.mute, .leave, .zoomctl { transition: opacity .2s ease; }
+#game.killcam #hud-top, #game.killcam #dock { opacity: .26; filter: saturate(.35); pointer-events: none; }
+#game.killcam .mute, #game.killcam .leave, #game.killcam .zoomctl { opacity: 0; pointer-events: none; }
+
 @media (min-width: 620px) {
   .aim-readout { grid-template-columns: 1fr 1fr; max-width: 640px; margin: 0 auto; width: 100%; }
   .control-rows { max-width: 640px; margin: 0 auto; width: 100%; }
@@ -330,4 +513,63 @@ input:focus { outline: 2px solid var(--accent); border-color: transparent; }
   /* .wchip .wn is hidden up here, so this popup is the ONLY place the weapon
      name is readable in landscape — keep it legible but compact. */
   .wpop { font-size: 11px; padding: 3px 8px; }
+}
+
+/* ==========================================================================
+   TITLE SCREEN — LANDSCAPE
+   Two orthogonal queries on purpose: WIDTH decides the two-column poster
+   layout, HEIGHT decides the vertical compaction. #home keeps overflow-y:auto
+   and `justify-content: safe center` throughout — if any of this still
+   overflows a very short screen, it scrolls exactly as it does today.
+   ========================================================================== */
+@media (orientation: landscape) and (min-width: 640px) {
+  #home .home-card {
+    max-width: 860px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.06fr);
+    grid-template-areas: "hero deck"
+                         "load deck";
+    align-items: start; gap: 10px 20px;
+  }
+  #home .hero    { grid-area: hero; text-align: left; }
+  #home .loadout { grid-area: load; align-self: end; }
+  #home .deck    { grid-area: deck; }
+  #home .gtitle      { justify-content: flex-start; }
+  #home .title-rule  { margin-left: 0; margin-right: auto; }
+}
+
+@media (orientation: landscape) and (max-height: 600px) {
+  #home, #lobby {
+    padding-top: max(10px, env(safe-area-inset-top));
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+  }
+  #home .home-card       { padding: 14px 16px; gap: 8px 18px; border-radius: 18px; }
+  #home .gtitle          { font-size: clamp(24px, 4.6vw, 34px); }
+  #home .title-rule      { margin-top: 6px; height: 2px; }
+  #home .byline          { font-size: 9.5px; letter-spacing: .2em; }
+  #home .tagline         { font-size: 12.5px; margin: 2px 0 0; }
+  #home .callsign        { margin-top: 6px; padding: 3px 4px 3px 11px; }
+  #home .callsign input  { padding: 5px 0; font-size: 15.5px; }
+  #home .reroll          { width: 34px; height: 34px; }
+  #home .reroll svg      { width: 17px; height: 17px; }
+  #home .playdeck        { gap: 7px; }
+  #home .playcard        { padding: 8px 11px; gap: 9px; }
+  #home .tile.hot .playcard { padding: 10px 11px; }
+  #home .playcard .pc-ico   { width: 28px; height: 28px; border-radius: 8px; }
+  #home .playcard .pc-ico svg { width: 17px; height: 17px; }
+  #home .playcard .pc-txt b { font-size: 14.5px; }
+  #home .tile.hot .pc-txt b { font-size: 16px; }
+  #home .playcard .pc-txt i { font-size: 10.5px; }
+  #home .tile .suboptions   { padding: 0 8px 8px; gap: 5px; }
+  #home .mode, #home .cnt   { padding: 7px 0; font-size: 12px; }
+  #home .diff               { padding: 6px 0; font-size: 11.5px; }
+  #home .or                 { margin: 2px 0; font-size: 11px; }
+  #home .code-input         { font-size: 17px; padding: 9px; letter-spacing: .28em; }
+  #home .join-row .btn      { padding: 9px 14px; font-size: 14px; }
+  #home .error              { min-height: 14px; font-size: 12px; }
+  #home .swatch             { width: 28px; height: 28px; }
+  #home .orient             { padding: 6px 9px; font-size: 11px; }
+  /* The footnote repeats what the game itself teaches in the first 5 seconds —
+     drop it here to buy back a row. */
+  #home .footnote           { display: none; }
 }

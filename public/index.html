@@ -15,48 +15,159 @@
 <link rel="stylesheet" href="styles.css" />
 
 <div id="app">
+  <!-- Animated canyon backdrop for the menu screens. Sits BEFORE the screens so
+       it paints underneath them, is pointer-transparent, and is display:none'd
+       via body.in-game (see showScreen) so #hud-top / #dock backdrop-filter has
+       nothing to blur mid-match and the GPU stays idle. Pure inline SVG + CSS
+       keyframes — no images, no fonts. viewBox units are the drift units, so the
+       parallax amplitude is identical on every screen size. -->
+  <div class="bg-canyon" aria-hidden="true">
+    <svg viewBox="0 0 1200 620" preserveAspectRatio="xMidYMax slice">
+      <defs>
+        <linearGradient id="ccSky" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0"    stop-color="#080d1e"/>
+          <stop offset=".46"  stop-color="#16204a"/>
+          <stop offset=".74"  stop-color="#3a2a48"/>
+          <stop offset="1"    stop-color="#7a3f26"/>
+        </linearGradient>
+        <linearGradient id="ccHaze" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#ff7a2e" stop-opacity="0"/>
+          <stop offset="1" stop-color="#ff7a2e" stop-opacity=".34"/>
+        </linearGradient>
+      </defs>
+
+      <rect width="1200" height="620" fill="url(#ccSky)"/>
+      <rect y="340" width="1200" height="280" fill="url(#ccHaze)"/>
+
+      <!-- Posterized sun slabs — flat bands, same trick as drawSky(). -->
+      <g fill="#ffb45a">
+        <rect x="852" y="430" width="176" height="7" opacity=".50"/>
+        <rect x="872" y="446" width="136" height="6" opacity=".38"/>
+        <rect x="892" y="460" width="96"  height="5" opacity=".26"/>
+      </g>
+
+      <!-- Three mesa ridges, drawn from -160 to 1360 so the drift never
+           uncovers an edge. Darkest layer matches --bg so it fuses with the page. -->
+      <g class="ridge r3" fill="#1b2647">
+        <path d="M-160 620V430h180l40-70h90l40 70h140l50-130h90l50 130h180l40-80h100l40 80h180l40-50h100l40 50h120v190z"/>
+      </g>
+      <g class="ridge r2" fill="#131c38">
+        <path d="M-160 620V500h250l50-70h120l40 70h220l40-50h100l40 50h200l50-80h130l40 80h280v120z"/>
+      </g>
+      <g class="ridge r1" fill="#0b1020">
+        <path d="M-160 620V562h360l40-42h160l40 42h320l40-56h160l40 56h360v58z"/>
+        <!-- lone dead tree on the near rim -->
+        <path d="M243 562v-40M243 536l-13-12M243 542l14-13M243 528l-9-14" stroke="#0b1020" stroke-width="4" stroke-linecap="round" fill="none"/>
+      </g>
+
+      <!-- Tracer streaks: a short dash travelling a ballistic path. Lines, not
+           discs — same house rule as drawParticles / drawMuzzleFlashes. -->
+      <path class="tracer t1" d="M-40 560 Q 400 150 900 500"/>
+      <path class="tracer t2" d="M1240 540 Q 800 210 260 520"/>
+    </svg>
+  </div>
+
   <!-- ============ HOME ============ -->
   <section id="home" class="screen active">
+    <!-- Three direct children only: .hero / .deck / .loadout. In landscape the
+         card becomes a grid and these three become named areas — no wrapper
+         divs and no DOM reordering needed. -->
     <div class="home-card">
-      <div class="logo">⛰️ CANYONS <em>&amp;</em> CANNONS</div>
-      <p class="byline">made by <b>Abara Brothers</b></p>
-      <p class="tagline">Cross-canyon artillery duel. Arc your shells over the peaks — live.</p>
 
-      <label class="field">
-        <span>Your name</span>
-        <input id="nameInput" maxlength="14" placeholder="Commander" autocomplete="off" />
-      </label>
+      <div class="hero">
+        <h1 class="gtitle">
+          <span class="w">Canyons</span><span class="amp">&amp;</span><span class="w">Cannons</span>
+        </h1>
+        <div class="title-rule" aria-hidden="true"></div>
+        <p class="byline">made by <b>Abara Brothers</b></p>
+        <p class="tagline">Cross-canyon artillery duel. Arc your shells over the peaks — live.</p>
 
-      <div class="modrow" id="modeRow" role="group" aria-label="Game mode">
-        <button type="button" class="mode active" data-mode="duel">⚔️ Duel</button>
-        <button type="button" class="mode" data-mode="ffa">💥 Free-for-all</button>
-      </div>
-      <div class="countrow hidden" id="countRow" role="group" aria-label="Players">
-        <button type="button" class="cnt" data-max="3">3 players</button>
-        <button type="button" class="cnt active" data-max="4">4 players</button>
-      </div>
-      <button id="createBtn" class="btn big primary">Create a game</button>
-      <button id="quickBtn" class="btn big">⚡ Quick match a stranger</button>
-
-      <div class="cpu-block">
-        <button id="cpuBtn" class="btn big">🤖 Play the computer</button>
-        <div class="diffrow" id="diffRow" role="group" aria-label="CPU difficulty">
-          <button type="button" class="diff" data-diff="easy">Easy</button>
-          <button type="button" class="diff active" data-diff="medium">Medium</button>
-          <button type="button" class="diff" data-diff="hard">Hard</button>
+        <div class="callsign">
+          <span class="cs-label">Callsign</span>
+          <input id="nameInput" maxlength="14" placeholder="Commander" autocomplete="off"
+                 spellcheck="false" aria-label="Your callsign" />
+          <button id="rerollBtn" type="button" class="reroll" title="Roll a new callsign" aria-label="Roll a new callsign">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 7h3.4a4 4 0 0 1 3.3 1.8l4.6 6.4A4 4 0 0 0 17.6 17H21"/>
+              <path d="M3 17h3.4a4 4 0 0 0 3.3-1.8l4.6-6.4A4 4 0 0 1 17.6 7H21"/>
+              <path d="M18.4 4.4L21 7l-2.6 2.6"/><path d="M18.4 14.4L21 17l-2.6 2.6"/>
+            </svg>
+          </button>
         </div>
       </div>
 
-      <div class="or"><span>or join a friend</span></div>
+      <div class="deck">
+        <div class="playdeck">
 
-      <div class="join-row">
-        <input id="codeInput" class="code-input" maxlength="4" placeholder="CODE" autocomplete="off" />
-        <button id="joinBtn" class="btn">Join</button>
+          <!-- PRIMARY: the only orange thing on the screen. -->
+          <div class="tile hot">
+            <button id="quickBtn" type="button" class="playcard">
+              <span class="pc-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M13.6 2 4 13.4h6L9.2 22 20 10.2h-6.6z"/></svg></span>
+              <span class="pc-txt"><b>Quick match</b><i>Straight into a duel with the next player looking</i></span>
+              <span class="pc-go" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></span>
+            </button>
+          </div>
+
+          <div class="tile">
+            <button id="createBtn" type="button" class="playcard">
+              <span class="pc-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 2.6a1 1 0 0 1 1.6-.8l9 5.2a1 1 0 0 1 0 1.7l-9 5.2A1 1 0 0 1 6 13z"/><rect x="3.2" y="2" width="2.2" height="20" rx="1.1"/></svg></span>
+              <span class="pc-txt"><b>Create a game</b><i>Get a 4-letter code and invite your friends</i></span>
+              <span class="pc-go" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></span>
+            </button>
+            <div class="suboptions">
+              <div class="modrow" id="modeRow" role="group" aria-label="Game mode">
+                <button type="button" class="mode active" data-mode="duel">⚔️ Duel</button>
+                <button type="button" class="mode" data-mode="ffa">💥 Free-for-all</button>
+              </div>
+              <div class="countrow hidden" id="countRow" role="group" aria-label="Players">
+                <button type="button" class="cnt" data-max="3">3 players</button>
+                <button type="button" class="cnt active" data-max="4">4 players</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="tile">
+            <button id="cpuBtn" type="button" class="playcard">
+              <span class="pc-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="3.6" y="8" width="16.8" height="11.4" rx="3.6"/><rect x="10.8" y="2.4" width="2.4" height="4.4" rx="1.2"/><rect x="0.8" y="11" width="2.2" height="5.2" rx="1.1"/><rect x="21" y="11" width="2.2" height="5.2" rx="1.1"/><rect x="7.4" y="11.6" width="3.1" height="3.6" rx="1.2" fill="#0b1020"/><rect x="13.5" y="11.6" width="3.1" height="3.6" rx="1.2" fill="#0b1020"/></svg></span>
+              <span class="pc-txt"><b>Play the computer</b><i>Solo drill — no waiting, no second phone</i></span>
+              <span class="pc-go" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></span>
+            </button>
+            <div class="suboptions">
+              <div class="diffrow" id="diffRow" role="group" aria-label="CPU difficulty">
+                <button type="button" class="diff" data-diff="easy">Easy</button>
+                <button type="button" class="diff active" data-diff="medium">Medium</button>
+                <button type="button" class="diff" data-diff="hard">Hard</button>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="or"><span>or join a code</span></div>
+
+        <div class="join-row">
+          <input id="codeInput" class="code-input" maxlength="4" placeholder="CODE" autocomplete="off" />
+          <button id="joinBtn" class="btn">Join</button>
+        </div>
+        <p id="homeError" class="error"></p>
       </div>
-      <p id="homeError" class="error"></p>
 
-      <div class="skinlabel">Tank paint</div>
-      <div class="skinrow" id="skinRow"></div>
+      <div class="loadout">
+        <div class="opt-label">Tank paint</div>
+        <div class="skinrow" id="skinRow"></div>
+        <div class="optline">
+          <span class="opt-label">Hold your phone</span>
+          <div class="orientrow" id="orientRow" role="group" aria-label="Preferred orientation">
+            <button type="button" class="orient active" data-orient="landscape" aria-label="Play in landscape">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/></svg>Sideways
+            </button>
+            <button type="button" class="orient" data-orient="portrait" aria-label="Play in portrait">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/></svg>Upright
+            </button>
+          </div>
+        </div>
+      </div>
+
     </div>
     <p class="footnote">Best on two phones. Drag to aim — pull farther to charge.</p>
   </section>
@@ -163,6 +274,24 @@
       <p class="muted">You'll forfeit this match and return to the menu.</p>
       <button id="stayBtn" class="btn big primary">Keep playing</button>
       <button id="leaveYesBtn" class="btn ghost danger">Leave game</button>
+    </div>
+  </div>
+
+  <!-- ============ ROTATE PROMPT ============ -->
+  <!-- Visibility is 100% CSS: shown only when body.in-game is set (showScreen),
+       the viewport is portrait, the screen is phone-sized, and the player has
+       NOT opted into portrait. Never covers the game-over / leave overlays
+       (z-index 18 vs their 20) and is always dismissible — an OS rotation lock
+       would otherwise make the game unplayable. -->
+  <div id="rotateHint" class="rotate-hint">
+    <div class="rh-card">
+      <svg class="rh-phone" viewBox="0 0 120 120" aria-hidden="true">
+        <rect class="rh-body" x="42" y="12" width="36" height="96" rx="7"/>
+        <rect class="rh-screen" x="46.5" y="21" width="27" height="78" rx="3"/>
+      </svg>
+      <div class="rh-title">Turn your phone sideways</div>
+      <p class="rh-sub">Canyons &amp; Cannons is built for landscape — you'll see far more of the canyon, and the controls shrink out of the way.</p>
+      <button id="portraitOkBtn" type="button" class="btn ghost">Play upright anyway</button>
     </div>
   </div>
 

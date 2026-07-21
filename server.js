@@ -254,11 +254,37 @@ function handleFire(room, seat, msg) {
   resolveFire(room, seat, w.id, msg.angle, msg.power);
 }
 
+// KILLCAM — purely presentational. If this shot ends the match, tell both clients
+// WHICH detonation is the fatal one so their slow-motion finish is identical.
+// Nothing here decides damage: it only names a projectile index already in the
+// payload. Lives in server.js on purpose — game-core stays pure.
+function buildKillcam(room, result, aliveBefore) {
+  if (aliveSeats(room).length > 1) return null;             // match carries on
+  const now = aliveFlags(room);
+  const fell = [];
+  for (let i = 0; i < now.length; i++) if (aliveBefore[i] && !now[i]) fell.push(i);
+  if (!fell.length) return null;                            // nobody died to THIS blast
+  // Mutual destruction: the worst-hit casualty is the star of the shot.
+  const seat = fell.reduce((a, b) => ((result.damage[b] || 0) > (result.damage[a] || 0) ? b : a));
+  const tk = result.tanks[seat];
+  const withDet = result.projectiles
+    .map((p, i) => ({ i, p, d: Math.hypot(p.det ? p.det.x - tk.x : 1e9, p.det ? p.det.y - tk.y : 1e9) }))
+    .filter(e => e.p.det);
+  if (!withDet.length) return null;
+  // Prefer a detonation that actually reached the victim; among those, the one
+  // that lands LAST in playback order — that's the one the eye reads as the kill.
+  const inReach = withDet.filter(e => e.d <= Math.max(900, e.p.det.r * 1.5));
+  const pick = (inReach.length ? inReach : [withDet.reduce((a, b) => (b.d < a.d ? b : a))])
+    .reduce((a, b) => (((b.p.delay || 0) + b.p.path.length) > ((a.p.delay || 0) + a.p.path.length) ? b : a));
+  return { seat, proj: pick.i, x: pick.p.det.x, y: pick.p.det.y };
+}
+
 // Shared shot resolution — used by both the human 'fire' message and the bot.
 function resolveFire(room, seat, weaponId, angle, power) {
   const w = WEAPON_BY_ID[weaponId] || WEAPON_BY_ID.cannon;
   clearTimeout(room.clock);
   const before = room.terrain.slice();
+  const aliveBefore = aliveFlags(room);   // snapshot for the killcam (who this shot kills)
   const result = simulateShot(
     { terrain: room.terrain, tanks: room.tanks },
     { by: seat, weapon: w.id, angle, power, dir: room.facing[seat] }
@@ -305,6 +331,7 @@ function resolveFire(room, seat, weaponId, angle, power) {
     alive: aliveFlags(room),
     ammo: room.ammo[seat],
     ammoSeat: seat,
+    killcam: buildKillcam(room, result, aliveBefore),   // null on every normal shot
   });
   // Give the shot animation a beat, then play out any fire/toxic burn before the
   // next turn (real-time damage-over-time; the turn holds until it finishes).
