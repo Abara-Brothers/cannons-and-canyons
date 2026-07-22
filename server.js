@@ -80,6 +80,21 @@ const seatCount = (room) => room.players.filter(Boolean).length;
 const aliveSeats = (room) =>
   room.tanks ? room.tanks.map((t, i) => (t.alive !== false && room.hp[i] > 0 ? i : -1)).filter(i => i >= 0) : [];
 const aliveFlags = (room) => (room.tanks ? room.tanks.map(t => t.alive !== false) : []);
+const bossSeatOf = (room) => room.players.findIndex(p => p && p.boss);
+// The one question every damage path asks. Duel/FFA: last tank standing.
+// Boss raid: the humans win TOGETHER the moment the boss falls, and lose only
+// when every human is gone — two live humans is not "match still on" the way
+// two live enemies would be.
+function matchOver(room) {
+  if (!room.tanks) return false;
+  if (room.mode === 'boss') {
+    const b = bossSeatOf(room);
+    const bossDead = b >= 0 && room.tanks[b] && room.tanks[b].alive === false;
+    const humanAlive = room.tanks.some((t, i) => i !== b && t.alive !== false && room.hp[i] > 0);
+    return bossDead || !humanAlive;
+  }
+  return aliveSeats(room).length <= 1;
+}
 function lobbyPayload(room, seat) {
   return {
     type: 'lobby', code: room.code, mode: room.mode, max: room.max,
@@ -116,9 +131,12 @@ function killDead(room) {
 
 // mode: 'duel' -> exactly 2, auto-starts the moment the 2nd player joins (legacy flow)
 //       'ffa'  -> 2..4, the HOST starts it (or it auto-starts when it fills)
+//       'boss' -> 1..2 humans vs the WARLORD (host may start solo)
+//       'golf' -> 1..2 humans, 9 holes, no damage
 function createRoom(hostWs, name, skin, opts = {}) {
   const code = makeCode();
-  const mode = opts.mode === 'ffa' ? 'ffa' : 'duel';
+  const MODES = ['duel', 'ffa', 'boss', 'golf'];
+  const mode = MODES.includes(opts.mode) ? opts.mode : 'duel';
   const max = mode === 'ffa' ? Math.max(2, Math.min(4, (opts.max | 0) || 4)) : 2;
   const room = {
     code, mode, max, hostSeat: 0,
@@ -162,6 +180,8 @@ function snapshot(room, seat) {
     hp: room.hp.map(h => Math.max(0, Math.round(h))), maxHp: MAX_HP,
     hpMax: room.hpMax && room.hpMax.length ? room.hpMax : undefined,
     biome: room.biome, ruins: room.ruins ? room.ruins.ranges : undefined,
+    boss: bossSeatOf(room) >= 0 ? bossSeatOf(room) : undefined,
+    scales: room.tanks.map(t => t.scale || 1),
     props: room.props, crates: room.crates, shield: room.shield,
     hazards: room.hazards,
     scorch: room.scorch || [],
@@ -175,7 +195,19 @@ function snapshot(room, seat) {
   };
 }
 
+const BOSS_HP = 400;
+const BOSS_SCALE = 1.8;
+
 function startGame(room) {
+  // Boss raid: the WARLORD occupies the LAST seat, appended once (a rematch
+  // reuses it). It's a bot player, so every existing bot path just works.
+  if (room.mode === 'boss' && !room.players.some(p => p && p.boss)) {
+    room.players.push({
+      ws: null, bot: true, boss: true, difficulty: 'boss', name: 'WARLORD-7',
+      token: makeToken(), connected: true, dropTimer: null, skin: 'midnight',
+    });
+    room.vsBot = true;
+  }
   const n = room.players.length;
   room.seed = (Math.floor(Math.random() * 1e9)) >>> 0;
   // Biome roulette — every match a different battlefield flavour.
@@ -193,7 +225,13 @@ function startGame(room) {
   room.hpMax = new Array(n).fill(MAX_HP);
   room.crates = []; room.crateSeq = 1;
   room.shield = new Array(n).fill(0);
-  room.turnCount = 0;
+  room.turnCount = 0; room.bossShots = 0;
+  const bSeat = bossSeatOf(room);
+  if (bSeat >= 0) {                       // the mecha is a bigger, tougher target
+    room.tanks[bSeat].scale = BOSS_SCALE;
+    room.hp[bSeat] = BOSS_HP;
+    room.hpMax[bSeat] = BOSS_HP;
+  }
   room.ammo = Array.from({ length: n }, () => startingAmmo());
   // Everyone starts turned toward the middle of the map. (n=2 -> [1, -1], as before.)
   room.facing = room.tanks.map((_, i) => (i < n / 2 ? 1 : -1));
@@ -286,7 +324,24 @@ function botFire(room) {
   const seat = room.turn;
   const bot = room.players[seat];
   if (!bot || !bot.bot) return;
-  const shot = aiShot(room.terrain, room.tanks, seat, bot.difficulty, room.facing[seat]);
+  // The WARLORD reads the range to its nearest living target and picks from its
+  // kit: rail lance / missile rack at distance, autocannon and flame up close,
+  // and every 4th shot a seismic slam whatever the range.
+  let wid = 'cannon';
+  if (bot.boss) {
+    room.bossShots = (room.bossShots || 0) + 1;
+    const me = room.tanks[seat];
+    let d = Infinity;
+    for (let i = 0; i < room.tanks.length; i++) {
+      if (i === seat || room.tanks[i].alive === false) continue;
+      d = Math.min(d, Math.abs(room.tanks[i].x - me.x));
+    }
+    if (room.bossShots % 4 === 0) wid = 'b_quake';
+    else if (d > 11000) wid = room.bossShots % 2 ? 'b_lance' : 'b_barrage';
+    else if (d > 4500) wid = ['b_twin', 'b_barrage', 'b_flame'][room.bossShots % 3];
+    else wid = room.bossShots % 2 ? 'b_flame' : 'b_twin';
+  }
+  const shot = aiShot(room.terrain, room.tanks, seat, bot.difficulty, room.facing[seat], wid);
   // Turn the turret toward its target, then show the barrel swing, then fire.
   if (shot.dir && shot.dir !== room.facing[seat]) {
     room.facing[seat] = shot.dir;
@@ -301,8 +356,7 @@ function botFire(room) {
 // Unlimited shots — the match only ends when a tank is destroyed.
 function advance(room, by) {
   killDead(room);
-  const live = aliveSeats(room);
-  if (live.length <= 1) return endGame(room);
+  if (matchOver(room)) return endGame(room);
   const n = room.players.length;
   let t = by;
   do { t = (t + 1) % n; } while (room.tanks[t].alive === false);   // terminates: >=2 alive
@@ -318,12 +372,21 @@ function endGame(room) {
   clearInterval(room.fireTimer); room.fireTimer = null;
   killDead(room);
   const live = aliveSeats(room);
-  const winner = live.length === 1 ? live[0] : -1;   // 0 left = mutual destruction
+  let winner = live.length === 1 ? live[0] : -1;   // 0 left = mutual destruction
+  let team = null;
+  if (room.mode === 'boss') {
+    const b = bossSeatOf(room);
+    const bossDead = b >= 0 && room.tanks[b].alive === false;
+    const humanAlive = room.tanks.some((t, i) => i !== b && t.alive !== false);
+    team = bossDead && humanAlive ? 'players' : bossDead ? 'draw' : 'boss';
+    winner = team === 'players' ? room.tanks.findIndex((t, i) => i !== b && t.alive !== false)
+           : team === 'boss' ? b : -1;
+  }
   broadcast(room, {
     type: 'gameover',
     hp: room.hp.map(h => Math.max(0, Math.round(h))),
     alive: aliveFlags(room),
-    winner,
+    winner, team,
   });
 }
 
@@ -331,7 +394,10 @@ function handleFire(room, seat, msg) {
   if (room.state !== 'playing' || room.turn !== seat) return;
   const w = WEAPON_BY_ID[msg.weapon];
   if (!w) return;
-  if ((room.ammo[seat][w.id] || 0) <= 0) return;
+  const pl = room.players[seat];
+  if (w.bossOnly && !(pl && pl.boss)) return;   // the WARLORD's kit is its own
+  if (w.golfOnly && room.mode !== 'golf') return;
+  if (!w.bossOnly && (room.ammo[seat][w.id] || 0) <= 0) return;
   resolveFire(room, seat, w.id, msg.angle, msg.power);
 }
 
@@ -340,7 +406,7 @@ function handleFire(room, seat, msg) {
 // Nothing here decides damage: it only names a projectile index already in the
 // payload. Lives in server.js on purpose — game-core stays pure.
 function buildKillcam(room, result, aliveBefore) {
-  if (aliveSeats(room).length > 1) return null;             // match carries on
+  if (!matchOver(room)) return null;                        // match carries on
   const now = aliveFlags(room);
   const fell = [];
   for (let i = 0; i < now.length; i++) if (aliveBefore[i] && !now[i]) fell.push(i);
@@ -441,7 +507,7 @@ function resolveFire(room, seat, weaponId, angle, power) {
 function startBurn(room, seat) {
   clearInterval(room.dotTimer); room.dotTimer = null;
   if (room.state !== 'playing') return;
-  if (aliveSeats(room).length <= 1) return advance(room, seat);   // blast already decided it
+  if (matchOver(room)) return advance(room, seat);   // blast already decided it
   const first = burnTick(room.hazards, room.tanks, room.lavaY);
   if (!first.some(d => d > 0)) return advance(room, seat);        // nobody's standing in it
   let ticks = 0;
@@ -454,7 +520,7 @@ function startBurn(room, seat) {
       room.hp[ti] = Math.max(0, Math.round((room.hp[ti] - dmg[ti]) * 10) / 10);
     }
     killDead(room);
-    const over = aliveSeats(room).length <= 1;
+    const over = matchOver(room);
     broadcast(room, {
       type: 'dot', tick: ticks,
       hp: room.hp.map(h => Math.max(0, Math.round(h))),
@@ -506,7 +572,7 @@ function fireBite(room) {
     });
   }
   if (!room.hazards.some(h => h.until != null)) stopFire(room);
-  if (aliveSeats(room).length <= 1) { stopFire(room); return endGame(room); }
+  if (matchOver(room)) { stopFire(room); return endGame(room); }
   // Burned to death on their own turn: nothing else will move the game on, so do
   // it here — but only if no handover is already in flight (post-shot beat or the
   // gas/lava burn hold), or the turn would advance twice.
@@ -576,7 +642,7 @@ function handleClose(ws) {
     room.hp[seat] = 0;
     killDead(room);
     broadcast(room, { type: 'forfeit', seat, hp: room.hp.map(h => Math.max(0, Math.round(h))), alive: aliveFlags(room) });
-    if (aliveSeats(room).length <= 1) return endGame(room);
+    if (matchOver(room)) return endGame(room);
     if (room.turn === seat) {          // they dropped mid-turn — move the game on
       clearTimeout(room.clock);
       clearInterval(room.dotTimer); room.dotTimer = null;
@@ -691,7 +757,8 @@ wss.on('connection', (ws) => {
         const r = rooms.get(ws.roomCode);
         if (!r || r.state !== 'waiting') break;
         if (ws.seat !== r.hostSeat) break;                  // only the host starts early
-        if (seatCount(r) < 2) { send(ws, { type: 'joinError', reason: 'Need at least 2 commanders.' }); break; }
+        const minSeats = (r.mode === 'boss' || r.mode === 'golf') ? 1 : 2;
+        if (seatCount(r) < minSeats) { send(ws, { type: 'joinError', reason: 'Need at least 2 commanders.' }); break; }
         compactRoster(r);
         startGame(r);
         break;

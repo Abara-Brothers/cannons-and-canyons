@@ -23,8 +23,12 @@ const S = {
   trees: [],
   hazards: [],
   scorch: [],                          // permanent burn scars from fire: [{a,b}] world-x ranges
+  biome: 'alpine', ruins: [],          // battlefield flavour (server-picked)
+  boss: -1, scales: [],                // boss seat + per-tank scale (mech is 1.8x)
+  props: [], crates: [], shield: [],   // barrels/bunkers, supply drops, crate shields
+  chainQueue: [],                      // staggered prop chain explosions
   tanks: [{ x: 900, y: 9720 }, { x: 23100, y: 9720 }],
-  hp: [100, 100], maxHp: 100,
+  hp: [150, 150], maxHp: 150, hpMax: [150, 150],
   ammo: {},
   turn: 0, fuel: 4500, moveBudget: 4500,
   selected: 'cannon',
@@ -465,7 +469,6 @@ function handle(m) {
       break;
     case 'crateTaken': {
       S.crates = S.crates.filter(c => c.id !== m.id);
-      if (m.hp) S.hp = m.hp.map((h, i) => Math.min(S.hp[i] ?? h, m.kind === 'repair' ? h : h) === h ? h : S.hp[i]);
       if (m.hp) S.hp = m.hp.slice();             // pickups can RAISE hp (repair) — trust the server here
       if (m.shield) S.shield = m.shield.slice();
       if (m.ammoSeat === S.you && m.ammo) { S.ammo = m.ammo; buildWeaponStrip(); }
@@ -658,9 +661,11 @@ function renderLobby(m) {
   S.code = m.code; $('lobbyCode').textContent = m.code;
   const isHost = m.you === m.host;
   const filled = m.players.filter(Boolean).length;
-  $('lobbyHeading').textContent = m.mode === 'ffa'
-    ? `Free-for-all — ${filled}/${m.max} commanders`
-    : 'Waiting for your opponent…';
+  $('lobbyHeading').textContent =
+    m.mode === 'ffa'  ? `Free-for-all — ${filled}/${m.max} commanders` :
+    m.mode === 'boss' ? `Boss Raid — ${filled}/${m.max} vs WARLORD-7` :
+    m.mode === 'golf' ? `Artillery Golf — ${filled}/${m.max} on the tee` :
+    'Waiting for your opponent…';
   $('lobbyHint').textContent = m.mode === 'ffa'
     ? (isHost ? "Send the link. Start whenever you have enough players — you don't have to wait for a full lobby."
               : 'Waiting for the host to start the battle…')
@@ -682,9 +687,14 @@ function renderLobby(m) {
     r.appendChild(el);
   }
   const btn = $('startMatchBtn');
-  btn.classList.toggle('hidden', !(isHost && m.mode === 'ffa'));
-  btn.disabled = filled < 2;
-  btn.textContent = filled < 2 ? 'Start battle (need 2)' : `Start battle (${filled})`;
+  const hostStarts = m.mode === 'ffa' || m.mode === 'boss' || m.mode === 'golf';
+  const minSeats = (m.mode === 'boss' || m.mode === 'golf') ? 1 : 2;
+  btn.classList.toggle('hidden', !(isHost && hostStarts));
+  btn.disabled = filled < minSeats;
+  btn.textContent = filled < minSeats ? `Start (need ${minSeats})`
+    : m.mode === 'boss' ? `Engage the WARLORD (${filled})`
+    : m.mode === 'golf' ? `Tee off (${filled})`
+    : `Start battle (${filled})`;
   showScreen('lobby');
 }
 $('startMatchBtn').onclick = () => sendMsg({ type: 'startMatch' });
@@ -709,6 +719,8 @@ function applySnapshot(m) {
   S.scorch = m.scorch || [];
   S.biome = m.biome || 'alpine';
   setBiomeTheme(S.biome);
+  S.boss = (m.boss != null) ? m.boss : -1;
+  S.scales = (m.scales || []).slice();
   S.ruins = m.ruins || [];
   S.props = m.props || [];
   S.crates = (m.crates || []).map(c => ({ ...c, dropT: 1 }));   // already landed on resume
@@ -781,7 +793,9 @@ function buildScoreboard() {
       '<div class="pname"></div>' +
       '<div class="pval"><span class="score">100</span><span class="shots">HP</span></div>' +
       '<div class="hpbar"><i></i></div>';
-    el.querySelector('.pname').textContent = (S.names[i] || `Player ${i + 1}`) + (i === S.you ? ' (you)' : '');
+    el.querySelector('.pname').textContent =
+      (i === S.boss ? '👑 ' : '') + (S.names[i] || `Player ${i + 1}`) + (i === S.you ? ' (you)' : '');
+    if (i === S.boss) el.classList.add('bossrow');
     row.appendChild(el);
   }
 }
@@ -1866,6 +1880,14 @@ function onGameOver(m) {
   if (m.alive) S.alive = m.alive.slice();
   updateHud();
   let title, cls, win = false;
+  if (m.team) {                                  // Boss Raid verdicts are TEAM verdicts
+    if (m.team === 'players') { title = 'WARLORD-7 DESTROYED! 🏆'; cls = 'win'; win = true; }
+    else if (m.team === 'boss') { title = 'Your squad was wiped out'; cls = 'lose'; }
+    else { title = 'Mutual destruction!'; cls = 'draw'; }
+    Audio.chime(win);
+    showOverlay(title, m.hp, cls, false);
+    return;
+  }
   if (m.winner === -1) { title = 'Mutual destruction!'; cls = 'draw'; }
   else if (m.winner === S.you) { title = S.n > 2 ? 'Last tank standing! \u{1F3C6}' : 'Enemy destroyed! \u{1F3C6}'; cls = 'win'; win = true; }
   else if (S.n > 2) { title = `${S.names[m.winner]} takes the canyon`; cls = 'lose'; }
@@ -2033,7 +2055,10 @@ function draw() {
       const order = [];
       for (let i = 0; i < S.n; i++) if (S.alive[i] !== false) order.push(i);
       order.sort((a, b) => (a === S.turn) - (b === S.turn) || (a === S.you) - (b === S.you));
-      for (const i of order) { drawTankWarped(i); if (S.shield && S.shield[i] > 0) drawShieldAura(i); }
+      for (const i of order) {
+        if (i === S.boss) drawMech(i); else drawTankWarped(i);
+        if (S.shield && S.shield[i] > 0) drawShieldAura(i);
+      }
     }
     drawWarp();
     drawEdgeIndicators();
@@ -2323,6 +2348,7 @@ const recAmt = (i) => Math.pow(S.recoil[i] || 0, 1.8);   // slams back, eases in
 
 // Local slope the tank sits on (also used for the muzzle position).
 function tankTilt(i, r) {
+  if (i === S.boss) return 0;                    // the mech stands level on its struts
   const wx = S.tanks[i].x;
   const wSpan = Math.max(30, (r * 1.15) / Math.max(cam.zoom, 1e-4));
   const t = Math.atan2(surfaceAt(wx + wSpan) - surfaceAt(wx - wSpan), 2 * wSpan);
@@ -2331,9 +2357,97 @@ function tankTilt(i, r) {
 
 // World position of the very end of the barrel — where shots and the muzzle
 // blast come from. Mirrors drawTank's tilt/lift transform.
+// ---------------------------------------------------------------------------
+// WARLORD-7 — the boss mecha-tank. Its OWN renderer (the player tank art is
+// locked and untouched): a wide tracked chassis under hydraulic struts, an
+// armoured torso with a glowing eye slit, a shoulder missile rack, and a spinal
+// rail gun that follows its aim and shares the recoil spring. Drawn ~1.8x the
+// player silhouette to match its server hitbox scale.
+// ---------------------------------------------------------------------------
+const MECH = { dk: '#1d2127', mid: '#2c323b', lite: '#3f4752', trim: '#552e33', glow: '#ff3b30' };
+function drawMech(i) {
+  if (!S.tanks[i]) return;
+  let { sx, sy, r } = tankScreen(i);
+  r *= 1.8;
+  const front = facingOf(i), dir = front;
+  ctx.save();
+
+  // ground shadow
+  ctx.fillStyle = 'rgba(10,12,16,0.35)';
+  ctx.fillRect(sx - r * 1.5, sy - r * 0.04, r * 3.0, r * 0.12);
+
+  // tracked chassis
+  ctx.fillStyle = MECH.dk;
+  ctx.fillRect(sx - r * 1.45, sy - r * 0.5, r * 2.9, r * 0.5);
+  ctx.fillStyle = MECH.mid;
+  ctx.fillRect(sx - r * 1.3, sy - r * 0.62, r * 2.6, r * 0.18);
+  ctx.fillStyle = '#14171c';                                   // road wheels as dark sockets
+  for (let k = -2; k <= 2; k++) ctx.fillRect(sx + k * r * 0.52 - r * 0.12, sy - r * 0.34, r * 0.24, r * 0.24);
+
+  // hydraulic struts up to the torso
+  ctx.strokeStyle = MECH.lite; ctx.lineWidth = Math.max(2, r * 0.14); ctx.lineCap = 'butt';
+  ctx.beginPath();
+  ctx.moveTo(sx - r * 0.8, sy - r * 0.6); ctx.lineTo(sx - r * 0.45, sy - r * 1.15);
+  ctx.moveTo(sx + r * 0.8, sy - r * 0.6); ctx.lineTo(sx + r * 0.45, sy - r * 1.15);
+  ctx.stroke();
+
+  // torso — angular armoured block
+  ctx.fillStyle = MECH.mid;
+  ctx.beginPath();
+  ctx.moveTo(sx - r * 1.05, sy - r * 1.1);
+  ctx.lineTo(sx + r * 1.05, sy - r * 1.1);
+  ctx.lineTo(sx + r * 0.85, sy - r * 1.95);
+  ctx.lineTo(sx - r * 0.85, sy - r * 1.95);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = MECH.lite;                                    // glacis highlight
+  ctx.fillRect(sx - r * 0.85 * dir - (dir > 0 ? 0 : 0), sy - r * 1.95, r * 0.22 * dir, r * 0.85);
+  ctx.fillStyle = MECH.trim;                                    // warning chevrons
+  for (let k = 0; k < 3; k++) ctx.fillRect(sx - r * 0.45 + k * r * 0.34, sy - r * 1.32, r * 0.2, r * 0.1);
+
+  // head + eye slit (glows toward its facing)
+  ctx.fillStyle = MECH.dk;
+  ctx.fillRect(sx - r * 0.5, sy - r * 2.35, r * 1.0, r * 0.42);
+  ctx.fillStyle = MECH.glow;
+  ctx.fillRect(sx - r * 0.34 + dir * r * 0.1, sy - r * 2.24, r * 0.62, Math.max(1.5, r * 0.09));
+  ctx.fillStyle = 'rgba(255,90,82,0.28)';                       // eye bloom
+  ctx.fillRect(sx - r * 0.44 + dir * r * 0.1, sy - r * 2.3, r * 0.86, r * 0.22);
+
+  // shoulder missile rack on the back side
+  const bx = sx - dir * r * 0.95;
+  ctx.fillStyle = MECH.mid;
+  ctx.fillRect(bx - r * 0.42, sy - r * 2.5, r * 0.84, r * 0.55);
+  ctx.fillStyle = '#0f1216';
+  for (let k = 0; k < 3; k++) ctx.fillRect(bx - r * 0.3 + k * r * 0.24, sy - r * 2.42, r * 0.16, r * 0.16);
+  ctx.fillStyle = MECH.trim;
+  ctx.fillRect(bx - r * 0.42, sy - r * 2.0, r * 0.84, r * 0.06);
+
+  // spinal rail gun — same aim/recoil conventions as drawTank, tilt-free
+  const aim = S.aim[i] || { angle: 45, power: 60 };
+  const rad = aim.angle * Math.PI / 180;
+  const cosA = Math.cos(rad) * dir, sinA = -Math.sin(rad);
+  const px = sx + dir * r * 0.47, py = sy - r * 1.86;
+  const rc = S.recoil[i] || 0;
+  const bLen = r * 1.5 - r * 0.5 * Math.pow(rc, 1.8);
+  ctx.strokeStyle = MECH.lite; ctx.lineWidth = Math.max(3, r * 0.22);
+  ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px + cosA * bLen, py + sinA * bLen); ctx.stroke();
+  ctx.strokeStyle = MECH.glow; ctx.lineWidth = Math.max(1, r * 0.06);       // rail charge line
+  ctx.beginPath();
+  ctx.moveTo(px + cosA * r * 0.2, py + sinA * r * 0.2);
+  ctx.lineTo(px + cosA * bLen * 0.92, py + sinA * bLen * 0.92);
+  ctx.stroke();
+  ctx.strokeStyle = MECH.dk; ctx.lineWidth = Math.max(4, r * 0.34);         // muzzle housing
+  ctx.beginPath();
+  ctx.moveTo(px + cosA * (bLen - r * 0.02), py + sinA * (bLen - r * 0.02));
+  ctx.lineTo(px + cosA * (bLen + r * 0.22), py + sinA * (bLen + r * 0.22));
+  ctx.stroke();
+
+  ctx.restore();
+}
+
 function muzzleTipWorld(i) {
   if (!S.tanks[i] || !cam.zoom) return null;
-  const { sx, sy, r } = tankScreen(i);
+  let { sx, sy, r } = tankScreen(i);
+  if (i === S.boss) r *= 1.8;                    // the mech's rail rides higher and further
   const front = facingOf(i), dir = front;
   const tilt = tankTilt(i, r), LIFT = r * 0.42;
   const px = sx + front * r * BARREL.ox, py = sy + r * BARREL.oy;

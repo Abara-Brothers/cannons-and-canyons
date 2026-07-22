@@ -96,18 +96,21 @@ export const TANK_TOP = Math.round(1.36 * TANK_R);   // 326 — turret top above
 const TANK_BELOW      = Math.round(0.10 * TANK_R);   //  24 — tracks sit this far below the ground point
 const TANK_CY = 274;          // turret pivot height above the ground point (0.72 r + 0.42 r LIFT)
 
+// tank.scale (default 1) grows the whole outline — the boss mecha is 1.8x.
 export function pointHitsTank(x, y, tank) {
+  const sc = tank.scale || 1;
   const dx = x - tank.x;
   const up = tank.y - y;                       // height above the ground point
-  if (Math.abs(dx) <= TANK_HW && up >= -TANK_BELOW && up <= TANK_HULL_H) return true;   // hull + tracks
-  if (Math.abs(dx) <= TANK_TUR_HW && up > TANK_HULL_H && up <= TANK_TOP) return true; // turret
+  if (Math.abs(dx) <= TANK_HW * sc && up >= -TANK_BELOW * sc && up <= TANK_HULL_H * sc) return true;   // hull + tracks
+  if (Math.abs(dx) <= TANK_TUR_HW * sc && up > TANK_HULL_H * sc && up <= TANK_TOP * sc) return true; // turret
   return false;
 }
 
 // Distance from a point to the nearest point of the tank outline.
 function distToTank(cx, cy, tank) {
-  const rx = Math.max(tank.x - TANK_HW, Math.min(cx, tank.x + TANK_HW));
-  const ry = Math.max(tank.y - TANK_TOP, Math.min(cy, tank.y + TANK_BELOW));
+  const sc = tank.scale || 1;
+  const rx = Math.max(tank.x - TANK_HW * sc, Math.min(cx, tank.x + TANK_HW * sc));
+  const ry = Math.max(tank.y - TANK_TOP * sc, Math.min(cy, tank.y + TANK_BELOW * sc));
   return Math.hypot(cx - rx, cy - ry);
 }
 
@@ -200,18 +203,38 @@ export const WEAPONS = [
     shots: 1, spread: 0,  speedMul: 1.0, damage: 75, radius: 1950, terrain: 'crater',
     hazard: { type: 'gas', turns: 2, dpt: 6, dps: 5, r: 800 },
     desc: 'One warhead. Leaves fallout that keeps hurting.' },
+  // ---- WARLORD-7 kit (bossOnly: never in a player's menu or loadout) ---------
+  { id: 'b_twin',    name: 'Twin Autocannon', color: '#ff6b6b', ammo: 99, bossOnly: true,
+    shots: 2, spread: 5,  speedMul: 1.0, damage: 16, radius: 650, terrain: 'crater',
+    desc: 'Paired shells from the shoulder mounts.' },
+  { id: 'b_barrage', name: 'Missile Barrage', color: '#ff9d3d', ammo: 99, bossOnly: true,
+    shots: 8, spread: 34, speedMul: 1.0, damage: 7, radius: 480, terrain: 'crater',
+    desc: 'A whole rack of rockets, saturating the slope.' },
+  { id: 'b_flame',   name: 'Flame Vent',      color: '#ff6a3d', ammo: 99, bossOnly: true,
+    shots: 1, spread: 0,  speedMul: 1.0, damage: 0, radius: 0, terrain: 'none',
+    split: { count: 6, spreadSpeed: 1000, radius: 560, damage: 6, terrain: 'scorch',
+             hazard: { type: 'fire', ms: FIRE_MS, bites: FIRE_BITES, r: 430 } },
+    desc: 'Vents burning reactor fuel over the ground.' },
+  { id: 'b_lance',   name: 'Rail Lance',      color: '#3ce88f', ammo: 99, bossOnly: true,
+    shots: 1, spread: 0,  speedMul: 1.7, gravityMul: 0.3, damage: 34, radius: 380, terrain: 'crater',
+    pierce: true, proximity: 140,
+    desc: 'A hypervelocity lance from the spinal rail.' },
+  { id: 'b_quake',   name: 'Seismic Slam',    color: '#c98a4b', ammo: 99, bossOnly: true,
+    shots: 1, spread: 0,  speedMul: 1.0, damage: 26, radius: 1400, terrain: 'crater', dig: 0.5,
+    desc: 'A ground-pounder round that cracks the earth open.' },
 ];
 
 export const WEAPON_BY_ID = Object.fromEntries(WEAPONS.map(w => [w.id, w]));
 
 // Public weapon info for the client UI (no physics numbers needed there).
 export function weaponMenu() {
-  return WEAPONS.map(w => ({ id: w.id, name: w.name, color: w.color, ammo: w.ammo, desc: w.desc }));
+  return WEAPONS.filter(w => !w.bossOnly && !w.golfOnly)
+    .map(w => ({ id: w.id, name: w.name, color: w.color, ammo: w.ammo, desc: w.desc }));
 }
 
 export function startingAmmo() {
   const a = {};
-  for (const w of WEAPONS) a[w.id] = w.ammo;
+  for (const w of WEAPONS) if (!w.bossOnly && !w.golfOnly) a[w.id] = w.ammo;
   return a;
 }
 
@@ -718,7 +741,7 @@ export function simulateShot(state, shot) {
 // so it's cheap enough to run inline on a turn) and returns { weapon, angle,
 // power }. `difficulty` scales the random aim error added to the best solution:
 // easy = wild, medium = loose, hard = crisp.
-export function aiShot(terrain, tanks, by, difficulty, facing) {
+export function aiShot(terrain, tanks, by, difficulty, facing, weaponId = 'cannon') {
   const me = tanks[by];
   // Nearest LIVING opponent. (Duel: identical to the old tanks[1 - by].)
   let enemy = null, bestD = Infinity;
@@ -729,7 +752,9 @@ export function aiShot(terrain, tanks, by, difficulty, facing) {
   }
   if (!enemy) return { weapon: 'cannon', angle: 45, power: 60, dir: facing === -1 ? -1 : 1 };
   const dir = enemy.x >= me.x ? 1 : -1;            // turn the turret toward the target
-  const speedMul = WEAPON_BY_ID.cannon.speedMul;   // cannon = 1.0, unlimited ammo
+  const aiW = WEAPON_BY_ID[weaponId] || WEAPON_BY_ID.cannon;
+  const speedMul = aiW.speedMul;
+  const aiGrav = GRAVITY * (aiW.gravityMul || 1);  // the rail lance flies nearly flat
 
   // Fly one cannon shell read-only; return |landing.x − enemy.x| (0 = direct hit).
   function miss(angle, power) {
@@ -744,7 +769,7 @@ export function aiShot(terrain, tanks, by, difficulty, facing) {
     // the bot falls back to a fixed 45/60.
     let leftOwn = !pointHitsTank(ox, oy, me);
     while (t < MAX_T) {
-      vy += GRAVITY * DT; x += vx * DT; y += vy * DT; t += DT;
+      vy += aiGrav * DT; x += vx * DT; y += vy * DT; t += DT;
       if (x < 0 || x > WORLD_W) return Math.abs(x - enemy.x) + 1e5;          // flew off the map
       const armed = Math.hypot(x - ox, y - oy) > ARM_DIST;
       if (armed && pointHitsTank(x, y, enemy)) return 0;                     // direct hit
@@ -772,13 +797,13 @@ export function aiShot(terrain, tanks, by, difficulty, facing) {
   }
 
   // Difficulty → aim jitter. Bell-ish noise from two uniforms in [-1,1].
-  const errByDiff = { easy: 15, medium: 8, hard: 3.5 };
+  const errByDiff = { easy: 15, medium: 8, hard: 3.5, boss: 3 };
   const e = errByDiff[difficulty] || errByDiff.medium;
   const noise = () => Math.random() + Math.random() - 1;
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   const angle = clamp(best.angle + noise() * e, 8, 88);
   const power = clamp(best.power + noise() * e * 1.4, 12, 100);
-  return { weapon: 'cannon', angle: round1(angle), power: round1(power), dir };
+  return { weapon: weaponId, angle: round1(angle), power: round1(power), dir };
 }
 
 function integrate(terrain, tanks, ox, oy, vx, vy, opts) {

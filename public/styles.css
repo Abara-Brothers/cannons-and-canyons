@@ -91,7 +91,8 @@ input:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .diff:active { transform: scale(.97); }
 .diff.active { color: #0a1020; background: var(--accent); border-color: var(--accent); }
 /* Game-mode picker + FFA player count */
-.modrow, .countrow { display: flex; gap: 6px; }
+.modrow { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.countrow { display: flex; gap: 6px; }
 .countrow.hidden { display: none; }
 .mode, .cnt {
   flex: 1; appearance: none; cursor: pointer; padding: 11px 0; border-radius: 10px;
@@ -314,6 +315,9 @@ body.in-game .bg-canyon { display: none; }
 .pscore.acting { border-bottom-color: var(--seat); }
 .pscore.dead { opacity: .42; filter: grayscale(1); }
 .pscore.dead .pname { text-decoration: line-through; }
+/* The WARLORD's card reads as the threat it is. */
+.pscore.bossrow { --seat: #ff3b30; }
+.pscore.bossrow .pname { color: #ff5a52; letter-spacing: .06em; font-weight: 900; }
 .pname { font-size: 12.5px; color: var(--seat, var(--muted)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pval { display: flex; align-items: baseline; gap: 8px; }
 .score { font-size: 26px; font-weight: 900; font-variant-numeric: tabular-nums; }
