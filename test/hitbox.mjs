@@ -58,10 +58,18 @@ for (const [a, p, what] of [[8, 60, 'shallow'], [45, 60, 'normal'], [88, 60, 'st
   if (r.damage[0] !== 0) fail(`cannon ${what} (${a}/${p}) self-damaged for ${r.damage[0]} — latch broken`);
 }
 
-// 4 — ballistics unchanged: the latch must not shorten a normal shot.
+// 4 — ballistics sane: the latch must not shorten a normal shot. Expected ~18400
+//     with SPEED_PER_POWER 58 and the muzzle-tip origin; the floor guards the
+//     catastrophic case (shell dying at the shooter's feet).
 const land = fire('cannon', 45, 60);
 const endX = land.projectiles[0].path[land.projectiles[0].path.length - 1][0];
-if (endX < 20000) fail(`cannon 45/60 landed at x=${endX}, expected ~22400 (latch ordering bug)`);
+if (endX < 17500) fail(`cannon 45/60 landed at x=${endX}, expected ~18400 (latch ordering bug)`);
+// The shell must LEAVE from the drawn barrel tip, not the hull centre.
+{
+  const p0 = land.projectiles[0].path[0];
+  if (Math.abs(p0[0] - (ME + 113 + 410 * Math.SQRT1_2)) > 2) fail(`shot origin x=${p0[0]} — not at the muzzle tip`);
+  if (Math.abs(p0[1] - (FLAT_Y - 274 - 410 * Math.SQRT1_2)) > 2) fail(`shot origin y=${p0[1]} — not at the muzzle tip`);
+}
 
 // 5 — Teleport moves the FIRER onto the landing point, MAY cross the enemy,
 //     never deforms terrain, and never moves the other tank.

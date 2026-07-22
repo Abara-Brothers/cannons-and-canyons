@@ -6,10 +6,16 @@ export const WORLD_W = 24000; // battlefield sized so a zoom-out frames BOTH tan
 export const WORLD_H = 13500; // tall world → room for huge peaks and deep canyons (no ceiling clipping)
 
 const GRAVITY = 900;          // world units / s^2  (no wind, per spec)
-const SPEED_PER_POWER = 64;   // power 0..100 -> speed 0..6400 u/s. Max 45° range = 6400^2/900 ≈ 45,511 —
-                              // ~1.9× the 24,000-wide map, so full map ≈ power 72 (good aiming granularity),
-                              // and steep high-angle lobs still clear the tallest peaks.
-const BARREL_LEN = 42;        // shell spawn distance from the turret pivot
+const SPEED_PER_POWER = 58;   // power 0..100 -> speed 0..5800 u/s. Max 45° range = 5800^2/900 ≈ 37,378 —
+                              // ~1.55× the 24,000-wide map, so full map ≈ power 80. Trimmed from 64
+                              // because shots flew too far; every weapon shares the change.
+// Where the shell leaves the tank. These mirror the CLIENT's drawTank barrel
+// geometry (BARREL {ox:0.47, oy:-0.72, len:1.45, brake:0.26} in tank radii, plus
+// the 0.42r LIFT) at the design scale TANK_R=240 — so the projectile path now
+// begins at the DRAWN muzzle tip, not the hull centre. Multiplied by tank.scale
+// so an oversized tank's gun reaches proportionally further.
+const BARREL_LEN = 410;       // pivot -> muzzle tip (1.71 r)
+const BARREL_PIVOT_X = 113;   // pivot sits forward of the hull centre (0.47 r)
 const DT = 1 / 120;           // physics step
 const SAMPLE_EVERY = 4;       // record a trajectory point every N steps (~30fps)
 const MAX_T = 26;             // safety cap on flight time (s)
@@ -57,7 +63,7 @@ const TANK_HULL_H     = Math.round(1.00 * TANK_R);   // 240 — hull top above t
 const TANK_TUR_HW     = Math.round(0.76 * TANK_R);   // 182 — turret half-width
 export const TANK_TOP = Math.round(1.36 * TANK_R);   // 326 — turret top above the ground point
 const TANK_BELOW      = Math.round(0.10 * TANK_R);   //  24 — tracks sit this far below the ground point
-const TANK_CY = 24;           // turret pivot height (barrel origin) — deliberately unchanged
+const TANK_CY = 274;          // turret pivot height above the ground point (0.72 r + 0.42 r LIFT)
 
 export function pointHitsTank(x, y, tank) {
   const dx = x - tank.x;
@@ -76,7 +82,7 @@ function distToTank(cx, cy, tank) {
 
 export const MOVE_BUDGET = 4500;  // driving distance allowed per turn — generous fuel to reposition
 export const MOVE_STEP = 60;      // distance per move tick (fast drive)
-export const MAX_HP = 100;        // tanks have health — destroy the enemy to win (no shot limit)
+export const MAX_HP = 150;        // tanks have health — destroy the enemy to win (no shot limit)
 // Placement rules shared by driving (handleMove) and teleporting — one source of
 // truth so the two can never drift apart. Tanks are NOT obstacles to each other:
 // you may drive or warp clean past an opponent, and may even come to rest on top
@@ -126,10 +132,10 @@ export const WEAPONS = [
   { id: 'volley',   name: 'Rocket Volley', color: '#7c6cff', ammo: 3,
     shots: 6, spread: 22, speedMul: 1.0, damage: 9, radius: 450, terrain: 'crater',
     desc: 'Six rockets in a fan. Saturates a whole slope.' },
-  { id: 'railgun',  name: 'Railgun',       color: '#3ce88f', ammo: 2,
+  { id: 'railgun',  name: 'Railgun',       color: '#3ce88f', ammo: 0,
     shots: 1, spread: 0,  speedMul: 1.7, gravityMul: 0.35, damage: 62, radius: 390, terrain: 'crater',
     pierce: true, proximity: 120,   // flat & fast; punches through terrain and detonates on the ENEMY tank
-    desc: 'Hypervelocity slug — flat shot, punches through hills to the enemy.' },
+    desc: 'Supply-drop exclusive. Flat hypervelocity slug that punches through hills.' },
   { id: 'cluster',  name: 'Cluster Bomb',  color: '#ffd23f', ammo: 2,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 0, radius: 0, terrain: 'none',
     split: { count: 5, spreadSpeed: 700, radius: 570, damage: 14, terrain: 'crater' },
@@ -532,8 +538,9 @@ export function simulateShot(state, shot) {
     const rad = ((angle + off) * Math.PI) / 180;
     const vx = Math.cos(rad) * speed * dir;
     const vy = -Math.sin(rad) * speed;
-    const ox = tank.x + Math.cos(rad) * dir * BARREL_LEN;
-    const oy = (tank.y - TANK_CY) - Math.sin(rad) * BARREL_LEN;
+    const sc = tank.scale || 1;
+    const ox = tank.x + dir * BARREL_PIVOT_X * sc + Math.cos(rad) * dir * BARREL_LEN * sc;
+    const oy = (tank.y - TANK_CY * sc) - Math.sin(rad) * BARREL_LEN * sc;
 
     if (w.split) {
       const fp = integrate(state.terrain, state.tanks, ox, oy, vx, vy, { stopAtApex: true, by });
@@ -645,8 +652,9 @@ export function aiShot(terrain, tanks, by, difficulty, facing) {
   function miss(angle, power) {
     const rad = (angle * Math.PI) / 180;
     const speed = Math.max(1, Math.min(100, power)) * SPEED_PER_POWER * speedMul;
-    const ox = me.x + Math.cos(rad) * dir * BARREL_LEN;
-    const oy = (me.y - TANK_CY) - Math.sin(rad) * BARREL_LEN;
+    const sc = me.scale || 1;
+    const ox = me.x + dir * BARREL_PIVOT_X * sc + Math.cos(rad) * dir * BARREL_LEN * sc;
+    const oy = (me.y - TANK_CY * sc) - Math.sin(rad) * BARREL_LEN * sc;
     let x = ox, y = oy, vx = Math.cos(rad) * speed * dir, vy = -Math.sin(rad) * speed, t = 0;
     // The muzzle now sits inside the firer's own hitbox, so mirror integrate()'s
     // latch — without it every candidate trajectory is rejected as a self-clip and

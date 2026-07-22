@@ -593,9 +593,10 @@ $('orientRow').addEventListener('click', (e) => {
   const b = e.target.closest('.orient'); if (!b) return;
   setOrient(b.dataset.orient);
 });
-// Dismissing the prompt IS the preference, so the menu chip stays truthful and
-// an OS-rotation-locked player is never trapped behind it.
-$('portraitOkBtn').onclick = () => setOrient('portrait');
+// Landscape is ENFORCED in-match: the prompt has no dismiss. The only way to
+// play upright is the Upright chip on the menu screen, so the prompt offers a
+// (confirmed) exit back to the menu for anyone whose OS rotation-lock is on.
+$('rhLeaveBtn').onclick = () => { $('confirmLeave').classList.remove('hidden'); };
 $('joinBtn').onclick = () => {
   Audio.ensure();
   const code = ($('codeInput').value || '').toUpperCase().trim();
@@ -1053,11 +1054,11 @@ function enqueueShot(m) { S.queue.push(m); if (!S.anim) startNextShot(); }
 // and the phase machine all run on real dt so they can never stall.
 // ---------------------------------------------------------------------------
 const KC = {
-  lead: 30,     // path samples of run-in before impact (~1.0s real once ramped)
+  lead: 46,     // path samples of run-in before impact (~1.5s real once ramped)
   min: 0.15,    // slowest time scale
-  in: 0.26,     // bars slide in            (real seconds)
-  hold: 0.85,   // crawl over the detonation (real seconds)
-  out: 0.42,    // bars retract + time ramps back to 1 (real seconds)
+  in: 0.30,     // bars slide in            (real seconds)
+  hold: 2.30,   // crawl over the detonation (real seconds) — savour the kill
+  out: 0.65,    // bars retract + time ramps back to 1 (real seconds)
   zoom: 2.6,    // camera tightening vs the aim baseline
 };
 
@@ -1937,8 +1938,8 @@ function stepEffects(dt) {
     if (S.playing) {
       for (let i = 0; i < S.n; i++) {
         const hp = S.hp[i];
-        if (S.alive[i] === false || hp > 65 || hp <= 0) continue;
-        const heavy = hp <= 30;
+        if (S.alive[i] === false || hp > S.maxHp * 0.45 || hp <= 0) continue;
+        const heavy = hp <= S.maxHp * 0.2;
         if (Math.random() < dt * (heavy ? 13 : 5)) {
           const t = S.tanks[i];
           S.particles.push({
@@ -2216,7 +2217,7 @@ const TANK_G = {
 const BARREL = { ox: 0.47, oy: -0.72, len: 1.45, brake: 0.26 };
 // Recoil: how far the gun tube telescopes back INTO the mantlet, in tank radii,
 // and the shape of the run-out. Kept here so drawTank and the muzzle pass agree.
-const REC_MAX = 0.55;
+const REC_MAX = 0.62;
 const recAmt = (i) => Math.pow(S.recoil[i] || 0, 1.8);   // slams back, eases into battery
 
 // Local slope the tank sits on (also used for the muzzle position).
@@ -2840,11 +2841,11 @@ function drawAim() {
   const rad = aim.angle * Math.PI / 180;
   const sx = wx2s(t.x), sy = wy2s(surfaceAt(t.x) - 24);
   const pct = aim.power / 100;
-  // Mirrors game-core's muzzle origin (TANK_CY 24, BARREL_LEN 42). If the muzzle
-  // is at or under the local surface the shell detonates in your own lap — now
-  // reachable since the aim range opened up to 300°, so warn in red.
-  const mox = t.x + Math.cos(rad) * dir * 42;
-  const moy = (t.y - 24) - Math.sin(rad) * 42;
+  // Mirrors game-core's muzzle origin (BARREL_PIVOT_X 113, TANK_CY 274,
+  // BARREL_LEN 410 — the drawn barrel tip). If the muzzle is at or under the
+  // local surface the shell detonates in your own lap, so warn in red.
+  const mox = t.x + dir * 113 + Math.cos(rad) * dir * 410;
+  const moy = (t.y - 274) - Math.sin(rad) * 410;
   const danger = moy >= surfaceAt(mox) - 8;
 
   const len = 30 + pct * 130;

@@ -18,7 +18,7 @@ let code = null;
 const summary = { shots: 0, craters: 0, maxProjectiles: 0, hazardsSeen: 0, hpFinal: null, gameover: null, errors: [] };
 
 // Cycle through every weapon (splits, airstrike, hazards, wall, buster) to exercise all paths.
-const ROTATION = ['cannon', 'mortar', 'volley', 'railgun', 'cluster', 'napalm', 'gas', 'airstrike', 'buster', 'wall', 'teleport', 'nuke', 'cannon'];
+const ROTATION = ['cannon', 'mortar', 'volley', 'cluster', 'napalm', 'gas', 'airstrike', 'buster', 'wall', 'teleport', 'nuke', 'cannon'];   // railgun is crate-only now (ammo 0) — firing it would be refused
 function fire(c, shotIndex) {
   const power = 68 + (shotIndex % 7) * 4;
   const weapon = ROTATION[shotIndex % ROTATION.length];
@@ -33,7 +33,7 @@ function attach(c) {
       case 'start':
         c.seat = m.you;
         if (m.terrain.length !== m.world.w + 1) summary.errors.push(`bad terrain length ${m.terrain.length}`);
-        if (!Array.isArray(m.hp) || m.hp[0] !== 100) summary.errors.push('missing/odd hp in start');
+        if (!Array.isArray(m.hp) || m.hp[0] !== (m.maxHp || 150)) summary.errors.push('missing/odd hp in start');
         if (!Array.isArray(m.trees) || m.trees.length < 30) summary.errors.push('missing trees');
         break;
       case 'turn':

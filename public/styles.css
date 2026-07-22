@@ -489,9 +489,11 @@ body.in-game .bg-canyon { display: none; }
      almost nothing in landscape — it survives in portrait. Measured: icon
      17 -> 26px (+53%), dock 83.5 -> 82.5px, and all 12 chips still fit a 667px
      phone with no swipe. */
-  .wchip { position: relative; min-width: 44px; padding: 3px 4px; border-radius: 10px; gap: 0; }
-  .wchip .wi { width: 26px; height: 26px; }
-  .wchip .wt { display: none; }
+  /* Shot-type/trajectory badge shown beside every icon (user request) — icon
+     eases 26 -> 24px to pay for it; the strip scrolls a touch on a 667px phone. */
+  .wchip { position: relative; min-width: 52px; padding: 3px 4px; border-radius: 10px; gap: 0; }
+  .wchip .wi { width: 24px; height: 24px; }
+  .wchip .wt { display: block; width: 20px; height: 10px; }
   .wchip .wn { display: none; }
   .wchip .wa {
     position: absolute; right: 3px; bottom: 0; font-size: 8.5px; line-height: 1;

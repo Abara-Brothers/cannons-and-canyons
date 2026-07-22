@@ -102,6 +102,13 @@ try {
   }
   log(over ? `match ended: winner=${over.winner} alive=[${over.alive}]` : 'match still running with 2 survivors (correct — nobody died)');
   if (over && over.alive.filter(Boolean).length > 1) fail('gameover fired with >1 alive');
+  // The play loop races wait('turn') vs wait('gameover') and never cancels the
+  // LOSER, so stale waiters pile up. A late gameover would be handed to one of
+  // those (whose race already settled) and silently swallowed, starving the real
+  // wait below — this was the intermittent "timeout waiting for gameover". The
+  // stale timeouts still fire, but a rejection into an already-settled race is a
+  // no-op, so clearing the list here is safe.
+  host.handlers.length = 0;
 
   // Now drop one survivor: only ONE tank is left, so the match MUST end.
   if (!over) {
