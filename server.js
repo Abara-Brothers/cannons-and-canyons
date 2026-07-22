@@ -96,6 +96,10 @@ function matchOver(room) {
     const humanAlive = room.tanks.some((t, i) => i !== b && t.alive !== false && room.hp[i] > 0);
     return bossDead || !humanAlive;
   }
+  if (room.horde) {
+    const humanAlive = room.players.some((p, i) => p && !p.bot && room.tanks[i].alive !== false && room.hp[i] > 0);
+    return room.horde.kills >= room.horde.target || !humanAlive;
+  }
   return aliveSeats(room).length <= 1;
 }
 function lobbyPayload(room, seat) {
@@ -132,13 +136,15 @@ function killDead(room) {
   }
 }
 
-// mode: 'duel' -> exactly 2, auto-starts the moment the 2nd player joins (legacy flow)
-//       'ffa'  -> 2..4, the HOST starts it (or it auto-starts when it fills)
-//       'boss' -> 1..2 humans vs the WARLORD (host may start solo)
-//       'golf' -> 1..2 humans, 9 holes, no damage
+// mode: 'duel'    -> exactly 2, auto-starts the moment the 2nd player joins
+//       'ffa'     -> 2..4, the HOST starts it (or it auto-starts when it fills)
+//       'boss'    -> 1..2 humans vs the WARLORD (host may start solo)
+//       'golf'    -> 1..2 humans, 9 holes, no damage
+//       'aliens'  -> 1..2 humans vs waves of xeno saucers
+//       'zombies' -> 1..2 humans vs waves of rotting hulks
 function createRoom(hostWs, name, skin, opts = {}) {
   const code = makeCode();
-  const MODES = ['duel', 'ffa', 'boss', 'golf'];
+  const MODES = ['duel', 'ffa', 'boss', 'golf', 'aliens', 'zombies'];
   const mode = MODES.includes(opts.mode) ? opts.mode : 'duel';
   const max = mode === 'ffa' ? Math.max(2, Math.min(4, (opts.max | 0) || 4)) : 2;
   const room = {
@@ -158,6 +164,8 @@ function createRoom(hostWs, name, skin, opts = {}) {
     props: [],                         // barrels / bunkers
     crates: [], crateSeq: 1,           // supply drops waiting on the field
     shield: [], hpMax: [],             // crate shield charges; per-seat HP ceiling
+    nanoBots: [], nanoTimer: null,     // Nano Swarm infestations (bots left per seat)
+    stat: null,                        // damage dealt/received tallies for the report
     turnCount: 0,
     scorch: [],                        // permanent burn scars: merged world-x ranges [{a,b}]
     trees: [],
@@ -170,7 +178,7 @@ function createRoom(hostWs, name, skin, opts = {}) {
 // Current-state snapshot — used both for match start and for resume.
 function snapshot(room, seat) {
   return {
-    world: { w: WORLD_W, h: WORLD_H }, lavaY: room.lavaY || LAVA_Y,
+    world: { w: room.worldW || WORLD_W, h: WORLD_H }, lavaY: room.lavaY || LAVA_Y,
     terrain: room.terrain.map(v => Math.round(v * 10) / 10),
     trees: room.trees,
     tanks: room.tanks.map(t => ({ x: Math.round(t.x * 10) / 10, y: Math.round(t.y * 10) / 10 })),
@@ -192,6 +200,9 @@ function snapshot(room, seat) {
     hpMax: room.hpMax && room.hpMax.length ? room.hpMax : undefined,
     biome: room.biome, ruins: room.ruins ? room.ruins.ranges : undefined,
     boss: bossSeatOf(room) >= 0 ? bossSeatOf(room) : undefined,
+    kinds: room.players.map(p => (p.boss ? 'mech' : p.horde ? (room.horde ? room.horde.kind : 'tank') : 'tank')),
+    horde: room.horde ? { kills: room.horde.kills, target: room.horde.target, wave: room.horde.wave } : undefined,
+    nano: room.nanoBots && room.nanoBots.some(b => b > 0) ? room.nanoBots : undefined,
     scales: room.tanks.map(t => t.scale || 1),
     props: room.props, crates: room.crates, shield: room.shield,
     hazards: room.hazards,
@@ -209,16 +220,77 @@ function snapshot(room, seat) {
 const BOSS_HP = 400;
 const BOSS_SCALE = 1.8;
 
+// ---- Horde survival ------------------------------------------------------------
+// One engine, two skins: waves of AI tanks with themed kits. Three enemy seats
+// cycle — a destroyed one respawns at the start of a later turn (stronger each
+// wave) until the squad has put down `target` of them. All humans down = loss.
+const HORDE = {
+  aliens:  { kind: 'alien',  baseHp: 90,  waveHp: 18, target: 8,
+             names: ['XENO-SCOUT', 'XENO-REAVER', 'XENO-HARROW'],
+             kit: ['a_plasma', 'a_pods', 'a_lance'] },
+  zombies: { kind: 'zombie', baseHp: 110, waveHp: 20, target: 8,
+             names: ['ROTBOX', 'GRAVEDIGGER', 'PUTRID-9'],
+             kit: ['z_spit', 'z_grubs', 'z_lob'] },
+};
+const isHordeMode = (m) => m === 'aliens' || m === 'zombies';
+const hordeSeats = (room) => room.players.map((p, i) => (p && p.horde ? i : -1)).filter(i => i >= 0);
+
+function hordeAccounting(room, aliveBefore) {
+  if (!room.horde) return;
+  let newKills = 0;
+  for (const i of hordeSeats(room)) {
+    if (aliveBefore[i] && room.tanks[i].alive === false) newKills++;
+  }
+  if (!newKills) return;
+  room.horde.kills += newKills;
+  broadcast(room, { type: 'wave', kills: room.horde.kills, target: room.horde.target, wave: room.horde.wave });
+}
+
+function hordeRespawn(room) {
+  if (!room.horde || room.state !== 'playing' || matchOver(room)) return;
+  const H = room.horde, cfg = HORDE[H.theme];
+  const seats = hordeSeats(room);
+  let aliveE = seats.filter(i => room.tanks[i].alive !== false).length;
+  for (const i of seats) {
+    if (room.tanks[i].alive !== false) continue;
+    // never field more than remain-to-kill, and never more than the seat pool
+    if (aliveE >= Math.min(seats.length, H.target - H.kills)) break;
+    H.wave++;
+    const hp = cfg.baseHp + H.wave * cfg.waveHp;
+    // drop the reinforcement well away from every living human
+    let x = 0;
+    for (let tries = 0; tries < 16; tries++) {
+      x = Math.round(2000 + Math.random() * (WORLD_W - 4000));
+      const clear = room.players.every((p, j) => p.horde || room.tanks[j].alive === false || Math.abs(room.tanks[j].x - x) > 2600);
+      if (clear) break;
+    }
+    room.tanks[i].alive = true;
+    room.tanks[i].x = x;
+    room.tanks[i].y = surfaceAt(room.terrain, x);
+    room.hp[i] = hp; room.hpMax[i] = hp;
+    aliveE++;
+    broadcast(room, {
+      type: 'respawn', seat: i,
+      x: Math.round(x * 10) / 10, y: Math.round(room.tanks[i].y * 10) / 10,
+      hp: room.hp.map(h => Math.max(0, Math.round(h))), hpMax: room.hpMax.slice(),
+      alive: aliveFlags(room), wave: H.wave, kills: H.kills, target: H.target,
+    });
+  }
+}
+
 // ---- Artillery Golf -----------------------------------------------------------
 // 9 holes, one club, real bounces. Both players tee off from the same box; your
 // TANK walks to wherever your ball rests, and the hole is done when everyone has
 // sunk it (or picked up at par+4). Lowest total after 9 wins.
+// Course width scales with PAR: par 3 = 150% of the battle map, par 4 = 200%,
+// par 5 = 250%. Hole distances are set per par so every hole is honest: a par 3
+// is one good carry, a par 4 one big + one short, a par 5 two full strokes in.
+const GOLF_PAR_W = { 3: 36000, 4: 48000, 5: 60000 };
 const GOLF_HOLES = [
-  { d: 5200,  biome: 'alpine' }, { d: 8400,  biome: 'desert' }, { d: 11800, biome: 'ice' },
-  { d: 6800,  biome: 'alpine' }, { d: 15500, biome: 'desert' }, { d: 9600,  biome: 'ice' },
-  { d: 18500, biome: 'alpine' }, { d: 7600,  biome: 'desert' }, { d: 13800, biome: 'ice' },
+  { d: 7800,  par: 3, biome: 'alpine' }, { d: 12600, par: 3, biome: 'desert' }, { d: 23600, par: 4, biome: 'ice' },
+  { d: 10200, par: 3, biome: 'alpine' }, { d: 38750, par: 5, biome: 'desert' }, { d: 19200, par: 4, biome: 'ice' },
+  { d: 46250, par: 5, biome: 'alpine' }, { d: 11400, par: 3, biome: 'desert' }, { d: 27600, par: 4, biome: 'ice' },
 ];
-const golfPar = (d) => 3 + (d > 9000 ? 1 : 0) + (d > 15000 ? 1 : 0);
 
 function startGolf(room) {
   const n = room.players.length;
@@ -243,13 +315,14 @@ function nextHole(room, first) {
   const g = room.golf;
   g.hole++;
   const H = GOLF_HOLES[g.hole - 1];
-  g.par = golfPar(H.d);
+  g.par = H.par;
+  room.worldW = GOLF_PAR_W[H.par] || WORLD_W;
   room.biome = H.biome;
   room.lavaY = biomeLavaY(H.biome);
   const seed = (room.seed + g.hole * 7919) >>> 0;
-  room.terrain = generateTerrain(seed, 2, H.biome);
+  room.terrain = generateTerrain(seed, 2, H.biome, room.worldW);
   g.tee = 2200;
-  g.cup = { x: Math.min(WORLD_W - 1500, g.tee + H.d), r: 330 };
+  g.cup = { x: Math.min(room.worldW - 1500, g.tee + H.d), r: 520 };   // a cup you can actually sink
   g.cup.y = prepareGolfHole(room.terrain, g.tee, g.cup.x);
   room.trees = generateTrees(room.terrain, seed, 2);
   room.tanks = room.players.map(() => ({ x: g.tee, y: surfaceAt(room.terrain, g.tee), alive: true }));
@@ -323,7 +396,7 @@ function finishGolf(room) {
   room.state = 'over';
   clearTimeout(room.clock); clearTimeout(room.botTimer);
   const totals = room.golf.strokes.map(r => r.reduce((a, b) => a + b, 0));
-  const parTotal = GOLF_HOLES.reduce((a, h) => a + golfPar(h.d), 0);
+  const parTotal = GOLF_HOLES.reduce((a, h) => a + h.par, 0);
   let winner = 0;
   if (totals.length > 1) {
     const best = Math.min(...totals);
@@ -347,6 +420,17 @@ function startGame(room) {
     });
     room.vsBot = true;
   }
+  // Horde survival: three themed enemy seats join once.
+  if (isHordeMode(room.mode) && !room.players.some(p => p && p.horde)) {
+    const cfg = HORDE[room.mode];
+    for (const nm of cfg.names) {
+      room.players.push({
+        ws: null, bot: true, horde: true, difficulty: 'medium', name: nm,
+        token: makeToken(), connected: true, dropTimer: null, skin: 'jungle',
+      });
+    }
+    room.vsBot = true;
+  }
   const n = room.players.length;
   room.seed = (Math.floor(Math.random() * 1e9)) >>> 0;
   // Biome roulette — every match a different battlefield flavour.
@@ -365,12 +449,23 @@ function startGame(room) {
   room.crates = []; room.crateSeq = 1;
   room.shield = new Array(n).fill(0);
   room.turnCount = 0; room.bossShots = 0;
+  room.nanoBots = new Array(n).fill(0);
+  clearInterval(room.nanoTimer); room.nanoTimer = null;
+  room.stat = { dealt: new Array(n).fill(0), received: new Array(n).fill(0) };
   const bSeat = bossSeatOf(room);
   if (bSeat >= 0) {                       // the mecha is a bigger, tougher target
     room.tanks[bSeat].scale = BOSS_SCALE;
     room.hp[bSeat] = BOSS_HP;
     room.hpMax[bSeat] = BOSS_HP;
   }
+  if (isHordeMode(room.mode)) {
+    const cfg = HORDE[room.mode];
+    room.horde = { theme: room.mode, kind: cfg.kind, kills: 0, target: cfg.target, wave: 1 };
+    for (const i of hordeSeats(room)) {
+      const hp = cfg.baseHp + cfg.waveHp;
+      room.hp[i] = hp; room.hpMax[i] = hp;
+    }
+  } else room.horde = null;
   room.ammo = Array.from({ length: n }, () => startingAmmo());
   // Everyone starts turned toward the middle of the map. (n=2 -> [1, -1], as before.)
   room.facing = room.tanks.map((_, i) => (i < n / 2 ? 1 : -1));
@@ -385,6 +480,7 @@ function startGame(room) {
 function beginTurn(room) {
   room.fuel = MOVE_BUDGET;
   room.turnCount = (room.turnCount || 0) + 1;
+  hordeRespawn(room);
   maybeDropCrate(room);
   broadcast(room, { type: 'turn', turn: room.turn, fuel: room.fuel, alive: aliveFlags(room) });
   scheduleBot(room);
@@ -405,7 +501,7 @@ function maybeDropCrate(room) {
   if (room.crates.length >= 2) return;
   for (let tries = 0; tries < 14; tries++) {
     const x = Math.round(1800 + Math.random() * (WORLD_W - 3600));
-    const clearTanks = room.tanks.every((t, i) => t.alive === false || Math.abs(t.x - x) > 900);
+    const clearTanks = room.tanks.every((t, i) => t.alive === false || Math.abs(t.x - x) > 2000);
     const clearCrates = room.crates.every(c => Math.abs(c.x - x) > 800);
     if (!clearTanks || !clearCrates) continue;
     const kind = CRATE_KINDS[Math.floor(Math.random() * CRATE_KINDS.length)];
@@ -416,34 +512,56 @@ function maybeDropCrate(room) {
   }
 }
 
+// Award a crate's contents to a seat, however it was opened (driven over, or
+// SHOT open — a blast near a crate cracks it and the SHOOTER collects).
+function applyCrate(room, seat, c, how) {
+  let detail = '';
+  if (c.kind === 'railgun') {
+    room.ammo[seat].railgun = (room.ammo[seat].railgun || 0) + 1;
+    detail = 'RAILGUN ×1';
+  } else if (c.kind === 'ammo') {
+    const wid = CRATE_AMMO_POOL[Math.floor(Math.random() * CRATE_AMMO_POOL.length)];
+    room.ammo[seat][wid] = (room.ammo[seat][wid] || 0) + 1;
+    detail = `+1 ${(WEAPON_BY_ID[wid] || {}).name || wid}`;
+  } else if (c.kind === 'shield') {
+    room.shield[seat] = 1;
+    detail = 'SHIELD UP';
+  } else {          // repair
+    const cap = (room.hpMax && room.hpMax[seat]) || MAX_HP;
+    room.hp[seat] = Math.min(cap, Math.round(room.hp[seat] + 35));
+    detail = '+35 Health';
+  }
+  broadcast(room, {
+    type: 'crateTaken', id: c.id, seat, kind: c.kind, detail, how: how || 'drive',
+    hp: room.hp.map(h => Math.max(0, Math.round(h))),
+    shield: room.shield.slice(),
+    ammo: room.ammo[seat], ammoSeat: seat,
+  });
+}
+
 function pickupCrates(room, seat) {
   const tank = room.tanks[seat];
   for (let i = room.crates.length - 1; i >= 0; i--) {
     const c = room.crates[i];
     if (Math.abs(c.x - tank.x) > CRATE_REACH) continue;
     room.crates.splice(i, 1);
-    let detail = '';
-    if (c.kind === 'railgun') {
-      room.ammo[seat].railgun = (room.ammo[seat].railgun || 0) + 1;
-      detail = 'RAILGUN ×1';
-    } else if (c.kind === 'ammo') {
-      const wid = CRATE_AMMO_POOL[Math.floor(Math.random() * CRATE_AMMO_POOL.length)];
-      room.ammo[seat][wid] = (room.ammo[seat][wid] || 0) + 1;
-      detail = `+1 ${(WEAPON_BY_ID[wid] || {}).name || wid}`;
-    } else if (c.kind === 'shield') {
-      room.shield[seat] = 1;
-      detail = 'SHIELD UP';
-    } else {          // repair
-      const cap = (room.hpMax && room.hpMax[seat]) || MAX_HP;
-      room.hp[seat] = Math.min(cap, Math.round(room.hp[seat] + 35));
-      detail = '+35 HP';
+    applyCrate(room, seat, c, 'drive');
+  }
+}
+
+// Blasts crack crates open for the SHOOTER; crates also re-settle onto whatever
+// is left of the ground after the terrain has been reshaped.
+function cratesAfterShot(room, seat, result) {
+  const dets = (result.projectiles || []).map(p => p.det).filter(Boolean);
+  for (let i = room.crates.length - 1; i >= 0; i--) {
+    const c = room.crates[i];
+    const hit = dets.some(d => Math.abs(d.x - c.x) <= Math.max(260, (d.r || 0) * 0.9) && Math.abs(d.y - c.y) < 2600);
+    if (hit) {
+      room.crates.splice(i, 1);
+      applyCrate(room, seat, c, 'shot');
+      continue;
     }
-    broadcast(room, {
-      type: 'crateTaken', id: c.id, seat, kind: c.kind, detail,
-      hp: room.hp.map(h => Math.max(0, Math.round(h))),
-      shield: room.shield.slice(),
-      ammo: room.ammo[seat], ammoSeat: seat,
-    });
+    c.y = Math.round(surfaceAt(room.terrain, c.x) * 10) / 10;   // fall with the ground
   }
 }
 
@@ -455,7 +573,38 @@ function scheduleBot(room) {
   if (!room.vsBot || room.state !== 'playing' || !cur || !cur.bot) return;
   if (!room.players.some(p => p && !p.bot && p.connected)) return;   // nobody watching
   clearTimeout(room.botTimer);
-  room.botTimer = setTimeout(() => botFire(room), 850 + Math.random() * 750);
+  room.botTimer = setTimeout(() => botAct(room), 850 + Math.random() * 750);
+}
+
+// Bots want the supply drops too. If a crate is inside this turn's fuel budget,
+// the bot spends its move driving for it (picking it up on arrival via the same
+// pickupCrates path a human uses), THEN takes its shot. Humans see the drive as
+// ordinary move broadcasts, so it reads as intent, not teleporting.
+function botAct(room) {
+  if (room.state !== 'playing') return;
+  const seat = room.turn;
+  const bot = room.players[seat];
+  if (!bot || !bot.bot) return;
+  const me = room.tanks[seat];
+  let target = null, best = Infinity;
+  for (const c of room.crates) {
+    const d = Math.abs(c.x - me.x);
+    if (d < best && d <= MOVE_BUDGET - 200) { best = d; target = c; }
+  }
+  if (!target || best <= CRATE_REACH - 40) return botFire(room);
+  const dir = target.x > me.x ? 1 : -1;
+  const id = target.id;
+  room.botTimer = setInterval(() => {
+    if (room.state !== 'playing' || room.turn !== seat) { clearInterval(room.botTimer); return; }
+    const stillThere = room.crates.some(c => c.id === id);
+    const arrived = Math.abs(target.x - room.tanks[seat].x) <= CRATE_REACH - 40;
+    if (!stillThere || arrived || room.fuel < MOVE_STEP) {
+      clearInterval(room.botTimer);
+      room.botTimer = setTimeout(() => botFire(room), 500);
+      return;
+    }
+    handleMove(room, seat, dir);
+  }, 45);
 }
 
 function botFire(room) {
@@ -467,6 +616,13 @@ function botFire(room) {
   // kit: rail lance / missile rack at distance, autocannon and flame up close,
   // and every 4th shot a seismic slam whatever the range.
   let wid = 'cannon';
+  if (bot.horde && room.horde) {
+    const cfg = HORDE[room.horde.theme];
+    const idx = hordeSeats(room).indexOf(seat);
+    // Each enemy has a signature weapon, with a change-up every third shot.
+    wid = cfg.kit[(idx + (room.turnCount % 3 === 0 ? 1 : 0)) % cfg.kit.length];
+    bot.difficulty = room.horde.wave >= 3 ? 'hard' : 'medium';
+  }
   if (bot.boss) {
     room.bossShots = (room.bossShots || 0) + 1;
     const me = room.tanks[seat];
@@ -480,7 +636,12 @@ function botFire(room) {
     else if (d > 4500) wid = ['b_twin', 'b_barrage', 'b_flame'][room.bossShots % 3];
     else wid = room.bossShots % 2 ? 'b_flame' : 'b_twin';
   }
-  const shot = aiShot(room.terrain, room.tanks, seat, bot.difficulty, room.facing[seat], wid);
+  // Horde enemies hunt HUMANS. Hand the gunnery brain a view of the field with
+  // fellow horde seats marked dead so it never opens fire on its own pack.
+  const field = bot.horde
+    ? room.tanks.map((t, j) => (j !== seat && room.players[j] && room.players[j].horde ? { ...t, alive: false } : t))
+    : room.tanks;
+  const shot = aiShot(room.terrain, field, seat, bot.difficulty, room.facing[seat], wid);
   // Turn the turret toward its target, then show the barrel swing, then fire.
   if (shot.dir && shot.dir !== room.facing[seat]) {
     room.facing[seat] = shot.dir;
@@ -509,10 +670,16 @@ function endGame(room) {
   clearTimeout(room.botTimer);
   clearInterval(room.dotTimer); room.dotTimer = null;
   clearInterval(room.fireTimer); room.fireTimer = null;
+  clearInterval(room.nanoTimer); room.nanoTimer = null;
   killDead(room);
   const live = aliveSeats(room);
   let winner = live.length === 1 ? live[0] : -1;   // 0 left = mutual destruction
   let team = null;
+  if (room.horde) {
+    const humanAlive = room.players.some((p, i) => p && !p.bot && room.tanks[i].alive !== false);
+    team = room.horde.kills >= room.horde.target && humanAlive ? 'players' : 'horde';
+    winner = -1;
+  }
   if (room.mode === 'boss') {
     const b = bossSeatOf(room);
     const bossDead = b >= 0 && room.tanks[b].alive === false;
@@ -526,6 +693,8 @@ function endGame(room) {
     hp: room.hp.map(h => Math.max(0, Math.round(h))),
     alive: aliveFlags(room),
     winner, team,
+    stats: room.stat ? { dealt: room.stat.dealt.map(Math.round), received: room.stat.received.map(Math.round) } : undefined,
+    loot: team === 'players',        // slaying the WARLORD pays out
   });
 }
 
@@ -535,7 +704,7 @@ function handleFire(room, seat, msg) {
   const w = WEAPON_BY_ID[msg.weapon];
   if (!w) return;
   const pl = room.players[seat];
-  if (w.bossOnly && !(pl && pl.boss)) return;   // the WARLORD's kit is its own
+  if ((w.bossOnly || w.aiOnly) && !(pl && pl.bot)) return;   // AI kits are theirs alone
   if (w.golfOnly && room.mode !== 'golf') return;
   if (!w.bossOnly && (room.ammo[seat][w.id] || 0) <= 0) return;
   resolveFire(room, seat, w.id, msg.angle, msg.power);
@@ -574,7 +743,8 @@ function resolveFire(room, seat, weaponId, angle, power) {
   const aliveBefore = aliveFlags(room);   // snapshot for the killcam (who this shot kills)
   const result = simulateShot(
     { terrain: room.terrain, tanks: room.tanks,
-      lavaY: room.lavaY, biome: room.biome, guard: room.guard, props: room.props },
+      lavaY: room.lavaY, biome: room.biome, guard: room.guard, props: room.props,
+      ruins: room.ruins ? room.ruins.ranges : undefined },
     { by: seat, weapon: w.id, angle, power, dir: room.facing[seat] }
   );
 
@@ -592,6 +762,12 @@ function resolveFire(room, seat, weaponId, angle, power) {
   }
   // Blast damage hits health directly (self-damage counts too).
   for (let i = 0; i < room.hp.length; i++) room.hp[i] -= (result.damage[i] || 0);
+  if (room.stat) for (let i = 0; i < room.hp.length; i++) {
+    const d = result.damage[i] || 0;
+    if (d <= 0) continue;
+    room.stat.received[i] += d;
+    if (i !== seat) room.stat.dealt[seat] += d;
+  }
   const diff = terrainDiff(before, room.terrain);
 
   // Age out expired hazard areas, then add the ones this shot just created.
@@ -614,6 +790,7 @@ function resolveFire(room, seat, weaponId, angle, power) {
   }
   for (let i = 0; i < room.hp.length; i++) room.hp[i] = Math.max(0, Math.round(room.hp[i] * 10) / 10);
   killDead(room);   // mark wrecks BEFORE the payload goes out, so `alive` below is current
+  hordeAccounting(room, aliveBefore);
 
   broadcast(room, {
     type: 'shot',
@@ -628,12 +805,16 @@ function resolveFire(room, seat, weaponId, angle, power) {
     scorch: room.scorch || [],
     hazardDamage: new Array(room.hp.length).fill(0),
     alive: aliveFlags(room),
-    props: result.props, propEvents: result.propEvents,
+    props: result.props, propEvents: result.propEvents, ruins: result.ruins,
     shield: room.shield.slice(), shieldPop,
     ammo: room.ammo[seat],
     ammoSeat: seat,
     killcam: buildKillcam(room, result, aliveBefore),   // null on every normal shot
   });
+  // Crates: a blast can crack one open for the shooter, and survivors re-settle
+  // onto whatever the shot left of the ground beneath them.
+  cratesAfterShot(room, seat, result);
+  if (result.nano) startNano(room, result.nano);
   // Give the shot animation a beat, then play out any fire/toxic burn before the
   // next turn (real-time damage-over-time; the turn holds until it finishes).
   clearTimeout(room.clock);
@@ -689,6 +870,7 @@ function startFire(room) {
 
 function fireBite(room) {
   if (room.state !== 'playing') return stopFire(room);
+  const aliveBefore = aliveFlags(room);
   const now = Date.now();
   const dmg = fireDamage(room.hazards, room.tanks);      // spends one bite per blaze
   const before = room.hazards.length;
@@ -698,8 +880,10 @@ function fireBite(room) {
     if (dmg[ti] <= 0) continue;
     hurt = true;
     room.hp[ti] = Math.max(0, Math.round((room.hp[ti] - dmg[ti]) * 10) / 10);
+    if (room.stat) room.stat.received[ti] += dmg[ti];
   }
   killDead(room);
+  hordeAccounting(room, aliveBefore);
   // Always ship `hazards` so a burnt-out blaze disappears on the clients even
   // when nobody was standing in it (the client only renders what we send).
   if (hurt || room.hazards.length !== before) {
@@ -716,6 +900,47 @@ function fireBite(room) {
   // Burned to death on their own turn: nothing else will move the game on, so do
   // it here — but only if no handover is already in flight (post-shot beat or the
   // gas/lava burn hold), or the turn would advance twice.
+  const cur = room.tanks[room.turn];
+  if (cur && cur.alive === false && !room.clock && !room.dotTimer) advance(room, room.turn);
+}
+
+// ---- Nano Swarm: bots gnaw on their host once a second -------------------------
+// 10 bots, 3 health each. Runs on its own clock like fire; a re-infection tops
+// the count back up to 10 rather than stacking.
+function startNano(room, hit) {
+  room.nanoBots[hit.seat] = Math.max(room.nanoBots[hit.seat] || 0, hit.bots);
+  room.nanoDmg = hit.dmg || 3;
+  if (room.nanoTimer) return;
+  room.nanoTimer = setInterval(() => nanoTick(room), 1000);
+}
+
+function nanoTick(room) {
+  if (room.state !== 'playing') { clearInterval(room.nanoTimer); room.nanoTimer = null; return; }
+  const aliveBefore = aliveFlags(room);
+  const dmg = new Array(room.hp.length).fill(0);
+  let any = false;
+  for (let i = 0; i < room.hp.length; i++) {
+    if ((room.nanoBots[i] || 0) <= 0) continue;
+    if (room.tanks[i].alive === false) { room.nanoBots[i] = 0; continue; }
+    room.nanoBots[i]--;
+    dmg[i] = room.nanoDmg || 3;
+    room.hp[i] = Math.max(0, Math.round((room.hp[i] - dmg[i]) * 10) / 10);
+    if (room.stat) room.stat.received[i] += dmg[i];
+    any = true;
+  }
+  killDead(room);
+  hordeAccounting(room, aliveBefore);
+  if (any) {
+    broadcast(room, {
+      type: 'dot', tick: 0, src: 'nano',
+      hp: room.hp.map(h => Math.max(0, Math.round(h))),
+      alive: aliveFlags(room),
+      damage: dmg.map(d => Math.round(d)),
+      nano: room.nanoBots.slice(),
+    });
+  }
+  if (!room.nanoBots.some(b => b > 0)) { clearInterval(room.nanoTimer); room.nanoTimer = null; }
+  if (matchOver(room)) { clearInterval(room.nanoTimer); room.nanoTimer = null; return endGame(room); }
   const cur = room.tanks[room.turn];
   if (cur && cur.alive === false && !room.clock && !room.dotTimer) advance(room, room.turn);
 }
@@ -750,6 +975,7 @@ function teardown(room, notify) {
   clearTimeout(room.botTimer);
   clearInterval(room.dotTimer);
   clearInterval(room.fireTimer);
+  clearInterval(room.nanoTimer);
   for (const p of room.players) if (p) clearTimeout(p.dropTimer);
   if (notify) broadcast(room, { type: 'opponentLeft' });
   rooms.delete(room.code);
@@ -898,7 +1124,7 @@ wss.on('connection', (ws) => {
         const r = rooms.get(ws.roomCode);
         if (!r || r.state !== 'waiting') break;
         if (ws.seat !== r.hostSeat) break;                  // only the host starts early
-        const minSeats = (r.mode === 'boss' || r.mode === 'golf') ? 1 : 2;
+        const minSeats = (r.mode === 'boss' || r.mode === 'golf' || r.mode === 'aliens' || r.mode === 'zombies') ? 1 : 2;
         if (seatCount(r) < minSeats) { send(ws, { type: 'joinError', reason: 'Need at least 2 commanders.' }); break; }
         compactRoster(r);
         startGame(r);

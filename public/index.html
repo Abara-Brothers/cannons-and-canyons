@@ -81,6 +81,7 @@
         <div class="title-rule" aria-hidden="true"></div>
         <p class="byline">made by <b>Abara Brothers</b></p>
         <p class="tagline">Cross-canyon artillery duel. Arc your shells over the peaks — live.</p>
+        <button id="helpHomeBtn" type="button" class="howto">❓ How to play &amp; weapon guide</button>
 
         <div class="callsign">
           <span class="cs-label">Callsign</span>
@@ -120,6 +121,8 @@
                 <button type="button" class="mode" data-mode="ffa">💥 Free-for-all</button>
                 <button type="button" class="mode" data-mode="boss">🤖 Boss Raid</button>
                 <button type="button" class="mode" data-mode="golf">⛳ Golf</button>
+                <button type="button" class="mode" data-mode="aliens">👽 Alien Invasion</button>
+                <button type="button" class="mode" data-mode="zombies">🧟 Zombie Uprising</button>
               </div>
               <div class="countrow hidden" id="countRow" role="group" aria-label="Players">
                 <button type="button" class="cnt" data-max="3">3 players</button>
@@ -219,6 +222,9 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 10l6 6 6-6"/></svg>
         </button>
       </div>
+      <button id="helpBtn" class="leave" title="How to play" aria-label="How to play">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M8.6 9a3.4 3.4 0 1 1 4.6 3.2c-1 .4-1.2 1-1.2 2.1"/><path d="M12 17.6v.2"/></svg>
+      </button>
       <button id="leaveBtn" class="leave" title="Leave game" aria-label="Leave game">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M14 21H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8"/><path d="M17 16l4-4-4-4M21 12H9"/></svg>
       </button>
@@ -258,6 +264,45 @@
          stage buttons. -->
     <div id="weaponPop" class="wpop" aria-hidden="true"></div>
   </section>
+
+  <!-- ============ HELP ============ -->
+  <div id="helpModal" class="overlay hidden">
+    <div class="overlay-card help-card">
+      <div class="result">How to play</div>
+      <div class="help-scroll">
+        <section class="help-sec">
+          <h3>Controls</h3>
+          <ul>
+            <li><b>Aim</b> — drag anywhere on the battlefield to set your angle and power at once, or nudge them precisely with the <b>ANGLE</b> and <b>POWER</b> steppers.</li>
+            <li><b>Drive</b> — the ◀ ▶ buttons move your tank along the ground. Driving burns <b>FUEL</b>, which refills at the start of every turn.</li>
+            <li><b>Fire</b> — one shot per turn. Pick a weapon from the strip first; the number on each card is its remaining ammo.</li>
+            <li><b>Camera</b> — pinch or use the ＋/− buttons to zoom, and the ▲/▼ buttons to look up or down. The view follows the shell automatically.</li>
+            <li><b>Supply drops</b> — crates parachute in mid-match. Drive into one to claim it, or shoot it open and take the contents from range. Crates carry repairs, shields, ammo — and the Railgun, which you can't get any other way.</li>
+          </ul>
+        </section>
+        <section class="help-sec">
+          <h3>Reading the trajectory</h3>
+          <p>Every weapon card shows a small <b>flight badge</b> next to its icon — that's the shape of its shot. A low flat line flies straight and fast, a tall arc lobs high over cover, a fan means several shells at once, and a shape at the end of the line is the payload it leaves behind (fire, gas, a dirt wall…). While you aim, the ghost arc from your barrel shows the first stretch of the real flight path.</p>
+        </section>
+        <section class="help-sec">
+          <h3>The arsenal</h3>
+          <div id="helpWeapons"></div>
+        </section>
+        <section class="help-sec">
+          <h3>Game modes</h3>
+          <ul>
+            <li><b>⚔️ Duel</b> — one on one, last tank standing.</li>
+            <li><b>💥 Free-for-all</b> — up to four commanders, no teams.</li>
+            <li><b>🤖 Boss Raid</b> — team up against WARLORD-7, a mecha with its own arsenal. Bring friends.</li>
+            <li><b>⛳ Golf</b> — nine holes of artillery golf. Fewest shots into the cup wins; longer holes carry a bigger par.</li>
+            <li><b>👽 Alien Invasion</b> — survive the saucers and destroy 8 of them. They come back stronger each wave.</li>
+            <li><b>🧟 Zombie Uprising</b> — same fight, uglier enemy. Put down 8 rotting hulks before they put you down.</li>
+          </ul>
+        </section>
+      </div>
+      <button id="helpCloseBtn" class="btn big primary">Got it</button>
+    </div>
+  </div>
 
   <!-- ============ GAME OVER ============ -->
   <div id="overlay" class="overlay hidden">

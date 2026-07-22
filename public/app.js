@@ -25,6 +25,8 @@ const S = {
   scorch: [],                          // permanent burn scars from fire: [{a,b}] world-x ranges
   biome: 'alpine', ruins: [],          // battlefield flavour (server-picked)
   boss: -1, scales: [],                // boss seat + per-tank scale (mech is 1.8x)
+  nanoBots: [],                        // Nano Swarm infestation per seat
+  kinds: [], horde: null,              // per-seat renderer + wave progress
   golf: null,                          // Artillery Golf scorecard state
   props: [], crates: [], shield: [],   // barrels/bunkers, supply drops, crate shields
   chainQueue: [],                      // staggered prop chain explosions
@@ -70,9 +72,17 @@ const SKINS = {
   arctic:   { name: 'Arctic',   lite: '#dfe8ee', mid: '#a9bcc9', dark: '#7c93a3', locked: true },
   gold:     { name: 'Gold',     lite: '#e8cf7a', mid: '#c0a23f', dark: '#8a7020', locked: true },
 };
+// Locked paints can be EARNED: Midnight drops from the WARLORD.
+function skinUnlocked(id) {
+  const sk = SKINS[id];
+  if (!sk) return false;
+  if (!sk.locked) return true;
+  try { if (id === 'midnight' && localStorage.getItem('cc_loot_midnight') === '1') return true; } catch {}
+  return false;
+}
 function mySkin() {
   const s = localStorage.getItem('cc_skin');
-  return SKINS[s] && !SKINS[s].locked ? s : 'olive';
+  return skinUnlocked(s) ? s : 'olive';
 }
 function buildSkinRow() {
   const row = $('skinRow'); if (!row) return;
@@ -81,10 +91,11 @@ function buildSkinRow() {
     const b = document.createElement('button');
     b.className = 'swatch' + (mySkin() === id ? ' sel' : '');
     b.style.background = `linear-gradient(180deg, ${sk.lite}, ${sk.dark})`;
-    b.title = sk.name + (sk.locked ? ' — Supporter Pack' : '');
-    if (sk.locked) b.innerHTML = '<span class="lock">🔒</span>';
+    const open = skinUnlocked(id);
+    b.title = sk.name + (open ? '' : (id === 'midnight' ? ' — defeat the WARLORD to unlock' : ' — Supporter Pack'));
+    if (!open) b.innerHTML = '<span class="lock">🔒</span>';
     b.onclick = () => {
-      if (sk.locked) { showToast('Supporter Pack paint — see the shop soon!'); return; }
+      if (!open) { showToast(id === 'midnight' ? 'Defeat the WARLORD in a Boss Raid to unlock this.' : 'Supporter Pack paint — see the shop soon!'); return; }
       localStorage.setItem('cc_skin', id);
       buildSkinRow();
     };
@@ -106,6 +117,8 @@ const ICONS = {
   airstrike: `<svg viewBox="0 0 24 24"><path d="M1.4 6.9l7.6 1.2 3.1-3.4 1.9.5-1.2 3.4 6.4 1-.4-2.1 1.7.3.9 3.2-19.2 1.1z" fill="#54c8ff"/><g fill="#9fdcff"><path d="M6.6 14.2l-1.2 3.9-1.2-3.9z"/><path d="M12 15.6l-1.3 4.3-1.3-4.3z"/><path d="M17.4 14.2l-1.2 3.9-1.2-3.9z"/></g><path d="M2.6 21.8h18.8" stroke="#54c8ff" stroke-width="1.4" stroke-linecap="round" opacity=".55" fill="none"/></svg>`,
   buster: `<svg viewBox="0 0 24 24"><path d="M10.4 1.6h3.2v3.2h-3.2z" fill="#c98a4b"/><path d="M8.9 1.6h1.5v3.6L8 6.6zM15.1 1.6h-1.5v3.6L16 6.6z" fill="#7a5a30"/><rect x="10.2" y="4.6" width="3.6" height="6.2" fill="#c98a4b"/><rect x="10.2" y="4.6" width="1.3" height="6.2" fill="#e0a668"/><path d="M10.2 10.6h3.6L12 15.4z" fill="#8e969f"/><path d="M2.6 12.4h6.5l2.4 4.6-1.6 4.9H2.6z" fill="#6b5a34"/><path d="M21.4 12.4h-6.5l-2.4 4.6 1.6 4.9h7.3z" fill="#6b5a34"/><path d="M2.6 12.4h6.5l1 1.9H2.6zM21.4 12.4h-6.5l-1 1.9h7.5z" fill="#a6d878"/></svg>`,
   wall: `<svg viewBox="0 0 24 24"><path d="M1.4 20.4c1.9 0 3.1-2.6 4.6-5.6C7.9 10.9 9.6 6.6 12 6.6s4.1 4.3 6 8.2c1.5 3 2.7 5.6 4.6 5.6z" fill="#8a5a2b"/><path d="M1.4 20.4c1.9 0 3.1-2.6 4.6-5.6C7.9 10.9 9.6 6.6 12 6.6v13.8z" fill="#a06b35"/><path d="M12 6.6c-1.2 0-2.2 1.1-3.1 2.6h6.2C14.2 7.7 13.2 6.6 12 6.6z" fill="#6fb04a"/><g stroke="#6b451f" stroke-width=".9" stroke-linecap="round" fill="none" opacity=".65"><path d="M6.9 16.4h3.4"/><path d="M13.7 16.4h3.4"/><path d="M9.6 12.6h4.8"/></g><path d="M1.4 20.4h21.2v1.9H1.4z" fill="#5d3c1c"/></svg>`,
+  nano: `<svg viewBox="0 0 24 24"><path d="M3 12l6-3.4v6.8z" fill="#39424e"/><rect x="8" y="10.6" width="10.4" height="2.8" rx="1.2" fill="#5b6572"/><rect x="8.6" y="11.4" width="9.2" height="1.2" fill="#6be7ff"/><path d="M18.4 9.2l3 2.8-3 2.8" fill="none" stroke="#6be7ff" stroke-width="1.4" stroke-linejoin="round"/><g fill="#6be7ff"><rect x="4.6" y="4.4" width="2" height="2" rx=".4"/><rect x="9.2" y="3.2" width="2" height="2" rx=".4"/><rect x="6.8" y="6.9" width="1.6" height="1.6" rx=".4"/><rect x="13.4" y="4.6" width="1.6" height="1.6" rx=".4"/></g></svg>`,
+  minigun: `<svg viewBox="0 0 24 24"><g fill="#aeb9c9"><rect x="6" y="8.2" width="13" height="1.9" rx=".9"/><rect x="6" y="11" width="15" height="1.9" rx=".9"/><rect x="6" y="13.8" width="13" height="1.9" rx=".9"/></g><rect x="3.4" y="7.4" width="4.4" height="9.2" rx="1.6" fill="#5b6572"/><rect x="1.6" y="10.4" width="2.4" height="3.2" rx=".8" fill="#39424e"/><g fill="#ffd9a0"><rect x="20" y="8.4" width="2.4" height="1.4" rx=".7"/><rect x="21.4" y="11.2" width="2.4" height="1.4" rx=".7"/><rect x="20" y="14" width="2.4" height="1.4" rx=".7"/></g></svg>`,
   golfball: `<svg viewBox="0 0 24 24"><circle cx="11" cy="10" r="6.2" fill="#f4f6f2"/><circle cx="11" cy="10" r="6.2" fill="none" stroke="#c9cfd8" stroke-width=".8"/><g fill="#c9cfd8"><circle cx="9" cy="8" r=".7"/><circle cx="12.4" cy="7.4" r=".7"/><circle cx="10.6" cy="11" r=".7"/><circle cx="13.6" cy="10.4" r=".7"/><circle cx="8.4" cy="10.8" r=".7"/></g><path d="M5 21h11" stroke="#3a7d2f" stroke-width="2.4" stroke-linecap="round"/><path d="M17.6 20.9V9.4l3.6 1.5-3.6 1.6" fill="#ff3b30" stroke="#e8ecf2" stroke-width=".9"/></svg>`,
   teleport: `<svg viewBox="0 0 24 24"><path d="M2.6 12l3.3-5.4L9.2 12l-3.3 5.4z" fill="none" stroke="#c86bff" stroke-width="1.7" stroke-linejoin="round" opacity=".8"/><path d="M14.8 12l3.3-5.4L21.4 12l-3.3 5.4z" fill="#c86bff"/><path d="M10.6 8.7L13.9 12l-3.3 3.3" fill="none" stroke="#6be7ff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 20.6h16" stroke="#8a93a8" stroke-width="1.5" stroke-linecap="round"/></svg>`,
   nuke: `<svg viewBox="0 0 24 24"><path d="M8.4 18.1L5.2 22.5h3.2zM15.6 18.1l3.2 4.4h-3.2z" fill="#2b323c"/><path d="M8.7 17.4h6.6l1.6 5.1H7.1z" fill="#3d4652"/><path d="M12 1.5c3.4 3.4 5.3 7.1 5.3 10.4 0 2.4-.8 4.4-1.9 5.9H8.6c-1.1-1.5-1.9-3.5-1.9-5.9C6.7 8.6 8.6 4.9 12 1.5z" fill="#aeb9c9"/><path d="M12 1.5C8.6 4.9 6.7 8.6 6.7 11.9c0 1.6.4 3.1 1 4.3V5.4z" fill="#d7e0ec"/><path d="M6.9 8.5h10.2v6.6H6.9z" fill="#26350f"/><g fill="#b6ff5a"><path d="M12 11.8l-1.6-3.1a3.6 3.6 0 013.2 0z"/><path d="M12 11.8l-1.6-3.1a3.6 3.6 0 013.2 0z" transform="rotate(120 12 11.8)"/><path d="M12 11.8l-1.6-3.1a3.6 3.6 0 013.2 0z" transform="rotate(240 12 11.8)"/><circle cx="12" cy="11.8" r=".9"/></g></svg>`,
@@ -121,6 +134,8 @@ const TRAJ = {
   airstrike: `<svg viewBox="0 0 24 14"><path d="M2 11 Q6 3 10 5" stroke="#aeb9d6" stroke-width="1.3" fill="none"/><g stroke="#54c8ff" stroke-width="1.3" fill="none"><path d="M14 1v6"/><path d="M18 0v6"/><path d="M22 1v6"/></g><g fill="#54c8ff"><path d="M14 11l-2-3.4h4z"/><path d="M18 10l-2-3.4h4z"/><path d="M22 11l-2-3.4h4z"/></g></svg>`,
   buster: `<svg viewBox="0 0 24 14"><path d="M2 9 Q9 0 16 6" stroke="#aeb9d6" stroke-width="1.6" fill="none"/><path d="M14 9h8" stroke="#7a5a30" stroke-width="1.3"/><path d="M18 6v4" stroke="#c98a4b" stroke-width="1.8"/><path d="M18 14l-2.4-3.4h4.8z" fill="#c98a4b"/></svg>`,
   wall: `<svg viewBox="0 0 24 14"><path d="M2 12 Q9 2 15 8" stroke="#aeb9d6" stroke-width="1.6" fill="none"/><rect x="16.5" y="3.5" width="5" height="9.5" rx="1" fill="#8a5a2b"/></svg>`,
+  nano: `<svg viewBox="0 0 24 14"><path d="M2 12 Q10 2 19 9" stroke="#aeb9d6" stroke-width="1.5" fill="none"/><g fill="#6be7ff"><rect x="17.5" y="7" width="1.7" height="1.7" rx=".3"/><rect x="20" y="8.4" width="1.7" height="1.7" rx=".3"/><rect x="18.6" y="10.4" width="1.7" height="1.7" rx=".3"/></g></svg>`,
+  minigun: `<svg viewBox="0 0 24 14"><g stroke="#ffd9a0" stroke-width="1.3" fill="none"><path d="M2 11 Q9 4 16 7.5"/><path d="M2 12.5 Q10 6.5 17.5 9.5"/><path d="M3 13.5 Q11 9 19 11.5"/></g></svg>`,
   golfball: `<svg viewBox="0 0 24 14"><path d="M2 12 Q7 3 11 8 Q13 10.5 15 9.5 Q18 8 21 11.5" stroke="#aeb9d6" stroke-width="1.5" fill="none"/><circle cx="21.2" cy="11.6" r="1.6" fill="#f4f6f2"/></svg>`,
   teleport: `<svg viewBox="0 0 24 14"><path d="M3 12 Q11 0 18 9.5" stroke="#aeb9d6" stroke-width="1.6" fill="none"/><path d="M3 12l2.1-3 2.1 3-2.1 3z" fill="none" stroke="#c86bff" stroke-width="1.2" stroke-linejoin="round"/><path d="M18 9.5l2.1-3 2.1 3-2.1 3z" fill="#c86bff"/><path d="M9.4 3.4l2.2 2.2-2.2 2.2" fill="none" stroke="#6be7ff" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   nuke: `<svg viewBox="0 0 24 14"><path d="M2 12 Q10 0 17 8" stroke="#aeb9d6" stroke-width="1.6" fill="none"/><circle cx="18" cy="9" r="4" fill="#b6ff5a" opacity=".4"/><circle cx="18" cy="9" r="1.8" fill="#b6ff5a"/></svg>`,
@@ -134,7 +149,10 @@ const Audio = {
   ensure() {
     if (this.muted) return null;
     if (!this.ctx) { try { this.ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch { return null; } }
-    if (this.ctx.state === 'suspended') this.ctx.resume();
+    // 'suspended' (Chrome autoplay policy) and 'interrupted' (iOS call /
+    // backgrounding) both need a resume; it only sticks when this runs inside
+    // a user gesture — the global pointerdown unlock guarantees one.
+    if (this.ctx.state !== 'running') { const p = this.ctx.resume(); if (p && p.catch) p.catch(() => {}); }
     return this.ctx;
   },
   fire() {
@@ -252,6 +270,13 @@ const Audio = {
     });
   },
 };
+// Autoplay unlock: EVERY pointer/key gesture (re)arms the context. This covers
+// entry paths that never click a home button — deep-link ?room= auto-join and
+// resume-on-reload — and re-resumes after iOS 'interrupted'. Kept attached for
+// life: once running, ensure() is two cheap property checks per tap.
+window.addEventListener('pointerdown', () => { Audio.ensure(); }, { capture: true, passive: true });
+window.addEventListener('keydown', () => { Audio.ensure(); }, { capture: true });
+
 $('muteBtn').onclick = () => {
   Audio.muted = !Audio.muted; localStorage.setItem('pt_mute', Audio.muted ? '1' : '0');
   $('muteBtn').textContent = Audio.muted ? '🔇' : '🔊';
@@ -474,16 +499,25 @@ function handle(m) {
       S.crates.push({ ...m.crate, dropT: 0 });   // parachute in from the sky
       showToast('📦 Supply drop incoming!');
       break;
-    case 'crateTaken': {
-      S.crates = S.crates.filter(c => c.id !== m.id);
-      if (m.hp) S.hp = m.hp.slice();             // pickups can RAISE hp (repair) — trust the server here
-      if (m.shield) S.shield = m.shield.slice();
-      if (m.ammoSeat === S.you && m.ammo) { S.ammo = m.ammo; buildWeaponStrip(); }
-      const t = S.tanks[m.seat];
-      if (t) S.floaters.push({ x: t.x, y: t.y - 380, text: m.detail || m.kind.toUpperCase(), age: 0, life: 1.6, color: '#ffd23f' });
-      updateHud();
+    case 'crateTaken': deferHp(() => applyCrateTaken(m)); break;
+    case 'respawn':
+      deferHp(() => {
+        if (S.tanks[m.seat]) { S.tanks[m.seat].x = m.x; S.tanks[m.seat].y = m.y; }
+        if (m.hp) S.hp = m.hp.slice();
+        if (m.hpMax) S.hpMax = m.hpMax.slice();
+        if (m.alive) S.alive = m.alive.slice();
+        S.horde = { kills: m.kills, target: m.target, wave: m.wave };
+        S.floaters.push({ x: m.x, y: m.y - 500, text: `☠ WAVE ${m.wave} INBOUND`, age: 0, life: 1.9, color: '#b6ff5a' });
+        updateHud();
+      });
       break;
-    }
+    case 'wave':
+      deferHp(() => {
+        S.horde = { kills: m.kills, target: m.target, wave: m.wave };
+        showToast(`☠ ${m.kills}/${m.target} down`);
+        updateDock();
+      });
+      break;
     case 'forfeit':
       deferHp(() => {
         if (m.hp) S.hp = m.hp.map((h, i) => Math.min(S.hp[i] ?? h, h));
@@ -672,6 +706,8 @@ function renderLobby(m) {
     m.mode === 'ffa'  ? `Free-for-all — ${filled}/${m.max} commanders` :
     m.mode === 'boss' ? `Boss Raid — ${filled}/${m.max} vs WARLORD-7` :
     m.mode === 'golf' ? `Artillery Golf — ${filled}/${m.max} on the tee` :
+    m.mode === 'aliens' ? `Alien Invasion — ${filled}/${m.max} defenders` :
+    m.mode === 'zombies' ? `Zombie Uprising — ${filled}/${m.max} survivors` :
     'Waiting for your opponent…';
   $('lobbyHint').textContent = m.mode === 'ffa'
     ? (isHost ? "Send the link. Start whenever you have enough players — you don't have to wait for a full lobby."
@@ -694,8 +730,8 @@ function renderLobby(m) {
     r.appendChild(el);
   }
   const btn = $('startMatchBtn');
-  const hostStarts = m.mode === 'ffa' || m.mode === 'boss' || m.mode === 'golf';
-  const minSeats = (m.mode === 'boss' || m.mode === 'golf') ? 1 : 2;
+  const hostStarts = m.mode !== 'duel';
+  const minSeats = (m.mode === 'ffa') ? 2 : 1;
   btn.classList.toggle('hidden', !(isHost && hostStarts));
   btn.disabled = filled < minSeats;
   btn.textContent = filled < minSeats ? `Start (need ${minSeats})`
@@ -704,7 +740,7 @@ function renderLobby(m) {
     : `Start battle (${filled})`;
   showScreen('lobby');
 }
-$('startMatchBtn').onclick = () => sendMsg({ type: 'startMatch' });
+$('startMatchBtn').onclick = () => { Audio.ensure(); sendMsg({ type: 'startMatch' }); };
 
 // ---------------------------------------------------------------------------
 // Game setup (also used to restore a resumed match)
@@ -728,7 +764,10 @@ function applySnapshot(m) {
   setBiomeTheme(S.biome);
   S.boss = (m.boss != null) ? m.boss : -1;
   S.scales = (m.scales || []).slice();
+  S.kinds = (m.kinds || []).slice();
+  S.horde = m.horde || null;
   S.golf = m.golf || null;
+  S.nanoBots = (m.nano || new Array(S.n).fill(0)).slice();
   document.body.classList.toggle('golf', S.mode === 'golf');
   if (S.mode === 'golf') S.selected = 'golfball';
   S.ruins = m.ruins || [];
@@ -810,7 +849,26 @@ function buildScoreboard() {
   }
 }
 
+// A raid boss deserves a raid-boss bar: full-width, segmented, under the cards.
+function updateBossBar() {
+  let bar = $('bossbar');
+  if (S.boss < 0 || !S.playing && !bar) { if (bar) bar.remove(); return; }
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'bossbar';
+    bar.innerHTML = '<span class="bb-name"></span><div class="bb-track"><i></i></div><span class="bb-num"></span>';
+    $('hud-top').appendChild(bar);
+  }
+  const hp = Math.max(0, Math.round(S.hp[S.boss] ?? 0));
+  const cap = (S.hpMax && S.hpMax[S.boss]) || 400;
+  bar.querySelector('.bb-name').textContent = '👑 ' + (S.names[S.boss] || 'BOSS');
+  bar.querySelector('.bb-num').textContent = `${hp} / ${cap}`;
+  bar.querySelector('.bb-track i').style.width = `${Math.max(0, Math.min(100, (hp / cap) * 100))}%`;
+  bar.classList.toggle('dead', S.alive[S.boss] === false);
+}
+
 function updateHud() {
+  updateBossBar();
   for (let i = 0; i < S.n; i++) {
     const el = $('p' + i); if (!el) continue;
     const hp = Math.max(0, Math.round(S.hp[i] ?? 0));
@@ -828,7 +886,7 @@ function updateHud() {
     }
     el.querySelector('.hpbar').style.display = '';
     el.querySelector('.score').textContent = dead ? '\u2620' : hp;
-    el.querySelector('.shots').textContent = 'HP';
+    el.querySelector('.shots').textContent = 'HEALTH';
     const bar = el.querySelector('.hpbar i');
     const cap = (S.hpMax && S.hpMax[i]) || S.maxHp;
     const pct = Math.max(0, Math.min(1, hp / cap));
@@ -849,6 +907,8 @@ function updateDock() {
   const active = myTurn();
   $('turnLabel').textContent = S.golf
     ? `⛳ Hole ${S.golf.hole}/9 · Par ${S.golf.par}` + (active ? ' — your shot' : (S.playing ? ` — ${S.names[S.turn]}` : ''))
+    : S.horde
+    ? `☠ ${S.horde.kills}/${S.horde.target} down · Wave ${S.horde.wave}` + (active ? ' — YOUR TURN' : (S.playing ? ` — ${S.names[S.turn]}` : ''))
     : active ? 'YOUR TURN' : (S.playing ? `${S.names[S.turn]}'s turn — line up your shot` : '');
   $('fireBtn').disabled = !active;
   $('moveLeft').disabled = !active || S.fuel < MOVE_MIN;
@@ -1031,6 +1091,7 @@ holdMove($('moveRight'), 1);
 // drag past the far side of your tank, or step the ANGLE readout past 90°.
 
 $('fireBtn').onclick = () => {
+  Audio.ensure();
   if (!myTurn()) return;
   const left = S.ammo[S.selected] ?? 99;
   if (left <= 0) { showToast('Out of ammo — pick another weapon'); return; }
@@ -1272,6 +1333,20 @@ function detonate(det) {
   // Teleport: no blast at all — the whole event IS the warp. Handled first so a
   // teleport det never falls into the round-particle burst-puff branch below.
   if (det.tp) { startWarp(det.tp); return; }
+  // Nano dart: a burst of cyan machine-chips instead of fire, and a warning on
+  // the victim. The actual per-second bites arrive as 'dot' src:'nano' ticks.
+  if (det.nano != null) {
+    for (let k = 0; k < 22; k++) {
+      const a = Math.random() * Math.PI * 2, sp = 180 + Math.random() * 480;
+      S.particles.push({ x: det.x, y: det.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 140,
+        life: 0.4 + Math.random() * 0.4, age: 0, r: 1.6 + Math.random() * 1.6, g: 0.3,
+        shape: 'spark', color: k % 3 ? '#6be7ff' : '#ffffff' });
+    }
+    const vt = S.tanks[det.nano];
+    if (vt) S.floaters.push({ x: vt.x, y: vt.y - 430, text: '⚠ NANOBOTS ATTACHED', age: 0, life: 1.7, color: '#6be7ff' });
+    Audio.boom(200);
+    return;
+  }
   if (det.kind === 'none' && det.r < 30 && !det.hz) { // burst puff / beacon flare
     for (let i = 0; i < 10; i++) {
       const ang = Math.random() * Math.PI * 2, sp = 120 + Math.random() * 200;
@@ -1371,6 +1446,7 @@ function applyResolve(m) {
   S.hazards = m.hazards || [];
   if (m.scorch) S.scorch = m.scorch;
   if (m.props) S.props = m.props;
+  if (m.ruins) S.ruins = m.ruins;
   if (m.shield) S.shield = m.shield.slice();
   if (m.shieldPop) for (let i = 0; i < m.shieldPop.length; i++) {
     if (m.shieldPop[i] && S.tanks[i]) S.floaters.push({ x: S.tanks[i].x, y: S.tanks[i].y - 430, text: 'SHIELD DOWN', age: 0, life: 1.4, color: '#54c8ff' });
@@ -1381,7 +1457,8 @@ function applyResolve(m) {
       const ev = m.propEvents[k];
       S.chainQueue.push({
         at: performance.now() + 130 * (k + 1),
-        det: { x: ev.x, y: ev.y - 60, r: ev.kind === 'barrel' ? 640 : 520, kind: 'crater', color: ev.kind === 'barrel' ? '#ff8a3d' : '#aeb9c9', hz: null },
+        det: { x: ev.x, y: ev.y - 60, r: ev.kind === 'barrel' ? 640 : 560, kind: 'crater',
+               color: ev.kind === 'barrel' ? '#ff8a3d' : '#aeb9c9', hz: null },
       });
     }
   }
@@ -1405,11 +1482,22 @@ function applyResolve(m) {
 // is broadcast 1.3s after the shot resolved — often while the client is still
 // replaying it — and its `hp` already includes the BLAST damage, so applying it
 // on arrival is what makes the bar drop before impact. Gate it.
+function applyCrateTaken(m) {
+  S.crates = S.crates.filter(c => c.id !== m.id);
+  if (m.hp) S.hp = m.hp.slice();             // pickups can RAISE health (repair) — trust the server
+  if (m.shield) S.shield = m.shield.slice();
+  if (m.ammoSeat === S.you && m.ammo) { S.ammo = m.ammo; buildWeaponStrip(); }
+  const t = S.tanks[m.seat];
+  if (t) S.floaters.push({ x: t.x, y: t.y - 380, text: (m.how === 'shot' ? '📦💥 ' : '📦 ') + (m.detail || m.kind.toUpperCase()), age: 0, life: 1.6, color: '#ffd23f' });
+  updateHud();
+}
+
 function applyDot(m) { deferHp(() => applyDotNow(m)); }
 function applyDotNow(m) {
   // Fire ticks carry the live hazard list so a blaze that has burned out (6s)
   // vanishes here instead of lingering until the next shot lands.
   if (m.hazards) S.hazards = m.hazards;
+  if (m.nano) S.nanoBots = m.nano.slice();
   if (m.hp) S.hp = m.hp.map((h, i) => Math.min(S.hp[i], h));
   if (m.alive) {
     for (let i = 0; i < m.alive.length; i++) {
@@ -1618,8 +1706,8 @@ const MUSH = {
   skirt:  3.40,   // seconds the ground-hugging base surge lives
   fade:   0.60,   // fraction of `life` before the fade-out starts
 };
-const MUSH_DARK = [92, 85, 78];      // shadowed ash
-const MUSH_LIT  = [206, 197, 182];   // sunlit ash
+const MUSH_DARK = [72, 70, 74];      // charcoal shadow — cooler, less muddy
+const MUSH_LIT  = [236, 234, 230];   // near-white sunlit cap
 // k = 0 shadow … 1 sunlit. Returns the "r,g,b" body of an rgba() string.
 function ashRGB(k) {
   const t = k < 0 ? 0 : k > 1 ? 1 : k;
@@ -1647,7 +1735,8 @@ function startMushroom(det) {
     gy: surfaceAt(det.x),                       // ground zero, on the local heightmap
     r: Math.max(240, det.r),                    // world units — everything scales off this
     tint: hexRGB(det.color, '182,255,90'),      // weapon colour, used only as a glow tint
-    wind: (Math.random() < 0.5 ? -1 : 1) * (0.10 + Math.random() * 0.10),
+    // Barely any drift: the column stays planted on the impact point.
+    wind: (Math.random() < 0.5 ? -1 : 1) * (0.02 + Math.random() * 0.03),
     seed: Math.random() * 1000,
     t: 0, life: MUSH.life,
   };
@@ -1752,9 +1841,10 @@ function drawMushroom() {
     ctx.quadraticCurveTo(sxAt(0.24) + wB * 0.92, gy - H * 0.24, sxAt(0) + wB, gy);
     ctx.closePath();
     const sg = ctx.createLinearGradient(gx, gy, cx, cy);
-    sg.addColorStop(0,    `rgba(120,104,84,${A * 0.86})`);
-    sg.addColorStop(0.42, `rgba(138,128,116,${A * 0.80})`);
-    sg.addColorStop(1,    `rgba(176,166,152,${A * 0.72})`);
+    sg.addColorStop(0,    `rgba(255,150,54,${A * 0.55})`);    // incandescent base
+    sg.addColorStop(0.30, `rgba(160,120,96,${A * 0.78})`);
+    sg.addColorStop(0.65, `rgba(120,114,118,${A * 0.82})`);
+    sg.addColorStop(1,    `rgba(190,186,184,${A * 0.74})`);   // pale where it meets the cap
     ctx.fillStyle = sg; ctx.fill();
 
     const hotK = Math.max(0, 1 - t / MUSH.hot);
@@ -1926,12 +2016,45 @@ function onGameOver(m) {
     $('overlay').classList.remove('hidden');
     return;
   }
-  if (m.team) {                                  // Boss Raid verdicts are TEAM verdicts
-    if (m.team === 'players') { title = 'WARLORD-7 DESTROYED! 🏆'; cls = 'win'; win = true; }
+  if (m.team) {                                  // team-mode verdicts (boss / horde)
+    if (S.mode === 'aliens' && m.team === 'players') { title = 'INVASION REPELLED! 🏆'; cls = 'win'; win = true; }
+    else if (S.mode === 'aliens' && m.team === 'horde') { title = 'The invasion overruns you'; cls = 'lose'; }
+    else if (S.mode === 'zombies' && m.team === 'players') { title = 'HORDE CLEARED! 🏆'; cls = 'win'; win = true; }
+    else if (S.mode === 'zombies' && m.team === 'horde') { title = 'Consumed by the horde…'; cls = 'lose'; }
+    else if (m.team === 'players') { title = 'WARLORD-7 DESTROYED! 🏆'; cls = 'win'; win = true; }
     else if (m.team === 'boss') { title = 'Your squad was wiped out'; cls = 'lose'; }
     else { title = 'Mutual destruction!'; cls = 'draw'; }
     Audio.chime(win);
     showOverlay(title, m.hp, cls, false);
+    // After-action report: what each commander dealt to the boss and took back.
+    if (m.stats) {
+      const rows = [];
+      for (let i = 0; i < S.n; i++) {
+        if (i === S.boss) continue;
+        rows.push(`<div class="br-row" style="--seat:${seatColor(i)}"><span class="br-name">${S.names[i] || ''}</span>` +
+          `<span class="br-stat">⚔ ${m.stats.dealt[i] || 0} dealt</span><span class="br-stat">🛡 ${m.stats.received[i] || 0} taken</span></div>`);
+      }
+      const rep = document.createElement('div');
+      rep.id = 'battleReport';
+      rep.innerHTML = `<div class="br-title">AFTER-ACTION REPORT</div>${rows.join('')}`;
+      const fsEl = $('finalScores');
+      fsEl.parentNode.insertBefore(rep, fsEl.nextSibling);
+    }
+    // The spoils: felling the WARLORD unlocks the Midnight paint, permanently.
+    if (m.loot && win) {
+      let lootLine = '💰 WAR SPOILS: salvage recovered';
+      try {
+        if (localStorage.getItem('cc_loot_midnight') !== '1') {
+          localStorage.setItem('cc_loot_midnight', '1');
+          lootLine = '💰 WAR SPOILS: <b>Midnight paint unlocked!</b>';
+        }
+      } catch {}
+      const lt = document.createElement('div');
+      lt.id = 'lootLine';
+      lt.innerHTML = lootLine;
+      $('resultTitle').parentNode.insertBefore(lt, $('resultTitle').nextSibling);
+      buildSkinRow();
+    }
     return;
   }
   if (m.winner === -1) { title = 'Mutual destruction!'; cls = 'draw'; }
@@ -1943,9 +2066,11 @@ function onGameOver(m) {
 }
 function showOverlay(title, hp, cls, hideRematch) {
   const rt = $('resultTitle'); rt.textContent = title; rt.className = 'result ' + cls;
+  const oldRep = $('battleReport'); if (oldRep) oldRep.remove();
+  const oldLoot = $('lootLine'); if (oldLoot) oldLoot.remove();
   const fs = $('finalScores');
   fs.innerHTML = hp ? hp.map((h, i) =>
-    `<div class="fs" style="--seat:${seatColor(i)}"><b>${Math.max(0, h)}</b><span>${(S.names[i] || '')} HP</span></div>`
+    `<div class="fs" style="--seat:${seatColor(i)}"><b>${Math.max(0, h)}</b><span>${(S.names[i] || '')} Health</span></div>`
   ).join('') : '';
   $('rematchBtn').style.display = hideRematch ? 'none' : '';
   $('overlay').classList.remove('hidden');
@@ -1958,6 +2083,42 @@ $('leaveBtn').onclick = () => $('confirmLeave').classList.remove('hidden');
 $('stayBtn').onclick = () => $('confirmLeave').classList.add('hidden');
 $('confirmLeave').onclick = (e) => { if (e.target.id === 'confirmLeave') $('confirmLeave').classList.add('hidden'); };
 $('leaveYesBtn').onclick = () => { clearResume(); sendMsg({ type: 'leave' }); location.href = location.origin; };
+
+// ---------------------------------------------------------------------------
+// Help — controls guide + full arsenal, one row per weapon, built from the
+// same ICONS/TRAJ art the dock uses so the guide always matches the game.
+// ---------------------------------------------------------------------------
+const HELP_WEAPONS = [
+  { id: 'cannon',   name: 'Cannon',        note: 'unlimited',        desc: 'Standard HE shell. Reliable, always available.' },
+  { id: 'mortar',   name: 'Heavy Mortar',  note: '2 rounds',         desc: 'A massive lobbed round that cracks open the landscape.' },
+  { id: 'volley',   name: 'Rocket Volley', note: '3 rounds',         desc: 'Six rockets in a fan — saturates a whole slope.' },
+  { id: 'cluster',  name: 'Cluster Bomb',  note: '2 rounds',         desc: 'Bursts at the top of its arc into five falling bomblets.' },
+  { id: 'napalm',   name: 'Napalm',        note: '2 rounds',         desc: 'Splashes burning fuel over a wide area. The fire keeps biting for several turns.' },
+  { id: 'gas',      name: 'Toxic Gas',     note: '2 rounds',         desc: 'No blast — a wide lingering cloud that poisons anyone inside it every couple of seconds.' },
+  { id: 'airstrike', name: 'Air Strike',   note: '2 beacons',        desc: 'Fire a beacon; a bomber flattens wherever it lands.' },
+  { id: 'buster',   name: 'Bunker Buster', note: '2 rounds',         desc: 'Burrows deep before detonating — digs a brutal pit under whatever it hits.' },
+  { id: 'nano',     name: 'Nano Swarm',    note: '2 darts',          desc: 'A dart that bursts into 10 nanobots. They latch onto the nearest tank and eat 3 health each, one per second.' },
+  { id: 'minigun',  name: 'Minigun',       note: '2 belts',          desc: 'Fourteen rounds in one long ripping burst. Death by a thousand cuts.' },
+  { id: 'wall',     name: 'Earthworks',    note: '3 charges',        desc: 'Heaps up a huge mound of dirt where it lands. Deals no damage — pure cover.' },
+  { id: 'teleport', name: 'Teleport',      note: '2 charges',        desc: 'Warp your tank to wherever the shell lands. No blast — pick your ground.' },
+  { id: 'nuke',     name: 'Tactical Nuke', note: '1 warhead',        desc: 'The big one. Leaves a fallout cloud over the crater that keeps hurting.' },
+  { id: 'railgun',  name: 'Railgun',       note: 'supply drops only', desc: 'A flat hypervelocity slug that punches straight through hills. Only found in supply crates.' },
+  { id: 'golfball', name: 'Golf Ball',     note: 'Golf mode',        desc: 'Bounces and rolls when it lands. Read the slope — the cup is flagged on the green.' },
+];
+let helpBuilt = false;
+function buildHelp() {
+  if (helpBuilt) return; helpBuilt = true;
+  $('helpWeapons').innerHTML = HELP_WEAPONS.map(w =>
+    `<div class="hw-row"><span class="hw-ico">${ICONS[w.id] || ''}</span>` +
+    `<span class="hw-name">${w.name}<i>${w.note}</i></span>` +
+    `<span class="hw-traj">${TRAJ[w.id] || ''}</span>` +
+    `<span class="hw-desc">${w.desc}</span></div>`).join('');
+}
+const openHelp = () => { buildHelp(); $('helpModal').classList.remove('hidden'); };
+$('helpBtn').onclick = openHelp;
+$('helpHomeBtn').onclick = openHelp;
+$('helpCloseBtn').onclick = () => $('helpModal').classList.add('hidden');
+$('helpModal').onclick = (e) => { if (e.target.id === 'helpModal') $('helpModal').classList.add('hidden'); };
 
 // ---------------------------------------------------------------------------
 // Rendering
@@ -2091,6 +2252,7 @@ function draw() {
     drawTrees();
     drawProps();
     drawCrates();
+    drawTeeBox();
     drawGolfCup();
     drawHazards();
     drawMushroom();               // nuke column — biggest and furthest back, BEHIND the tanks
@@ -2103,8 +2265,14 @@ function draw() {
       for (let i = 0; i < S.n; i++) if (S.alive[i] !== false) order.push(i);
       order.sort((a, b) => (a === S.turn) - (b === S.turn) || (a === S.you) - (b === S.you));
       for (const i of order) {
-        if (i === S.boss) drawMech(i); else drawTankWarped(i);
+        if (S.golf && S.golf.done && S.golf.done[i]) continue;   // holed out — in the clubhouse
+        const kind = (S.kinds && S.kinds[i]) || (i === S.boss ? 'mech' : 'tank');
+        if (kind === 'mech') drawMech(i);
+        else if (kind === 'alien') drawAlien(i);
+        else if (kind === 'zombie') drawZombie(i);
+        else drawTankWarped(i);
         if (S.shield && S.shield[i] > 0) drawShieldAura(i);
+        if (S.nanoBots && S.nanoBots[i] > 0) drawNanoBots(i);
       }
     }
     drawWarp();
@@ -2224,7 +2392,7 @@ function scorchAt(wx) {
 // scan per column is cheap.
 function ruinAt(wx) {
   if (!S.ruins || !S.ruins.length) return null;
-  for (const r of S.ruins) if (wx >= r.a && wx <= r.b) return r;
+  for (const r of S.ruins) if (r.alive !== false && wx >= r.a && wx <= r.b) return r;
   return null;
 }
 const RUIN_COLS = [[90, '#cdd6dd'], [430, '#99a3ab'], [Infinity, '#565f66']];
@@ -2239,6 +2407,7 @@ function drawTerrain(w, h) {
     const surf = wy2s(surfaceAt(wxc));
     if (surf >= h) continue;
     const sc = burnt ? Math.round(scorchAt(wxc) * SCORCH_STEPS) : 0;
+    const golfC = S.golf ? golfTopColor(wxc, TLAYERS[0][1]) : null;
     let top = surf;
     // Indestructible concrete reads as concrete, not painted grass — but only
     // while the deck itself is the surface (dirt piled on top covers it).
@@ -2256,7 +2425,7 @@ function drawTerrain(w, h) {
     for (let li = 0; li < TLAYERS.length; li++) {
       const bottom = TLAYERS[li][0] === Infinity ? h : surf + TLAYERS[li][0] * z;
       const y0 = Math.max(0, Math.round(top)), y1 = Math.min(h, Math.round(bottom));
-      if (y1 > y0) { ctx.fillStyle = TCHAR[li][sc]; ctx.fillRect(sx, y0, 1, y1 - y0); }
+      if (y1 > y0) { ctx.fillStyle = (li === 0 && golfC) ? golfC : TCHAR[li][sc]; ctx.fillRect(sx, y0, 1, y1 - y0); }
       top = bottom;
       if (top >= h) break;
     }
@@ -2487,6 +2656,184 @@ function drawMech(i) {
   ctx.moveTo(px + cosA * (bLen - r * 0.02), py + sinA * (bLen - r * 0.02));
   ctx.lineTo(px + cosA * (bLen + r * 0.22), py + sinA * (bLen + r * 0.22));
   ctx.stroke();
+
+  ctx.restore();
+}
+
+// ---- Horde enemy renderers ---------------------------------------------------
+// Alien saucer-tank: a hovering lens hull with a glass dome, blinking rim lights
+// and an anti-grav shimmer instead of tracks. Bobs on a slow sine so it never
+// sits still. Barrel follows the same aim/recoil conventions as drawTank.
+const ALIEN = { hull: '#3a4d5c', rim: '#22303a', dome: 'rgba(122,255,190,0.30)', glow: '#7dff6a', lite: '#5b7386' };
+function drawAlien(i) {
+  if (!S.tanks[i]) return;
+  const { sx, sy, r } = tankScreen(i);
+  const dir = facingOf(i);
+  const t = performance.now() / 1000;
+  const bob = Math.sin(t * 1.9 + i * 2.1) * r * 0.15;
+  const cy = sy - r * 1.05 + bob;                      // hull centreline, hovering
+
+  ctx.save();
+  // anti-grav shimmer: tapering light slats between hull and ground (lines, not blobs)
+  ctx.strokeStyle = 'rgba(125,255,106,0.35)';
+  for (let k = -2; k <= 2; k++) {
+    const px = sx + k * r * 0.42 + Math.sin(t * 5 + k * 1.9) * r * 0.06;
+    const kk = 0.5 + 0.5 * Math.sin(t * 6 + k * 2.4);
+    ctx.lineWidth = Math.max(1, r * 0.07);
+    ctx.globalAlpha = 0.25 + 0.35 * kk;
+    ctx.beginPath(); ctx.moveTo(px, cy + r * 0.42); ctx.lineTo(px, sy + r * 0.06); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  // ground scorch shadow
+  ctx.fillStyle = 'rgba(10,14,10,0.30)';
+  ctx.fillRect(sx - r * 1.1, sy - r * 0.03, r * 2.2, r * 0.1);
+
+  // saucer lens hull — two mirrored quads with a bright equator seam
+  ctx.fillStyle = ALIEN.rim;
+  ctx.beginPath();
+  ctx.moveTo(sx - r * 1.5, cy);
+  ctx.lineTo(sx - r * 0.75, cy + r * 0.46);
+  ctx.lineTo(sx + r * 0.75, cy + r * 0.46);
+  ctx.lineTo(sx + r * 1.5, cy);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = ALIEN.hull;
+  ctx.beginPath();
+  ctx.moveTo(sx - r * 1.5, cy);
+  ctx.lineTo(sx - r * 0.75, cy - r * 0.42);
+  ctx.lineTo(sx + r * 0.75, cy - r * 0.42);
+  ctx.lineTo(sx + r * 1.5, cy);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = ALIEN.lite;                          // equator band
+  ctx.fillRect(sx - r * 1.5, cy - r * 0.05, r * 3.0, r * 0.1);
+
+  // rim running lights, chasing around the saucer
+  for (let k = 0; k < 5; k++) {
+    const on = ((Math.floor(t * 3) + k) % 5) === 0;
+    ctx.fillStyle = on ? ALIEN.glow : 'rgba(125,255,106,0.25)';
+    const lx = sx - r * 1.16 + k * r * 0.58;
+    ctx.fillRect(lx - r * 0.07, cy + r * 0.10, r * 0.14, r * 0.14);
+  }
+
+  // glass dome + pilot silhouette (big head, two eye dots — kept angular)
+  ctx.fillStyle = ALIEN.dome;
+  ctx.beginPath();
+  ctx.moveTo(sx - r * 0.62, cy - r * 0.40);
+  ctx.lineTo(sx - r * 0.40, cy - r * 1.05);
+  ctx.lineTo(sx + r * 0.40, cy - r * 1.05);
+  ctx.lineTo(sx + r * 0.62, cy - r * 0.40);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = 'rgba(16,28,20,0.85)';               // occupant
+  ctx.fillRect(sx - r * 0.16, cy - r * 0.88, r * 0.32, r * 0.42);
+  ctx.fillStyle = ALIEN.glow;                          // eyes toward its facing
+  ctx.fillRect(sx + dir * r * 0.02 - r * 0.10, cy - r * 0.80, r * 0.09, r * 0.06);
+  ctx.fillRect(sx + dir * r * 0.02 + r * 0.02, cy - r * 0.80, r * 0.09, r * 0.06);
+
+  // plasma cannon under the leading rim — same aim/recoil conventions
+  const aim = S.aim[i] || { angle: 45, power: 60 };
+  const rad = aim.angle * Math.PI / 180;
+  const cosA = Math.cos(rad) * dir, sinA = -Math.sin(rad);
+  const px = sx + dir * r * 0.62, py = cy - r * 0.10;
+  const bLen = r * 1.05 - r * 0.35 * Math.pow(S.recoil[i] || 0, 1.8);
+  ctx.strokeStyle = ALIEN.lite; ctx.lineWidth = Math.max(2.5, r * 0.17);
+  ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px + cosA * bLen, py + sinA * bLen); ctx.stroke();
+  ctx.strokeStyle = ALIEN.glow; ctx.lineWidth = Math.max(1, r * 0.06);   // charge line
+  ctx.globalAlpha = 0.5 + 0.5 * Math.sin(t * 8 + i);
+  ctx.beginPath();
+  ctx.moveTo(px + cosA * r * 0.2, py + sinA * r * 0.2);
+  ctx.lineTo(px + cosA * bLen, py + sinA * bLen);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+// Zombie hulk-tank: a rusted, rotting wreck that shambles — slow lurch tilt,
+// torn plating over exposed ribs, dripping ooze, flickering green eye slits and
+// a bent, taped-together barrel.
+const ZOMB = { hull: '#3c4030', dk: '#262a1e', rust: '#5c4630', ooze: '#9dde4b', bone: '#c9c2a8' };
+function drawZombie(i) {
+  if (!S.tanks[i]) return;
+  const { sx, sy, r } = tankScreen(i);
+  const dir = facingOf(i);
+  const t = performance.now() / 1000;
+  const lurch = Math.sin(t * 0.9 + i * 1.7) * 0.045;   // slow drunken shamble
+
+  ctx.save();
+  ctx.translate(sx, sy); ctx.rotate(lurch); ctx.translate(-sx, -sy);
+
+  // ground shadow
+  ctx.fillStyle = 'rgba(8,10,6,0.35)';
+  ctx.fillRect(sx - r * 1.35, sy - r * 0.04, r * 2.7, r * 0.11);
+
+  // broken tracks — sagging run, two wheels missing, one hanging link
+  ctx.fillStyle = ZOMB.dk;
+  ctx.fillRect(sx - r * 1.3, sy - r * 0.42, r * 2.6, r * 0.42);
+  ctx.fillStyle = '#101208';
+  for (let k = -2; k <= 2; k++) {
+    if (k === -1) continue;                            // torn-out road wheel
+    ctx.fillRect(sx + k * r * 0.5 - r * 0.11, sy - r * 0.30, r * 0.22, r * 0.22);
+  }
+  ctx.fillStyle = ZOMB.rust;                           // snapped track link flapping
+  ctx.fillRect(sx - r * 0.5 - r * 0.05, sy - r * 0.06 + Math.sin(t * 3) * r * 0.03, r * 0.34, r * 0.08);
+
+  // hull — sagging slab with a bitten-out notch and a rust wash
+  ctx.fillStyle = ZOMB.hull;
+  ctx.beginPath();
+  ctx.moveTo(sx - r * 1.15, sy - r * 0.42);
+  ctx.lineTo(sx - r * 0.95, sy - r * 1.02);
+  ctx.lineTo(sx - r * 0.15, sy - r * 1.06);
+  ctx.lineTo(sx + r * 0.05, sy - r * 0.86);            // the bite
+  ctx.lineTo(sx + r * 0.30, sy - r * 1.04);
+  ctx.lineTo(sx + r * 0.95, sy - r * 0.98);
+  ctx.lineTo(sx + r * 1.15, sy - r * 0.42);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = ZOMB.rust;
+  ctx.fillRect(sx - r * 0.9, sy - r * 0.62, r * 0.55, r * 0.16);
+  ctx.fillRect(sx + r * 0.35, sy - r * 0.55, r * 0.4, r * 0.1);
+  // exposed ribs where a plate tore off
+  ctx.strokeStyle = ZOMB.bone; ctx.lineWidth = Math.max(1, r * 0.05);
+  ctx.beginPath();
+  for (let k = 0; k < 3; k++) {
+    ctx.moveTo(sx - r * 0.05 + k * r * 0.12, sy - r * 0.84);
+    ctx.lineTo(sx - r * 0.02 + k * r * 0.12, sy - r * 0.5);
+  }
+  ctx.stroke();
+
+  // turret stump — cracked box, eye slits flickering green
+  ctx.fillStyle = ZOMB.dk;
+  ctx.fillRect(sx - r * 0.52, sy - r * 1.52, r * 1.04, r * 0.5);
+  const flick = Math.sin(t * 13 + i * 3) > -0.6 ? 1 : 0.25;
+  ctx.fillStyle = `rgba(157,222,75,${0.85 * flick})`;
+  ctx.fillRect(sx + dir * r * 0.10 - r * 0.16, sy - r * 1.38, r * 0.14, r * 0.08);
+  ctx.fillRect(sx + dir * r * 0.10 + r * 0.06, sy - r * 1.38, r * 0.14, r * 0.08);
+  ctx.fillStyle = `rgba(157,222,75,${0.18 * flick})`;  // eye bloom
+  ctx.fillRect(sx + dir * r * 0.10 - r * 0.24, sy - r * 1.44, r * 0.52, r * 0.2);
+
+  // ooze drips crawling down the hull face (animated, capped drop length)
+  ctx.fillStyle = ZOMB.ooze;
+  for (let k = 0; k < 3; k++) {
+    const dx = sx - r * 0.7 + k * r * 0.62;
+    const fall = ((t * (0.5 + k * 0.23) + k * 0.37) % 1);
+    ctx.globalAlpha = 0.75 * (1 - fall * 0.6);
+    ctx.fillRect(dx - r * 0.035, sy - r * 0.98 + fall * r * 0.7, r * 0.07, r * 0.16);
+  }
+  ctx.globalAlpha = 1;
+
+  // bent barrel: two segments with a kink, patched with a weld band
+  const aim = S.aim[i] || { angle: 45, power: 60 };
+  const rad = aim.angle * Math.PI / 180;
+  const cosA = Math.cos(rad) * dir, sinA = -Math.sin(rad);
+  const px = sx + dir * r * 0.42, py = sy - r * 1.30;
+  const rc = Math.pow(S.recoil[i] || 0, 1.8);
+  const L1 = r * (0.75 - 0.25 * rc), L2 = r * (0.62 - 0.2 * rc);
+  const kinkA = rad + 0.16;                            // droops a touch past the kink
+  const cosK = Math.cos(kinkA) * dir, sinK = -Math.sin(kinkA);
+  const mx = px + cosA * L1, my = py + sinA * L1;
+  ctx.strokeStyle = ZOMB.hull; ctx.lineWidth = Math.max(2.5, r * 0.17);
+  ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(mx, my); ctx.stroke();
+  ctx.strokeStyle = ZOMB.rust;
+  ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(mx + cosK * L2, my + sinK * L2); ctx.stroke();
+  ctx.fillStyle = ZOMB.bone;                           // weld/tape band on the kink
+  ctx.fillRect(mx - r * 0.09, my - r * 0.09, r * 0.18, r * 0.18);
 
   ctx.restore();
 }
@@ -2914,7 +3261,38 @@ function drawPlane() {
 
 // Thin indestructible lava floor at the very bottom of the map. Drawn over the
 // terrain fill so it shows through anything blasted down to it.
-// ---- Golf cup + flag ------------------------------------------------------------
+// ---- Golf course dressing --------------------------------------------------------
+// The top grass band restyles by zone: mowed GREEN around the cup (bright,
+// tight stripes), FAIRWAY stripes tee->green, darker rough everywhere else.
+// Colours derive from the biome's own grass so a desert hole reads as baked
+// links and an ice hole as frost — same course language, same biome.
+function golfTopColor(wx, base) {
+  const g = S.golf; if (!g || !g.cup) return null;
+  const inGreen = Math.abs(wx - g.cup.x) <= 1500;
+  const inFair = wx >= g.tee - 700 && wx <= g.cup.x + 700;
+  if (inGreen) return (Math.floor(wx / 300) % 2 === 0) ? mixToward(base, [255, 255, 255], 0.30) : mixToward(base, [255, 255, 255], 0.20);
+  if (inFair)  return (Math.floor(wx / 800) % 2 === 0) ? mixToward(base, [255, 255, 255], 0.10) : base;
+  return mixToward(base, [20, 26, 18], 0.22);                  // the rough
+}
+
+function drawTeeBox() {
+  const g = S.golf; if (!g || !g.tee) return;
+  const sx = wx2s(g.tee);
+  if (sx < -140 || sx > view.cssW + 140) return;
+  const gy = wy2s(surfaceAt(g.tee));
+  const u = Math.max(8, Math.min(18, 250 * cam.zoom));
+  ctx.fillStyle = 'rgba(20,30,18,0.55)';                        // tee mat
+  ctx.fillRect(sx - u * 3.2, gy - Math.max(1, u * 0.14), u * 6.4, Math.max(2, u * 0.22));
+  ctx.fillStyle = '#f2f5f7';                                    // tee markers
+  for (const s of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(sx + s * u * 3.0, gy - u * 0.85);
+    ctx.lineTo(sx + s * u * 3.0 + u * 0.3, gy);
+    ctx.lineTo(sx + s * u * 3.0 - u * 0.3, gy);
+    ctx.closePath(); ctx.fill();
+  }
+}
+
 function drawGolfCup() {
   const g = S.golf; if (!g || !g.cup) return;
   const sx = wx2s(g.cup.x);
@@ -3016,15 +3394,36 @@ function drawCrates() {
       ctx.moveTo(sx, cy2 + ch * 0.8); ctx.lineTo(sx, sy - u);
       ctx.stroke();
     }
-    // The box: olive drab with a kind-coloured band and star stencil.
-    ctx.fillStyle = '#6b6234';
-    ctx.fillRect(sx - u, sy - u * 2, u * 2, u * 2);
-    ctx.fillStyle = '#524a24';
-    ctx.fillRect(sx + u * 0.3, sy - u * 2, u * 0.7, u * 2);
-    ctx.fillStyle = KIND_COL[c.kind] || '#ffd23f';
-    ctx.fillRect(sx - u, sy - u * 1.25, u * 2, Math.max(2, u * 0.5));
-    ctx.fillStyle = '#2c2a18';
-    ctx.fillRect(sx - u, sy - u * 2, u * 2, Math.max(1, u * 0.16));
+    // The box: a proper CARE PACKAGE — pale planked pine, dark straps over the
+    // top, riveted corner brackets, a big stencilled star, and a kind-coloured
+    // tag so you can tell what's inside from across the canyon.
+    const bw = u * 2.3, bh = u * 2.1, bx0 = sx - bw / 2, by0 = sy - bh;
+    ctx.fillStyle = '#c9a468';                                   // pine face
+    ctx.fillRect(bx0, by0, bw, bh);
+    ctx.fillStyle = '#b28c50';                                   // shadow side
+    ctx.fillRect(bx0 + bw * 0.72, by0, bw * 0.28, bh);
+    ctx.fillStyle = '#96743e';                                   // plank seams
+    for (let k = 1; k <= 2; k++) ctx.fillRect(bx0, by0 + (bh / 3) * k, bw, Math.max(1, u * 0.07));
+    ctx.fillStyle = '#4c3b22';                                   // straps
+    ctx.fillRect(bx0 + bw * 0.16, by0, Math.max(2, u * 0.2), bh);
+    ctx.fillRect(bx0 + bw * 0.64, by0, Math.max(2, u * 0.2), bh);
+    ctx.fillStyle = '#7a828c';                                   // corner brackets
+    for (const [cxk, cyk] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+      ctx.fillRect(bx0 + cxk * (bw - u * 0.34), by0 + cyk * (bh - u * 0.34), u * 0.34, u * 0.34);
+    }
+    // stencilled star
+    ctx.fillStyle = 'rgba(240,240,235,0.92)';
+    const stx = sx - bw * 0.06, sty = by0 + bh * 0.46, sr = u * 0.42;
+    ctx.beginPath();
+    for (let k = 0; k < 10; k++) {
+      const a = -Math.PI / 2 + (k * Math.PI) / 5;
+      const rr = k % 2 === 0 ? sr : sr * 0.45;
+      const px2 = stx + Math.cos(a) * rr, py2 = sty + Math.sin(a) * rr;
+      k === 0 ? ctx.moveTo(px2, py2) : ctx.lineTo(px2, py2);
+    }
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = KIND_COL[c.kind] || '#ffd23f';               // contents tag
+    ctx.fillRect(bx0, by0 + bh - Math.max(2, u * 0.34), bw, Math.max(2, u * 0.34));
     // Ground marker once landed so a distant crate is spottable.
     if (t >= 1) {
       const gy = wy2s(surfaceAt(c.x));
@@ -3034,6 +3433,26 @@ function drawCrates() {
       ctx.closePath(); ctx.fill();
     }
   }
+}
+
+// ---- Nano Swarm infestation ---------------------------------------------------
+// Tiny cyan machines skittering over the hull, one square per bot left. Pure
+// cosmetics — positions are a hash of time+index, no state, no arcs.
+function drawNanoBots(i) {
+  const t = S.tanks[i]; if (!t) return;
+  const { sx, sy, r } = tankScreen(i);
+  const n = Math.min(10, S.nanoBots[i] || 0);
+  const tms = performance.now() / 1000;
+  ctx.fillStyle = '#6be7ff';
+  for (let k = 0; k < n; k++) {
+    const ph = tms * (1.3 + (k % 3) * 0.45) + k * 2.4;
+    const bx = sx + Math.sin(ph) * r * 1.1;
+    const by = sy - r * 0.55 - Math.abs(Math.sin(ph * 1.7 + k)) * r * 1.1;
+    const s2 = Math.max(1.5, r * 0.12);
+    ctx.fillRect(bx - s2 / 2, by - s2 / 2, s2, s2);
+  }
+  ctx.fillStyle = 'rgba(107,231,255,0.16)';                    // faint interference haze
+  ctx.fillRect(sx - r * 1.4, sy - r * 1.9, r * 2.8, r * 1.9);
 }
 
 // ---- Crate shield -----------------------------------------------------------
@@ -3337,6 +3756,26 @@ function oLance(x0, len, h, stops) {
 // One drawer per kind. `ph` is pr.pos (playback points) — a monotonic, RNG-free
 // phase for the few sprites that pulse.
 const ORD = {
+  // Nano Swarm dart: a sleek machined needle with a pulsing cyan core line and
+  // fin-chips at the tail. Reads unmistakably high-tech at 10px.
+  nano(R) {
+    ctx.fillStyle = '#39424e';
+    oPoly('#39424e', -1.1 * R, -0.22 * R, 1.15 * R, 0, -1.1 * R, 0.22 * R);
+    ctx.fillStyle = '#5b6572';
+    ctx.fillRect(-1.1 * R, -0.1 * R, 1.7 * R, 0.2 * R);
+    const pulse = 0.55 + 0.45 * Math.sin(performance.now() / 90);
+    ctx.fillStyle = `rgba(107,231,255,${pulse})`;
+    ctx.fillRect(-0.95 * R, -0.05 * R, 1.85 * R, 0.1 * R);
+    ctx.fillStyle = '#6be7ff';
+    ctx.fillRect(-1.25 * R, -0.3 * R, 0.16 * R, 0.6 * R);       // tail chip
+    ctx.fillRect(0.5 * R, -0.26 * R, 0.1 * R, 0.52 * R);        // collar
+  },
+  // Minigun round: a stubby tracer slug — mostly its own streak.
+  minigun(R) {
+    ctx.fillStyle = '#ffd9a0';
+    ctx.fillRect(-0.7 * R, -0.12 * R, 1.1 * R, 0.24 * R);
+    oPoly('#fff3d0', 0.4 * R, -0.12 * R, 0.75 * R, 0, 0.4 * R, 0.12 * R);
+  },
   // A golf ball: white dimpled octagon — the one honest sphere in the arsenal.
   golfball(R) {
     ctx.fillStyle = '#f4f6f2';
@@ -3490,6 +3929,72 @@ const ORD = {
     ctx.fillRect(-0.16 * R, -0.24 * R, 0.11 * R, 0.48 * R);
     oPoly('#8a93a8', 0.98 * R, -0.30 * R, 1.38 * R, 0, 0.98 * R, 0.30 * R);
   },
+  // ---- Horde ordnance ---------------------------------------------------------
+  // Plasma Bolt: a green energy shard — nested diamonds with a pulsing core.
+  plasma(R) {
+    const k = 0.75 + 0.25 * Math.sin(performance.now() / 90);
+    oPoly('rgba(125,255,106,0.35)', -1.5 * R, 0, 0, -0.85 * R, 1.5 * R, 0, 0, 0.85 * R);
+    oPoly('#7dff6a', -1.05 * R, 0, 0, -0.55 * R, 1.05 * R, 0, 0, 0.55 * R);
+    oPoly(`rgba(235,255,220,${k})`, -0.5 * R, 0, 0, -0.26 * R, 0.5 * R, 0, 0, 0.26 * R);
+  },
+  // Spore pod shell: a veined purple husk, and the spores it bursts into.
+  podshell(R) {
+    oPoly('#5c3a80', -1.2 * R, 0, -0.3 * R, -0.8 * R, 0.9 * R, -0.5 * R, 1.2 * R, 0, 0.9 * R, 0.5 * R, -0.3 * R, 0.8 * R);
+    ctx.strokeStyle = '#b06bff'; ctx.lineWidth = Math.max(1, R * 0.12);
+    ctx.beginPath();
+    ctx.moveTo(-0.9 * R, 0); ctx.lineTo(0.9 * R, 0);
+    ctx.moveTo(-0.3 * R, -0.7 * R); ctx.lineTo(-0.1 * R, 0.7 * R);
+    ctx.stroke();
+  },
+  spore(R) {
+    oPoly('#7a4fae', -0.9 * R, 0, 0, -0.7 * R, 0.9 * R, 0, 0, 0.7 * R);
+    oPoly('#d9b8ff', -0.35 * R, 0, 0, -0.28 * R, 0.35 * R, 0, 0, 0.28 * R);
+  },
+  // Phase Lance: a long magenta needle with a phase-shift echo behind it.
+  lance(R) {
+    ctx.globalAlpha = 0.35;
+    oPoly('#ff6bf0', -2.6 * R, -0.16 * R, -0.6 * R, -0.16 * R, -0.6 * R, 0.16 * R, -2.6 * R, 0.16 * R);
+    ctx.globalAlpha = 1;
+    oPoly('#ff6bf0', -1.8 * R, -0.2 * R, 1.6 * R, 0, -1.8 * R, 0.2 * R);
+    oPoly('#ffe2fb', -0.9 * R, -0.09 * R, 1.35 * R, 0, -0.9 * R, 0.09 * R);
+  },
+  // Bile Spit: a lumpy glob shedding a droplet off its tail.
+  bile(R) {
+    oPoly('#6f9c2e', -1.1 * R, -0.2 * R, -0.5 * R, -0.75 * R, 0.5 * R, -0.65 * R, 1.05 * R, 0.1 * R, 0.4 * R, 0.7 * R, -0.6 * R, 0.6 * R);
+    oPoly('#9dde4b', -0.5 * R, -0.35 * R, 0.3 * R, -0.3 * R, 0.5 * R, 0.2 * R, -0.3 * R, 0.3 * R);
+    oPoly('#9dde4b', -1.5 * R, 0.1 * R, -1.25 * R, -0.12 * R, -1.15 * R, 0.3 * R);
+  },
+  // Grave Grubs: the sack, and the biting larva — segmented, wriggling via pos.
+  grubsack(R, pos) {
+    oPoly('#8a7b4a', -1.15 * R, 0, -0.4 * R, -0.8 * R, 0.8 * R, -0.55 * R, 1.15 * R, 0.15 * R, 0.3 * R, 0.8 * R, -0.7 * R, 0.55 * R);
+    ctx.strokeStyle = '#5c5232'; ctx.lineWidth = Math.max(1, R * 0.1);   // stitching
+    ctx.beginPath(); ctx.moveTo(-0.8 * R, -0.25 * R); ctx.lineTo(0.75 * R, -0.1 * R); ctx.stroke();
+    const b = Math.sin((pos || 0) * 0.8) * 0.14 * R;                     // something inside is moving
+    oPoly('#c4b36a', 0.1 * R + b, -0.35 * R, 0.35 * R + b, -0.5 * R, 0.45 * R + b, -0.25 * R);
+  },
+  grub(R, pos) {
+    const wig = Math.sin((pos || 0) * 1.1);
+    for (let s = 0; s < 3; s++) {
+      const gx = -0.7 * R + s * 0.62 * R, gy = wig * (s - 1) * 0.22 * R;
+      oPoly(s === 2 ? '#e0d3a0' : '#c4b36a', gx - 0.34 * R, gy, gx, gy - 0.3 * R, gx + 0.34 * R, gy, gx, gy + 0.3 * R);
+    }
+    ctx.fillStyle = '#3a3320';                                           // bite end
+    ctx.fillRect(0.72 * R, -0.1 * R, 0.22 * R, 0.2 * R);
+  },
+  // Corpse Lob: a shrouded bundle with a bone jutting out. Best not examined.
+  corpse(R) {
+    oPoly('#565e3c', -1.2 * R, -0.25 * R, -0.3 * R, -0.8 * R, 0.85 * R, -0.6 * R, 1.2 * R, 0.15 * R, 0.35 * R, 0.75 * R, -0.75 * R, 0.6 * R);
+    ctx.strokeStyle = '#31371f'; ctx.lineWidth = Math.max(1, R * 0.11);  // shroud ropes
+    ctx.beginPath();
+    ctx.moveTo(-0.6 * R, -0.7 * R); ctx.lineTo(-0.4 * R, 0.7 * R);
+    ctx.moveTo(0.35 * R, -0.75 * R); ctx.lineTo(0.5 * R, 0.65 * R);
+    ctx.stroke();
+    ctx.strokeStyle = '#c9c2a8'; ctx.lineWidth = Math.max(1.5, R * 0.16);  // the bone
+    ctx.beginPath(); ctx.moveTo(0.9 * R, -0.5 * R); ctx.lineTo(1.45 * R, -0.85 * R); ctx.stroke();
+    ctx.fillStyle = '#c9c2a8';
+    ctx.fillRect(1.32 * R, -1.02 * R, 0.3 * R, 0.18 * R);
+    ctx.fillRect(1.44 * R, -0.88 * R, 0.3 * R, 0.18 * R);
+  },
 };
 
 // Sub-munitions and the airstrike stick are a DIFFERENT object from the round
@@ -3507,16 +4012,29 @@ function ordnanceKind(A, pr) {
   if (w === 'b_flame')   return pr.delay > 0 ? 'firebomb' : 'napalm';
   if (w === 'b_lance')   return 'railgun';
   if (w === 'b_quake')   return 'buster';
+  // Horde kits get their own silhouettes so alien/zombie fire reads on-theme.
+  if (w === 'a_plasma')  return 'plasma';
+  if (w === 'a_pods')    return pr.delay > 0 ? 'spore' : 'podshell';
+  if (w === 'a_lance')   return 'lance';
+  if (w === 'z_spit')    return 'bile';
+  if (w === 'z_grubs')   return pr.delay > 0 ? 'grub' : 'grubsack';
+  if (w === 'z_lob')     return 'corpse';
   return ORD[w] ? w : 'cannon';          // cannon is the sensible default round
 }
-const ORD_SCALE = { nuke: 1.30, mortar: 1.12, buster: 1.10, bomb: 0.92, firebomb: 0.85, bomblet: 0.72 };
-const ORD_SPIN  = { bomblet: 0.16, firebomb: 0.10, wall: 0.07 };   // radians per path point
+const ORD_SCALE = { nuke: 1.30, mortar: 1.12, buster: 1.10, bomb: 0.92, firebomb: 0.85, bomblet: 0.72,
+                    spore: 0.70, grub: 0.62, corpse: 1.18, podshell: 1.05, grubsack: 1.05 };
+const ORD_SPIN  = { bomblet: 0.16, firebomb: 0.10, wall: 0.07,
+                    spore: 0.12, grub: 0.22, corpse: 0.09, grubsack: 0.08 };   // radians per path point
 const ORD_TRAIL = {
   golfball: 'rgba(244,246,242,.5)',
+  nano: 'rgba(107,231,255,.65)',
+  minigun: 'rgba(255,217,160,.55)',
   cannon: 'rgba(255,220,150,.5)', mortar: 'rgba(255,190,110,.5)', volley: 'rgba(180,170,255,.55)',
   railgun: 'rgba(60,232,143,.75)', cluster: 'rgba(255,210,63,.45)', napalm: 'rgba(255,120,70,.55)',
   gas: 'rgba(157,222,75,.45)', airstrike: 'rgba(84,200,255,.5)', buster: 'rgba(201,138,75,.5)',
   wall: 'rgba(160,120,70,.45)', teleport: 'rgba(200,107,255,.55)', nuke: 'rgba(182,255,90,.5)',
+  a_plasma: 'rgba(125,255,106,.65)', a_pods: 'rgba(176,107,255,.5)', a_lance: 'rgba(255,107,240,.7)',
+  z_spit: 'rgba(157,222,75,.55)', z_grubs: 'rgba(196,179,106,.45)', z_lob: 'rgba(122,138,74,.5)',
 };
 
 // Heading straight off the server's path — the client never decides anything.

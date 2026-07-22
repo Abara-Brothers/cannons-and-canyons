@@ -15,8 +15,12 @@ const fire = (weapon, angle, power) => simulateShot(fresh(), { by: 0, weapon, an
 const FLOOR = {
   cannon: 20, mortar: 40, volley: 30, railgun: 55, cluster: 40, napalm: 25,
   gas: 4, airstrike: 45, buster: 25, nuke: 65,
+  nano: 3,       // the payload is the bot infestation (30 over time), not the dart
+  minigun: 25,   // fourteen 3-damage rounds — the stream lands a good chunk
   wall: 0,       // Earthworks deals no damage by design
   teleport: 0,   // Teleport deals no damage by design — it repositions the firer
+  // Horde kits (aiOnly) — the enemies must be able to actually hurt a player.
+  a_plasma: 10, a_pods: 5, a_lance: 12, z_spit: 8, z_grubs: 4, z_lob: 14,
 };
 
 let failures = 0;
@@ -25,12 +29,22 @@ const fail = (m) => { console.error('FAIL ' + m); failures++; };
 // 1 — the hitbox exists where the tank is DRAWN. Every one of these points is
 //     inside the sprite the client renders, so every one must register.
 for (const [dx, up, what] of [[0, 0, 'ground point'], [0, 120, 'hull'], [0, 300, 'turret'],
-                              [300, 120, 'hull edge'], [-300, 20, 'track edge'], [0, -20, 'tracks below grade']]) {
+                              [300, 120, 'skirt edge'], [-300, 20, 'track edge'], [0, -20, 'tracks below grade'],
+                              [240, 200, 'glacis mid-taper'], [-240, 200, 'glacis mid-taper L'],
+                              [120, 310, 'turret upper'], [50, 340, 'hatch cap']]) {
   if (!pointHitsTank(ENEMY + dx, FLAT_Y - up, { x: ENEMY, y: FLAT_Y })) {
     fail(`pointHitsTank miss at ${what} (dx=${dx}, up=${up})`);
   }
 }
-if (pointHitsTank(ENEMY + 900, FLAT_Y, { x: ENEMY, y: FLAT_Y })) fail('pointHitsTank false positive 900 units away');
+// …and it must NOT exist where the old box had empty-air corners the art
+// never covered. Every point here is outside the drawn sprite.
+for (const [dx, up, what] of [[310, 230, 'old hull box corner'], [-310, 230, 'old hull box corner L'],
+                              [170, 320, 'old turret box corner'], [312, 130, 'beside the skirt'],
+                              [0, 380, 'above the hatch'], [900, 0, '900 units away']]) {
+  if (pointHitsTank(ENEMY + dx, FLAT_Y - up, { x: ENEMY, y: FLAT_Y })) {
+    fail(`pointHitsTank false positive at ${what} (dx=${dx}, up=${up})`);
+  }
+}
 
 // 2 — every weapon must be able to actually hurt the enemy somewhere in the
 //     angle/power space, and must never hurt the FIRER on a normal outbound shot.

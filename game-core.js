@@ -84,34 +84,63 @@ export const biomeLavaY = (biome) => LAVA_Y - ((BIOMES[biome] || BIOMES.alpine).
 // in multiples of `r` screen px; at the game's design zoom band (cam.zoom
 // 0.033..0.075) r == TANK_R world units. Body extents in multiples of r, after
 // drawTank's LIFT of 0.42r:
-//   hull half-width 1.35 | hull top 1.00 | turret half-width 0.76
-//   turret top 1.36 | track bottom 0.10 BELOW the ground point
+//   tracks ±1.33 (up -0.10..0.48) | skirt ±1.26 (..0.60) | hull wedge ±1.35
+//   at 0.60 tapering to ±0.99 at 1.00 | turret ±0.76 at 1.00 tapering to
+//   ±0.52 at 1.36 | commander hatch ±0.34 up to 1.49
 // The tank art is LOCKED. If drawTank's proportions ever change, retune these
 // multipliers to match it — never the other way round.
 export const TANK_R = 240;
-export const TANK_HW  = Math.round(1.35 * TANK_R);   // 324 — hull/track half-width
+export const TANK_HW  = Math.round(1.35 * TANK_R);   // 324 — widest point: the hull's bottom edge
 const TANK_HULL_H     = Math.round(1.00 * TANK_R);   // 240 — hull top above the ground point
-const TANK_TUR_HW     = Math.round(0.76 * TANK_R);   // 182 — turret half-width
-export const TANK_TOP = Math.round(1.36 * TANK_R);   // 326 — turret top above the ground point
+const TANK_TUR_HW     = Math.round(0.76 * TANK_R);   // 182 — turret half-width at its base
+export const TANK_TOP = Math.round(1.36 * TANK_R);   // 326 — turret roof above the ground point
 const TANK_BELOW      = Math.round(0.10 * TANK_R);   //  24 — tracks sit this far below the ground point
+const TANK_TRACK_TOP  = Math.round(0.48 * TANK_R);   // 115 — top of the track band
+const TANK_TRACK_HW   = Math.round(1.33 * TANK_R);   // 319 — track half-width
+const TANK_SKIRT_HW   = Math.round(1.26 * TANK_R);   // 302 — side-skirt half-width
+const TANK_HULL_BOT   = Math.round(0.60 * TANK_R);   // 144 — hull wedge bottom edge (widest line)
+const TANK_HULL_TOP_HW = Math.round(0.99 * TANK_R);  // 238 — hull half-width at the hull top
+const TANK_TUR_TOP_HW = Math.round(0.52 * TANK_R);   // 125 — turret half-width at its roof
+const TANK_HAT_HW     = Math.round(0.34 * TANK_R);   //  82 — commander hatch half-width
+const TANK_HAT_TOP    = Math.round(1.49 * TANK_R);   // 358 — hatch top above the ground point
 const TANK_CY = 274;          // turret pivot height above the ground point (0.72 r + 0.42 r LIFT)
+
+// Silhouette half-width at height `up` above the ground point (world units,
+// UNSCALED — callers divide by tank.scale first). -1 = outside vertically.
+function tankHalfWidthAt(up) {
+  if (up < -TANK_BELOW || up > TANK_HAT_TOP) return -1;
+  if (up <= TANK_TRACK_TOP) return TANK_TRACK_HW;                       // tracks + wheels
+  if (up < TANK_HULL_BOT) return TANK_SKIRT_HW;                         // side skirts
+  if (up <= TANK_HULL_H)                                                // hull wedge taper
+    return TANK_HW + (TANK_HULL_TOP_HW - TANK_HW) * (up - TANK_HULL_BOT) / (TANK_HULL_H - TANK_HULL_BOT);
+  if (up <= TANK_TOP)                                                   // turret taper
+    return TANK_TUR_HW + (TANK_TUR_TOP_HW - TANK_TUR_HW) * (up - TANK_HULL_H) / (TANK_TOP - TANK_HULL_H);
+  return TANK_HAT_HW;                                                   // commander hatch cap
+}
 
 // tank.scale (default 1) grows the whole outline — the boss mecha is 1.8x.
 export function pointHitsTank(x, y, tank) {
   const sc = tank.scale || 1;
-  const dx = x - tank.x;
-  const up = tank.y - y;                       // height above the ground point
-  if (Math.abs(dx) <= TANK_HW * sc && up >= -TANK_BELOW * sc && up <= TANK_HULL_H * sc) return true;   // hull + tracks
-  if (Math.abs(dx) <= TANK_TUR_HW * sc && up > TANK_HULL_H * sc && up <= TANK_TOP * sc) return true; // turret
-  return false;
+  const hw = tankHalfWidthAt((tank.y - y) / sc);   // height above the ground point
+  return hw >= 0 && Math.abs(x - tank.x) <= hw * sc;
 }
 
-// Distance from a point to the nearest point of the tank outline.
+// Distance from a point to the nearest point of the tank outline: clamp the
+// height into the silhouette band and the x onto the width at that height.
+// The flat segment boundaries are probed too so the convex corners (hull
+// bottom edge, hull/turret step, turret/hatch step) are measured exactly.
 function distToTank(cx, cy, tank) {
   const sc = tank.scale || 1;
-  const rx = Math.max(tank.x - TANK_HW * sc, Math.min(cx, tank.x + TANK_HW * sc));
-  const ry = Math.max(tank.y - TANK_TOP * sc, Math.min(cy, tank.y + TANK_BELOW * sc));
-  return Math.hypot(cx - rx, cy - ry);
+  const dx = Math.abs(cx - tank.x) / sc;
+  const up = (tank.y - cy) / sc;
+  let best = Infinity;
+  const probe = (u) => {
+    const hw = tankHalfWidthAt(u);
+    if (hw >= 0) best = Math.min(best, Math.hypot(Math.max(0, dx - hw), up - u));
+  };
+  probe(Math.max(-TANK_BELOW, Math.min(up, TANK_HAT_TOP)));
+  probe(TANK_TRACK_TOP); probe(TANK_HULL_BOT); probe(TANK_HULL_H); probe(TANK_TOP);
+  return best * sc;
 }
 
 export const MOVE_BUDGET = 4500;  // driving distance allowed per turn — generous fuel to reposition
@@ -177,11 +206,11 @@ export const WEAPONS = [
   { id: 'napalm',   name: 'Napalm',        color: '#ff6a3d', ammo: 2,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 0, radius: 0, terrain: 'none',
     split: { count: 8, spreadSpeed: 1150, radius: 630, damage: 7, terrain: 'scorch',
-             hazard: { type: 'fire', ms: FIRE_MS, bites: FIRE_BITES, r: 430 } },
+             hazard: { type: 'fire', ms: FIRE_MS, bites: FIRE_BITES, dmg: FIRE_DMG, r: 430 } },
     desc: 'Splashes burning fuel over a wide area — burns the ground black, never moves it.' },
   { id: 'gas',      name: 'Toxic Gas',     color: '#9dde4b', ammo: 2,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 5, radius: 660, terrain: 'none',
-    hazard: { type: 'gas', turns: 2, dpt: 7, dps: 4, r: 500 },
+    hazard: { type: 'gas', ms: 10000, bites: 5, dmg: 6, r: 900 },   // 6 every 2s for 10s, WIDE
     desc: 'No blast — a lingering cloud that poisons over time.' },
   { id: 'airstrike', name: 'Air Strike',   color: '#54c8ff', ammo: 2,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 0, radius: 0, terrain: 'none',
@@ -201,8 +230,15 @@ export const WEAPONS = [
     desc: 'Warp to wherever the shell lands. No blast — pick your ground.' },
   { id: 'nuke',     name: 'Tactical Nuke', color: '#b6ff5a', ammo: 1,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 75, radius: 1950, terrain: 'crater',
-    hazard: { type: 'gas', turns: 2, dpt: 6, dps: 5, r: 800 },
+    hazard: { type: 'gas', ms: 8000, bites: 4, dmg: 5, r: 1000 },
     desc: 'One warhead. Leaves fallout that keeps hurting.' },
+  { id: 'nano',     name: 'Nano Swarm',    color: '#6be7ff', ammo: 2,
+    shots: 1, spread: 0,  speedMul: 1.0, damage: 4, radius: 260, terrain: 'none',
+    nano: { bots: 10, dmg: 3, r: 760 },
+    desc: 'A dart that bursts into 10 nanobots — they latch on and eat 3 health each.' },
+  { id: 'minigun',  name: 'Minigun',       color: '#aeb9c9', ammo: 2,
+    shots: 14, spread: 7, speedMul: 1.0, damage: 3, radius: 170, terrain: 'crater', burst: true,
+    desc: 'Fourteen rounds in one long ripping burst. Death by a thousand cuts.' },
   // ---- WARLORD-7 kit (bossOnly: never in a player's menu or loadout) ---------
   { id: 'b_twin',    name: 'Twin Autocannon', color: '#ff6b6b', ammo: 99, bossOnly: true,
     shots: 2, spread: 5,  speedMul: 1.0, damage: 16, radius: 650, terrain: 'crater',
@@ -213,7 +249,7 @@ export const WEAPONS = [
   { id: 'b_flame',   name: 'Flame Vent',      color: '#ff6a3d', ammo: 99, bossOnly: true,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 0, radius: 0, terrain: 'none',
     split: { count: 6, spreadSpeed: 1000, radius: 560, damage: 6, terrain: 'scorch',
-             hazard: { type: 'fire', ms: FIRE_MS, bites: FIRE_BITES, r: 430 } },
+             hazard: { type: 'fire', ms: FIRE_MS, bites: FIRE_BITES, dmg: FIRE_DMG, r: 430 } },
     desc: 'Vents burning reactor fuel over the ground.' },
   { id: 'b_lance',   name: 'Rail Lance',      color: '#3ce88f', ammo: 99, bossOnly: true,
     shots: 1, spread: 0,  speedMul: 1.7, gravityMul: 0.3, damage: 34, radius: 380, terrain: 'crater',
@@ -222,10 +258,33 @@ export const WEAPONS = [
   { id: 'b_quake',   name: 'Seismic Slam',    color: '#c98a4b', ammo: 99, bossOnly: true,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 26, radius: 1400, terrain: 'crater', dig: 0.5,
     desc: 'A ground-pounder round that cracks the earth open.' },
+  // ---- Horde kits (aiOnly: alien saucers / zombie hulks only) ----------------
+  { id: 'a_plasma', name: 'Plasma Bolt',    color: '#7dff6a', ammo: 99, aiOnly: true,
+    shots: 1, spread: 0,  speedMul: 1.0, damage: 14, radius: 620, terrain: 'crater',
+    desc: 'Superheated xeno-plasma. Splashes green.' },
+  { id: 'a_pods',   name: 'Spore Pods',     color: '#b06bff', ammo: 99, aiOnly: true,
+    shots: 1, spread: 0,  speedMul: 1.0, damage: 0, radius: 0, terrain: 'none',
+    split: { count: 4, spreadSpeed: 900, radius: 430, damage: 6, terrain: 'crater' },
+    desc: 'A pod that bursts into four falling spores.' },
+  { id: 'a_lance',  name: 'Phase Lance',    color: '#ff6bf0', ammo: 99, aiOnly: true,
+    shots: 1, spread: 0,  speedMul: 1.6, gravityMul: 0.3, damage: 18, radius: 300, terrain: 'crater',
+    pierce: true, proximity: 130,
+    desc: 'A phased beam that ignores terrain.' },
+  { id: 'z_spit',   name: 'Bile Spit',      color: '#9dde4b', ammo: 99, aiOnly: true,
+    shots: 1, spread: 0,  speedMul: 1.0, damage: 12, radius: 560, terrain: 'none',
+    hazard: { type: 'gas', ms: 6000, bites: 3, dmg: 4, r: 520 },
+    desc: 'A gob of something best not examined.' },
+  { id: 'z_grubs',  name: 'Grave Grubs',    color: '#c4b36a', ammo: 99, aiOnly: true,
+    shots: 1, spread: 0,  speedMul: 1.0, damage: 0, radius: 0, terrain: 'none',
+    split: { count: 5, spreadSpeed: 800, radius: 380, damage: 5, terrain: 'crater' },
+    desc: 'A sack of biting things that scatters on impact.' },
+  { id: 'z_lob',    name: 'Corpse Lob',     color: '#7a8a4a', ammo: 99, aiOnly: true,
+    shots: 1, spread: 0,  speedMul: 1.0, damage: 18, radius: 820, terrain: 'crater',
+    desc: 'They throw... something heavy. Do not ask.' },
   // ---- Artillery Golf (golfOnly: the mode's single weapon) -------------------
   { id: 'golfball',  name: 'Golf Ball',       color: '#f4f6f2', ammo: 99, golfOnly: true,
     shots: 1, spread: 0,  speedMul: 0.9, damage: 0, radius: 0, terrain: 'none',
-    bounce: { rest: 0.55, fric: 0.74, stop: 150, max: 14 },
+    bounce: { rest: 0.55, fric: 0.84, stop: 100, max: 24 },   // long satisfying roll-out
     desc: 'Dimpled, honest, and utterly indifferent to your feelings.' },
 ];
 
@@ -233,13 +292,13 @@ export const WEAPON_BY_ID = Object.fromEntries(WEAPONS.map(w => [w.id, w]));
 
 // Public weapon info for the client UI (no physics numbers needed there).
 export function weaponMenu() {
-  return WEAPONS.filter(w => !w.bossOnly && !w.golfOnly)
+  return WEAPONS.filter(w => !w.bossOnly && !w.golfOnly && !w.aiOnly)
     .map(w => ({ id: w.id, name: w.name, color: w.color, ammo: w.ammo, desc: w.desc }));
 }
 
 export function startingAmmo() {
   const a = {};
-  for (const w of WEAPONS) if (!w.bossOnly && !w.golfOnly) a[w.id] = w.ammo;
+  for (const w of WEAPONS) if (!w.bossOnly && !w.golfOnly && !w.aiOnly) a[w.id] = w.ammo;
   return a;
 }
 
@@ -260,12 +319,12 @@ function mulberry32(seed) {
 // Gaussian peaks (some sharp, some broad), and 2..5 true CLIFFS (sigmoid
 // elevation steps). Flattened pockets under each tank. Peak height is capped
 // so a high-power lob always clears them (verified against SPEED_PER_POWER).
-export function generateTerrain(seed, n = 2, biome = 'alpine') {
+export function generateTerrain(seed, n = 2, biome = 'alpine', width = WORLD_W) {
   const B = (BIOMES[biome] || BIOMES.alpine).gen;
   const floor = biomeLavaY(biome);
   const rng = mulberry32(seed);
   const base = WORLD_H * B.base; // surface baseline; peaks rise into the sky above, valleys drop below
-  const terrain = new Array(WORLD_W + 1);
+  const terrain = new Array(width + 1);
   const rough = (0.7 + rng() * 0.45) * B.roughMul;  // per-map ruggedness
 
   // BIG rolling relief — broad, deep valleys and rises (retuned for the 24k map).
@@ -282,9 +341,9 @@ export function generateTerrain(seed, n = 2, biome = 'alpine') {
   const peaks = [];
   for (let i = 0; i < peakCount; i++) {
     peaks.push({
-      cx: WORLD_W * (0.20 + rng() * 0.60),         // central band, well clear of both tanks
+      cx: width * (0.20 + rng() * 0.60),           // central band, well clear of both tanks
       h: B.ph0 + rng() * B.phR,                    // biome-scaled massif height
-      w: WORLD_W * (0.050 + rng() * 0.100) * B.pwMul,
+      w: width * (0.050 + rng() * 0.100) * B.pwMul,
       sharp: rng() < B.sharpP,                     // some peaks are jagged spires
     });
   }
@@ -293,13 +352,13 @@ export function generateTerrain(seed, n = 2, biome = 'alpine') {
   const cliffs = [];
   for (let i = 0; i < cliffCount; i++) {
     cliffs.push({
-      cx: WORLD_W * (0.16 + rng() * 0.68),
+      cx: width * (0.16 + rng() * 0.68),
       drop: (400 + rng() * 800) * B.dropMul * (rng() < 0.5 ? 1 : -1),
       w: 70 + rng() * 130,                         // steepness of the step (steeper = more canyon-like)
     });
   }
 
-  for (let x = 0; x <= WORLD_W; x++) {
+  for (let x = 0; x <= width; x++) {
     let y = base;
     for (const L of layers) y += Math.sin(x * L.f + L.p) * L.a;
     y -= Math.pow(1 - Math.abs(Math.sin(x * ridge.f + ridge.p)), 3) * ridge.a;
@@ -318,7 +377,7 @@ export function generateTerrain(seed, n = 2, biome = 'alpine') {
   }
 
   // flatten a pocket wherever each tank will spawn
-  for (const sx of pickSpawns(seed, n)) flattenZone(terrain, sx, 700);
+  for (const sx of pickSpawns(seed, n, width)) flattenZone(terrain, sx, 700);
   smooth(terrain, 1);
   return terrain;
 }
@@ -334,7 +393,7 @@ export function generateTrees(terrain, seed, n = 2) {
   const tries = 11000;
   const MIN_GAP = 85;                                             // world units between trees
   for (let i = 0; i < tries && trees.length < 240; i++) {
-    const x = Math.round(600 + rng() * (WORLD_W - 1200));
+    const x = Math.round(600 + rng() * (terrain.length - 1 - 1200));
     if (spawns.some(sx => Math.abs(x - sx) < CLEAR)) continue;      // keep tank pockets clear
     const slope = Math.abs(surfaceAt(terrain, x + 25) - surfaceAt(terrain, x - 25));
     if (slope > 85) continue;                                     // too steep for trees
@@ -348,10 +407,10 @@ export function generateTrees(terrain, seed, n = 2) {
 function clampY(y, floor = TERRAIN_FLOOR) { return Math.max(TERRAIN_TOP, Math.min(floor, y)); }
 
 function flattenZone(terrain, cx, half) {
-  const x0 = Math.max(0, Math.round(cx - half)), x1 = Math.min(WORLD_W, Math.round(cx + half));
+  const x0 = Math.max(0, Math.round(cx - half)), x1 = Math.min(terrain.length - 1, Math.round(cx + half));
   let sum = 0, cnt = 0;
   for (let x = Math.round(cx) - 40; x <= Math.round(cx) + 40; x++) {
-    if (x >= 0 && x <= WORLD_W) { sum += terrain[x]; cnt++; }
+    if (x >= 0 && x <= terrain.length - 1) { sum += terrain[x]; cnt++; }
   }
   const level = sum / cnt;
   for (let x = x0; x <= x1; x++) {
@@ -370,7 +429,8 @@ function smooth(terrain, passes) {
 
 export function surfaceAt(terrain, x) {
   if (x <= 0) return terrain[0];
-  if (x >= WORLD_W) return terrain[WORLD_W];
+  const xMax = terrain.length - 1;
+  if (x >= xMax) return terrain[xMax];
   const i = Math.floor(x), f = x - i;
   return terrain[i] * (1 - f) + terrain[i + 1] * f;
 }
@@ -379,10 +439,10 @@ export function surfaceAt(terrain, x) {
 // the LEFT half and player 1 in the RIGHT half (matching the scoreboard sides),
 // and they're always at least a quarter of the map apart. Terrain flattening,
 // tree placement and the tanks all call this so they agree on the pockets.
-export function pickSpawns(seed, n = 2) {
+export function pickSpawns(seed, n = 2, width = WORLD_W) {
   const rng = mulberry32((seed ^ 0x5adf00d) >>> 0);
   const margin = 1600;                       // keep clear of the map edges
-  const slot = (WORLD_W - 2 * margin) / n;   // one lane per player
+  const slot = (width - 2 * margin) / n;     // one lane per player
   const jitter = slot * 0.22;                // guarantees a slot*0.56 neighbour gap
   const xs = [];
   for (let i = 0; i < n; i++) {
@@ -452,7 +512,7 @@ function deform(terrain, cx, cy, r, mode, wall, opt = {}) {
   const floor = opt.floor ?? TERRAIN_FLOOR;
   if (mode === 'wall' && wall) {
     const span = Math.ceil(wall.w * 3);
-    const x0 = Math.max(0, Math.floor(cx - span)), x1 = Math.min(WORLD_W, Math.ceil(cx + span));
+    const x0 = Math.max(0, Math.floor(cx - span)), x1 = Math.min(terrain.length - 1, Math.ceil(cx + span));
     for (let x = x0; x <= x1; x++) {
       const d = (x - cx) / wall.w;
       // Math.max(WALL_TOP, …): a rampart may never crest above WALL_TOP, so the
@@ -465,7 +525,7 @@ function deform(terrain, cx, cy, r, mode, wall, opt = {}) {
   }
   const rw = r * (opt.wMul || 1);
   const x0 = Math.max(0, Math.floor(cx - rw));
-  const x1 = Math.min(WORLD_W, Math.ceil(cx + rw));
+  const x1 = Math.min(terrain.length - 1, Math.ceil(cx + rw));
   for (let x = x0; x <= x1; x++) {
     const dx = x - cx;
     if (Math.abs(dx) > rw) continue;
@@ -541,9 +601,12 @@ export function fireDamage(hazards, tanks) {
   for (const h of hazards) {
     if (h.until == null || !(h.bites > 0)) continue;
     h.bites--;
+    const bite = h.dmg || FIRE_DMG;
     for (let ti = 0; ti < n; ti++) {
       if (tanks[ti].alive === false) continue;
-      if (distToTank(h.x, h.y, tanks[ti]) <= h.r) dmg[ti] = FIRE_DMG;
+      // Overlapping clouds take the WORST bite, they don't stack — standing in
+      // fire is standing in fire, gas on top doesn't double-cook you.
+      if (distToTank(h.x, h.y, tanks[ti]) <= h.r) dmg[ti] = Math.max(dmg[ti], bite);
     }
   }
   return dmg;
@@ -575,6 +638,27 @@ export function simulateShot(state, shot) {
     floor: state.lavaY ?? TERRAIN_FLOOR,
     guard: state.guard || null,
     ...((BIOMES[state.biome] || BIOMES.alpine).crater),
+  };
+
+  // NOTHING on the field is immortal. Concrete slabs guard against digging only
+  // while they stand: enough battering (170 health) crumbles one — its guard
+  // columns clear and the deck collapses into a crater.
+  const batterRuins = (x, y, rDmg, dmg) => {
+    if (!state.ruins || dmg <= 0) return;
+    for (const s of state.ruins) {
+      if (s.alive === false) continue;
+      const cx2 = (s.a + s.b) / 2, hw = (s.b - s.a) / 2;
+      const d = Math.max(0, Math.abs(x - cx2) - hw);
+      const reach = rDmg + 200;
+      if (d > reach) continue;
+      s.hp -= Math.max(0, dmg * (1 - d / reach));
+      if (s.hp <= 0) {
+        s.alive = false;
+        if (state.guard) for (let gx = s.a; gx <= s.b; gx++) state.guard[gx] = 0;
+        propEvents.push({ kind: 'slab', x: round1(cx2), y: round1(s.top) });
+        deform(state.terrain, cx2, s.top + 80, hw * 1.15, 'crater', null, fx);
+      }
+    }
   };
 
   // Chain-reaction props. A damaging blast cooks off any fuel barrel it touches
@@ -623,13 +707,14 @@ export function simulateShot(state, shot) {
       damageDealt[ti] += blastDamage(x, y, rDmg, dmg, state.tanks[ti]);
     }
     igniteProps(x, y, rDmg, dmg);
+    batterRuins(x, y, rDmg, dmg);
     if (opts.hazard) {
       const hz = opts.hazard;
       const rec = { type: hz.type, x: round1(x), y: round1(y), r: hz.r };
       // REAL-TIME hazard (fire): carries a duration + a bite budget. The server
       // stamps `until` from its own clock when it adopts the hazard, so this
       // function stays pure and clock-free.
-      if (hz.ms) { rec.ms = hz.ms; rec.bites = hz.bites; }
+      if (hz.ms) { rec.ms = hz.ms; rec.bites = hz.bites; rec.dmg = hz.dmg || FIRE_DMG; }
       // TURN-BASED hazard (gas): unchanged.
       else { rec.turnsLeft = hz.turns; rec.dpt = hz.dpt; rec.dps = hz.dps || 0; }
       newHazards.push(rec);
@@ -641,7 +726,7 @@ export function simulateShot(state, shot) {
     kind, color: w.color, hz: hazardType || null,
   });
 
-  let golfOut;
+  let golfOut, nanoOut;
   const nSub = w.shots;
   for (let i = 0; i < nSub; i++) {
     const off = nSub === 1 ? 0 : (-w.spread / 2 + (w.spread * i) / (nSub - 1));
@@ -730,10 +815,35 @@ export function simulateShot(state, shot) {
         // onto any ground this shot reshaped) and BEFORE settle() below.
         if (w.teleport) d.tp = teleportTank(state, by, fp.x);
       }
-      projectiles.push({ path: fp.path, det: d, delay: 0 });
+      // A nano dart that lands tags the nearest living tank in reach — the
+      // server runs the bot clock; the flag here just tells it who.
+      if (w.nano && fp.hit) {
+        let ns = -1, nd = Infinity;
+        for (let ti = 0; ti < state.tanks.length; ti++) {
+          if (state.tanks[ti].alive === false) continue;
+          const dd = Math.hypot(state.tanks[ti].x - fp.x, state.tanks[ti].y - fp.y);
+          if (dd <= w.nano.r && dd < nd) { nd = dd; ns = ti; }
+        }
+        if (ns >= 0) { nanoOut = { seat: ns, bots: w.nano.bots, dmg: w.nano.dmg }; if (d) d.nano = ns; }
+      }
+      projectiles.push({ path: fp.path, det: d, delay: w.burst ? i * 6 : 0 });
     }
   }
 
+  // A bunker is only as good as the ground under it: if the deck has been dug
+  // through across more than a third of its span, the casemate comes down.
+  if (state.props) for (const p of state.props) {
+    if (p.kind !== 'bunker' || p.alive === false) continue;
+    let breached = 0, span = 0;
+    for (let tx = Math.max(0, Math.round(p.x - p.w)); tx <= Math.min(state.terrain.length - 1, Math.round(p.x + p.w)); tx++) {
+      span++;
+      if (state.terrain[tx] > p.deck + 240) breached++;
+    }
+    if (span > 0 && breached / span > 0.35) {
+      p.alive = false;
+      propEvents.push({ kind: 'bunker', x: round1(p.x), y: round1(p.deck) });
+    }
+  }
   settle(state.terrain, state.tanks);
   return {
     projectiles,
@@ -741,6 +851,8 @@ export function simulateShot(state, shot) {
     newScorches,
     propEvents,
     golf: golfOut,
+    nano: nanoOut,
+    ruins: state.ruins ? state.ruins.map(s => ({ a: s.a, b: s.b, top: s.top, hp: Math.max(0, Math.round(s.hp)), alive: s.alive !== false })) : undefined,
     props: state.props ? state.props.map(p => ({ id: p.id, kind: p.kind, x: round1(p.x), y: round1(p.y), w: p.w || 0, deck: p.deck != null ? round1(p.deck) : undefined, hp: Math.max(0, Math.round(p.hp ?? 0)), alive: p.alive !== false })) : undefined,
     tanks: state.tanks.map(t => ({ x: round1(t.x), y: round1(t.y) })),
     // total damage dealt to everyone who isn't you (self-damage excluded)
@@ -840,7 +952,7 @@ function integrate(terrain, tanks, ox, oy, vx, vy, opts) {
     }
     prevVy = vy;
 
-    if (x < 0 || x > WORLD_W || y > WORLD_H) { path.push([round1(x), round1(y)]); return { path, hit: false, x, y, vx, vy }; }
+    if (x < 0 || x > terrain.length - 1 || y > WORLD_H) { path.push([round1(x), round1(y)]); return { path, hit: false, x, y, vx, vy }; }
     const armed = Math.hypot(x - ox, y - oy) > ARM_DIST;
     if (opts.pierce) {
       // Railgun: ignore terrain and the firer entirely — punch straight through
@@ -860,9 +972,11 @@ function integrate(terrain, tanks, ox, oy, vx, vy, opts) {
             if (ti === opts.pierceBy) continue;                   // never your own tank
             const tk = tanks[ti];
             if (tk.alive === false) continue;
-            const rx = Math.max(tk.x - TANK_HW, Math.min(ix, tk.x + TANK_HW));   // closest point on the hull box
-            const ry = Math.max(tk.y - TANK_TOP, Math.min(iy, tk.y));
-            if (Math.hypot(ix - rx, iy - ry) <= prox) {
+            const sc2 = tk.scale || 1;
+            const ry = Math.max(tk.y - TANK_HAT_TOP * sc2, Math.min(iy, tk.y + TANK_BELOW * sc2));
+            const hw2 = tankHalfWidthAt((tk.y - ry) / sc2) * sc2;                 // closest point on the outline
+            const rx = Math.max(tk.x - hw2, Math.min(ix, tk.x + hw2));
+            if (distToTank(ix, iy, tk) <= prox) {
               path.push([round1(ix), round1(iy)]); return { path, hit: true, x: rx, y: ry, vx, vy };
             }
           }
@@ -965,12 +1079,19 @@ export function prepareGolfHole(terrain, teeX, cupX) {
       terrain[x] = terrain[x] * 0.35 + avg * 0.65;
     }
   }
-  flattenZone(terrain, teeX, 700);
-  flattenZone(terrain, cupX, 560);
+  flattenZone(terrain, teeX, 850);           // the tee box
+  // The GREEN: wide and properly FLAT — level the whole apron to one height
+  // rather than averaging it (flattenZone leaves a lean on slopes).
+  const gHalf = 1500;
+  const gLevel = surfaceAt(terrain, cupX);
+  for (let gx = Math.max(0, Math.round(cupX - gHalf)); gx <= Math.min(nL - 1, Math.round(cupX + gHalf)); gx++) {
+    const t = Math.min(1, Math.max(0, (gHalf - Math.abs(gx - cupX)) / 420));   // feathered fringe
+    terrain[gx] = terrain[gx] * (1 - t) + gLevel * t;
+  }
   smooth(terrain, 1);
   for (let dx = -120; dx <= 120; dx++) {
     const x = Math.round(cupX + dx);
-    if (x < 0 || x > WORLD_W) continue;
+    if (x < 0 || x >= nL) continue;
     terrain[x] = terrain[x] + (1 - Math.pow(Math.abs(dx) / 120, 2)) * 95;
   }
   return round1(surfaceAt(terrain, cupX));
@@ -1030,7 +1151,7 @@ export function generateRuins(seed, terrain, n = 2) {
       terrain[tx] = Math.min(terrain[tx], top);
       guard[tx] = top;                               // nothing digs below the deck
     }
-    ranges.push({ a, b, top });
+    ranges.push({ a, b, top, hp: 170, alive: true });   // concrete, not immortal
   }
   return { ranges, guard };
 }

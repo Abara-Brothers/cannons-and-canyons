@@ -584,3 +584,45 @@ body.in-game .bg-canyon { display: none; }
 /* No driving in golf — your tank walks to your ball. */
 body.golf .drive-row { display: none; }
 body.golf .fuel { display: none; }
+
+/* ---------- Boss health bar ---------- */
+#bossbar { display: flex; align-items: center; gap: 10px; padding: 2px 2px 0; }
+#bossbar .bb-name { font-size: 12px; font-weight: 900; color: #ff5a52; letter-spacing: .08em; white-space: nowrap; }
+#bossbar .bb-track { flex: 1; height: 11px; border-radius: 6px; background: #0e142b; border: 1px solid #552e33; overflow: hidden; }
+#bossbar .bb-track i { display: block; height: 100%; width: 100%; background: linear-gradient(90deg, #ff3b30, #ff7a2e); transition: width .35s ease; }
+#bossbar .bb-num { font-size: 11px; font-weight: 800; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+#bossbar.dead .bb-track i { background: #39424a; }
+
+/* ---------- After-action report + loot ---------- */
+#battleReport { margin-top: 10px; text-align: left; }
+#battleReport .br-title { font-size: 11px; letter-spacing: .18em; color: var(--muted); margin-bottom: 6px; text-align: center; }
+#battleReport .br-row { display: flex; gap: 10px; align-items: baseline; padding: 5px 10px; border-radius: 9px; background: var(--panel-2); border: 1px solid var(--line); margin-bottom: 5px; font-size: 13.5px; }
+#battleReport .br-name { font-weight: 800; color: var(--seat, var(--text)); flex: 1; }
+#battleReport .br-stat { color: var(--muted); font-variant-numeric: tabular-nums; }
+#lootLine { margin: 6px 0 2px; font-size: 14.5px; color: #ffd23f; font-weight: 700; }
+
+/* ---- Help modal --------------------------------------------------------- */
+.howto {
+  margin-top: 10px; padding: 7px 14px; border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.05);
+  color: var(--ink-dim, #aeb9d6); font: inherit; font-size: 13px; cursor: pointer;
+}
+.howto:active { transform: translateY(1px); }
+.help-card { max-width: 560px; width: min(92vw, 560px); max-height: 86dvh; display: flex; flex-direction: column; }
+.help-scroll { overflow-y: auto; text-align: left; margin: 10px 0 14px; padding-right: 6px; min-height: 0; }
+.help-sec { margin-bottom: 16px; }
+.help-sec h3 { margin: 0 0 6px; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent, #ff9d3d); }
+.help-sec p, .help-sec li { font-size: 13.5px; line-height: 1.5; color: var(--ink-dim, #c5cde0); }
+.help-sec ul { margin: 0; padding-left: 18px; }
+.help-sec li { margin-bottom: 6px; }
+.hw-row {
+  display: grid; grid-template-columns: 30px minmax(90px, auto) 44px 1fr;
+  gap: 8px; align-items: center; padding: 6px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.hw-row:last-child { border-bottom: 0; }
+.hw-ico svg { width: 26px; height: 26px; display: block; }
+.hw-traj svg { width: 40px; height: 24px; display: block; }
+.hw-name { font-weight: 700; font-size: 13px; }
+.hw-name i { display: block; font-style: normal; font-weight: 400; font-size: 10.5px; color: #8a93a8; }
+.hw-desc { font-size: 12.5px; line-height: 1.4; color: var(--ink-dim, #c5cde0); }
