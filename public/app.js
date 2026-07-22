@@ -3501,6 +3501,12 @@ function ordnanceKind(A, pr) {
   if (w === 'airstrike') return 'bomb';
   if (w === 'cluster')   return pr.delay > 0 ? 'bomblet'  : 'cluster';
   if (w === 'napalm')    return pr.delay > 0 ? 'firebomb' : 'napalm';
+  // The WARLORD's kit borrows the matching player ordnance art.
+  if (w === 'b_twin')    return 'cannon';
+  if (w === 'b_barrage') return 'volley';
+  if (w === 'b_flame')   return pr.delay > 0 ? 'firebomb' : 'napalm';
+  if (w === 'b_lance')   return 'railgun';
+  if (w === 'b_quake')   return 'buster';
   return ORD[w] ? w : 'cannon';          // cannon is the sensible default round
 }
 const ORD_SCALE = { nuke: 1.30, mortar: 1.12, buster: 1.10, bomb: 0.92, firebomb: 0.85, bomblet: 0.72 };
