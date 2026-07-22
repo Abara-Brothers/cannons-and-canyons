@@ -36,6 +36,9 @@ if (pointHitsTank(ENEMY + 900, FLAT_Y, { x: ENEMY, y: FLAT_Y })) fail('pointHits
 //     angle/power space, and must never hurt the FIRER on a normal outbound shot.
 const report = [];
 for (const w of WEAPONS) {
+  // Boss kit and the golf ball are mode-gated, not player arsenal: the WARLORD's
+  // balance is exercised live by test/boss.mjs, and the ball never deals damage.
+  if (w.bossOnly || w.golfOnly) continue;
   let bestEnemy = 0, worstSelf = 0, bestAt = null;
   for (let a = 10; a <= 80; a += 2.5) {
     for (let p = 20; p <= 100; p += 2.5) {

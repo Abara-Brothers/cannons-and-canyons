@@ -222,6 +222,11 @@ export const WEAPONS = [
   { id: 'b_quake',   name: 'Seismic Slam',    color: '#c98a4b', ammo: 99, bossOnly: true,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 26, radius: 1400, terrain: 'crater', dig: 0.5,
     desc: 'A ground-pounder round that cracks the earth open.' },
+  // ---- Artillery Golf (golfOnly: the mode's single weapon) -------------------
+  { id: 'golfball',  name: 'Golf Ball',       color: '#f4f6f2', ammo: 99, golfOnly: true,
+    shots: 1, spread: 0,  speedMul: 0.9, damage: 0, radius: 0, terrain: 'none',
+    bounce: { rest: 0.55, fric: 0.74, stop: 150, max: 14 },
+    desc: 'Dimpled, honest, and utterly indifferent to your feelings.' },
 ];
 
 export const WEAPON_BY_ID = Object.fromEntries(WEAPONS.map(w => [w.id, w]));
@@ -636,6 +641,7 @@ export function simulateShot(state, shot) {
     kind, color: w.color, hz: hazardType || null,
   });
 
+  let golfOut;
   const nSub = w.shots;
   for (let i = 0; i < nSub; i++) {
     const off = nSub === 1 ? 0 : (-w.spread / 2 + (w.spread * i) / (nSub - 1));
@@ -706,9 +712,17 @@ export function simulateShot(state, shot) {
         }
       }
     } else {
-      const fp = integrate(state.terrain, state.tanks, ox, oy, vx, vy, w.pierce ? { pierce: true, pierceBy: by, proximity: w.proximity || 0, gravMul, by } : { gravMul, by });
+      const fp = integrate(state.terrain, state.tanks, ox, oy, vx, vy,
+        w.pierce ? { pierce: true, pierceBy: by, proximity: w.proximity || 0, gravMul, by }
+        : w.bounce ? { bounce: w.bounce, gravMul, by }
+        : { gravMul, by });
       let d = null;
-      if (fp.hit) {
+      if (w.bounce) {
+        // Golf: no detonation — the ball either comes to rest (a soft dust puff)
+        // or leaves the world (out of bounds; the server scores the penalty).
+        golfOut = { rest: fp.rest ? [fp.rest.x, fp.rest.y] : null };
+        if (fp.rest) d = det(fp.rest.x, fp.rest.y, 22, 'none');
+      } else if (fp.hit) {
         d = det(fp.x, fp.y, w.wall ? 0 : w.radius, w.terrain, w.hazard ? w.hazard.type : null);
         boom(fp.x, fp.y, w.radius, w.terrain, w.damage, { hazard: w.hazard, dig: w.dig, wall: w.wall });
         // Teleport rides the detonation record so the client can trigger the warp
@@ -726,6 +740,7 @@ export function simulateShot(state, shot) {
     newHazards,
     newScorches,
     propEvents,
+    golf: golfOut,
     props: state.props ? state.props.map(p => ({ id: p.id, kind: p.kind, x: round1(p.x), y: round1(p.y), w: p.w || 0, deck: p.deck != null ? round1(p.deck) : undefined, hp: Math.max(0, Math.round(p.hp ?? 0)), alive: p.alive !== false })) : undefined,
     tanks: state.tanks.map(t => ({ x: round1(t.x), y: round1(t.y) })),
     // total damage dealt to everyone who isn't you (self-damage excluded)
@@ -809,7 +824,7 @@ export function aiShot(terrain, tanks, by, difficulty, facing, weaponId = 'canno
 function integrate(terrain, tanks, ox, oy, vx, vy, opts) {
   const path = [[round1(ox), round1(oy)]];
   const grav = GRAVITY * (opts.gravMul || 1);
-  let x = ox, y = oy, t = 0, step = 0, prevVy = vy;
+  let x = ox, y = oy, t = 0, step = 0, prevVy = vy, bounces = 0;
   // The muzzle now sits INSIDE the firer's own (much larger) hitbox, so the shell
   // must be allowed to leave its own tank before it can collide with it.
   let leftOwn = (opts.by == null) || !pointHitsTank(ox, oy, tanks[opts.by]);
@@ -855,11 +870,33 @@ function integrate(terrain, tanks, ox, oy, vx, vy, opts) {
       }
     } else {
       const gy = surfaceAt(terrain, x);
+      if (y >= gy && opts.bounce) {
+        // GOLF: the ball bounces and rolls instead of detonating. Reflect the
+        // velocity about the local surface normal (heightmap slope over ±24u),
+        // damp the normal component by restitution and the tangential one by
+        // friction, and come to rest when it's too slow to matter.
+        const bz = opts.bounce;
+        bounces = (bounces || 0) + 1;
+        const k = (surfaceAt(terrain, x + 24) - surfaceAt(terrain, x - 24)) / 48;   // dy/dx, y-down
+        const L = Math.hypot(k, 1);
+        const nx2 = k / L, ny2 = -1 / L;                 // outward (up) normal
+        const vn = vx * nx2 + vy * ny2;
+        const tx2 = vx - vn * nx2, ty2 = vy - vn * ny2;  // tangential part
+        vx = tx2 * bz.fric - vn * nx2 * bz.rest;
+        vy = ty2 * bz.fric - vn * ny2 * bz.rest;
+        y = gy - 0.5;
+        path.push([round1(x), round1(gy)]);
+        if (Math.hypot(vx, vy) < bz.stop || bounces > bz.max) {
+          return { path, hit: false, rest: { x: round1(x), y: round1(gy) }, x, y: gy, vx, vy };
+        }
+        continue;
+      }
       if (y >= gy) { path.push([round1(x), round1(gy)]); return { path, hit: true, x, y: gy, vx, vy }; }
       // Direct tank hit — tested against the tank OUTLINE (hull + turret boxes).
       // SWEPT: one physics step is up to ~91 world units, so sub-sample the
-      // segment or a fast shell tunnels clean through the box.
-      if (armed) {
+      // segment or a fast shell tunnels clean through the box. Golf balls are
+      // NOT ordnance — they sail past tanks and only ever rest on the ground.
+      if (armed && !opts.bounce) {
         const px = x - vx * DT, py = y - vy * DT;
         const n = Math.max(1, Math.ceil(Math.hypot(x - px, y - py) / 12));
         for (let s = 1; s <= n; s++) {
@@ -908,6 +945,35 @@ export function terrainDiff(before, after) {
   const values = [];
   for (let x = from; x <= to; x++) values.push(round1(after[x]));
   return { from, values };
+}
+
+// ---- Artillery Golf -----------------------------------------------------------
+// Dress a generated terrain as a golf hole: a flat tee box, a flat green, and a
+// crisp cup notch sunk into it. Returns the cup's surface y.
+export function prepareGolfHole(terrain, teeX, cupX) {
+  // A raw battlefield is a wall, not a course: a par-3 dead-ended by a 3000-unit
+  // spire just bounces the ball back to the tee (observed). Two wide box-blurs
+  // keep the macro elevation — ridges, valleys, doglegs — but knock spires and
+  // cliff steps down into fairway rollers a bounced ball can actually take on.
+  const nL = terrain.length, R = 340;
+  for (let pass = 0; pass < 2; pass++) {
+    const pre = new Array(nL + 1); pre[0] = 0;
+    for (let x = 0; x < nL; x++) pre[x + 1] = pre[x] + terrain[x];
+    for (let x = 0; x < nL; x++) {
+      const a = Math.max(0, x - R), b = Math.min(nL - 1, x + R);
+      const avg = (pre[b + 1] - pre[a]) / (b - a + 1);
+      terrain[x] = terrain[x] * 0.35 + avg * 0.65;
+    }
+  }
+  flattenZone(terrain, teeX, 700);
+  flattenZone(terrain, cupX, 560);
+  smooth(terrain, 1);
+  for (let dx = -120; dx <= 120; dx++) {
+    const x = Math.round(cupX + dx);
+    if (x < 0 || x > WORLD_W) continue;
+    terrain[x] = terrain[x] + (1 - Math.pow(Math.abs(dx) / 120, 2)) * 95;
+  }
+  return round1(surfaceAt(terrain, cupX));
 }
 
 // ---- Destructible props -------------------------------------------------------

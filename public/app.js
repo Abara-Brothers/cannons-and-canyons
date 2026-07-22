@@ -25,6 +25,7 @@ const S = {
   scorch: [],                          // permanent burn scars from fire: [{a,b}] world-x ranges
   biome: 'alpine', ruins: [],          // battlefield flavour (server-picked)
   boss: -1, scales: [],                // boss seat + per-tank scale (mech is 1.8x)
+  golf: null,                          // Artillery Golf scorecard state
   props: [], crates: [], shield: [],   // barrels/bunkers, supply drops, crate shields
   chainQueue: [],                      // staggered prop chain explosions
   tanks: [{ x: 900, y: 9720 }, { x: 23100, y: 9720 }],
@@ -105,6 +106,7 @@ const ICONS = {
   airstrike: `<svg viewBox="0 0 24 24"><path d="M1.4 6.9l7.6 1.2 3.1-3.4 1.9.5-1.2 3.4 6.4 1-.4-2.1 1.7.3.9 3.2-19.2 1.1z" fill="#54c8ff"/><g fill="#9fdcff"><path d="M6.6 14.2l-1.2 3.9-1.2-3.9z"/><path d="M12 15.6l-1.3 4.3-1.3-4.3z"/><path d="M17.4 14.2l-1.2 3.9-1.2-3.9z"/></g><path d="M2.6 21.8h18.8" stroke="#54c8ff" stroke-width="1.4" stroke-linecap="round" opacity=".55" fill="none"/></svg>`,
   buster: `<svg viewBox="0 0 24 24"><path d="M10.4 1.6h3.2v3.2h-3.2z" fill="#c98a4b"/><path d="M8.9 1.6h1.5v3.6L8 6.6zM15.1 1.6h-1.5v3.6L16 6.6z" fill="#7a5a30"/><rect x="10.2" y="4.6" width="3.6" height="6.2" fill="#c98a4b"/><rect x="10.2" y="4.6" width="1.3" height="6.2" fill="#e0a668"/><path d="M10.2 10.6h3.6L12 15.4z" fill="#8e969f"/><path d="M2.6 12.4h6.5l2.4 4.6-1.6 4.9H2.6z" fill="#6b5a34"/><path d="M21.4 12.4h-6.5l-2.4 4.6 1.6 4.9h7.3z" fill="#6b5a34"/><path d="M2.6 12.4h6.5l1 1.9H2.6zM21.4 12.4h-6.5l-1 1.9h7.5z" fill="#a6d878"/></svg>`,
   wall: `<svg viewBox="0 0 24 24"><path d="M1.4 20.4c1.9 0 3.1-2.6 4.6-5.6C7.9 10.9 9.6 6.6 12 6.6s4.1 4.3 6 8.2c1.5 3 2.7 5.6 4.6 5.6z" fill="#8a5a2b"/><path d="M1.4 20.4c1.9 0 3.1-2.6 4.6-5.6C7.9 10.9 9.6 6.6 12 6.6v13.8z" fill="#a06b35"/><path d="M12 6.6c-1.2 0-2.2 1.1-3.1 2.6h6.2C14.2 7.7 13.2 6.6 12 6.6z" fill="#6fb04a"/><g stroke="#6b451f" stroke-width=".9" stroke-linecap="round" fill="none" opacity=".65"><path d="M6.9 16.4h3.4"/><path d="M13.7 16.4h3.4"/><path d="M9.6 12.6h4.8"/></g><path d="M1.4 20.4h21.2v1.9H1.4z" fill="#5d3c1c"/></svg>`,
+  golfball: `<svg viewBox="0 0 24 24"><circle cx="11" cy="10" r="6.2" fill="#f4f6f2"/><circle cx="11" cy="10" r="6.2" fill="none" stroke="#c9cfd8" stroke-width=".8"/><g fill="#c9cfd8"><circle cx="9" cy="8" r=".7"/><circle cx="12.4" cy="7.4" r=".7"/><circle cx="10.6" cy="11" r=".7"/><circle cx="13.6" cy="10.4" r=".7"/><circle cx="8.4" cy="10.8" r=".7"/></g><path d="M5 21h11" stroke="#3a7d2f" stroke-width="2.4" stroke-linecap="round"/><path d="M17.6 20.9V9.4l3.6 1.5-3.6 1.6" fill="#ff3b30" stroke="#e8ecf2" stroke-width=".9"/></svg>`,
   teleport: `<svg viewBox="0 0 24 24"><path d="M2.6 12l3.3-5.4L9.2 12l-3.3 5.4z" fill="none" stroke="#c86bff" stroke-width="1.7" stroke-linejoin="round" opacity=".8"/><path d="M14.8 12l3.3-5.4L21.4 12l-3.3 5.4z" fill="#c86bff"/><path d="M10.6 8.7L13.9 12l-3.3 3.3" fill="none" stroke="#6be7ff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 20.6h16" stroke="#8a93a8" stroke-width="1.5" stroke-linecap="round"/></svg>`,
   nuke: `<svg viewBox="0 0 24 24"><path d="M8.4 18.1L5.2 22.5h3.2zM15.6 18.1l3.2 4.4h-3.2z" fill="#2b323c"/><path d="M8.7 17.4h6.6l1.6 5.1H7.1z" fill="#3d4652"/><path d="M12 1.5c3.4 3.4 5.3 7.1 5.3 10.4 0 2.4-.8 4.4-1.9 5.9H8.6c-1.1-1.5-1.9-3.5-1.9-5.9C6.7 8.6 8.6 4.9 12 1.5z" fill="#aeb9c9"/><path d="M12 1.5C8.6 4.9 6.7 8.6 6.7 11.9c0 1.6.4 3.1 1 4.3V5.4z" fill="#d7e0ec"/><path d="M6.9 8.5h10.2v6.6H6.9z" fill="#26350f"/><g fill="#b6ff5a"><path d="M12 11.8l-1.6-3.1a3.6 3.6 0 013.2 0z"/><path d="M12 11.8l-1.6-3.1a3.6 3.6 0 013.2 0z" transform="rotate(120 12 11.8)"/><path d="M12 11.8l-1.6-3.1a3.6 3.6 0 013.2 0z" transform="rotate(240 12 11.8)"/><circle cx="12" cy="11.8" r=".9"/></g></svg>`,
 };
@@ -119,6 +121,7 @@ const TRAJ = {
   airstrike: `<svg viewBox="0 0 24 14"><path d="M2 11 Q6 3 10 5" stroke="#aeb9d6" stroke-width="1.3" fill="none"/><g stroke="#54c8ff" stroke-width="1.3" fill="none"><path d="M14 1v6"/><path d="M18 0v6"/><path d="M22 1v6"/></g><g fill="#54c8ff"><path d="M14 11l-2-3.4h4z"/><path d="M18 10l-2-3.4h4z"/><path d="M22 11l-2-3.4h4z"/></g></svg>`,
   buster: `<svg viewBox="0 0 24 14"><path d="M2 9 Q9 0 16 6" stroke="#aeb9d6" stroke-width="1.6" fill="none"/><path d="M14 9h8" stroke="#7a5a30" stroke-width="1.3"/><path d="M18 6v4" stroke="#c98a4b" stroke-width="1.8"/><path d="M18 14l-2.4-3.4h4.8z" fill="#c98a4b"/></svg>`,
   wall: `<svg viewBox="0 0 24 14"><path d="M2 12 Q9 2 15 8" stroke="#aeb9d6" stroke-width="1.6" fill="none"/><rect x="16.5" y="3.5" width="5" height="9.5" rx="1" fill="#8a5a2b"/></svg>`,
+  golfball: `<svg viewBox="0 0 24 14"><path d="M2 12 Q7 3 11 8 Q13 10.5 15 9.5 Q18 8 21 11.5" stroke="#aeb9d6" stroke-width="1.5" fill="none"/><circle cx="21.2" cy="11.6" r="1.6" fill="#f4f6f2"/></svg>`,
   teleport: `<svg viewBox="0 0 24 14"><path d="M3 12 Q11 0 18 9.5" stroke="#aeb9d6" stroke-width="1.6" fill="none"/><path d="M3 12l2.1-3 2.1 3-2.1 3z" fill="none" stroke="#c86bff" stroke-width="1.2" stroke-linejoin="round"/><path d="M18 9.5l2.1-3 2.1 3-2.1 3z" fill="#c86bff"/><path d="M9.4 3.4l2.2 2.2-2.2 2.2" fill="none" stroke="#6be7ff" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   nuke: `<svg viewBox="0 0 24 14"><path d="M2 12 Q10 0 17 8" stroke="#aeb9d6" stroke-width="1.6" fill="none"/><circle cx="18" cy="9" r="4" fill="#b6ff5a" opacity=".4"/><circle cx="18" cy="9" r="1.8" fill="#b6ff5a"/></svg>`,
 };
@@ -451,6 +454,10 @@ function handle(m) {
     case 'queued': showLobby('search'); break;
     case 'joinError': $('homeError').textContent = m.reason; break;
     case 'start': applySnapshot(m); saveResume(m.code, m.token); break;
+    case 'hole':
+      applySnapshot(m); saveResume(m.code, m.token);
+      showToast(`⛳ Hole ${m.golf ? m.golf.hole : '?'} of 9 — Par ${m.golf ? m.golf.par : '?'}`);
+      break;
     case 'restore':
       applySnapshot(m); saveResume(m.code, m.token);
       showToast('Reconnected — battle on!');
@@ -721,6 +728,9 @@ function applySnapshot(m) {
   setBiomeTheme(S.biome);
   S.boss = (m.boss != null) ? m.boss : -1;
   S.scales = (m.scales || []).slice();
+  S.golf = m.golf || null;
+  document.body.classList.toggle('golf', S.mode === 'golf');
+  if (S.mode === 'golf') S.selected = 'golfball';
   S.ruins = m.ruins || [];
   S.props = m.props || [];
   S.crates = (m.crates || []).map(c => ({ ...c, dropT: 1 }));   // already landed on resume
@@ -807,6 +817,16 @@ function updateHud() {
     const dead = S.alive[i] === false || hp <= 0;
     el.classList.toggle('dead', dead);
     el.classList.toggle('acting', !!S.playing && S.turn === i && !dead);
+    if (S.golf) {                          // golf cards show STROKES, not health
+      const done = S.golf.done && S.golf.done[i];
+      el.querySelector('.score').textContent = `${(S.golf.strokes && S.golf.strokes[i]) || 0}`;
+      el.querySelector('.shots').textContent = done ? '⛳ IN' : `STR · tot ${(S.golf.totals && S.golf.totals[i]) || 0}`;
+      el.querySelector('.hpbar').style.display = 'none';
+      el.classList.toggle('acting', !!S.playing && S.turn === i);
+      el.classList.remove('dead');
+      continue;
+    }
+    el.querySelector('.hpbar').style.display = '';
     el.querySelector('.score').textContent = dead ? '\u2620' : hp;
     el.querySelector('.shots').textContent = 'HP';
     const bar = el.querySelector('.hpbar i');
@@ -827,7 +847,9 @@ function canAim() { return S.playing; }
 
 function updateDock() {
   const active = myTurn();
-  $('turnLabel').textContent = active ? 'YOUR TURN' : (S.playing ? `${S.names[S.turn]}'s turn — line up your shot` : '');
+  $('turnLabel').textContent = S.golf
+    ? `⛳ Hole ${S.golf.hole}/9 · Par ${S.golf.par}` + (active ? ' — your shot' : (S.playing ? ` — ${S.names[S.turn]}` : ''))
+    : active ? 'YOUR TURN' : (S.playing ? `${S.names[S.turn]}'s turn — line up your shot` : '');
   $('fireBtn').disabled = !active;
   $('moveLeft').disabled = !active || S.fuel < MOVE_MIN;
   $('moveRight').disabled = !active || S.fuel < MOVE_MIN;
@@ -1364,6 +1386,12 @@ function applyResolve(m) {
     }
   }
   if (m.ammoSeat === S.you && m.ammo) S.ammo = m.ammo;
+  if (m.golf) {
+    S.golf = { ...(S.golf || {}), ...m.golf };
+    const t = S.tanks[m.golf.noteSeat];
+    const NOTES = { holed: '⛳ SUNK IT!', hazard: 'HAZARD +1', oob: 'OUT OF BOUNDS +1', capped: 'PICKED UP' };
+    if (m.golf.note && t) S.floaters.push({ x: t.x, y: t.y - 420, text: NOTES[m.golf.note] || '', age: 0, life: 1.8, color: m.golf.note === 'holed' ? '#b6ff5a' : '#ffd23f' });
+  }
   updateHud(); buildWeaponStrip();
   for (let i = 0; i < S.n; i++) {
     const blast = (m.damage && m.damage[i]) || 0;
@@ -1880,6 +1908,24 @@ function onGameOver(m) {
   if (m.alive) S.alive = m.alive.slice();
   updateHud();
   let title, cls, win = false;
+  if (m.golf) {                                  // Artillery Golf: the scorecard IS the verdict
+    const g = m.golf;
+    const mine = g.totals[S.you] ?? g.totals[0];
+    const diff = mine - g.parTotal;
+    const vsPar = diff === 0 ? 'even par' : diff > 0 ? `+${diff}` : `${diff}`;
+    if (g.totals.length < 2) { title = `Round complete — ${mine} strokes (${vsPar})`; cls = 'win'; win = true; }
+    else if (m.winner === S.you) { title = `You win the round! ${mine} strokes (${vsPar})`; cls = 'win'; win = true; }
+    else if (m.winner === -1) { title = `All square — ${mine} strokes (${vsPar})`; cls = 'draw'; }
+    else { title = `${S.names[m.winner]} takes the round`; cls = 'lose'; }
+    Audio.chime(win);
+    const rt = $('resultTitle'); rt.textContent = title; rt.className = 'result ' + cls;
+    $('finalScores').innerHTML = g.totals.map((t, i) =>
+      `<div class="fs" style="--seat:${seatColor(i)}"><b>${t}</b><span>${(S.names[i] || '')} strokes</span></div>`
+    ).join('');
+    $('rematchBtn').style.display = '';
+    $('overlay').classList.remove('hidden');
+    return;
+  }
   if (m.team) {                                  // Boss Raid verdicts are TEAM verdicts
     if (m.team === 'players') { title = 'WARLORD-7 DESTROYED! 🏆'; cls = 'win'; win = true; }
     else if (m.team === 'boss') { title = 'Your squad was wiped out'; cls = 'lose'; }
@@ -2045,6 +2091,7 @@ function draw() {
     drawTrees();
     drawProps();
     drawCrates();
+    drawGolfCup();
     drawHazards();
     drawMushroom();               // nuke column — biggest and furthest back, BEHIND the tanks
     drawParticles(true);          // soft discs (fire glow, smoke, dust) — BEHIND the tanks
@@ -2867,6 +2914,35 @@ function drawPlane() {
 
 // Thin indestructible lava floor at the very bottom of the map. Drawn over the
 // terrain fill so it shows through anything blasted down to it.
+// ---- Golf cup + flag ------------------------------------------------------------
+function drawGolfCup() {
+  const g = S.golf; if (!g || !g.cup) return;
+  const sx = wx2s(g.cup.x);
+  if (sx < -60 || sx > view.cssW + 60) return;
+  const gy = wy2s(surfaceAt(g.cup.x));
+  const u = Math.max(9, Math.min(20, 260 * cam.zoom));
+  // cup shadow (the notch itself is carved into the terrain server-side)
+  ctx.fillStyle = 'rgba(10,12,16,0.55)';
+  ctx.fillRect(sx - u * 0.5, gy - u * 0.12, u, u * 0.3);
+  // pole
+  ctx.fillStyle = '#e8ecf2';
+  ctx.fillRect(sx - Math.max(1, u * 0.07), gy - u * 4.6, Math.max(2, u * 0.14), u * 4.6);
+  // flag (waves gently)
+  const wob = Math.sin(performance.now() / 420) * u * 0.14;
+  ctx.fillStyle = '#ff3b30';
+  ctx.beginPath();
+  ctx.moveTo(sx + u * 0.07, gy - u * 4.55);
+  ctx.lineTo(sx + u * 1.7 + wob, gy - u * 4.05);
+  ctx.lineTo(sx + u * 0.07, gy - u * 3.55);
+  ctx.closePath(); ctx.fill();
+  // capture ring: the rest radius that counts as holed
+  const rr = g.cup.r * cam.zoom;
+  ctx.strokeStyle = 'rgba(182,255,90,0.4)'; ctx.lineWidth = Math.max(1, u * 0.1);
+  ctx.setLineDash([6, 7]);
+  ctx.beginPath(); ctx.moveTo(sx - rr, gy + u * 0.35); ctx.lineTo(sx + rr, gy + u * 0.35); ctx.stroke();
+  ctx.setLineDash([]);
+}
+
 // ---- Battlefield props --------------------------------------------------------
 // Fuel barrels (one blast cooks them off, and they cook each other off) and
 // concrete bunkers whose raised deck is the cover. Everything is rects/polygons.
@@ -3261,6 +3337,21 @@ function oLance(x0, len, h, stops) {
 // One drawer per kind. `ph` is pr.pos (playback points) — a monotonic, RNG-free
 // phase for the few sprites that pulse.
 const ORD = {
+  // A golf ball: white dimpled octagon — the one honest sphere in the arsenal.
+  golfball(R) {
+    ctx.fillStyle = '#f4f6f2';
+    ctx.beginPath();
+    for (let k = 0; k <= 8; k++) {
+      const a = (k / 8) * Math.PI * 2 + Math.PI / 8;
+      const px = Math.cos(a) * 0.52 * R, py = Math.sin(a) * 0.52 * R;
+      k === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+    }
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#c9cfd8';
+    ctx.fillRect(-0.18 * R, -0.16 * R, 0.1 * R, 0.1 * R);
+    ctx.fillRect(0.06 * R, 0.02 * R, 0.1 * R, 0.1 * R);
+    ctx.fillRect(-0.05 * R, 0.2 * R, 0.1 * R, 0.1 * R);
+  },
   // Steel HE shell: ogive nose, copper driving band, red ballistic cap.
   cannon(R) {
     oOgive(-1.05 * R, 0.25 * R, 1.25 * R, 0.40 * R, '#aab4c4');
@@ -3415,6 +3506,7 @@ function ordnanceKind(A, pr) {
 const ORD_SCALE = { nuke: 1.30, mortar: 1.12, buster: 1.10, bomb: 0.92, firebomb: 0.85, bomblet: 0.72 };
 const ORD_SPIN  = { bomblet: 0.16, firebomb: 0.10, wall: 0.07 };   // radians per path point
 const ORD_TRAIL = {
+  golfball: 'rgba(244,246,242,.5)',
   cannon: 'rgba(255,220,150,.5)', mortar: 'rgba(255,190,110,.5)', volley: 'rgba(180,170,255,.55)',
   railgun: 'rgba(60,232,143,.75)', cluster: 'rgba(255,210,63,.45)', napalm: 'rgba(255,120,70,.55)',
   gas: 'rgba(157,222,75,.45)', airstrike: 'rgba(84,200,255,.5)', buster: 'rgba(201,138,75,.5)',

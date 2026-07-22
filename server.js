@@ -11,7 +11,7 @@ import {
   generateTerrain, generateTrees, spawnTanks, surfaceAt, simulateShot, terrainDiff,
   weaponMenu, startingAmmo, WEAPON_BY_ID, tickHazards, burnTick, aiShot, mergeScorch,
   fireDamage, FIRE_TICK,
-  BIOMES, BIOME_IDS, biomeLavaY, generateProps, generateRuins,
+  BIOMES, BIOME_IDS, biomeLavaY, generateProps, generateRuins, prepareGolfHole,
 } from './game-core.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -87,6 +87,9 @@ const bossSeatOf = (room) => room.players.findIndex(p => p && p.boss);
 // two live enemies would be.
 function matchOver(room) {
   if (!room.tanks) return false;
+  // Golf has no damage path to end on. A duo match still ends if a player is
+  // scuttled (disconnect forfeit); a solo round can only end via the scorecard.
+  if (room.mode === 'golf') return room.players.length > 1 && aliveSeats(room).length <= 1;
   if (room.mode === 'boss') {
     const b = bossSeatOf(room);
     const bossDead = b >= 0 && room.tanks[b] && room.tanks[b].alive === false;
@@ -171,7 +174,15 @@ function snapshot(room, seat) {
     terrain: room.terrain.map(v => Math.round(v * 10) / 10),
     trees: room.trees,
     tanks: room.tanks.map(t => ({ x: Math.round(t.x * 10) / 10, y: Math.round(t.y * 10) / 10 })),
-    weapons: weaponMenu(),
+    weapons: room.mode === 'golf'
+      ? [{ id: 'golfball', name: WEAPON_BY_ID.golfball.name, color: WEAPON_BY_ID.golfball.color, ammo: 99, desc: WEAPON_BY_ID.golfball.desc }]
+      : weaponMenu(),
+    golf: room.golf ? {
+      hole: room.golf.hole, holes: 9, par: room.golf.par, cup: room.golf.cup, tee: room.golf.tee,
+      strokes: room.golf.strokes.map(r => r[room.golf.hole - 1] || 0),
+      totals: room.golf.strokes.map(r => r.reduce((a, b) => a + b, 0)),
+      done: room.golf.done.slice(),
+    } : undefined,
     n: room.players.length, mode: room.mode,
     names: room.players.map(p => p.name),
     skins: room.players.map(p => p.skin),
@@ -198,7 +209,135 @@ function snapshot(room, seat) {
 const BOSS_HP = 400;
 const BOSS_SCALE = 1.8;
 
+// ---- Artillery Golf -----------------------------------------------------------
+// 9 holes, one club, real bounces. Both players tee off from the same box; your
+// TANK walks to wherever your ball rests, and the hole is done when everyone has
+// sunk it (or picked up at par+4). Lowest total after 9 wins.
+const GOLF_HOLES = [
+  { d: 5200,  biome: 'alpine' }, { d: 8400,  biome: 'desert' }, { d: 11800, biome: 'ice' },
+  { d: 6800,  biome: 'alpine' }, { d: 15500, biome: 'desert' }, { d: 9600,  biome: 'ice' },
+  { d: 18500, biome: 'alpine' }, { d: 7600,  biome: 'desert' }, { d: 13800, biome: 'ice' },
+];
+const golfPar = (d) => 3 + (d > 9000 ? 1 : 0) + (d > 15000 ? 1 : 0);
+
+function startGolf(room) {
+  const n = room.players.length;
+  room.seed = (Math.floor(Math.random() * 1e9)) >>> 0;
+  room.golf = {
+    hole: 0, par: 0, cup: null, tee: 0,
+    strokes: Array.from({ length: n }, () => new Array(GOLF_HOLES.length).fill(0)),
+    done: new Array(n).fill(false),
+  };
+  room.hp = new Array(n).fill(MAX_HP);
+  room.hpMax = new Array(n).fill(MAX_HP);
+  room.ammo = Array.from({ length: n }, () => ({ golfball: 99 }));
+  room.shield = new Array(n).fill(0);
+  room.crates = []; room.props = []; room.ruins = null; room.guard = null;
+  room.facing = new Array(n).fill(1);            // every course plays left -> right
+  room.hazards = []; room.scorch = []; room.turnCount = 0;
+  room.state = 'playing';
+  nextHole(room, true);
+}
+
+function nextHole(room, first) {
+  const g = room.golf;
+  g.hole++;
+  const H = GOLF_HOLES[g.hole - 1];
+  g.par = golfPar(H.d);
+  room.biome = H.biome;
+  room.lavaY = biomeLavaY(H.biome);
+  const seed = (room.seed + g.hole * 7919) >>> 0;
+  room.terrain = generateTerrain(seed, 2, H.biome);
+  g.tee = 2200;
+  g.cup = { x: Math.min(WORLD_W - 1500, g.tee + H.d), r: 330 };
+  g.cup.y = prepareGolfHole(room.terrain, g.tee, g.cup.x);
+  room.trees = generateTrees(room.terrain, seed, 2);
+  room.tanks = room.players.map(() => ({ x: g.tee, y: surfaceAt(room.terrain, g.tee), alive: true }));
+  g.done.fill(false);
+  room.hazards = []; room.scorch = [];
+  room.turn = first ? Math.floor(Math.random() * room.players.length) : (g.hole - 1) % room.players.length;
+  for (let i = 0; i < room.players.length; i++) {
+    send(room.players[i].ws, { type: first ? 'start' : 'hole', ...snapshot(room, i) });
+  }
+  beginTurn(room);
+}
+
+function golfShot(room, seat, msg) {
+  const g = room.golf;
+  if (g.done[seat]) return;
+  const result = simulateShot(
+    { terrain: room.terrain, tanks: room.tanks, lavaY: room.lavaY, biome: room.biome },
+    { by: seat, weapon: 'golfball', angle: msg.angle, power: msg.power, dir: room.facing[seat] }
+  );
+  const hi = g.hole - 1;
+  g.strokes[seat][hi]++;
+  const rest = result.golf && result.golf.rest;
+  let note = '';
+  if (rest && rest[1] >= room.lavaY - 6) {
+    g.strokes[seat][hi]++;               // splash! stroke + penalty, play again from here
+    note = 'hazard';
+  } else if (!rest) {
+    g.strokes[seat][hi]++;               // sailed off the world: stroke + penalty
+    note = 'oob';
+  } else {
+    room.tanks[seat].x = rest[0];
+    room.tanks[seat].y = surfaceAt(room.terrain, rest[0]);
+    if (Math.abs(rest[0] - g.cup.x) <= g.cup.r) { g.done[seat] = true; note = 'holed'; }
+  }
+  if (!g.done[seat] && g.strokes[seat][hi] >= g.par + 4) { g.done[seat] = true; note = note || 'capped'; }
+  broadcast(room, {
+    type: 'shot', by: seat, weapon: 'golfball',
+    projectiles: result.projectiles,
+    terrainDiff: null,
+    tanks: room.tanks.map(t => ({ x: Math.round(t.x * 10) / 10, y: Math.round(t.y * 10) / 10 })),
+    hp: room.hp.map(h => Math.max(0, Math.round(h))),
+    damage: result.damage,
+    hazards: [], alive: aliveFlags(room),
+    ammo: room.ammo[seat], ammoSeat: seat,
+    golf: {
+      hole: g.hole, holes: GOLF_HOLES.length, par: g.par, cup: g.cup,
+      strokes: g.strokes.map(r => r[hi]),
+      totals: g.strokes.map(r => r.reduce((a, b) => a + b, 0)),
+      done: g.done.slice(), note, noteSeat: seat,
+    },
+  });
+  clearTimeout(room.clock);
+  room.clock = setTimeout(() => { room.clock = null; golfAdvance(room, seat); }, 600);
+}
+
+function golfAdvance(room, by) {
+  if (room.state !== 'playing') return;
+  const g = room.golf;
+  if (g.done.every(Boolean)) {
+    if (g.hole >= GOLF_HOLES.length) return finishGolf(room);
+    return nextHole(room, false);
+  }
+  const n = room.players.length;
+  let t = by;
+  do { t = (t + 1) % n; } while (g.done[t]);
+  room.turn = t;
+  beginTurn(room);
+}
+
+function finishGolf(room) {
+  room.state = 'over';
+  clearTimeout(room.clock); clearTimeout(room.botTimer);
+  const totals = room.golf.strokes.map(r => r.reduce((a, b) => a + b, 0));
+  const parTotal = GOLF_HOLES.reduce((a, h) => a + golfPar(h.d), 0);
+  let winner = 0;
+  if (totals.length > 1) {
+    const best = Math.min(...totals);
+    winner = totals.filter(t => t === best).length === 1 ? totals.indexOf(best) : -1;
+  }
+  broadcast(room, {
+    type: 'gameover', winner, team: null,
+    hp: room.hp.map(h => Math.max(0, Math.round(h))), alive: aliveFlags(room),
+    golf: { totals, parTotal, strokes: room.golf.strokes },
+  });
+}
+
 function startGame(room) {
+  if (room.mode === 'golf') return startGolf(room);
   // Boss raid: the WARLORD occupies the LAST seat, appended once (a rematch
   // reuses it). It's a bot player, so every existing bot path just works.
   if (room.mode === 'boss' && !room.players.some(p => p && p.boss)) {
@@ -392,6 +531,7 @@ function endGame(room) {
 
 function handleFire(room, seat, msg) {
   if (room.state !== 'playing' || room.turn !== seat) return;
+  if (room.mode === 'golf') return golfShot(room, seat, msg);   // one club, no ammo
   const w = WEAPON_BY_ID[msg.weapon];
   if (!w) return;
   const pl = room.players[seat];
@@ -582,6 +722,7 @@ function fireBite(room) {
 
 function handleMove(room, seat, dir) {
   if (room.state !== 'playing' || room.turn !== seat) return;
+  if (room.mode === 'golf') return;    // you walk to your BALL, not wherever you like
   if (room.fuel < MOVE_STEP) return;
   const tank = room.tanks[seat];
   if (tank.alive === false) return;

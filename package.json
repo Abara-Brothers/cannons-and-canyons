@@ -13,7 +13,9 @@
     "test:resume": "node test/resume_test.mjs",
     "test:takeover": "node test/resume_takeover.mjs",
     "test:ffa": "node test/ffa.mjs",
-    "test:ffa-elim": "node test/ffa_elim.mjs"
+    "test:ffa-elim": "node test/ffa_elim.mjs",
+    "test:boss": "node test/boss.mjs",
+    "test:golf": "node test/golf.mjs"
   },
   "engines": {
     "node": ">=18"

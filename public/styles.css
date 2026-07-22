@@ -579,3 +579,8 @@ body.in-game .bg-canyon { display: none; }
      drop it here to buy back a row. */
   #home .footnote           { display: none; }
 }
+
+/* ---------- Artillery Golf ---------- */
+/* No driving in golf — your tank walks to your ball. */
+body.golf .drive-row { display: none; }
+body.golf .fuel { display: none; }

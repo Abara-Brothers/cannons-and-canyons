@@ -59,12 +59,12 @@ run hitbox node test/hitbox.mjs
 
 if [ "$REMOTE" = "1" ]; then
   echo "== against ${WS:-?} =="
-  for t in sim resume_test resume_takeover ffa; do run "$t" node test/$t.mjs; done
+  for t in sim resume_test resume_takeover ffa boss golf; do run "$t" node test/$t.mjs; done
   echo "  (ffa_elim needs RESUME_GRACE_MS on the server — local only)"
 else
   echo "== local server =="
   start_server
-  for t in sim resume_test resume_takeover ffa; do run "$t" node test/$t.mjs; done
+  for t in sim resume_test resume_takeover ffa boss golf; do run "$t" node test/$t.mjs; done
 
   echo "== local server, short resume grace =="
   start_server RESUME_GRACE_MS=1200
