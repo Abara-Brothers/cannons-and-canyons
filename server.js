@@ -11,6 +11,7 @@ import {
   generateTerrain, generateTrees, spawnTanks, surfaceAt, simulateShot, terrainDiff,
   weaponMenu, startingAmmo, WEAPON_BY_ID, tickHazards, burnTick, aiShot, mergeScorch,
   fireDamage, FIRE_TICK,
+  BIOMES, BIOME_IDS, biomeLavaY, generateProps, generateRuins,
 } from './game-core.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -131,6 +132,12 @@ function createRoom(hostWs, name, skin, opts = {}) {
     clock: null,                       // only used to pace the post-shot handover
     hazards: [], hazardSeq: 1,         // lingering fire / gas areas
     fireTimer: null,                   // fire burns on its OWN clock, across turns
+    biome: 'alpine', lavaY: LAVA_Y,    // per-match terrain flavour
+    ruins: null, guard: null,          // indestructible concrete (ruins biome)
+    props: [],                         // barrels / bunkers
+    crates: [], crateSeq: 1,           // supply drops waiting on the field
+    shield: [], hpMax: [],             // crate shield charges; per-seat HP ceiling
+    turnCount: 0,
     scorch: [],                        // permanent burn scars: merged world-x ranges [{a,b}]
     trees: [],
   };
@@ -142,7 +149,7 @@ function createRoom(hostWs, name, skin, opts = {}) {
 // Current-state snapshot — used both for match start and for resume.
 function snapshot(room, seat) {
   return {
-    world: { w: WORLD_W, h: WORLD_H }, lavaY: LAVA_Y,
+    world: { w: WORLD_W, h: WORLD_H }, lavaY: room.lavaY || LAVA_Y,
     terrain: room.terrain.map(v => Math.round(v * 10) / 10),
     trees: room.trees,
     tanks: room.tanks.map(t => ({ x: Math.round(t.x * 10) / 10, y: Math.round(t.y * 10) / 10 })),
@@ -153,6 +160,9 @@ function snapshot(room, seat) {
     facing: room.facing.slice(),
     alive: aliveFlags(room),
     hp: room.hp.map(h => Math.max(0, Math.round(h))), maxHp: MAX_HP,
+    hpMax: room.hpMax && room.hpMax.length ? room.hpMax : undefined,
+    biome: room.biome, ruins: room.ruins ? room.ruins.ranges : undefined,
+    props: room.props, crates: room.crates, shield: room.shield,
     hazards: room.hazards,
     scorch: room.scorch || [],
     moveBudget: MOVE_BUDGET,
@@ -168,10 +178,22 @@ function snapshot(room, seat) {
 function startGame(room) {
   const n = room.players.length;
   room.seed = (Math.floor(Math.random() * 1e9)) >>> 0;
-  room.terrain = generateTerrain(room.seed, n);
+  // Biome roulette — every match a different battlefield flavour.
+  room.biome = BIOME_IDS[Math.floor(Math.random() * BIOME_IDS.length)];
+  room.lavaY = biomeLavaY(room.biome);
+  room.terrain = generateTerrain(room.seed, n, room.biome);
+  // Order matters: ruins and bunkers RESHAPE the terrain, so they go before the
+  // trees are placed and before the tanks are seated on the final surface.
+  room.ruins = (BIOMES[room.biome] || {}).ruins ? generateRuins(room.seed, room.terrain, n) : null;
+  room.guard = room.ruins ? room.ruins.guard : null;
+  room.props = generateProps(room.seed, room.terrain, n, room.biome);
   room.trees = generateTrees(room.terrain, room.seed, n);
   room.tanks = spawnTanks(room.terrain, room.seed, n);   // ordered left -> right
   room.hp = new Array(n).fill(MAX_HP);
+  room.hpMax = new Array(n).fill(MAX_HP);
+  room.crates = []; room.crateSeq = 1;
+  room.shield = new Array(n).fill(0);
+  room.turnCount = 0;
   room.ammo = Array.from({ length: n }, () => startingAmmo());
   // Everyone starts turned toward the middle of the map. (n=2 -> [1, -1], as before.)
   room.facing = room.tanks.map((_, i) => (i < n / 2 ? 1 : -1));
@@ -185,8 +207,67 @@ function startGame(room) {
 // No shot-clock: players take as long as they like. Turns only advance on fire.
 function beginTurn(room) {
   room.fuel = MOVE_BUDGET;
+  room.turnCount = (room.turnCount || 0) + 1;
+  maybeDropCrate(room);
   broadcast(room, { type: 'turn', turn: room.turn, fuel: room.fuel, alive: aliveFlags(room) });
   scheduleBot(room);
+}
+
+// ---- Supply crates -----------------------------------------------------------
+// The reward for spending fuel. A crate parachutes onto open ground every few
+// turns; DRIVE within reach of it to crack it open. Contents: the crate-only
+// Railgun (1 shot per crate), +1 of a random limited weapon, a one-blast shield,
+// or a field repair. Positions are broadcast, so both clients render the drop.
+const CRATE_KINDS = ['railgun', 'ammo', 'shield', 'repair'];
+const CRATE_AMMO_POOL = ['mortar', 'volley', 'cluster', 'napalm', 'airstrike', 'buster', 'teleport'];
+const CRATE_REACH = 380;
+
+function maybeDropCrate(room) {
+  if (room.mode === 'golf' || room.state !== 'playing') return;
+  if (room.turnCount < 3 || (room.turnCount - 3) % 4 !== 0) return;   // turn 3, 7, 11, ...
+  if (room.crates.length >= 2) return;
+  for (let tries = 0; tries < 14; tries++) {
+    const x = Math.round(1800 + Math.random() * (WORLD_W - 3600));
+    const clearTanks = room.tanks.every((t, i) => t.alive === false || Math.abs(t.x - x) > 900);
+    const clearCrates = room.crates.every(c => Math.abs(c.x - x) > 800);
+    if (!clearTanks || !clearCrates) continue;
+    const kind = CRATE_KINDS[Math.floor(Math.random() * CRATE_KINDS.length)];
+    const crate = { id: room.crateSeq++, x, y: Math.round(surfaceAt(room.terrain, x) * 10) / 10, kind };
+    room.crates.push(crate);
+    broadcast(room, { type: 'crate', crate });
+    return;
+  }
+}
+
+function pickupCrates(room, seat) {
+  const tank = room.tanks[seat];
+  for (let i = room.crates.length - 1; i >= 0; i--) {
+    const c = room.crates[i];
+    if (Math.abs(c.x - tank.x) > CRATE_REACH) continue;
+    room.crates.splice(i, 1);
+    let detail = '';
+    if (c.kind === 'railgun') {
+      room.ammo[seat].railgun = (room.ammo[seat].railgun || 0) + 1;
+      detail = 'RAILGUN ×1';
+    } else if (c.kind === 'ammo') {
+      const wid = CRATE_AMMO_POOL[Math.floor(Math.random() * CRATE_AMMO_POOL.length)];
+      room.ammo[seat][wid] = (room.ammo[seat][wid] || 0) + 1;
+      detail = `+1 ${(WEAPON_BY_ID[wid] || {}).name || wid}`;
+    } else if (c.kind === 'shield') {
+      room.shield[seat] = 1;
+      detail = 'SHIELD UP';
+    } else {          // repair
+      const cap = (room.hpMax && room.hpMax[seat]) || MAX_HP;
+      room.hp[seat] = Math.min(cap, Math.round(room.hp[seat] + 35));
+      detail = '+35 HP';
+    }
+    broadcast(room, {
+      type: 'crateTaken', id: c.id, seat, kind: c.kind, detail,
+      hp: room.hp.map(h => Math.max(0, Math.round(h))),
+      shield: room.shield.slice(),
+      ammo: room.ammo[seat], ammoSeat: seat,
+    });
+  }
 }
 
 // ---- AI opponent -------------------------------------------------------------
@@ -286,11 +367,23 @@ function resolveFire(room, seat, weaponId, angle, power) {
   const before = room.terrain.slice();
   const aliveBefore = aliveFlags(room);   // snapshot for the killcam (who this shot kills)
   const result = simulateShot(
-    { terrain: room.terrain, tanks: room.tanks },
+    { terrain: room.terrain, tanks: room.tanks,
+      lavaY: room.lavaY, biome: room.biome, guard: room.guard, props: room.props },
     { by: seat, weapon: w.id, angle, power, dir: room.facing[seat] }
   );
 
   if (w.ammo < 99) room.ammo[seat][w.id] = Math.max(0, (room.ammo[seat][w.id] || 0) - 1);
+  // A supply-crate shield soaks 65% of the next blast that actually hurts you,
+  // then breaks. Applied BEFORE the hp loop so the wire damage, the floaters and
+  // the hp all agree; fire bites and lava bypass it deliberately.
+  const shieldPop = new Array(room.hp.length).fill(false);
+  for (let i = 0; i < room.hp.length; i++) {
+    if ((result.damage[i] || 0) > 0 && (room.shield[i] || 0) > 0) {
+      room.shield[i] = 0;
+      result.damage[i] = Math.round(result.damage[i] * 0.35);
+      shieldPop[i] = true;
+    }
+  }
   // Blast damage hits health directly (self-damage counts too).
   for (let i = 0; i < room.hp.length; i++) room.hp[i] -= (result.damage[i] || 0);
   const diff = terrainDiff(before, room.terrain);
@@ -329,6 +422,8 @@ function resolveFire(room, seat, weaponId, angle, power) {
     scorch: room.scorch || [],
     hazardDamage: new Array(room.hp.length).fill(0),
     alive: aliveFlags(room),
+    props: result.props, propEvents: result.propEvents,
+    shield: room.shield.slice(), shieldPop,
     ammo: room.ammo[seat],
     ammoSeat: seat,
     killcam: buildKillcam(room, result, aliveBefore),   // null on every normal shot
@@ -347,13 +442,13 @@ function startBurn(room, seat) {
   clearInterval(room.dotTimer); room.dotTimer = null;
   if (room.state !== 'playing') return;
   if (aliveSeats(room).length <= 1) return advance(room, seat);   // blast already decided it
-  const first = burnTick(room.hazards, room.tanks);
+  const first = burnTick(room.hazards, room.tanks, room.lavaY);
   if (!first.some(d => d > 0)) return advance(room, seat);        // nobody's standing in it
   let ticks = 0;
   room.dotTimer = setInterval(() => {
     if (room.state !== 'playing') { clearInterval(room.dotTimer); room.dotTimer = null; return; }
     ticks++;
-    const dmg = burnTick(room.hazards, room.tanks);
+    const dmg = burnTick(room.hazards, room.tanks, room.lavaY);
     for (let ti = 0; ti < room.hp.length; ti++) {
       dmg[ti] = Math.min(dmg[ti], 14);   // cap per second so overlapping clouds don't nuke
       room.hp[ti] = Math.max(0, Math.round((room.hp[ti] - dmg[ti]) * 10) / 10);
@@ -436,6 +531,7 @@ function handleMove(room, seat, dir) {
   tank.y = surfaceAt(room.terrain, nx);
   room.fuel -= moved;
   broadcast(room, { type: 'move', seat, x: Math.round(tank.x * 10) / 10, y: Math.round(tank.y * 10) / 10, fuel: room.fuel });
+  pickupCrates(room, seat);   // driving is how you claim a supply drop
 }
 
 // ---- Disconnect / resume -----------------------------------------------------

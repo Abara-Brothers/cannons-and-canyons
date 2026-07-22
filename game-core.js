@@ -45,6 +45,37 @@ const CRATER_MUL = 0.8;       // crater/blast visual size; the DAMAGE radius now
 const SCORCH_MUL = 0.8;       // scorch half-width vs damage radius — same footprint the crater used to have
 export const SCORCH_MAX = 40; // hard cap on stored scorch ranges (bounds the wire payload)
 
+// ---- Biomes -----------------------------------------------------------------
+// One generator, per-biome constants. `gen` scales the alpine formulas (alpine is
+// all 1s so its RNG sequence and output are byte-identical to before); `crater`
+// reshapes blast holes (desert digs huge soft bowls, ice shears wide shallow
+// sheets); `lavaRaise` lifts the lava floor (volcanic); `ruins` scatters
+// indestructible concrete decks that blasts cannot dig through.
+export const BIOMES = {
+  alpine:   { crater: { wMul: 1.0,  sheet: false }, lavaRaise: 0,
+              gen: { base: 0.72, roughMul: 1.0, layerMul: 1.0, ridgeMul: 1.0,
+                     pc0: 4, pcR: 4, ph0: 2600, phR: 1500, pwMul: 1.0, sharpP: 0.4,
+                     cc0: 3, ccR: 4, dropMul: 1.0 } },
+  desert:   { crater: { wMul: 1.45, sheet: false }, lavaRaise: 0,
+              gen: { base: 0.74, roughMul: 0.8, layerMul: 1.5, ridgeMul: 0.15,
+                     pc0: 2, pcR: 2, ph0: 1300, phR: 900,  pwMul: 1.8, sharpP: 0.0,
+                     cc0: 0, ccR: 2, dropMul: 0.5 } },
+  ice:      { crater: { wMul: 1.55, sheet: true },  lavaRaise: 0,
+              gen: { base: 0.70, roughMul: 0.9, layerMul: 1.1, ridgeMul: 0.5,
+                     pc0: 3, pcR: 3, ph0: 2200, phR: 1300, pwMul: 1.2, sharpP: 0.25,
+                     cc0: 2, ccR: 3, dropMul: 1.4 } },
+  volcanic: { crater: { wMul: 1.0,  sheet: false }, lavaRaise: 2300,
+              gen: { base: 0.60, roughMul: 1.15, layerMul: 1.0, ridgeMul: 1.3,
+                     pc0: 4, pcR: 4, ph0: 2400, phR: 1600, pwMul: 0.9, sharpP: 0.7,
+                     cc0: 4, ccR: 4, dropMul: 1.2 } },
+  ruins:    { crater: { wMul: 1.0,  sheet: false }, lavaRaise: 0, ruins: true,
+              gen: { base: 0.72, roughMul: 0.7, layerMul: 0.9, ridgeMul: 0.4,
+                     pc0: 2, pcR: 3, ph0: 1800, phR: 1100, pwMul: 1.1, sharpP: 0.2,
+                     cc0: 1, ccR: 3, dropMul: 0.8 } },
+};
+export const BIOME_IDS = Object.keys(BIOMES);
+export const biomeLavaY = (biome) => LAVA_Y - ((BIOMES[biome] || BIOMES.alpine).lavaRaise || 0);
+
 // ---- Tank hitbox (world units) ---------------------------------------------
 // The hitbox is the tank's OUTLINE: a hull/track box topped by a narrower
 // turret box, anchored at the tank's ground point (tank.x, tank.y).
@@ -201,39 +232,41 @@ function mulberry32(seed) {
 // Gaussian peaks (some sharp, some broad), and 2..5 true CLIFFS (sigmoid
 // elevation steps). Flattened pockets under each tank. Peak height is capped
 // so a high-power lob always clears them (verified against SPEED_PER_POWER).
-export function generateTerrain(seed, n = 2) {
+export function generateTerrain(seed, n = 2, biome = 'alpine') {
+  const B = (BIOMES[biome] || BIOMES.alpine).gen;
+  const floor = biomeLavaY(biome);
   const rng = mulberry32(seed);
-  const base = WORLD_H * 0.72;   // surface baseline; peaks rise into the sky above, valleys drop below
+  const base = WORLD_H * B.base; // surface baseline; peaks rise into the sky above, valleys drop below
   const terrain = new Array(WORLD_W + 1);
-  const rough = 0.7 + rng() * 0.45;  // per-map ruggedness (tightened: soil stays an even depth, no extreme highs/lows)
+  const rough = (0.7 + rng() * 0.45) * B.roughMul;  // per-map ruggedness
 
   // BIG rolling relief — broad, deep valleys and rises (retuned for the 24k map).
   const layers = [
-    { a: (230 + rng() * 250) * rough, f: 0.00020 + rng() * 0.00016, p: rng() * 6.2832 }, // huge broad valleys
-    { a: (150 + rng() * 175) * rough, f: 0.00060 + rng() * 0.00045, p: rng() * 6.2832 }, // medium valleys
+    { a: (230 + rng() * 250) * rough * B.layerMul, f: 0.00020 + rng() * 0.00016, p: rng() * 6.2832 }, // huge broad valleys
+    { a: (150 + rng() * 175) * rough * B.layerMul, f: 0.00060 + rng() * 0.00045, p: rng() * 6.2832 }, // medium valleys
     { a: (80  + rng() * 100) * rough, f: 0.00160 + rng() * 0.00120, p: rng() * 6.2832 }, // hills
     { a: (40  + rng() * 55)  * rough, f: 0.00440 + rng() * 0.00320, p: rng() * 6.2832 }, // detail
   ];
   // Craggy ridged octave — sharp crests / canyon edges, like real eroded rock.
-  const ridge = { a: (110 + rng() * 140) * rough, f: 0.0011 + rng() * 0.0009, p: rng() * 6.2832 };
+  const ridge = { a: (110 + rng() * 140) * rough * B.ridgeMul, f: 0.0011 + rng() * 0.0009, p: rng() * 6.2832 };
 
-  const peakCount = 4 + Math.floor(rng() * 4);     // 4..7 BIG distinct massifs (space between = valleys/canyons)
+  const peakCount = B.pc0 + Math.floor(rng() * B.pcR);   // distinct massifs (space between = valleys/canyons)
   const peaks = [];
   for (let i = 0; i < peakCount; i++) {
     peaks.push({
       cx: WORLD_W * (0.20 + rng() * 0.60),         // central band, well clear of both tanks
-      h: 2600 + rng() * 1500,                      // 2600..4100 — dramatic but leaves sky above in landscape
-      w: WORLD_W * (0.050 + rng() * 0.100),        // BROAD alpine massifs (1200..3600 wide)
-      sharp: rng() < 0.4,                          // some peaks are jagged spires
+      h: B.ph0 + rng() * B.phR,                    // biome-scaled massif height
+      w: WORLD_W * (0.050 + rng() * 0.100) * B.pwMul,
+      sharp: rng() < B.sharpP,                     // some peaks are jagged spires
     });
   }
 
-  const cliffCount = 3 + Math.floor(rng() * 4);    // 3..6 canyon walls (deep elevation steps)
+  const cliffCount = B.cc0 + Math.floor(rng() * Math.max(1, B.ccR));   // canyon walls (deep elevation steps)
   const cliffs = [];
   for (let i = 0; i < cliffCount; i++) {
     cliffs.push({
       cx: WORLD_W * (0.16 + rng() * 0.68),
-      drop: (400 + rng() * 800) * (rng() < 0.5 ? 1 : -1),  // 1100..2800 deep canyon steps
+      drop: (400 + rng() * 800) * B.dropMul * (rng() < 0.5 ? 1 : -1),
       w: 70 + rng() * 130,                         // steepness of the step (steeper = more canyon-like)
     });
   }
@@ -253,7 +286,7 @@ export function generateTerrain(seed, n = 2) {
     for (const cl of cliffs) {
       y += cl.drop / (1 + Math.exp(-(x - cl.cx) / cl.w)) - cl.drop / 2;
     }
-    terrain[x] = clampY(y);
+    terrain[x] = clampY(y, floor);
   }
 
   // flatten a pocket wherever each tank will spawn
@@ -284,7 +317,7 @@ export function generateTrees(terrain, seed, n = 2) {
   return trees;
 }
 
-function clampY(y) { return Math.max(TERRAIN_TOP, Math.min(TERRAIN_FLOOR, y)); }
+function clampY(y, floor = TERRAIN_FLOOR) { return Math.max(TERRAIN_TOP, Math.min(floor, y)); }
 
 function flattenZone(terrain, cx, half) {
   const x0 = Math.max(0, Math.round(cx - half)), x1 = Math.min(WORLD_W, Math.round(cx + half));
@@ -376,14 +409,19 @@ export function teleportTank(state, by, landX) {
     seat: by,
     from: [round1(fromX), round1(fromY)],
     to: [round1(tank.x), round1(tank.y)],
-    lava: tank.y >= LAVA_Y - 4,               // landed in the lava — the burn will bite
+    lava: tank.y >= (state.lavaY ?? LAVA_Y) - 4,   // landed in the lava — the burn will bite
     fizzle: Math.abs(nx - fromX) < 1,         // clamped back onto itself — warp in place
   };
 }
 
 // Deform terrain. 'crater' removes ground, 'dirt' mounds it, 'wall' raises a
 // tall Gaussian rampart (Earthworks).
-function deform(terrain, cx, cy, r, mode, wall) {
+// opt: { floor  — this match's lava top (volcanic raises it),
+//        guard  — per-column y caps digging may never pass (ruins concrete),
+//        wMul   — crater width multiplier (desert bowls, ice sheets),
+//        sheet  — flat-bottomed shear instead of a hemisphere (ice) }
+function deform(terrain, cx, cy, r, mode, wall, opt = {}) {
+  const floor = opt.floor ?? TERRAIN_FLOOR;
   if (mode === 'wall' && wall) {
     const span = Math.ceil(wall.w * 3);
     const x0 = Math.max(0, Math.floor(cx - span)), x1 = Math.min(WORLD_W, Math.ceil(cx + span));
@@ -393,18 +431,25 @@ function deform(terrain, cx, cy, r, mode, wall) {
       // "fire it at your own feet and ride the mound up" ladder tops out with the
       // tank still inside the world. Ground below WALL_TOP is unaffected.
       const target = Math.max(WALL_TOP, cy - wall.h * Math.exp(-d * d));
-      terrain[x] = clampY(Math.min(terrain[x], target));
+      terrain[x] = clampY(Math.min(terrain[x], target), floor);
     }
     return;
   }
-  const x0 = Math.max(0, Math.floor(cx - r));
-  const x1 = Math.min(WORLD_W, Math.ceil(cx + r));
+  const rw = r * (opt.wMul || 1);
+  const x0 = Math.max(0, Math.floor(cx - rw));
+  const x1 = Math.min(WORLD_W, Math.ceil(cx + rw));
   for (let x = x0; x <= x1; x++) {
     const dx = x - cx;
-    if (Math.abs(dx) > r) continue;
-    const dy = Math.sqrt(r * r - dx * dx);
-    if (mode === 'crater') terrain[x] = clampY(Math.max(terrain[x], cy + dy)); // can only lower ground
-    else if (mode === 'dirt') terrain[x] = clampY(Math.min(terrain[x], cy - dy)); // can only raise ground
+    if (Math.abs(dx) > rw) continue;
+    let dy = Math.sqrt(rw * rw - dx * dx) * (r / rw);   // widen without deepening
+    if (opt.sheet) dy = Math.min(dy, rw * 0.30);        // ice shears off in a flat sheet
+    if (mode === 'crater') {
+      let v = Math.max(terrain[x], cy + dy);            // can only lower ground
+      // Indestructible concrete: digging can never pass the deck. Piling dirt on
+      // top ('dirt'/'wall') is unaffected.
+      if (opt.guard && opt.guard[x]) v = Math.min(v, opt.guard[x]);
+      terrain[x] = clampY(v, floor);
+    } else if (mode === 'dirt') terrain[x] = clampY(Math.min(terrain[x], cy - dy), floor);
   }
 }
 
@@ -439,7 +484,7 @@ export function tickHazards(hazards, tanks, now = 0) {
 // GAS clouds damage any tank standing inside them by their per-second `dps`, and
 // the lava floor cooks anything sitting in it. FIRE is NOT here — it runs on its
 // own 2-second clock in fireDamage() and does not hold the turn open.
-export function burnTick(hazards, tanks) {
+export function burnTick(hazards, tanks, lavaY = LAVA_Y) {
   const n = tanks.length;
   const dmg = new Array(n).fill(0);
   for (const h of hazards) {
@@ -453,7 +498,7 @@ export function burnTick(hazards, tanks) {
   // The lava floor cooks anything standing in it.
   for (let ti = 0; ti < n; ti++) {
     if (tanks[ti].alive === false) continue;
-    if (tanks[ti].y >= LAVA_Y - 4) dmg[ti] += LAVA_DPS;
+    if (tanks[ti].y >= lavaY - 4) dmg[ti] += LAVA_DPS;
   }
   return dmg;
 }
@@ -496,10 +541,45 @@ export function simulateShot(state, shot) {
   const projectiles = [];
   const newHazards = [];
   const newScorches = [];
+  const propEvents = [];
+  // Per-match deform flavour: biome crater shape + lava floor + ruins guard.
+  const fx = {
+    floor: state.lavaY ?? TERRAIN_FLOOR,
+    guard: state.guard || null,
+    ...((BIOMES[state.biome] || BIOMES.alpine).crater),
+  };
+
+  // Chain-reaction props. A damaging blast cooks off any fuel barrel it touches
+  // (whose own blast can cook the next one — the queue is the recursion, bounded
+  // by the prop count because a barrel dies BEFORE its blast) and batters
+  // bunkers, whose raised deck collapses into a crater when they give way.
+  const igniteProps = (x, y, rDmg, dmg) => {
+    if (!state.props || dmg <= 0) return;
+    for (const p of state.props) {
+      if (!p.alive) continue;
+      const d = Math.hypot(x - p.x, y - (p.y - 120));
+      if (p.kind === 'barrel') {
+        if (d <= rDmg * 0.9 + 180) {
+          p.alive = false;
+          propEvents.push({ kind: 'barrel', x: round1(p.x), y: round1(p.y) });
+          boom(p.x, p.y - 60, BARREL_R, 'crater', BARREL_DMG, {});
+        }
+      } else if (p.kind === 'bunker') {
+        if (d <= rDmg + p.w) {
+          p.hp -= Math.max(0, dmg * (1 - Math.min(1, d / Math.max(1, rDmg + p.w))));
+          if (p.hp <= 0) {
+            p.alive = false;
+            propEvents.push({ kind: 'bunker', x: round1(p.x), y: round1(p.deck) });
+            deform(state.terrain, p.x, p.deck + 60, p.w * 1.25, 'crater', null, fx);
+          }
+        }
+      }
+    }
+  };
 
   // rDmg = damage radius. Craters + blast visuals use rDmg * CRATER_MUL.
   const boom = (x, y, rDmg, kind, dmg, opts = {}) => {
-    if (kind === 'wall') deform(state.terrain, x, surfaceAt(state.terrain, x), 0, 'wall', opts.wall);
+    if (kind === 'wall') deform(state.terrain, x, surfaceAt(state.terrain, x), 0, 'wall', opts.wall, fx);
     else if (kind === 'scorch') {
       // Fire BURNS the ground — it never moves it. Record a surface scorch range;
       // the terrain heightmap is left completely untouched.
@@ -508,12 +588,13 @@ export function simulateShot(state, shot) {
     }
     else if (kind !== 'none') {
       const cy = y + (opts.dig ? rDmg * CRATER_MUL * opts.dig : 0);   // bunker buster digs deep
-      deform(state.terrain, x, cy, rDmg * CRATER_MUL, kind);
+      deform(state.terrain, x, cy, rDmg * CRATER_MUL, kind, null, fx);
     }
     if (dmg > 0) for (let ti = 0; ti < state.tanks.length; ti++) {
       if (state.tanks[ti].alive === false) continue;      // wrecks take no further damage
       damageDealt[ti] += blastDamage(x, y, rDmg, dmg, state.tanks[ti]);
     }
+    igniteProps(x, y, rDmg, dmg);
     if (opts.hazard) {
       const hz = opts.hazard;
       const rec = { type: hz.type, x: round1(x), y: round1(y), r: hz.r };
@@ -621,6 +702,8 @@ export function simulateShot(state, shot) {
     projectiles,
     newHazards,
     newScorches,
+    propEvents,
+    props: state.props ? state.props.map(p => ({ id: p.id, kind: p.kind, x: round1(p.x), y: round1(p.y), w: p.w || 0, deck: p.deck != null ? round1(p.deck) : undefined, hp: Math.max(0, Math.round(p.hp ?? 0)), alive: p.alive !== false })) : undefined,
     tanks: state.tanks.map(t => ({ x: round1(t.x), y: round1(t.y) })),
     // total damage dealt to everyone who isn't you (self-damage excluded)
     scoreDelta: Math.round(damageDealt.reduce((sum, d, i) => (i === by ? sum : sum + d), 0)),
@@ -800,6 +883,65 @@ export function terrainDiff(before, after) {
   const values = [];
   for (let x = from; x <= to; x++) values.push(round1(after[x]));
   return { from, values };
+}
+
+// ---- Destructible props -------------------------------------------------------
+// Seeded battlefield furniture. Barrels are one-touch bombs; bunkers raise a flat
+// concrete deck (cover you can sit behind) that collapses when its HP runs out.
+const BARREL_DMG = 26;
+const BARREL_R = 800;
+export function generateProps(seed, terrain, n = 2, biome = 'alpine') {
+  const rng = mulberry32((seed ^ 0x9d2c5680) >>> 0);
+  const spawns = pickSpawns(seed, n);
+  const props = [];
+  const clearOf = (x, gap) => spawns.every(sx => Math.abs(x - sx) > gap) &&
+                              props.every(p => Math.abs(x - p.x) > gap);
+  let id = 1;
+  const barrels = 3 + Math.floor(rng() * 3);         // 3..5
+  for (let i = 0; i < barrels * 8 && props.filter(p => p.kind === 'barrel').length < barrels; i++) {
+    const x = Math.round(2200 + rng() * (WORLD_W - 4400));
+    if (!clearOf(x, 1100)) continue;
+    props.push({ id: id++, kind: 'barrel', x, y: round1(surfaceAt(terrain, x)), hp: 1, alive: true });
+  }
+  const bunkers = biome === 'ruins' ? 0 : 1 + Math.floor(rng() * 2);   // ruins has its slabs
+  for (let i = 0; i < bunkers * 8 && props.filter(p => p.kind === 'bunker').length < bunkers; i++) {
+    const x = Math.round(3000 + rng() * (WORLD_W - 6000));
+    if (!clearOf(x, 1600)) continue;
+    const w = 480 + Math.round(rng() * 160);
+    // Raise the casemate deck out of the ground so it reads (and works) as cover.
+    const deck = round1(Math.min(surfaceAt(terrain, x - w), surfaceAt(terrain, x + w)) - 430);
+    for (let tx = Math.max(0, x - w); tx <= Math.min(WORLD_W, x + w); tx++) {
+      terrain[tx] = Math.min(terrain[tx], deck + Math.pow(Math.abs(tx - x) / w, 3) * 90);
+    }
+    props.push({ id: id++, kind: 'bunker', x, y: round1(surfaceAt(terrain, x)), w, deck, hp: 80, alive: true });
+  }
+  return props;
+}
+
+// ---- Ruins (indestructible concrete decks) ------------------------------------
+// Raises 3..5 flat slabs and returns both the drawable ranges and a per-column
+// guard: digging may never pass guard[x]. Mutates `terrain` like generateProps.
+export function generateRuins(seed, terrain, n = 2) {
+  const rng = mulberry32((seed ^ 0x51ab3e7) >>> 0);
+  const spawns = pickSpawns(seed, n);
+  const ranges = [];
+  const guard = new Array(WORLD_W + 1).fill(0);
+  const clearOf = (x, gap) => spawns.every(sx => Math.abs(x - sx) > gap) &&
+                              ranges.every(rr => Math.abs(x - (rr.a + rr.b) / 2) > gap);
+  const slabs = 3 + Math.floor(rng() * 3);           // 3..5
+  for (let i = 0; i < slabs * 8 && ranges.length < slabs; i++) {
+    const x = Math.round(2600 + rng() * (WORLD_W - 5200));
+    if (!clearOf(x, 1700)) continue;
+    const hw = 300 + Math.round(rng() * 300);
+    const top = round1(Math.min(surfaceAt(terrain, x - hw), surfaceAt(terrain, x + hw)) - (380 + rng() * 320));
+    const a = Math.max(0, x - hw), b = Math.min(WORLD_W, x + hw);
+    for (let tx = a; tx <= b; tx++) {
+      terrain[tx] = Math.min(terrain[tx], top);
+      guard[tx] = top;                               // nothing digs below the deck
+    }
+    ranges.push({ a, b, top });
+  }
+  return { ranges, guard };
 }
 
 // ---- Scorch marks (persistent burn scars) -----------------------------------

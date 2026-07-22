@@ -459,6 +459,21 @@ function handle(m) {
     }
     case 'turn': onTurn(m); break;
     case 'face': if (m.seat !== S.you) S.facing[m.seat] = m.dir; break;
+    case 'crate':
+      S.crates.push({ ...m.crate, dropT: 0 });   // parachute in from the sky
+      showToast('📦 Supply drop incoming!');
+      break;
+    case 'crateTaken': {
+      S.crates = S.crates.filter(c => c.id !== m.id);
+      if (m.hp) S.hp = m.hp.map((h, i) => Math.min(S.hp[i] ?? h, m.kind === 'repair' ? h : h) === h ? h : S.hp[i]);
+      if (m.hp) S.hp = m.hp.slice();             // pickups can RAISE hp (repair) — trust the server here
+      if (m.shield) S.shield = m.shield.slice();
+      if (m.ammoSeat === S.you && m.ammo) { S.ammo = m.ammo; buildWeaponStrip(); }
+      const t = S.tanks[m.seat];
+      if (t) S.floaters.push({ x: t.x, y: t.y - 380, text: m.detail || m.kind.toUpperCase(), age: 0, life: 1.6, color: '#ffd23f' });
+      updateHud();
+      break;
+    }
     case 'forfeit':
       deferHp(() => {
         if (m.hp) S.hp = m.hp.map((h, i) => Math.min(S.hp[i] ?? h, h));
@@ -692,8 +707,15 @@ function applySnapshot(m) {
   S.trees = (m.trees || []).map(t => ({ ...t }));
   S.hazards = m.hazards || [];
   S.scorch = m.scorch || [];
+  S.biome = m.biome || 'alpine';
+  setBiomeTheme(S.biome);
+  S.ruins = m.ruins || [];
+  S.props = m.props || [];
+  S.crates = (m.crates || []).map(c => ({ ...c, dropT: 1 }));   // already landed on resume
+  S.shield = (m.shield || []).slice();
   S.tanks = m.tanks.map(t => ({ x: t.x, y: t.y }));
-  S.hp = (m.hp || new Array(S.n).fill(100)).slice(); S.maxHp = m.maxHp || 100;
+  S.hp = (m.hp || new Array(S.n).fill(150)).slice(); S.maxHp = m.maxHp || 150;
+  S.hpMax = (m.hpMax || new Array(S.n).fill(S.maxHp)).slice();
   S.ammo = m.ammo; S.moveBudget = m.moveBudget;
   if (Array.isArray(m.aimRange) && m.aimRange.length === 2) { S.aimMin = m.aimRange[0]; S.aimMax = m.aimRange[1]; }
   S.turn = m.turn; S.fuel = m.fuel ?? m.moveBudget;
@@ -709,6 +731,7 @@ function applySnapshot(m) {
   S.particles = []; S.floaters = []; S.rings = []; S.muzzle = []; S.flash = 0; S.shake = 0;
   S.plane = null;
   S.mush = null;                       // a nuke cloud must never survive into the next match
+  S.chainQueue = [];
   S.recoil = [0, 0];
   S.charging = false; S.pullPointer = null; S.userZoom = 1; S.panY = 0;
   computeMinY();
@@ -773,7 +796,8 @@ function updateHud() {
     el.querySelector('.score').textContent = dead ? '\u2620' : hp;
     el.querySelector('.shots').textContent = 'HP';
     const bar = el.querySelector('.hpbar i');
-    const pct = Math.max(0, Math.min(1, hp / S.maxHp));
+    const cap = (S.hpMax && S.hpMax[i]) || S.maxHp;
+    const pct = Math.max(0, Math.min(1, hp / cap));
     bar.style.width = (pct * 100) + '%';
     bar.style.background = hpColor(pct);
   }
@@ -1310,6 +1334,21 @@ function applyResolve(m) {
   }
   S.hazards = m.hazards || [];
   if (m.scorch) S.scorch = m.scorch;
+  if (m.props) S.props = m.props;
+  if (m.shield) S.shield = m.shield.slice();
+  if (m.shieldPop) for (let i = 0; i < m.shieldPop.length; i++) {
+    if (m.shieldPop[i] && S.tanks[i]) S.floaters.push({ x: S.tanks[i].x, y: S.tanks[i].y - 430, text: 'SHIELD DOWN', age: 0, life: 1.4, color: '#54c8ff' });
+  }
+  // Chain-detonating props: play each explosion as its own staggered blast.
+  if (m.propEvents && m.propEvents.length) {
+    for (let k = 0; k < m.propEvents.length; k++) {
+      const ev = m.propEvents[k];
+      S.chainQueue.push({
+        at: performance.now() + 130 * (k + 1),
+        det: { x: ev.x, y: ev.y - 60, r: ev.kind === 'barrel' ? 640 : 520, kind: 'crater', color: ev.kind === 'barrel' ? '#ff8a3d' : '#aeb9c9', hz: null },
+      });
+    }
+  }
   if (m.ammoSeat === S.you && m.ammo) S.ammo = m.ammo;
   updateHud(); buildWeaponStrip();
   for (let i = 0; i < S.n; i++) {
@@ -1885,6 +1924,18 @@ function stepEffects(dt) {
   stepWarp(dt);
   stepMushroom(dt);
   stepPlane(dt);
+  // Supply crates float down on their chutes (~2.4s), purely cosmetic — the
+  // server considers a crate collectable the moment it broadcasts it.
+  for (const c of S.crates) if (c.dropT < 1) c.dropT = Math.min(1, c.dropT + dt / 2.4);
+  // Staggered chain explosions from barrels/bunkers.
+  if (S.chainQueue.length) {
+    const now = performance.now();
+    const due = S.chainQueue.filter(q => q.at <= now);
+    if (due.length) {
+      S.chainQueue = S.chainQueue.filter(q => q.at > now);
+      for (const q of due) detonate(q.det);
+    }
+  }
   // Barrel runs back out to battery (shaped by recAmt in drawTank).
   for (let i = 0; i < S.n; i++) if (S.recoil[i] > 0) S.recoil[i] = Math.max(0, S.recoil[i] - dt * 3.4);
   // Muzzle blasts age on their own clock — they are NOT particles.
@@ -1970,6 +2021,8 @@ function draw() {
     drawTerrain(cssW, cssH);
     drawLava(cssW, cssH);
     drawTrees();
+    drawProps();
+    drawCrates();
     drawHazards();
     drawMushroom();               // nuke column — biggest and furthest back, BEHIND the tanks
     drawParticles(true);          // soft discs (fire glow, smoke, dust) — BEHIND the tanks
@@ -1980,7 +2033,7 @@ function draw() {
       const order = [];
       for (let i = 0; i < S.n; i++) if (S.alive[i] !== false) order.push(i);
       order.sort((a, b) => (a === S.turn) - (b === S.turn) || (a === S.you) - (b === S.you));
-      for (const i of order) drawTankWarped(i);
+      for (const i of order) { drawTankWarped(i); if (S.shield && S.shield[i] > 0) drawShieldAura(i); }
     }
     drawWarp();
     drawEdgeIndicators();
@@ -1999,7 +2052,23 @@ function draw() {
 
 // Posterized bright daytime sky (Level-6 look) — flat blue bands, a chunky
 // pixel sun and a couple of blocky clouds. Drawn in screen space (a skybox).
-const SKY_BANDS = ['#3fb0ff', '#54bcff', '#74caff', '#93d6ff', '#b0e2ff'];
+// ---- Biome themes -----------------------------------------------------------
+// One entry per server biome. sky = posterized bands, tl = terrain depth layers
+// (same shape as the old TLAYERS), trees = canopy rows, dead = skeletal trees.
+const BIOME_THEMES = {
+  alpine:   { sky: ['#3fb0ff', '#54bcff', '#74caff', '#93d6ff', '#b0e2ff'],
+              tl: [[55, '#83cf4f'], [230, '#4e9235'], [820, '#6b4d28'], [Infinity, '#3a2a14']] },
+  desert:   { sky: ['#ffb45a', '#ffc478', '#ffd79a', '#ffe7bd', '#fff3d9'],
+              tl: [[55, '#eecf8a'], [230, '#d8b269'], [820, '#a97f42'], [Infinity, '#6b4c24']] },
+  ice:      { sky: ['#9fd2ff', '#b6deff', '#cde9ff', '#e1f2ff', '#f2faff'],
+              tl: [[55, '#f2f8ff'], [230, '#c3ddf2'], [820, '#7d9fc0'], [Infinity, '#3c526b']] },
+  volcanic: { sky: ['#2a1418', '#3c1b1c', '#552420', '#742e20', '#93401f'],
+              tl: [[55, '#6b5a52'], [230, '#544741'], [820, '#3a322e'], [Infinity, '#221d1b']], dead: true },
+  ruins:    { sky: ['#8fa6b8', '#a3b6c4', '#b8c8d2', '#ccd8e0', '#dfe8ed'],
+              tl: [[55, '#7f9c60'], [230, '#5d7a48'], [820, '#5c5347'], [Infinity, '#37312a']] },
+};
+let THEME = BIOME_THEMES.alpine;
+let SKY_BANDS = THEME.sky;
 const B = 1;                                    // draw at native backing res; the low-res canvas does the pixelation
 function pxRect(x, y, w2, h2) { const q = v => Math.round(v / B) * B; ctx.fillRect(q(x), q(y), q(w2), q(h2)); }
 function pxDisc(cx, cy, r, col) { ctx.fillStyle = col; for (let y = -r; y <= r; y += B) for (let x = -r; x <= r; x += B) if (x * x + y * y <= r * r + r * B * 0.5) ctx.fillRect(Math.round((cx + x) / B) * B, Math.round((cy + y) / B) * B, B, B); }
@@ -2029,7 +2098,7 @@ function drawSky(w, h) {
 // Because every seam is "surface + constant depth", the colour lines follow the
 // terrain's angle (parallel to the slope) instead of running flat — no more
 // horizontal banding. Two greens on top, two browns below.
-const TLAYERS = [
+let TLAYERS = [
   [55,        '#83cf4f'],   // bright grass cap (0..55 world units below surface)
   [230,       '#4e9235'],   // deeper green slope
   [820,       '#6b4d28'],   // brown soil
@@ -2051,9 +2120,19 @@ function mixToward(hex, rgb, t) {
   return `rgb(${Math.round(r + (rgb[0] - r) * t)},${Math.round(g + (rgb[1] - g) * t)},${Math.round(b + (rgb[2] - b) * t)})`;
 }
 // TCHAR[layer][step] — step 0 is byte-identical to the clean colour.
-const TCHAR = TLAYERS.map((L, li) =>
+const buildTCHAR = () => TLAYERS.map((L, li) =>
   Array.from({ length: SCORCH_STEPS + 1 }, (_, s) =>
     mixToward(L[1], SCORCH_CHAR, (s / SCORCH_STEPS) * SCORCH_TINT[li])));
+let TCHAR = buildTCHAR();
+
+// Swap every biome-coloured table in one place. Called from applySnapshot, so a
+// resume or a golf hole change restyles the whole battlefield atomically.
+function setBiomeTheme(biome) {
+  THEME = BIOME_THEMES[biome] || BIOME_THEMES.alpine;
+  SKY_BANDS = THEME.sky;
+  TLAYERS = THEME.tl;
+  TCHAR = buildTCHAR();
+}
 const SCORCH_CRUST = Array.from({ length: SCORCH_STEPS + 1 },
   (_, s) => `rgba(12,10,8,${((s / SCORCH_STEPS) * 0.6).toFixed(3)})`);
 
@@ -2069,6 +2148,15 @@ function scorchAt(wx) {
   return k;
 }
 
+// Concrete deck lookup for the ruins biome. Ranges are few (≤5), so a linear
+// scan per column is cheap.
+function ruinAt(wx) {
+  if (!S.ruins || !S.ruins.length) return null;
+  for (const r of S.ruins) if (wx >= r.a && wx <= r.b) return r;
+  return null;
+}
+const RUIN_COLS = [[90, '#cdd6dd'], [430, '#99a3ab'], [Infinity, '#565f66']];
+
 function drawTerrain(w, h) {
   const z = cam.zoom;                            // low-res px per world unit
   const burnt = S.scorch && S.scorch.length > 0;
@@ -2080,6 +2168,19 @@ function drawTerrain(w, h) {
     if (surf >= h) continue;
     const sc = burnt ? Math.round(scorchAt(wxc) * SCORCH_STEPS) : 0;
     let top = surf;
+    // Indestructible concrete reads as concrete, not painted grass — but only
+    // while the deck itself is the surface (dirt piled on top covers it).
+    const ruin = ruinAt(wxc);
+    if (ruin && Math.abs(S.terrain[Math.round(wxc)] - ruin.top) < 60) {
+      for (let li = 0; li < RUIN_COLS.length; li++) {
+        const bottom = RUIN_COLS[li][0] === Infinity ? h : surf + RUIN_COLS[li][0] * z;
+        const y0 = Math.max(0, Math.round(top)), y1 = Math.min(h, Math.round(bottom));
+        if (y1 > y0) { ctx.fillStyle = RUIN_COLS[li][1]; ctx.fillRect(sx, y0, 1, y1 - y0); }
+        top = bottom;
+        if (top >= h) break;
+      }
+      continue;
+    }
     for (let li = 0; li < TLAYERS.length; li++) {
       const bottom = TLAYERS[li][0] === Infinity ? h : surf + TLAYERS[li][0] * z;
       const y0 = Math.max(0, Math.round(top)), y1 = Math.min(h, Math.round(bottom));
@@ -2109,7 +2210,7 @@ function drawTrees() {
     ctx.fillStyle = '#4a3320';
     ctx.fillRect(sx - u * 0.35, sy - u * 1.5, u * 0.7, u * 1.6);
     const burn = (S.scorch && S.scorch.length) ? scorchAt(t.x) : 0;
-    const rows = burn > 0.45
+    const rows = (burn > 0.45 || THEME.dead)
       ? [[5, '#2a241d'], [4, '#332c23'], [2.9, '#2a241d'], [1.7, '#332c23']]   // burnt to a black skeleton
       : [[5, '#2f5a2b'], [4, '#3a6f34'], [2.9, '#2f5a2b'], [1.7, '#3a6f34']];
     let y = sy - u * 1.4;
@@ -2652,6 +2753,118 @@ function drawPlane() {
 
 // Thin indestructible lava floor at the very bottom of the map. Drawn over the
 // terrain fill so it shows through anything blasted down to it.
+// ---- Battlefield props --------------------------------------------------------
+// Fuel barrels (one blast cooks them off, and they cook each other off) and
+// concrete bunkers whose raised deck is the cover. Everything is rects/polygons.
+function drawProps() {
+  if (!S.props || !S.props.length) return;
+  for (const p of S.props) {
+    if (p.alive === false) continue;
+    const sx = wx2s(p.x);
+    if (sx < -80 || sx > view.cssW + 80) continue;
+    if (p.kind === 'barrel') {
+      const gy = wy2s(surfaceAt(p.x));
+      const u = Math.max(7, Math.min(15, 230 * cam.zoom));       // drum half-width px
+      const hgt = u * 2.5;
+      ctx.fillStyle = '#b8352c';
+      ctx.fillRect(sx - u, gy - hgt, u * 2, hgt);
+      ctx.fillStyle = '#8f2019';                                  // shadow side
+      ctx.fillRect(sx + u * 0.25, gy - hgt, u * 0.75, hgt);
+      ctx.fillStyle = '#5c120e';                                  // rims
+      ctx.fillRect(sx - u, gy - hgt, u * 2, Math.max(1, u * 0.22));
+      ctx.fillRect(sx - u, gy - hgt * 0.55, u * 2, Math.max(1, u * 0.18));
+      ctx.fillRect(sx - u, gy - Math.max(1, u * 0.22), u * 2, Math.max(1, u * 0.22));
+      ctx.fillStyle = '#ffd23f';                                  // hazard diamond
+      const d = u * 0.55, cy2 = gy - hgt * 0.78;
+      ctx.beginPath(); ctx.moveTo(sx, cy2 - d); ctx.lineTo(sx + d, cy2); ctx.lineTo(sx, cy2 + d); ctx.lineTo(sx - d, cy2); ctx.closePath(); ctx.fill();
+    } else if (p.kind === 'bunker') {
+      const deckY = wy2s(p.deck);
+      const x0 = wx2s(p.x - p.w), x1 = wx2s(p.x + p.w);
+      const u = Math.max(6, Math.min(14, 230 * cam.zoom));
+      // Parapet lip along the deck edge + a casemate block with a firing slit.
+      ctx.fillStyle = '#9aa4ac';
+      ctx.fillRect(x0, deckY - u * 0.5, x1 - x0, u * 0.5);
+      ctx.fillStyle = '#7b858d';
+      ctx.fillRect(sx - u * 2.4, deckY - u * 2.2, u * 4.8, u * 1.8);
+      ctx.fillStyle = '#20262b';
+      ctx.fillRect(sx - u * 1.7, deckY - u * 1.7, u * 3.4, Math.max(1, u * 0.5));
+      if (p.hp < 40) {                                           // battle damage cracks
+        ctx.strokeStyle = '#39424a'; ctx.lineWidth = Math.max(1, u * 0.14);
+        ctx.beginPath();
+        ctx.moveTo(sx - u, deckY - u * 2.1); ctx.lineTo(sx - u * 0.4, deckY - u * 1.2); ctx.lineTo(sx - u * 0.9, deckY - u * 0.5);
+        ctx.moveTo(sx + u * 1.3, deckY - u * 2.0); ctx.lineTo(sx + u * 0.8, deckY - u * 1.0);
+        ctx.stroke();
+      }
+    }
+  }
+}
+
+// ---- Supply crates --------------------------------------------------------------
+function drawCrates() {
+  if (!S.crates || !S.crates.length) return;
+  const KIND_COL = { railgun: '#3ce88f', ammo: '#ffd23f', shield: '#54c8ff', repair: '#b6ff5a' };
+  for (const c of S.crates) {
+    const t = c.dropT ?? 1;
+    const ease = 1 - Math.pow(1 - t, 2.2);                       // decelerating fall
+    const wy = c.y - (1 - ease) * 3600;
+    const sx = wx2s(c.x), sy = wy2s(wy);
+    if (sx < -90 || sx > view.cssW + 90) continue;
+    const u = Math.max(8, Math.min(17, 250 * cam.zoom));         // crate half-size px
+    if (t < 1) {                                                 // parachute canopy + lines
+      const cw = u * 3.1, ch = u * 2.0, cy2 = sy - u * 2.1 - ch;
+      ctx.fillStyle = '#e8e2d2';
+      ctx.beginPath();
+      ctx.moveTo(sx - cw, cy2 + ch);
+      ctx.quadraticCurveTo(sx, cy2 - ch * 0.55, sx + cw, cy2 + ch);
+      ctx.lineTo(sx + cw * 0.62, cy2 + ch * 0.72);
+      ctx.quadraticCurveTo(sx, cy2 + ch * 0.10, sx - cw * 0.62, cy2 + ch * 0.72);
+      ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = 'rgba(230,225,210,0.9)'; ctx.lineWidth = Math.max(1, u * 0.1);
+      ctx.beginPath();
+      ctx.moveTo(sx - cw, cy2 + ch); ctx.lineTo(sx - u * 0.8, sy - u);
+      ctx.moveTo(sx + cw, cy2 + ch); ctx.lineTo(sx + u * 0.8, sy - u);
+      ctx.moveTo(sx, cy2 + ch * 0.8); ctx.lineTo(sx, sy - u);
+      ctx.stroke();
+    }
+    // The box: olive drab with a kind-coloured band and star stencil.
+    ctx.fillStyle = '#6b6234';
+    ctx.fillRect(sx - u, sy - u * 2, u * 2, u * 2);
+    ctx.fillStyle = '#524a24';
+    ctx.fillRect(sx + u * 0.3, sy - u * 2, u * 0.7, u * 2);
+    ctx.fillStyle = KIND_COL[c.kind] || '#ffd23f';
+    ctx.fillRect(sx - u, sy - u * 1.25, u * 2, Math.max(2, u * 0.5));
+    ctx.fillStyle = '#2c2a18';
+    ctx.fillRect(sx - u, sy - u * 2, u * 2, Math.max(1, u * 0.16));
+    // Ground marker once landed so a distant crate is spottable.
+    if (t >= 1) {
+      const gy = wy2s(surfaceAt(c.x));
+      ctx.fillStyle = 'rgba(255,210,63,0.5)';
+      ctx.beginPath();
+      ctx.moveTo(sx, gy - u * 3.4); ctx.lineTo(sx + u * 0.55, gy - u * 2.5); ctx.lineTo(sx - u * 0.55, gy - u * 2.5);
+      ctx.closePath(); ctx.fill();
+    }
+  }
+}
+
+// ---- Crate shield -----------------------------------------------------------
+// An angular hex cocoon — polygons only, pulsing gently so it reads as active.
+function drawShieldAura(i) {
+  const t = S.tanks[i]; if (!t) return;
+  const { sx, sy, r } = tankScreen(i);
+  const R = r * 2.5 + Math.sin(performance.now() / 300) * r * 0.12;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(84,200,255,0.75)'; ctx.lineWidth = Math.max(1.5, r * 0.14);
+  ctx.fillStyle = 'rgba(84,200,255,0.08)';
+  ctx.beginPath();
+  for (let k = 0; k <= 6; k++) {
+    const a = -Math.PI / 2 + (k / 6) * Math.PI * 2;
+    const px = sx + Math.cos(a) * R, py = sy - r * 0.6 + Math.sin(a) * R * 0.86;
+    k === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+  }
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.restore();
+}
+
 function drawLava(w, h) {
   const lavaY = S.lavaY || (WH() - 300);
   const top = wy2s(lavaY);
