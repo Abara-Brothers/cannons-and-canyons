@@ -96,4 +96,4 @@ function finish() {
   console.log(JSON.stringify(summary, null, 2));
   process.exit(summary.errors.length ? 1 : 0);
 }
-setTimeout(() => { summary.errors.push('timeout'); finish(); }, 90000);   // remote runs pay an RTT per turn (~2.7s/shot x 24)
+setTimeout(() => { summary.errors.push('timeout'); finish(); }, 240000);  // remote runs pay an RTT per turn PLUS the bot's replay-hold (~6s/bot turn)

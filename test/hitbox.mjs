@@ -70,17 +70,20 @@ for (const w of WEAPONS) {
 }
 
 // 3 — a plain outbound shot must never detonate on the firer (the latch).
-for (const [a, p, what] of [[8, 60, 'shallow'], [45, 60, 'normal'], [88, 60, 'steep'], [45, 100, 'max power']]) {
+//     Steep is 84°, not 88: at SPEED_PER_POWER 52 a near-vertical shell comes
+//     down ~880u away — inside cannon splash. That's honest artillery (fire
+//     straight up and it lands on you), not a latch failure.
+for (const [a, p, what] of [[8, 60, 'shallow'], [45, 60, 'normal'], [84, 60, 'steep'], [45, 100, 'max power']]) {
   const r = fire('cannon', a, p);
   if (r.damage[0] !== 0) fail(`cannon ${what} (${a}/${p}) self-damaged for ${r.damage[0]} — latch broken`);
 }
 
-// 4 — ballistics sane: the latch must not shorten a normal shot. Expected ~18400
-//     with SPEED_PER_POWER 58 and the muzzle-tip origin; the floor guards the
+// 4 — ballistics sane: the latch must not shorten a normal shot. Expected ~15700
+//     with SPEED_PER_POWER 52 and the muzzle-tip origin; the floor guards the
 //     catastrophic case (shell dying at the shooter's feet).
 const land = fire('cannon', 45, 60);
 const endX = land.projectiles[0].path[land.projectiles[0].path.length - 1][0];
-if (endX < 17500) fail(`cannon 45/60 landed at x=${endX}, expected ~18400 (latch ordering bug)`);
+if (endX < 15000) fail(`cannon 45/60 landed at x=${endX}, expected ~15700 (latch ordering bug)`);
 // The shell must LEAVE from the drawn barrel tip, not the hull centre.
 {
   const p0 = land.projectiles[0].path[0];
@@ -105,8 +108,8 @@ if (endX < 17500) fail(`cannon 45/60 landed at x=${endX}, expected ~18400 (latch
   // of them — but it must still never leave the map.
   {
     const s2 = fresh();
-    const r2 = simulateShot(s2, { by: 0, weapon: 'teleport', angle: 45, power: 60 });
-    if (!(r2.tanks[0].x > ENEMY + 1000)) fail(`teleport 45/60 landed at x=${r2.tanks[0].x}, expected past the enemy at ${ENEMY}`);
+    const r2 = simulateShot(s2, { by: 0, weapon: 'teleport', angle: 45, power: 65 });
+    if (!(r2.tanks[0].x > ENEMY + 1000)) fail(`teleport 45/65 landed at x=${r2.tanks[0].x}, expected past the enemy at ${ENEMY}`);
     if (r2.tanks[1].x !== ENEMY) fail('a crossing teleport moved the ENEMY tank');
     for (let p = 20; p <= 100; p += 2.5) {
       const s3 = fresh();
@@ -154,6 +157,26 @@ if (shot.angle === 45 && shot.power === 60) fail('aiShot returned the fallback 4
     if (r.nano && r.nano.seat === 1) enemyTagged = true;
   }
   if (!enemyTagged) fail('nano never tagged the enemy across the power sweep');
+}
+
+// 9 — crates and fuel barrels are SOLID: a shell that visually touches their
+//     outline stops on the box (mid-air, before the ground), a struck barrel
+//     cooks off, and the railgun still pierces straight through both.
+{
+  const flatShot = { by: 0, weapon: 'cannon', angle: 8, power: 60 };   // descends through x=8700 at ~200u altitude
+  const stopOf = (r) => r.projectiles[0].path[r.projectiles[0].path.length - 1];
+  const sB = fresh(); sB.props = [{ id: 1, kind: 'barrel', x: 8700, y: FLAT_Y, hp: 1, alive: true }];
+  const rB = simulateShot(sB, flatShot);
+  const [bx, by2] = stopOf(rB);
+  if (!(bx > 8300 && bx < 8950 && by2 < FLAT_Y - 60)) fail(`shell flew through the barrel: stopped at ${bx},${by2}`);
+  if (!rB.propEvents.some(e => e.kind === 'barrel')) fail('direct barrel hit did not cook it off');
+  const sC = fresh(); sC.crates = [{ id: 9, x: 8700, y: FLAT_Y }];
+  const rC = simulateShot(sC, flatShot);
+  const [cx2, cy3] = stopOf(rC);
+  if (!(cx2 > 8300 && cx2 < 9020 && cy3 < FLAT_Y - 60)) fail(`shell flew through the crate: stopped at ${cx2},${cy3}`);
+  const sR = fresh(); sR.props = [{ id: 1, kind: 'barrel', x: 8700, y: FLAT_Y, hp: 1, alive: true }];
+  const rR = simulateShot(sR, { by: 0, weapon: 'railgun', angle: 8, power: 60 });
+  if (stopOf(rR)[0] < 9200) fail(`railgun stopped at the barrel (x=${stopOf(rR)[0]}) — pierce must ignore solids`);
 }
 
 console.table(report);

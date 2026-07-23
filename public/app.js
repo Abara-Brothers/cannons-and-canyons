@@ -728,12 +728,10 @@ function handle(m) {
       if (m.seat === S.boss && m.weapon) S.bossCharge = { weapon: m.weapon, t0: performance.now() };
       break;
     case 'move': {
-      const prev = S.tanks[m.seat] ? S.tanks[m.seat].x : m.x;
-      S.tanks[m.seat] = { x: m.x, y: m.y };
-      // Lean into the direction of travel; stopping springs it back with a rock.
-      const d = Math.sign(m.x - prev);
-      if (d) { S.leanTarget[m.seat] = d * 0.11; S.moveAt[m.seat] = performance.now(); }
-      if (m.seat === S.you) { S.fuel = m.fuel; updateFuel(); }
+      // Your own drive echoes back instantly; anyone ELSE's movement holds
+      // behind the replay gate — an NPC must never scoot around the field
+      // while your shell is still in the air on this screen.
+      if (m.seat === S.you) applyMove(m); else deferHp(() => applyMove(m));
       break;
     }
     case 'shot': if (m.by === S.boss) S.bossCharge = null; enqueueShot(m); break;
@@ -1067,7 +1065,13 @@ function applySnapshot(m) {
   updateHud(); updateAimUI(); updateFuel(); updateDock();
 }
 
-function onTurn(m) {
+// The server hands the turn over on ITS clock — usually while this client is
+// still replaying the shot (or watching the golf ball roll out). The entire
+// visible handover (banner, dock, FIRE button) waits behind the same gate as
+// HP, so a turn never ends on screen before the shell lands / the ball rests.
+function onTurn(m) { deferHp(() => applyTurn(m)); }
+
+function applyTurn(m) {
   S.turn = m.turn; S.fuel = m.fuel;
   if (m.ammoSeat === S.you && m.ammo) {
     // The emergency shell: if we were completely dry and the server just slid
@@ -1084,6 +1088,15 @@ function onTurn(m) {
   if (m.alive) deferHp(() => { S.alive = m.alive.slice(); updateHud(); });
   if (m.turn === S.you && (!S.selected || (S.ammo[S.selected] ?? 99) <= 0)) S.selected = firstAvailableWeapon();
   updateFuel(); updateDock(); buildWeaponStrip();
+}
+
+function applyMove(m) {
+  const prev = S.tanks[m.seat] ? S.tanks[m.seat].x : m.x;
+  S.tanks[m.seat] = { x: m.x, y: m.y };
+  // Lean into the direction of travel; stopping springs it back with a rock.
+  const d = Math.sign(m.x - prev);
+  if (d) { S.leanTarget[m.seat] = d * 0.11; S.moveAt[m.seat] = performance.now(); }
+  if (m.seat === S.you) { S.fuel = m.fuel; updateFuel(); }
 }
 
 function firstAvailableWeapon() {
@@ -1759,7 +1772,7 @@ function advanceAnim(dt) {
     if (local >= pr.path.length - 1) {
       pr.pos = pr.path.length - 1; pr.done = true;
       if (pr.det && !pr.exploded) {
-        detonate(pr.det); pr.exploded = true;
+        detonate(pr.det, pr.beacon); pr.exploded = true;
         if (i === A.lastDet) resolveNow = true;
       }
     } else { pr.pos = local; allDone = false; }
@@ -1780,13 +1793,16 @@ function advanceAnim(dt) {
   }
 }
 
-function detonate(det) {
+function detonate(det, beacon) {
   // FIRST: this blast frees its own patch of the queued terrain change — the
   // ground breaks where and WHEN each bomb lands.
   if (det && Number.isFinite(det.x)) {
     const relR = Math.max(700, (det.r || 0) * 1.3 + 200);
     releaseTerrainCols(det.x - relR, det.x + relR);
   }
+  // The Air Strike's target beacon lands with NO impact of its own — no puff,
+  // no ring, no sound. The stick of bombs that follows makes every impact.
+  if (beacon) return;
   // Teleport: no blast at all — the whole event IS the warp. Handled first so a
   // teleport det never falls into the round-particle burst-puff branch below.
   if (det.tp) { startWarp(det.tp); return; }
@@ -4466,7 +4482,7 @@ function drawAim() {
   // ctx.save() state and quietly wrecks everything drawn after it.
   try {
     const selW = (S.weapons || []).find(w => w.id === S.selected) || {};
-    const speed = aim.power * 58 * (selW.speedMul || 1);
+    const speed = aim.power * 52 * (selW.speedMul || 1);   // mirrors game-core SPEED_PER_POWER
     const G = 900 * (selW.gravityMul || 1), DTs = 1 / 120;
     let px = mox, py = moy, vx = Math.cos(rad) * dir * speed, vy = -Math.sin(rad) * speed;
     let landed = null, burst = null, prevVy = vy;
@@ -4477,7 +4493,7 @@ function drawAim() {
       prevVy = vy;
       if (px < 0 || px > WW() || py > WH()) break;
       if (!selW.pierce && py >= surfaceAt(px)) { landed = [px, surfaceAt(px)]; break; }
-      if (i % 10 === 4) dots.push([px, py]);         // a dot every ~1/12 s of flight
+      if (i % 7 === 3) dots.push([px, py]);          // a dot every ~1/17 s of flight
     }
     // The arc warns in RED when this shot would hurt YOU: muzzle buried, or
     // the landing sits inside your own weapon's blast radius. (No landing
@@ -4486,18 +4502,20 @@ function drawAim() {
       ? Math.hypot(landed[0] - t.x, landed[1] - (t.y - 150)) <= selW.radius
       : false;
     const hot = danger || selfBlast;
-    // Only the FIRST ~30% of the flight is drawn, fading to nothing — enough
-    // to read the launch and the curve, while the fall stays the player's
-    // judgement. (The full path is still integrated for the red warning.)
-    // NEVER more dots than exist: a steep or point-blank shot may land within
-    // a handful of steps and produce 0-3 dots.
-    const shown = Math.min(dots.length, Math.max(4, Math.ceil(dots.length * 0.3)));
-    ctx.fillStyle = hot ? 'rgba(255,90,82,.9)' : 'rgba(255,210,63,.9)';
+    // The FIRST ~45% of the flight is drawn — a clear, confident curve that
+    // still leaves the fall to the player's judgement. (The full path is
+    // integrated regardless, for the red self-damage warning.) NEVER more
+    // dots than exist: a steep shot may land within a handful of steps.
+    const shown = Math.min(dots.length, Math.max(4, Math.ceil(dots.length * 0.45)));
     for (let i = 0; i < shown; i++) {
       const dsx = wx2s(dots[i][0]), dsy = wy2s(dots[i][1]);
       if (dsx < -20 || dsx > view.cssW + 20 || dsy < -20 || dsy > view.cssH + 20) continue;
-      const k = 2.6 - (i / shown) * 1.2;                       // dots thin along the hint
-      ctx.globalAlpha = 0.85 * (1 - i / shown);                // ...and fade out fully
+      const f = i / shown;
+      const k = 3.6 - f * 1.6;                                 // bold near the muzzle
+      ctx.globalAlpha = Math.max(0.15, 0.95 - f * 0.8);
+      ctx.fillStyle = 'rgba(10,12,16,0.6)';                    // dark under-dot: reads on
+      ctx.fillRect(dsx - k / 2 - 1, dsy - k / 2 - 1, k + 2, k + 2);   // sky, snow and sand
+      ctx.fillStyle = hot ? 'rgba(255,90,82,.95)' : 'rgba(255,214,70,.95)';
       ctx.fillRect(dsx - k / 2, dsy - k / 2, k, k);
     }
   } catch {} finally {
@@ -4515,11 +4533,6 @@ function drawAim() {
   ctx.beginPath(); ctx.arc(sx, sy + 6, ringR, start, start + pct * Math.PI * 2); ctx.stroke();
   ctx.lineCap = 'butt';
 
-  if (S.charging && S.pullPointer) {
-    ctx.setLineDash([3, 5]); ctx.strokeStyle = 'rgba(255,255,255,.5)'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(S.pullPointer.sx, S.pullPointer.sy); ctx.stroke();
-    ctx.setLineDash([]);
-  }
   if (S.charging) {
     ctx.fillStyle = col; ctx.font = '900 15px system-ui, sans-serif';
     ctx.textAlign = 'center';

@@ -6,9 +6,10 @@ export const WORLD_W = 24000; // battlefield sized so a zoom-out frames BOTH tan
 export const WORLD_H = 13500; // tall world → room for huge peaks and deep canyons (no ceiling clipping)
 
 const GRAVITY = 900;          // world units / s^2  (no wind, per spec)
-const SPEED_PER_POWER = 58;   // power 0..100 -> speed 0..5800 u/s. Max 45° range = 5800^2/900 ≈ 37,378 —
-                              // ~1.55× the 24,000-wide map, so full map ≈ power 80. Trimmed from 64
-                              // because shots flew too far; every weapon shares the change.
+const SPEED_PER_POWER = 52;   // power 0..100 -> speed 0..5200 u/s. Max 45° range = 5200^2/900 ≈ 30,044 —
+                              // ~1.25× the 24,000-wide map, so full map ≈ power 89. Trimmed twice
+                              // (64 → 58 → 52) because shots flew too far; every combat weapon
+                              // shares the change. GOLF DOES NOT: the ball's speedMul compensates.
 // Where the shell leaves the tank. These mirror the CLIENT's drawTank barrel
 // geometry (BARREL {ox:0.47, oy:-0.72, len:1.45, brake:0.26} in tank radii, plus
 // the 0.42r LIFT) at the design scale TANK_R=240 — so the projectile path now
@@ -283,7 +284,9 @@ export const WEAPONS = [
     desc: 'They throw... something heavy. Do not ask.' },
   // ---- Artillery Golf (golfOnly: the mode's single weapon) -------------------
   { id: 'golfball',  name: 'Golf Ball',       color: '#f4f6f2', ammo: 99, golfOnly: true,
-    shots: 1, spread: 0,  speedMul: 0.9, damage: 0, radius: 0, terrain: 'none',
+    // speedMul rides the combat power trims in the OPPOSITE direction so golf
+    // ballistics never move: 52 × 1.0038 ≈ the original 58 × 0.9 launch speed.
+    shots: 1, spread: 0,  speedMul: 1.0038, damage: 0, radius: 0, terrain: 'none',
     bounce: { rest: 0.55, fric: 0.88, stop: 72, max: 30 },   // long satisfying roll-out
     desc: 'Dimpled, honest, and utterly indifferent to your feelings.' },
 ];
@@ -667,6 +670,11 @@ export function simulateShot(state, shot) {
   const tank = state.tanks[by];
   const damageDealt = new Array(state.tanks.length).fill(0);
   const projectiles = [];
+  SIM_SOLIDS = [
+    ...(state.props || []).filter(p => p.kind === 'barrel').map(p => ({ kind: 'barrel', x: p.x, y: p.y, ref: p })),
+    ...(state.crates || []).map(c => ({ kind: 'crate', x: c.x, y: c.y })),
+  ];
+  if (!SIM_SOLIDS.length) SIM_SOLIDS = null;
   const newHazards = [];
   const newScorches = [];
   const propEvents = [];
@@ -883,6 +891,7 @@ export function simulateShot(state, shot) {
     }
   }
   settle(state.terrain, state.tanks);
+  SIM_SOLIDS = null;
   return {
     projectiles,
     newHazards,
@@ -970,6 +979,21 @@ export function aiShot(terrain, tanks, by, difficulty, facing, weaponId = 'canno
   const power = clamp(best.power + noise() * e * 1.4, 12, 100);
   return { weapon: weaponId, angle: round1(angle), power: round1(power), dir };
 }
+
+// ---- Solid battlefield objects: shells stop on their DRAWN outline ------------
+// Supply crates and fuel barrels are rendered at constant SCREEN size; these are
+// their world-unit footprints at battle zoom (they read about half a tank wide).
+// A shell that visually touches the box detonates ON it — no more flying clean
+// through a care package or an explosive barrel.
+const SOLID_BOXES = { crate: { hw: 300, h: 560 }, barrel: { hw: 230, h: 580 } };
+export function pointHitsSolid(x, y, s) {
+  const b = SOLID_BOXES[s.kind] || SOLID_BOXES.crate;
+  return Math.abs(x - s.x) <= b.hw && y >= s.y - b.h && y <= s.y + 40;
+}
+// Set by simulateShot for the duration of one sim so every nested integrate()
+// call (splitter children, air-strike bombs, minigun stream) sees the same
+// obstacles. A barrel that cooks off mid-salvo stops blocking via its ref.
+let SIM_SOLIDS = null;
 
 function integrate(terrain, tanks, ox, oy, vx, vy, opts) {
   const path = [[round1(ox), round1(oy)]];
@@ -1061,6 +1085,15 @@ function integrate(terrain, tanks, ox, oy, vx, vy, opts) {
             if (ti === opts.by && !leftOwn) continue;   // still inside its own hull
             if (tanks[ti].alive === false) continue;    // shells pass through wrecks
             if (pointHitsTank(ix, iy, tanks[ti])) {
+              path.push([round1(ix), round1(iy)]); return { path, hit: true, x: ix, y: iy, vx, vy };
+            }
+          }
+          // Crates and barrels stop shells on their outline too. (The railgun's
+          // pierce branch never reaches here — a slug punches through them the
+          // same way it punches through a mountain.)
+          if (SIM_SOLIDS) for (const s of SIM_SOLIDS) {
+            if (s.ref && s.ref.alive === false) continue;
+            if (pointHitsSolid(ix, iy, s)) {
               path.push([round1(ix), round1(iy)]); return { path, hit: true, x: ix, y: iy, vx, vy };
             }
           }

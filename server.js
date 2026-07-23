@@ -743,7 +743,11 @@ function scheduleBot(room) {
   // Survival enemies keep the pressure up: three of them share the clock, so
   // each thinks, walks and fires on a much tighter cycle than a duel CPU.
   const quick = cur.horde;
-  room.botTimer = setTimeout(() => botAct(room), quick ? 220 + Math.random() * 240 : 850 + Math.random() * 750);
+  // Stay frozen until every client has finished WATCHING the previous shot —
+  // an NPC that starts driving mid-replay reads as moving on the human's turn.
+  // Scaled by the test knob (BOT_FIRE_MS) so fast suites stay fast.
+  const watch = Math.max(0, (room.replayUntil || 0) - Date.now()) * Math.min(1, BOT_FIRE_MS / 1500);
+  room.botTimer = setTimeout(() => botAct(room), watch + (quick ? 220 + Math.random() * 240 : 850 + Math.random() * 750));
 }
 
 // Bots want the supply drops too. If a crate is inside this turn's fuel budget,
@@ -997,6 +1001,7 @@ function resolveFire(room, seat, weaponId, angle, power) {
   const result = simulateShot(
     { terrain: room.terrain, tanks: room.tanks,
       lavaY: room.lavaY, biome: room.biome, guard: room.guard, props: room.props,
+      crates: room.crates,   // shells collide with the crate outline mid-flight
       ruins: room.ruins ? room.ruins.ranges : undefined },
     { by: seat, weapon: w.id, angle, power, dir: room.facing[seat] }
   );
@@ -1074,6 +1079,12 @@ function resolveFire(room, seat, weaponId, angle, power) {
   cratesAfterShot(room, seat, result);
   if (room.crates.length) broadcast(room, { type: 'crates', crates: room.crates });
   if (result.nano) startNano(room, result.nano);
+  // How long the clients will spend REPLAYING this salvo (paths play ~9ms a
+  // point; the Air Strike's slow-motion bomb run stretches it). A bot's next
+  // action is held until this window closes, so an NPC never visibly walks or
+  // aims while the previous shot is still flying on someone's screen.
+  const lastPt = result.projectiles.reduce((m2, p) => Math.max(m2, (p.delay || 0) + p.path.length), 0);
+  room.replayUntil = Date.now() + Math.min(8000, Math.round(lastPt * (w.id === 'airstrike' ? 24 : 9)) + 700);
   // Give the shot animation a beat, then play out any fire/toxic burn before the
   // next turn (real-time damage-over-time; the turn holds until it finishes).
   clearTimeout(room.clock);

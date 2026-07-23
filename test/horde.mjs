@@ -11,7 +11,7 @@ const out = { steps: [], errors: [] };
 const step = (m) => out.steps.push(m);
 const fail = (m) => { out.errors.push(m); console.error('FAIL ' + m); };
 const finish = () => { console.log(JSON.stringify(out, null, 2)); process.exit(out.errors.length ? 1 : 0); };
-setTimeout(() => { fail('timeout'); finish(); }, 150000);
+setTimeout(() => { fail('timeout'); finish(); }, 360000);   // deployed bots hold for each shot's replay window
 
 // ---- Pass 1: aliens, played until we see kills + a respawn (or gameover) ----
 const ws = new WebSocket(URL);

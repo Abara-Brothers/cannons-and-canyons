@@ -11,7 +11,7 @@ const out = { steps: [], errors: [] };
 const step = (m) => out.steps.push(m);
 const fail = (m) => { out.errors.push(m); console.error('FAIL ' + m); };
 const finish = () => { console.log(JSON.stringify(out, null, 2)); process.exit(out.errors.length ? 1 : 0); };
-setTimeout(() => { fail('global timeout'); finish(); }, 60000);
+setTimeout(() => { fail('global timeout'); finish(); }, 180000);   // deployed bots hold for each shot's replay window
 
 // ---- Pass 1: profanity ------------------------------------------------------
 function profanityPass() {
@@ -181,7 +181,7 @@ function bossFriendlyFirePass() {
       }, 5200);
     }
   });
-  setTimeout(() => { if (!shotSeen) { fail('boss FF pass never saw the shot resolve'); finish(); } }, 30000);
+  setTimeout(() => { if (!shotSeen) { fail('boss FF pass never saw the shot resolve'); finish(); } }, 90000);
 }
 
 profanityPass();

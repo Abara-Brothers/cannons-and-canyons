@@ -9,7 +9,7 @@ const out = { steps: [], errors: [] };
 const step = (m) => out.steps.push(m);
 const fail = (m) => { out.errors.push(m); console.error('FAIL ' + m); };
 const finish = () => { console.log(JSON.stringify(out, null, 2)); process.exit(out.errors.length ? 1 : 0); };
-setTimeout(() => { fail('timeout'); finish(); }, 45000);
+setTimeout(() => { fail('timeout'); finish(); }, 150000);   // deployed bots hold for each shot's replay window
 
 const ws = new WebSocket(URL);
 const send = (m) => ws.send(JSON.stringify(m));
