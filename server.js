@@ -299,7 +299,7 @@ function snapshot(room, seat) {
     trees: room.trees,
     tanks: room.tanks.map(t => ({ x: Math.round(t.x * 10) / 10, y: Math.round(t.y * 10) / 10 })),
     weapons: room.mode === 'golf'
-      ? [{ ...menuEntry(WEAPON_BY_ID.golfball), ammo: 99 }]
+      ? ['golfball', 'driver', 'putter'].map((id) => ({ ...menuEntry(WEAPON_BY_ID[id]), ammo: 99 }))
       : weaponMenu(),
     golf: room.golf ? {
       hole: room.golf.hole, holes: 9, par: room.golf.par, cup: room.golf.cup, tee: room.golf.tee,
@@ -376,12 +376,16 @@ function hordeRespawn(room) {
     if (aliveE >= Math.min(seats.length, H.target - H.kills)) break;
     H.wave++;
     const hp = cfg.baseHp + H.wave * cfg.waveHp;
-    // drop the reinforcement well away from every living human
+    // Drop the reinforcement clear of every human but INSIDE the fight: on the
+    // 48k map an unconstrained roll stranded enemies beyond max weapon range
+    // (~30k) where neither side could touch the other. 2.6k..20k from the
+    // nearest living human keeps waves dangerous AND hittable.
     let x = 0;
-    for (let tries = 0; tries < 16; tries++) {
+    const humans = room.players.map((p, j) => (!p.horde && room.tanks[j].alive !== false ? room.tanks[j].x : null)).filter((v) => v != null);
+    for (let tries = 0; tries < 24; tries++) {
       x = Math.round(2000 + Math.random() * (WORLD_W - 4000));
-      const clear = room.players.every((p, j) => p.horde || room.tanks[j].alive === false || Math.abs(room.tanks[j].x - x) > 2600);
-      if (clear) break;
+      const dNear = humans.length ? Math.min(...humans.map((hx) => Math.abs(hx - x))) : 10000;
+      if (dNear > 2600 && dNear < 20000) break;
     }
     room.tanks[i].alive = true;
     room.tanks[i].x = x;
@@ -425,7 +429,7 @@ function startGolf(room) {
   };
   room.hp = new Array(n).fill(MAX_HP);
   room.hpMax = new Array(n).fill(MAX_HP);
-  room.ammo = Array.from({ length: n }, () => ({ golfball: 99 }));
+  room.ammo = Array.from({ length: n }, () => ({ golfball: 99, driver: 99, putter: 99 }));
   room.shield = new Array(n).fill(0);
   room.crates = []; room.props = []; room.ruins = null; room.guard = null;
   room.facing = new Array(n).fill(1);            // every course plays left -> right
@@ -472,9 +476,13 @@ function nextHole(room, first) {
 function golfShot(room, seat, msg) {
   const g = room.golf;
   if (g.done[seat]) return;
+  // Three clubs, one ball: any golfOnly weapon id is a legal swing; anything
+  // else (or nothing) falls back to the iron.
+  const clubW = WEAPON_BY_ID[msg.weapon];
+  const club = clubW && clubW.golfOnly ? clubW.id : 'golfball';
   const result = simulateShot(
     { terrain: room.terrain, tanks: room.tanks, lavaY: room.lavaY, biome: room.biome },
-    { by: seat, weapon: 'golfball', angle: msg.angle, power: msg.power, dir: room.facing[seat] }
+    { by: seat, weapon: club, angle: msg.angle, power: msg.power, dir: room.facing[seat] }
   );
   const hi = g.hole - 1;
   g.strokes[seat][hi]++;
@@ -493,7 +501,7 @@ function golfShot(room, seat, msg) {
   }
   if (!g.done[seat] && g.strokes[seat][hi] >= g.par + 4) { g.done[seat] = true; note = note || 'capped'; }
   broadcast(room, {
-    type: 'shot', by: seat, weapon: 'golfball',
+    type: 'shot', by: seat, weapon: club,
     projectiles: result.projectiles,
     terrainDiff: null,
     tanks: room.tanks.map(t => ({ x: Math.round(t.x * 10) / 10, y: Math.round(t.y * 10) / 10 })),
@@ -512,8 +520,10 @@ function golfShot(room, seat, msg) {
   clearTimeout(room.clock);
   // The turn does NOT end while the ball is moving: hold the handover for the
   // replay's full flight+roll (path plays ~9ms a point on the clients).
+  // Real rolling can run well past the old cap — the hold must cover the whole
+  // replay (maxT 60s of sim = 1800 points ≈ 16.2s of playback, plus settle).
   const ptsMs = ((result.projectiles[0] && result.projectiles[0].path.length) || 0) * 9;
-  room.clock = setTimeout(() => { room.clock = null; golfAdvance(room, seat); }, 600 + Math.min(9500, Math.round(ptsMs)));
+  room.clock = setTimeout(() => { room.clock = null; golfAdvance(room, seat); }, 600 + Math.min(20000, Math.round(ptsMs)));
 }
 
 function golfAdvance(room, by) {
@@ -574,14 +584,34 @@ function startGame(room) {
   // Biome roulette — every match a different battlefield flavour.
   room.biome = BIOME_IDS[Math.floor(Math.random() * BIOME_IDS.length)];
   room.lavaY = biomeLavaY(room.biome);
-  room.terrain = generateTerrain(room.seed, n, room.biome);
+  // featMul 2: twice the massifs/canyons for the doubled 48k battlefield.
+  room.terrain = generateTerrain(room.seed, n, room.biome, undefined, 2);
   // Order matters: ruins and bunkers RESHAPE the terrain, so they go before the
   // trees are placed and before the tanks are seated on the final surface.
   room.ruins = (BIOMES[room.biome] || {}).ruins ? generateRuins(room.seed, room.terrain, n) : null;
   room.guard = room.ruins ? room.ruins.guard : null;
   room.props = generateProps(room.seed, room.terrain, n, room.biome);
-  room.trees = generateTrees(room.terrain, room.seed, n);
+  room.trees = generateTrees(room.terrain, room.seed, n, 420, 24000);   // tree budget scaled to 48k
   room.tanks = spawnTanks(room.terrain, room.seed, n);   // ordered left -> right
+  // Horde: the pack must START in reach too. Reseat every enemy 6k..19k from
+  // the nearest human lane (alternating sides where the map allows) — the 48k
+  // spawn spread otherwise opens 96% of matches with somebody beyond max range.
+  if (room.mode === 'aliens' || room.mode === 'zombies') {
+    const humanXs = room.players.map((p, j) => (!p.horde ? room.tanks[j].x : null)).filter((v) => v != null);
+    room.players.forEach((p, j) => {
+      if (!p.horde) return;
+      const hx = humanXs[j % Math.max(1, humanXs.length)] ?? WORLD_W / 2;
+      for (let tries = 0; tries < 30; tries++) {
+        const side = (j + tries) % 2 === 0 ? 1 : -1;
+        const cand = Math.round(hx + side * (6000 + Math.random() * 13000));
+        if (cand < 2000 || cand > WORLD_W - 2000) continue;
+        if (room.tanks.some((t, k) => k !== j && Math.abs(t.x - cand) < 2600)) continue;
+        room.tanks[j].x = cand;
+        break;
+      }
+      room.tanks[j].y = surfaceAt(room.terrain, room.tanks[j].x);
+    });
+  }
   room.hp = new Array(n).fill(MAX_HP);
   room.hpMax = new Array(n).fill(MAX_HP);
   room.crates = []; room.crateSeq = 1; room.crateDrops = 0;
@@ -665,8 +695,13 @@ function maybeDropCrate(room) {
   if (room.turnCount < 3 || (room.turnCount - 3) % 4 !== 0) return;   // turn 3, 7, 11, ...
   if (room.crates.length >= 2) return;
   if ((room.crateDrops || 0) >= 4) return;           // hard cap: 4 drops per match
+  // Sample inside the battle envelope (tank spread + 3k each side) — a random
+  // point on the whole 48k map put 73% of drops beyond a turn's drive.
+  const live = room.tanks.filter((t, i) => t.alive !== false && room.players[i]);
+  const lo = Math.max(1800, Math.min(...live.map((t) => t.x)) - 3000);
+  const hi = Math.min(WORLD_W - 1800, Math.max(...live.map((t) => t.x)) + 3000);
   for (let tries = 0; tries < 14; tries++) {
-    const x = Math.round(1800 + Math.random() * (WORLD_W - 3600));
+    const x = Math.round(lo + Math.random() * Math.max(1, hi - lo));
     const clearTanks = room.tanks.every((t, i) => t.alive === false || Math.abs(t.x - x) > 2000);
     const clearCrates = room.crates.every(c => Math.abs(c.x - x) > 800);
     if (!clearTanks || !clearCrates) continue;
@@ -812,7 +847,7 @@ function botPlan(room, seat) {
   }
   if (me.x < 2200) dir = 1; else if (me.x > (room.worldW || WORLD_W) - 2200) dir = -1;
   if (!dir) return null;
-  const steps = meP.horde ? 6 + Math.floor(Math.random() * 10) : 8 + Math.floor(Math.random() * 22);
+  const steps = meP.horde ? 20 + Math.floor(Math.random() * 18) : 8 + Math.floor(Math.random() * 22);
   return { dir, steps };
 }
 
@@ -865,7 +900,11 @@ function botFire(room) {
     const idx = hordeSeats(room).indexOf(seat);
     // Each enemy has a signature weapon, with a change-up every third shot.
     wid = cfg.kit[(idx + (room.turnCount % 3 === 0 ? 1 : 0)) % cfg.kit.length];
-    bot.difficulty = room.horde.wave >= 3 ? 'hard' : 'medium';
+    // The pack is CHAFF, not snipers: now that every enemy seats in range,
+    // closes with real strides and aims with range-compensated jitter, medium+
+    // scatter made solo survival mathematically impossible (3 accurate guns vs
+    // one 150hp tank). Waves 1-2 spray, wave 3+ tightens up.
+    bot.difficulty = room.horde.wave >= 3 ? 'medium' : 'easy';
   }
   if (bot.boss) {
     room.bossShots = (room.bossShots || 0) + 1;

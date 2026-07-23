@@ -114,7 +114,9 @@ if (endX < 15000) fail(`cannon 45/60 landed at x=${endX}, expected ~15700 (latch
     for (let p = 20; p <= 100; p += 2.5) {
       const s3 = fresh();
       const r3 = simulateShot(s3, { by: 0, weapon: 'teleport', angle: 45, power: p });
-      if (r3.tanks[0].x < 200 || r3.tanks[0].x > 23800) fail(`teleport at power ${p} left the map: x=${r3.tanks[0].x}`);
+      // The test terrain is 24001 wide (narrower than the real 48k map): a warp
+      // may land anywhere on IT, but never outside its own ground.
+      if (r3.tanks[0].x < 200 || r3.tanks[0].x > 24000) fail(`teleport at power ${p} left the map: x=${r3.tanks[0].x}`);
     }
   }
 }
@@ -132,7 +134,7 @@ if (endX < 15000) fail(`cannon 45/60 landed at x=${endX}, expected ~15700 (latch
   for (const tanks of layouts) {
     for (let i = 0; i < tanks.length; i++) {
       const [lo, hi] = laneBounds(tanks, i);
-      if (lo !== 200 || hi !== 23800) {
+      if (lo !== 200 || hi !== 47800) {   // EDGE_MARGIN .. WORLD_W - EDGE_MARGIN
         fail(`laneBounds fenced seat ${i} to [${lo}, ${hi}] — tanks must not block each other`);
       }
     }

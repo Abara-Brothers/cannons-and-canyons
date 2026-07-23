@@ -13,7 +13,7 @@ const $ = (id) => document.getElementById(id);
 // ---------------------------------------------------------------------------
 const S = {
   ws: null, connected: false,
-  world: { w: 24000, h: 13500 },
+  world: { w: 48000, h: 13500 },
   you: 0, n: 2, mode: 'duel',
   names: ['Player 1', 'Player 2'],
   skins: ['olive', 'desert'],
@@ -30,7 +30,7 @@ const S = {
   golf: null,                          // Artillery Golf scorecard state
   props: [], crates: [], shield: [],   // barrels/bunkers, supply drops, crate shields
   chainQueue: [],                      // staggered prop chain explosions
-  tanks: [{ x: 900, y: 9720 }, { x: 23100, y: 9720 }],
+  tanks: [{ x: 900, y: 9720 }, { x: 47100, y: 9720 }],
   hp: [150, 150], maxHp: 150, hpMax: [150, 150],
   ammo: {},
   turn: 0, fuel: 4500, moveBudget: 4500,
@@ -134,6 +134,8 @@ const ICONS = {
   nano: `<svg viewBox="0 0 24 24"><path d="M3 12l6-3.4v6.8z" fill="#39424e"/><rect x="8" y="10.6" width="10.4" height="2.8" rx="1.2" fill="#5b6572"/><rect x="8.6" y="11.4" width="9.2" height="1.2" fill="#6be7ff"/><path d="M18.4 9.2l3 2.8-3 2.8" fill="none" stroke="#6be7ff" stroke-width="1.4" stroke-linejoin="round"/><g fill="#6be7ff"><rect x="4.6" y="4.4" width="2" height="2" rx=".4"/><rect x="9.2" y="3.2" width="2" height="2" rx=".4"/><rect x="6.8" y="6.9" width="1.6" height="1.6" rx=".4"/><rect x="13.4" y="4.6" width="1.6" height="1.6" rx=".4"/></g></svg>`,
   minigun: `<svg viewBox="0 0 24 24"><g fill="#aeb9c9"><rect x="6" y="8.2" width="13" height="1.9" rx=".9"/><rect x="6" y="11" width="15" height="1.9" rx=".9"/><rect x="6" y="13.8" width="13" height="1.9" rx=".9"/></g><rect x="3.4" y="7.4" width="4.4" height="9.2" rx="1.6" fill="#5b6572"/><rect x="1.6" y="10.4" width="2.4" height="3.2" rx=".8" fill="#39424e"/><g fill="#ffd9a0"><rect x="20" y="8.4" width="2.4" height="1.4" rx=".7"/><rect x="21.4" y="11.2" width="2.4" height="1.4" rx=".7"/><rect x="20" y="14" width="2.4" height="1.4" rx=".7"/></g></svg>`,
   golfball: `<svg viewBox="0 0 24 24"><circle cx="11" cy="10" r="6.2" fill="#f4f6f2"/><circle cx="11" cy="10" r="6.2" fill="none" stroke="#c9cfd8" stroke-width=".8"/><g fill="#c9cfd8"><circle cx="9" cy="8" r=".7"/><circle cx="12.4" cy="7.4" r=".7"/><circle cx="10.6" cy="11" r=".7"/><circle cx="13.6" cy="10.4" r=".7"/><circle cx="8.4" cy="10.8" r=".7"/></g><path d="M5 21h11" stroke="#3a7d2f" stroke-width="2.4" stroke-linecap="round"/><path d="M17.6 20.9V9.4l3.6 1.5-3.6 1.6" fill="#ff3b30" stroke="#e8ecf2" stroke-width=".9"/></svg>`,
+  driver: `<svg viewBox="0 0 24 24"><path d="M16.5 3.2 8.2 15.4" stroke="#c9cfd8" stroke-width="1.7" stroke-linecap="round"/><path d="M4.6 15.2c0-2.2 2-3.6 4.3-3.6 2.5 0 4 1.7 4 3.6 0 2.1-1.9 3.6-4.2 3.6-2.4 0-4.1-1.5-4.1-3.6z" fill="#ffd23f" stroke="#b8912a" stroke-width=".9"/><path d="M6.4 14.2c.5-.9 1.5-1.4 2.6-1.4" stroke="#fff3c8" stroke-width=".9" fill="none" stroke-linecap="round"/><circle cx="18.6" cy="5.6" r="2.4" fill="#f4f6f2" stroke="#c9cfd8" stroke-width=".8"/></svg>`,
+  putter: `<svg viewBox="0 0 24 24"><path d="M14.5 3.4 12.9 16" stroke="#c9cfd8" stroke-width="1.7" stroke-linecap="round"/><path d="M6.2 16.4h8.4c.8 0 1.4.5 1.4 1.3s-.6 1.3-1.4 1.3H6.2c-.8 0-1.4-.5-1.4-1.3s.6-1.3 1.4-1.3z" fill="#8affde" stroke="#3f9a7c" stroke-width=".9"/><circle cx="19.2" cy="17.7" r="2.1" fill="#f4f6f2" stroke="#c9cfd8" stroke-width=".8"/></svg>`,
   teleport: `<svg viewBox="0 0 24 24"><path d="M2.6 12l3.3-5.4L9.2 12l-3.3 5.4z" fill="none" stroke="#c86bff" stroke-width="1.7" stroke-linejoin="round" opacity=".8"/><path d="M14.8 12l3.3-5.4L21.4 12l-3.3 5.4z" fill="#c86bff"/><path d="M10.6 8.7L13.9 12l-3.3 3.3" fill="none" stroke="#6be7ff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 20.6h16" stroke="#8a93a8" stroke-width="1.5" stroke-linecap="round"/></svg>`,
   nuke: `<svg viewBox="0 0 24 24"><path d="M8.4 18.1L5.2 22.5h3.2zM15.6 18.1l3.2 4.4h-3.2z" fill="#2b323c"/><path d="M8.7 17.4h6.6l1.6 5.1H7.1z" fill="#3d4652"/><path d="M12 1.5c3.4 3.4 5.3 7.1 5.3 10.4 0 2.4-.8 4.4-1.9 5.9H8.6c-1.1-1.5-1.9-3.5-1.9-5.9C6.7 8.6 8.6 4.9 12 1.5z" fill="#aeb9c9"/><path d="M12 1.5C8.6 4.9 6.7 8.6 6.7 11.9c0 1.6.4 3.1 1 4.3V5.4z" fill="#d7e0ec"/><path d="M6.9 8.5h10.2v6.6H6.9z" fill="#26350f"/><g fill="#b6ff5a"><path d="M12 11.8l-1.6-3.1a3.6 3.6 0 013.2 0z"/><path d="M12 11.8l-1.6-3.1a3.6 3.6 0 013.2 0z" transform="rotate(120 12 11.8)"/><path d="M12 11.8l-1.6-3.1a3.6 3.6 0 013.2 0z" transform="rotate(240 12 11.8)"/><circle cx="12" cy="11.8" r=".9"/></g></svg>`,
 };
@@ -151,6 +153,8 @@ const TRAJ = {
   nano: `<svg viewBox="0 0 24 14"><path d="M2 12 Q10 2 19 9" stroke="#aeb9d6" stroke-width="1.5" fill="none"/><g fill="#6be7ff"><rect x="17.5" y="7" width="1.7" height="1.7" rx=".3"/><rect x="20" y="8.4" width="1.7" height="1.7" rx=".3"/><rect x="18.6" y="10.4" width="1.7" height="1.7" rx=".3"/></g></svg>`,
   minigun: `<svg viewBox="0 0 24 14"><g stroke="#ffd9a0" stroke-width="1.3" fill="none"><path d="M2 11 Q9 4 16 7.5"/><path d="M2 12.5 Q10 6.5 17.5 9.5"/><path d="M3 13.5 Q11 9 19 11.5"/></g></svg>`,
   golfball: `<svg viewBox="0 0 24 14"><path d="M2 12 Q7 3 11 8 Q13 10.5 15 9.5 Q18 8 21 11.5" stroke="#aeb9d6" stroke-width="1.5" fill="none"/><circle cx="21.2" cy="11.6" r="1.6" fill="#f4f6f2"/></svg>`,
+  driver: `<svg viewBox="0 0 24 14"><path d="M2 12 Q8 1 14 6 Q18 9.4 22 11.6" stroke="#aeb9d6" stroke-width="1.5" fill="none"/><circle cx="22" cy="11.6" r="1.6" fill="#f4f6f2"/></svg>`,
+  putter: `<svg viewBox="0 0 24 14"><path d="M2 11.6h17" stroke="#aeb9d6" stroke-width="1.5" stroke-dasharray="3 2.4" fill="none"/><circle cx="21" cy="11.6" r="1.6" fill="#f4f6f2"/></svg>`,
   teleport: `<svg viewBox="0 0 24 14"><path d="M3 12 Q11 0 18 9.5" stroke="#aeb9d6" stroke-width="1.6" fill="none"/><path d="M3 12l2.1-3 2.1 3-2.1 3z" fill="none" stroke="#c86bff" stroke-width="1.2" stroke-linejoin="round"/><path d="M18 9.5l2.1-3 2.1 3-2.1 3z" fill="#c86bff"/><path d="M9.4 3.4l2.2 2.2-2.2 2.2" fill="none" stroke="#6be7ff" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   nuke: `<svg viewBox="0 0 24 14"><path d="M2 12 Q10 0 17 8" stroke="#aeb9d6" stroke-width="1.6" fill="none"/><circle cx="18" cy="9" r="4" fill="#b6ff5a" opacity=".4"/><circle cx="18" cy="9" r="1.8" fill="#b6ff5a"/></svg>`,
 };
@@ -336,13 +340,29 @@ function minMapZoom() { return view.cssW / WW(); }
 const clampUserZoom = (z) => Math.max(0.25, Math.min(6, Number.isFinite(z) ? z : 1));
 const finite = (v, fb) => (Number.isFinite(v) ? v : fb);
 
-// Aim zoom baseline. Wide screens: whole battlefield. Portrait: fill the tall
-// screen with the terrain band around your tank.
+// Aim zoom baseline. COMBAT: fit every tank still fighting (plus margin) — on
+// the 48k map neither the whole-map view (tanks become specks) nor the old
+// own-tank band (enemy off-screen) works; 'see all player tanks' is the rule.
+// GOLF keeps its terrain-band framing: the course is far wider than any screen
+// and the cup is flagged, so framing 'all tanks' would mean nothing there.
 function aimZoom() {
   const fzW = fullZoom();
   const band = WH() - S.minY;
-  if (band * fzW >= view.cssH * 0.42) return fzW;
-  return Math.min(0.14, Math.max(fzW, view.cssH / (band + 1400)));
+  if (S.mode === 'golf') {
+    if (band * fzW >= view.cssH * 0.42) return fzW;
+    return Math.min(0.14, Math.max(fzW, view.cssH / (band + 1400)));
+  }
+  let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity;
+  for (let i = 0; i < S.n; i++) {
+    if (S.alive[i] === false || !S.tanks[i]) continue;
+    xmin = Math.min(xmin, S.tanks[i].x); xmax = Math.max(xmax, S.tanks[i].x);
+    ymin = Math.min(ymin, S.tanks[i].y); ymax = Math.max(ymax, S.tanks[i].y);
+  }
+  if (!Number.isFinite(xmin)) return Math.max(minMapZoom(), Math.min(0.14, fzW));
+  const spanX = Math.max(9000, (xmax - xmin) + 7000);   // breathing room both sides
+  const spanY = Math.max(6500, (ymax - ymin) + 5200);   // arc headroom + ground
+  const zFit = Math.min(view.cssW / spanX, view.cssH / spanY);
+  return Math.max(minMapZoom(), Math.min(0.14, zFit));
 }
 
 // The camera NEVER follows shots. It frames YOUR tank; you control the zoom.
@@ -356,22 +376,26 @@ function cameraTarget() {
   tz = Math.min(0.32, Math.max(minMapZoom(), tz));
   const focus = S.tanks[S.you] || S.tanks[0];
   const vw = view.cssW / tz, vh = view.cssH / tz;
-  let tx = focus.x + (S.panX || 0);
-  // Vertical: frame the acting tank (with arc headroom) while aiming; near full
-  // zoom-out, drift to the midpoint of both tanks so both stay on screen. Blend on
-  // the zoom level alone: 1 at min zoom → 0 once zoomed to 1.6× min (aiming).
-  const mz = minMapZoom();
-  const surveyMix = Math.max(0, Math.min(1, (mz * 1.6 - tz) / (mz * 0.6)));
+  // Survey framing: at the default (fit-all) zoom the camera centres on the
+  // WHOLE battle — bounds midpoint of everyone still fighting, both axes — and
+  // eases back onto your own tank as you pinch in. Blend runs off the fit
+  // baseline (not min-map zoom), so 'default view = every tank on screen'
+  // holds on the 48k map. Golf skips the survey: it stays on your ball.
+  const base = aimZoom();
+  const surveyMix = S.mode === 'golf' ? 0
+    : Math.max(0, Math.min(1, (base * 1.6 - tz) / (base * 0.6)));
+  let xmin = Infinity, xmax = -Infinity, ysum = 0, ycnt = 0;
+  for (let i = 0; i < S.n; i++) {
+    if (S.alive[i] === false || !S.tanks[i]) continue;
+    xmin = Math.min(xmin, S.tanks[i].x); xmax = Math.max(xmax, S.tanks[i].x);
+    ysum += S.tanks[i].y; ycnt++;
+  }
+  const surveyX = Number.isFinite(xmin) ? (xmin + xmax) / 2 : focus.x;
+  let tx = focus.x + (surveyX - focus.x) * surveyMix + (S.panX || 0);
   const framedY = focus.y - vh * 0.18;
   // On landscape, sit the tanks lower in the frame by default so you see more sky
   // (and less of the terrain wall). Then apply the user's vertical pan (S.panY).
   const skyBias = view.cssW > view.cssH ? vh * 0.13 : 0;
-  // Survey framing centres on the mean height of everyone still fighting.
-  let ysum = 0, ycnt = 0;
-  for (let i = 0; i < S.n; i++) {
-    if (S.alive[i] === false || !S.tanks[i]) continue;
-    ysum += S.tanks[i].y; ycnt++;
-  }
   const surveyY = (ycnt ? ysum / ycnt : focus.y) - skyBias;
   let ty = framedY + (surveyY - framedY) * surveyMix + (S.panY || 0);
   // KILLCAM is the ONE time the camera leaves your tank during a shot: blend the
@@ -1028,7 +1052,7 @@ function applySnapshot(m) {
   S.golf = m.golf || null;
   S.nanoBots = (m.nano || new Array(S.n).fill(0)).slice();
   document.body.classList.toggle('golf', S.mode === 'golf');
-  if (S.mode === 'golf') S.selected = 'golfball';
+  if (S.mode === 'golf' && !(S.weapons || []).some((w) => w.id === S.selected)) S.selected = 'golfball';
   S.ruins = m.ruins || [];
   S.props = m.props || [];
   S.crates = (m.crates || []).map(c => ({ ...c, dropT: 1 }));   // already landed on resume
@@ -2641,7 +2665,9 @@ const HELP_WEAPONS = [
   { id: 'teleport', name: 'Teleport',      note: '2 charges',        desc: 'Warp your tank to wherever the shell lands. No blast — pick your ground.' },
   { id: 'nuke',     name: 'Tactical Nuke', note: '1 warhead',        desc: 'The big one. Leaves a fallout cloud over the crater that keeps hurting.' },
   { id: 'railgun',  name: 'Railgun',       note: 'supply drops only', desc: 'A flat hypervelocity slug that punches straight through hills. Only found in supply crates.' },
-  { id: 'golfball', name: 'Golf Ball',     note: 'Golf mode',        desc: 'Bounces and rolls when it lands. Read the slope — the cup is flagged on the green.' },
+  { id: 'golfball', name: 'Iron',          note: 'Golf mode',        desc: 'The all-rounder: honest carry, bites on landing, modest release.' },
+  { id: 'driver',   name: 'Driver',        note: 'Golf mode',        desc: 'Maximum carry and it keeps running after it lands. Off the tee, nothing else comes close.' },
+  { id: 'putter',   name: 'Putter',        note: 'Golf mode',        desc: 'Never leaves the turf — a pure roll whose pace you set. The closer, the deadlier.' },
 ];
 let helpBuilt = false;
 function buildHelp() {
@@ -4482,6 +4508,27 @@ function drawAim() {
   // ctx.save() state and quietly wrecks everything drawn after it.
   try {
     const selW = (S.weapons || []).find(w => w.id === S.selected) || {};
+    if (selW.ground) {
+      // PUTTER: the ball never lofts, so an arc would be a lie. Show a dotted
+      // pace line hugging the turf — its length is the true flat-ground roll
+      // (v^2 / 2·rr·g, rr 0.10 mirrors game-core), first 60% shown.
+      const v = aim.power * 52 * (selW.speedMul || 1);
+      const roll = (v * v) / (2 * 0.10 * 900);
+      const pdir = dir * (Math.cos(rad) < 0 ? -1 : 1);   // aim past 90° = putt backwards
+      for (let i = 1; i <= 22; i++) {
+        const f = (i / 22) * 0.6;
+        const pxg = t.x + pdir * (350 + roll * f);
+        if (pxg < 0 || pxg > WW()) break;
+        const gx = wx2s(pxg), gy = wy2s(surfaceAt(pxg) - 10);
+        const k = 3.2 - f * 1.8;
+        ctx.globalAlpha = Math.max(0.2, 0.95 - f * 1.1);
+        ctx.fillStyle = 'rgba(10,12,16,0.6)';
+        ctx.fillRect(gx - k / 2 - 1, gy - k / 2 - 1, k + 2, k + 2);
+        ctx.fillStyle = 'rgba(255,214,70,.95)';
+        ctx.fillRect(gx - k / 2, gy - k / 2, k, k);
+      }
+      throw 0;   // skip the ballistic arc below; finally{} resets alpha
+    }
     const speed = aim.power * 52 * (selW.speedMul || 1);   // mirrors game-core SPEED_PER_POWER
     const G = 900 * (selW.gravityMul || 1), DTs = 1 / 120;
     let px = mox, py = moy, vx = Math.cos(rad) * dir * speed, vy = -Math.sin(rad) * speed;
@@ -4906,6 +4953,7 @@ function ordnanceKind(A, pr) {
   if (w === 'z_spit')    return 'bile';
   if (w === 'z_grubs')   return pr.delay > 0 ? 'grub' : 'grubsack';
   if (w === 'z_lob')     return 'corpse';
+  if (w === 'driver' || w === 'putter') return 'golfball';   // every club strikes the same ball
   return ORD[w] ? w : 'cannon';          // cannon is the sensible default round
 }
 const ORD_SCALE = { nuke: 1.30, mortar: 1.12, buster: 1.10, bomb: 0.92, firebomb: 0.85, bomblet: 0.72,
@@ -4915,7 +4963,7 @@ const ORD_SPIN  = { bomblet: 0.16, firebomb: 0.10, wall: 0.07,
                     spore: 0.12, grub: 0.22, corpse: 0.09, grubsack: 0.08,
                     magmagob: 0.15 };   // radians per path point
 const ORD_TRAIL = {
-  golfball: 'rgba(244,246,242,.5)',
+  golfball: 'rgba(244,246,242,.5)', driver: 'rgba(244,246,242,.5)', putter: 'rgba(244,246,242,.5)',
   nano: 'rgba(107,231,255,.65)',
   minigun: 'rgba(255,217,160,.55)',
   cannon: 'rgba(255,220,150,.5)', mortar: 'rgba(255,190,110,.5)', volley: 'rgba(180,170,255,.55)',

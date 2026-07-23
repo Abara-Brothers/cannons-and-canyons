@@ -2,14 +2,15 @@
 // Runs on the server only. Deterministic given the same inputs so both
 // clients, which merely replay the server's resolved shot, stay in sync.
 
-export const WORLD_W = 24000; // battlefield sized so a zoom-out frames BOTH tanks well
+export const WORLD_W = 48000; // battlefield DOUBLED (2026-07-23, Jordan: 'gameplay needs to feel much larger') — the camera fits all tanks, not the whole map
 export const WORLD_H = 13500; // tall world → room for huge peaks and deep canyons (no ceiling clipping)
 
 const GRAVITY = 900;          // world units / s^2  (no wind, per spec)
 const SPEED_PER_POWER = 52;   // power 0..100 -> speed 0..5200 u/s. Max 45° range = 5200^2/900 ≈ 30,044 —
-                              // ~1.25× the 24,000-wide map, so full map ≈ power 89. Trimmed twice
-                              // (64 → 58 → 52) because shots flew too far; every combat weapon
-                              // shares the change. GOLF DOES NOT: the ball's speedMul compensates.
+                              // ~0.63× the 48,000-wide map: you can NO LONGER snipe border to
+                              // border; pickSpawns caps a duel gap at 26,000 so opponents always
+                              // start in reach. Trimmed twice (64 → 58 → 52) because shots flew
+                              // too far. GOLF DOES NOT share this: the ball's speedMul compensates.
 // Where the shell leaves the tank. These mirror the CLIENT's drawTank barrel
 // geometry (BARREL {ox:0.47, oy:-0.72, len:1.45, brake:0.26} in tank radii, plus
 // the 0.42r LIFT) at the design scale TANK_R=240 — so the projectile path now
@@ -69,7 +70,9 @@ export const BIOMES = {
               gen: { base: 0.60, roughMul: 1.15, layerMul: 1.0, ridgeMul: 1.3,
                      pc0: 4, pcR: 4, ph0: 2400, phR: 1600, pwMul: 0.9, sharpP: 0.7,
                      cc0: 4, ccR: 4, dropMul: 1.2 } },
-  ruins:    { crater: { wMul: 1.0,  sheet: false }, lavaRaise: 0, ruins: true,
+  // The guarded concrete slabs ('indestructible pillars') are RETIRED — Jordan
+  // 2026-07-23. The biome keeps its overcast palette; it gets normal bunkers now.
+  ruins:    { crater: { wMul: 1.0,  sheet: false }, lavaRaise: 0,
               gen: { base: 0.72, roughMul: 0.7, layerMul: 0.9, ridgeMul: 0.4,
                      pc0: 2, pcR: 3, ph0: 1800, phR: 1100, pwMul: 1.1, sharpP: 0.2,
                      cc0: 1, ccR: 3, dropMul: 0.8 } },
@@ -254,8 +257,8 @@ export const WEAPONS = [
     desc: 'Hawks up gobs of reactor slag that burn where they splatter.' },
   { id: 'b_spear',     name: 'Phase Spear',     color: '#8affde', ammo: 99, bossOnly: true,
     shots: 1, spread: 0,  speedMul: 1.8, gravityMul: 0.25, damage: 36, radius: 380, terrain: 'crater',
-    pierce: true, proximity: 140,
-    desc: 'A charged energy spear that phases straight through terrain.' },
+    pierce: true, proximity: 140, drill: true,
+    desc: 'A charged spear that burns a channel through everything it crosses.' },
   { id: 'b_quake',     name: 'Seismic Slam',    color: '#c98a4b', ammo: 99, bossOnly: true,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 26, radius: 1400, terrain: 'crater', dig: 0.5,
     desc: 'A piledriver round that cracks the earth open.' },
@@ -269,8 +272,8 @@ export const WEAPONS = [
     desc: 'A pod that bursts into four falling spores.' },
   { id: 'a_lance',  name: 'Phase Lance',    color: '#ff6bf0', ammo: 99, aiOnly: true,
     shots: 1, spread: 0,  speedMul: 1.6, gravityMul: 0.3, damage: 18, radius: 300, terrain: 'crater',
-    pierce: true, proximity: 130,
-    desc: 'A phased beam that ignores terrain.' },
+    pierce: true, proximity: 130, drill: true,
+    desc: 'A beam that scours a burning trench through the land.' },
   { id: 'z_spit',   name: 'Bile Spit',      color: '#9dde4b', ammo: 99, aiOnly: true,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 12, radius: 560, terrain: 'none',
     hazard: { type: 'gas', ms: 6000, bites: 3, dmg: 4, r: 520 },
@@ -283,12 +286,25 @@ export const WEAPONS = [
     shots: 1, spread: 0,  speedMul: 1.0, damage: 18, radius: 820, terrain: 'crater',
     desc: 'They throw... something heavy. Do not ask.' },
   // ---- Artillery Golf (golfOnly: the mode's single weapon) -------------------
-  { id: 'golfball',  name: 'Golf Ball',       color: '#f4f6f2', ammo: 99, golfOnly: true,
+  // Golf clubs. Each carries bounce physics: rest = restitution, fric = impact
+  // friction, rr = ROLLING-RESISTANCE coefficient (the real-physics roll: the
+  // ball keeps rolling, downhill re-accelerates it, and it only rests where
+  // friction beats the slope). No caps, no timers — see integrate()'s roll mode.
+  { id: 'golfball',  name: 'Iron',            color: '#f4f6f2', ammo: 99, golfOnly: true,
     // speedMul rides the combat power trims in the OPPOSITE direction so golf
     // ballistics never move: 52 × 1.0038 ≈ the original 58 × 0.9 launch speed.
     shots: 1, spread: 0,  speedMul: 1.0038, damage: 0, radius: 0, terrain: 'none',
-    bounce: { rest: 0.55, fric: 0.88, stop: 72, max: 30 },   // long satisfying roll-out
-    desc: 'Dimpled, honest, and utterly indifferent to your feelings.' },
+    bounce: { rest: 0.45, fric: 0.72, rr: 0.30 },    // bites on the pitch mark, ~2-3k release
+    desc: 'The honest mid-game club. Flies true, bites on landing.' },
+  { id: 'driver',    name: 'Driver',          color: '#ffd23f', ammo: 99, golfOnly: true,
+    shots: 1, spread: 0,  speedMul: 1.25, damage: 0, radius: 0, terrain: 'none',
+    bounce: { rest: 0.50, fric: 0.80, rr: 0.16 },    // longest carry AND the longest roll-out
+    desc: 'Off the tee: maximum carry, and it runs forever on the fairway.' },
+  { id: 'putter',    name: 'Putter',          color: '#8affde', ammo: 99, golfOnly: true,
+    shots: 1, spread: 0,  speedMul: 0.20, damage: 0, radius: 0, terrain: 'none',
+    ground: true,                                     // struck along the turf — the ball NEVER lofts
+    bounce: { rest: 0.2, fric: 0.9, rr: 0.10 },      // true roll: full power ≈ a 6,000u lag putt
+    desc: 'No loft, no drama. Rolls exactly as far as you dare.' },
 ];
 
 export const WEAPON_BY_ID = Object.fromEntries(WEAPONS.map(w => [w.id, w]));
@@ -300,7 +316,8 @@ export const WEAPON_BY_ID = Object.fromEntries(WEAPONS.map(w => [w.id, w]));
 export function menuEntry(w) {
   return { id: w.id, name: w.name, color: w.color, ammo: w.ammo, desc: w.desc,
            speedMul: w.speedMul, gravityMul: w.gravityMul || 1,
-           pierce: !!w.pierce, apex: !!w.split, radius: w.radius || 0 };
+           pierce: !!w.pierce, apex: !!w.split, radius: w.radius || 0,
+           ground: !!w.ground };
 }
 export function weaponMenu() {
   return WEAPONS.filter(w => !w.bossOnly && !w.golfOnly && !w.aiOnly).map(menuEntry);
@@ -358,7 +375,10 @@ function mulberry32(seed) {
 // Gaussian peaks (some sharp, some broad), and 2..5 true CLIFFS (sigmoid
 // elevation steps). Flattened pockets under each tank. Peak height is capped
 // so a high-power lob always clears them (verified against SPEED_PER_POWER).
-export function generateTerrain(seed, n = 2, biome = 'alpine', width = WORLD_W) {
+export function generateTerrain(seed, n = 2, biome = 'alpine', width = WORLD_W, featMul = 1) {
+  // featMul scales FEATURE COUNTS (massifs, canyon steps) with map area — the
+  // 48k combat map passes 2 so it reads as more world, not the same world
+  // stretched. Golf never passes it, so every hole generates exactly as before.
   const B = (BIOMES[biome] || BIOMES.alpine).gen;
   const floor = biomeLavaY(biome);
   const rng = mulberry32(seed);
@@ -376,7 +396,7 @@ export function generateTerrain(seed, n = 2, biome = 'alpine', width = WORLD_W) 
   // Craggy ridged octave — sharp crests / canyon edges, like real eroded rock.
   const ridge = { a: (110 + rng() * 140) * rough * B.ridgeMul, f: 0.0011 + rng() * 0.0009, p: rng() * 6.2832 };
 
-  const peakCount = B.pc0 + Math.floor(rng() * B.pcR);   // distinct massifs (space between = valleys/canyons)
+  const peakCount = Math.round((B.pc0 + Math.floor(rng() * B.pcR)) * featMul);   // distinct massifs (space between = valleys/canyons)
   const peaks = [];
   for (let i = 0; i < peakCount; i++) {
     peaks.push({
@@ -387,7 +407,7 @@ export function generateTerrain(seed, n = 2, biome = 'alpine', width = WORLD_W) 
     });
   }
 
-  const cliffCount = B.cc0 + Math.floor(rng() * Math.max(1, B.ccR));   // canyon walls (deep elevation steps)
+  const cliffCount = Math.round((B.cc0 + Math.floor(rng() * Math.max(1, B.ccR))) * featMul);   // canyon walls (deep elevation steps)
   const cliffs = [];
   for (let i = 0; i < cliffCount; i++) {
     cliffs.push({
@@ -424,14 +444,13 @@ export function generateTerrain(seed, n = 2, biome = 'alpine', width = WORLD_W) 
 // Scatter trees across the slopes — well spaced (min gap), not near the
 // tanks, not on sheer walls. Sent to clients once; a tree whose ground gets
 // blasted away dies.
-export function generateTrees(terrain, seed, n = 2) {
+export function generateTrees(terrain, seed, n = 2, cap = 240, tries = 11000) {
   const rng = mulberry32((seed ^ 0x5eed) >>> 0);
   const spawns = pickSpawns(seed, n);                             // keep the tank pockets clear of trees
   const CLEAR = n >= 3 ? 1100 : 1400;                             // smaller pockets when the map is busier
   const trees = [];
-  const tries = 11000;
   const MIN_GAP = 85;                                             // world units between trees
-  for (let i = 0; i < tries && trees.length < 240; i++) {
+  for (let i = 0; i < tries && trees.length < cap; i++) {
     const x = Math.round(600 + rng() * (terrain.length - 1 - 1200));
     if (spawns.some(sx => Math.abs(x - sx) < CLEAR)) continue;      // keep tank pockets clear
     const slope = Math.abs(surfaceAt(terrain, x + 25) - surfaceAt(terrain, x - 25));
@@ -486,6 +505,16 @@ export function pickSpawns(seed, n = 2, width = WORLD_W) {
   const xs = [];
   for (let i = 0; i < n; i++) {
     xs.push(Math.round(margin + slot * (i + 0.5) + (rng() * 2 - 1) * jitter));
+  }
+  // Duel guarantee: max 45° range at full power is ~30,044. Cap the gap at
+  // 20,000 so the opening exchange has real headroom — a 26k cap left only
+  // knife-edge p93-100 solutions that the bots' aim jitter dropped into the
+  // doubled massifs (24% of seeds), and pinned every human first shot to the
+  // top tenth of the power dial. 12.5k-20k keeps the '2x bigger' feel (old map
+  // dealt 5.8k-15k) with the whole arena around it to drive and flank in.
+  if (n === 2) {
+    const over = (xs[1] - xs[0]) - 20000;
+    if (over > 0) { xs[0] += Math.round(over / 2); xs[1] -= Math.round(over / 2); }
   }
   return xs;
 }
@@ -842,9 +871,21 @@ export function simulateShot(state, shot) {
         }
       }
     } else {
-      const fp = integrate(state.terrain, state.tanks, ox, oy, vx, vy,
+      // The putter never lofts: the ball is struck at turf level just ahead of
+      // the tank and enters the roll model immediately (angle is irrelevant).
+      let iox = ox, ioy = oy, ivx = vx, ivy = vy;
+      if (w.ground) {
+        // The stroke direction follows the AIM like every club: an angle past
+        // 90° flips the launch vx negative and the putt rolls backwards —
+        // without this a ball past the cup could never come back.
+        const pdir = Math.sign(vx) || dir;
+        iox = tank.x + pdir * 350;
+        ioy = surfaceAt(state.terrain, iox) - 4;
+        ivx = speed * pdir; ivy = 0;
+      }
+      const fp = integrate(state.terrain, state.tanks, iox, ioy, ivx, ivy,
         w.pierce ? { pierce: true, pierceBy: by, proximity: w.proximity || 0, gravMul, by }
-        : w.bounce ? { bounce: w.bounce, gravMul, by }
+        : w.bounce ? { bounce: w.bounce, gravMul, by, maxT: 60, ground: !!w.ground }
         : { gravMul, by });
       let d = null;
       if (w.bounce) {
@@ -859,6 +900,27 @@ export function simulateShot(state, shot) {
         // at the exact frame of impact. Must run AFTER boom() (so the tank settles
         // onto any ground this shot reshaped) and BEFORE settle() below.
         if (w.teleport) d.tp = teleportTank(state, by, fp.x);
+      }
+      // DRILL (NPC lances): the beam does not slip cleanly through the world —
+      // it scours a channel through any rock it crosses and grazes every tank
+      // along the flight line. Tanks the terminal blast already covers are
+      // skipped so nobody is billed twice for the same beam.
+      if (w.drill) {
+        const grazed = new Set();
+        for (let pi = 0; pi < fp.path.length; pi += 2) {
+          const dpx = fp.path[pi][0], dpy = fp.path[pi][1];
+          if (dpy >= surfaceAt(state.terrain, dpx) - 60) {
+            deform(state.terrain, dpx, dpy, w.radius * 0.55, 'crater', null, fx);
+          }
+          for (let ti = 0; ti < state.tanks.length; ti++) {
+            if (ti === by || grazed.has(ti) || state.tanks[ti].alive === false) continue;
+            if (fp.hit && Math.hypot(fp.x - state.tanks[ti].x, fp.y - state.tanks[ti].y) <= w.radius * 1.2 + 350) continue;
+            if (distToTank(dpx, dpy, state.tanks[ti]) <= Math.max(320, w.radius)) {
+              grazed.add(ti);
+              damageDealt[ti] += Math.round(w.damage * 0.75);
+            }
+          }
+        }
       }
       // A nano dart that lands releases seekers: they hunt the nearest living
       // ENEMY tank inside the seek radius (never the firer), crawl onto it and
@@ -937,7 +999,7 @@ export function aiShot(terrain, tanks, by, difficulty, facing, weaponId = 'canno
     const sc = me.scale || 1;
     const ox = me.x + dir * BARREL_PIVOT_X * sc + Math.cos(rad) * dir * BARREL_LEN * sc;
     const oy = (me.y - TANK_CY * sc) - Math.sin(rad) * BARREL_LEN * sc;
-    let x = ox, y = oy, vx = Math.cos(rad) * speed * dir, vy = -Math.sin(rad) * speed, t = 0;
+    let x = ox, y = oy, vx = Math.cos(rad) * speed * dir, vy = -Math.sin(rad) * speed, t = 0, minClear = Infinity;
     // The muzzle now sits inside the firer's own hitbox, so mirror integrate()'s
     // latch — without it every candidate trajectory is rejected as a self-clip and
     // the bot falls back to a fixed 45/60.
@@ -946,10 +1008,25 @@ export function aiShot(terrain, tanks, by, difficulty, facing, weaponId = 'canno
       vy += aiGrav * DT; x += vx * DT; y += vy * DT; t += DT;
       if (x < 0 || x > WORLD_W) return Math.abs(x - enemy.x) + 1e5;          // flew off the map
       const armed = Math.hypot(x - ox, y - oy) > ARM_DIST;
-      if (armed && pointHitsTank(x, y, enemy)) return 0;                     // direct hit
+      // Direct hit — but one that THREADED A NEEDLE over a peak still pays the
+      // clearance penalty, or the search always picks arcs that jitter cannot
+      // reproduce (they tip into the mountain face). A clean direct hit is 0.
+      if (armed && pointHitsTank(x, y, enemy)) return Math.max(0, 320 - minClear) * 6;
       if (armed && leftOwn && pointHitsTank(x, y, me)) return Math.abs(x - me.x) + 1e5; // would clip itself
       if (!leftOwn && !pointHitsTank(x, y, me)) leftOwn = true;
-      if (y >= surfaceAt(terrain, x)) return Math.abs(x - enemy.x);         // hit ground
+      const gy2 = surfaceAt(terrain, x);
+      if (y >= gy2) {
+        // Score = landing miss + a penalty for GRAZING terrain mid-flight. On
+        // the doubled-massif map a knife-edge arc that clears a peak by a few
+        // units lands perfectly in the search but tips into the mountain face
+        // under aim jitter — prefer arcs with real clearance instead.
+        // The penalty applies even to perfect landings: a wall-hugging arc
+        // that scores 0 in the search flips into the rock under aim jitter.
+        return Math.abs(x - enemy.x) + Math.max(0, 320 - minClear) * 6;
+      }
+      if (armed && x > Math.min(ox, enemy.x) + 900 && x < Math.max(ox, enemy.x) - 900) {
+        minClear = Math.min(minClear, gy2 - y);
+      }
     }
     return Math.abs(x - enemy.x) + 1e5;
   }
@@ -972,7 +1049,13 @@ export function aiShot(terrain, tanks, by, difficulty, facing, weaponId = 'canno
 
   // Difficulty → aim jitter. Bell-ish noise from two uniforms in [-1,1].
   const errByDiff = { easy: 15, medium: 8, hard: 3.5, boss: 2.2 };   // the WARLORD shoots like it means it
-  const e = errByDiff[difficulty] || errByDiff.medium;
+  // RANGE COMPENSATION: landing error grows with distance (dRange/dPower and
+  // dRange/dAngle both scale with range), so raw jitter that felt right at the
+  // 24k map's ~10k duels scattered shells ~2x as far on the 48k map's ~20k
+  // opening exchanges. Shrink the jitter beyond 11k so a bot's LANDING spread
+  // — the thing the player experiences — stays constant at every range.
+  const rangeK = Math.min(1, 11000 / Math.max(1, bestD));
+  const e = (errByDiff[difficulty] || errByDiff.medium) * rangeK;
   const noise = () => Math.random() + Math.random() - 1;
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   const angle = clamp(best.angle + noise() * e, 8, 88);
@@ -998,11 +1081,41 @@ let SIM_SOLIDS = null;
 function integrate(terrain, tanks, ox, oy, vx, vy, opts) {
   const path = [[round1(ox), round1(oy)]];
   const grav = GRAVITY * (opts.gravMul || 1);
-  let x = ox, y = oy, t = 0, step = 0, prevVy = vy, bounces = 0, rollT0 = -1;
+  let x = ox, y = oy, t = 0, step = 0, prevVy = vy, bounces = 0;
+  // GOLF ROLL MODE: once true, the ball is CONSTRAINED to the surface and obeys
+  // rolling physics — gravity along the slope accelerates it, rolling
+  // resistance (bounce.rr) bleeds it, and it rests only where friction beats
+  // the grade. A putt (opts.ground) starts here and never lofts at all.
+  let rolling = !!opts.ground;
+  let s = rolling ? Math.hypot(vx, vy) * Math.sign(vx || 1) : 0;   // signed ground speed
+  if (rolling) y = surfaceAt(terrain, x);
+  const maxT = opts.maxT || MAX_T;
   // The muzzle now sits INSIDE the firer's own (much larger) hitbox, so the shell
   // must be allowed to leave its own tank before it can collide with it.
   let leftOwn = (opts.by == null) || !pointHitsTank(ox, oy, tanks[opts.by]);
-  while (t < MAX_T) {
+  while (t < maxT) {
+    if (rolling) {
+      const bz = opts.bounce;
+      const k = (surfaceAt(terrain, x + 24) - surfaceAt(terrain, x - 24)) / 48;   // dy/dx, y-down
+      const L = Math.hypot(k, 1);
+      s += (GRAVITY * k / L) * DT;                       // slope pulls it downhill
+      const dec = (bz.rr * GRAVITY / L) * DT;            // rolling resistance
+      s = Math.abs(s) <= dec ? 0 : s - Math.sign(s) * dec;
+      x += (s / L) * DT;
+      t += DT;
+      if (x < 0 || x > terrain.length - 1) {             // rolled clean off the world
+        path.push([round1(x), round1(y)]);
+        return { path, hit: false, x, y, vx: s, vy: 0 };
+      }
+      y = surfaceAt(terrain, x);
+      // At rest only when stationary AND the grade can't restart the ball.
+      if (s === 0 && Math.abs(k) <= bz.rr * 1.05) {
+        path.push([round1(x), round1(y)]);
+        return { path, hit: false, rest: { x: round1(x), y: round1(y) }, x, y, vx: 0, vy: 0 };
+      }
+      if (++step % SAMPLE_EVERY === 0) path.push([round1(x), round1(y)]);
+      continue;
+    }
     vy += grav * DT;
     x += vx * DT;
     y += vy * DT;
@@ -1062,12 +1175,13 @@ function integrate(terrain, tanks, ox, oy, vx, vy, opts) {
         vy = ty2 * bz.fric - vn * ny2 * bz.rest;
         y = gy - 0.5;
         path.push([round1(x), round1(gy)]);
-        if (rollT0 < 0) rollT0 = t;
-        // Rest when it's slow, out of bounces, or has been running the slopes
-        // too long — a smoothed course can re-accelerate a ball downhill for
-        // ever, and 'for ever' must not carry it off the edge of the world.
-        if (Math.hypot(vx, vy) < bz.stop || bounces > bz.max || t - rollT0 > 6.5) {
-          return { path, hit: false, rest: { x: round1(x), y: round1(gy) }, x, y: gy, vx, vy };
+        // When the rebound has gone flat (barely leaves the turf any more) the
+        // ball is no longer bouncing — it is ROLLING. Hand it to the roll model
+        // with its tangential speed; from here on real friction decides where
+        // it stops. (The old bz.stop / bounce-count / 6.5s caps are gone.)
+        if (Math.abs(vn) * bz.rest < 130) {
+          rolling = true;
+          s = (vx + vy * k) / L;                          // project onto the tangent
         }
         continue;
       }
@@ -1207,13 +1321,13 @@ export function generateProps(seed, terrain, n = 2, biome = 'alpine') {
   const clearOf = (x, gap) => spawns.every(sx => Math.abs(x - sx) > gap) &&
                               props.every(p => Math.abs(x - p.x) > gap);
   let id = 1;
-  const barrels = 3 + Math.floor(rng() * 3);         // 3..5
+  const barrels = 6 + Math.floor(rng() * 4);         // 6..9 — density kept as the map doubled
   for (let i = 0; i < barrels * 8 && props.filter(p => p.kind === 'barrel').length < barrels; i++) {
     const x = Math.round(2200 + rng() * (WORLD_W - 4400));
     if (!clearOf(x, 1100)) continue;
     props.push({ id: id++, kind: 'barrel', x, y: round1(surfaceAt(terrain, x)), hp: 1, alive: true });
   }
-  const bunkers = biome === 'ruins' ? 0 : 1 + Math.floor(rng() * 2);   // ruins has its slabs
+  const bunkers = 2 + Math.floor(rng() * 2);         // 2..3 on the 48k map (ruins gets them too now)
   for (let i = 0; i < bunkers * 8 && props.filter(p => p.kind === 'bunker').length < bunkers; i++) {
     const x = Math.round(3000 + rng() * (WORLD_W - 6000));
     if (!clearOf(x, 1600)) continue;

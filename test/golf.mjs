@@ -27,8 +27,9 @@ ws.on('message', (raw) => {
   if (m.type === 'start') {
     if (!m.golf) return fail('start snapshot has no golf payload'), finish();
     if (m.golf.hole !== 1) fail(`expected hole 1, got ${m.golf.hole}`);
-    if (!m.weapons || m.weapons.length !== 1 || m.weapons[0].id !== 'golfball') {
-      fail(`golf weapons should be exactly [golfball], got ${JSON.stringify((m.weapons || []).map(w => w.id))}`);
+    const ids = (m.weapons || []).map(w => w.id);
+    if (ids.join() !== 'golfball,driver,putter') {
+      fail(`golf weapons should be [golfball, driver, putter], got ${JSON.stringify(ids)}`);
     }
     cup = m.golf.cup; par = m.golf.par;
     myX = m.tanks[m.you].x;
@@ -65,8 +66,12 @@ function swing() {
   // Aim at the cup with a crude range guess; the cap (par+4) bounds the hole.
   // The ball ROLLS a long way now — aim deliberately short and let the
   // roll-out do the work; the point here is course FLOW, not sinking it.
+  // Real physics also means a wall in front of the tee can roll the ball
+  // straight back to your feet — so play like a golfer and LOFT progressively
+  // higher on each stroke that goes nowhere.
   const dist = Math.max(400, cup.x - myX);
   const power = Math.max(18, Math.min(68, Math.sqrt(dist * 620) / (58 * 0.9)));
   shots++;
-  send({ type: 'fire', weapon: 'golfball', angle: 44, power });
+  const angle = Math.min(78, 44 + shots * 5);   // 49, 54, 59... clears tee-side walls
+  send({ type: 'fire', weapon: 'golfball', angle, power });
 }
