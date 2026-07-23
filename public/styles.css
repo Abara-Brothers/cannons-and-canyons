@@ -47,7 +47,7 @@ body {
   border-radius: 14px; cursor: pointer; transition: transform .05s ease, filter .15s ease;
 }
 .btn:active { transform: translateY(1px) scale(.99); }
-.btn.big { width: 100%; padding: 17px; font-size: 18px; }
+.btn.big { width: 100%; padding: 15px; font-size: 17px; }
 .btn.primary { background: linear-gradient(180deg, var(--primary), var(--primary-2)); border-color: transparent; color: #240a00; }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
 .btn.fire { background: linear-gradient(180deg, #ff9a3d, #ff4d3d); border-color: transparent; color: #2a0800; font-size: 22px; letter-spacing: .04em; box-shadow: 0 8px 22px rgba(255,90,60,.35); }
@@ -371,14 +371,14 @@ html { background: var(--bg); }
 /* ---------- Game: bottom dock ---------- */
 #dock {
   position: relative; background: rgba(10,14,30,.72); backdrop-filter: blur(6px);
-  border-top: 1px solid var(--line); padding: 8px 12px calc(10px + env(safe-area-inset-bottom));
-  display: flex; flex-direction: column; gap: 8px;
+  border-top: 1px solid var(--line); padding: 6px 12px calc(8px + env(safe-area-inset-bottom));
+  display: flex; flex-direction: column; gap: 6px;
 }
 .weapon-strip { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; }
 .weapon-strip::-webkit-scrollbar { display: none; }
 .wchip {
   flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 2px;
-  min-width: 66px; padding: 8px 6px; border-radius: 13px; border: 1px solid var(--line);
+  min-width: 60px; padding: 6px 5px; border-radius: 12px; border: 1px solid var(--line);
   background: var(--panel-2); cursor: pointer; transition: border-color .12s, transform .05s;
 }
 .wchip:active { transform: translateY(1px); }
@@ -424,7 +424,7 @@ html { background: var(--bg); }
 @keyframes wpopFade { 0%, 82% { opacity: 1; transform: translate(-50%, -100%); }
                       100%    { opacity: 0; transform: translate(-50%, -100%); } }
 
-.control-rows { display: flex; flex-direction: column; gap: 8px; }
+.control-rows { display: flex; flex-direction: column; gap: 6px; }
 .aim-readout { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .stepper { display: flex; align-items: center; justify-content: space-between; gap: 6px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 4px; }
 .readout { text-align: center; line-height: 1.1; }
@@ -893,10 +893,10 @@ body.golf .fuel { display: none; }
 
 /* ---- Aim controls: proper touch targets — taller drums, taller buttons ---- */
 .stepper { padding: 5px; }
-.mini { width: 46px; height: 48px; font-size: 21px; }
-.drum { min-height: 46px; align-items: center; }
+.mini { width: 42px; height: 43px; font-size: 19px; }
+.drum { min-height: 41px; align-items: center; }
 .drum .dc.cur { font-size: clamp(17px, calc(3 * var(--vhu)), 21px); }
 @media (orientation: landscape) and (max-height: 600px), (orientation: portrait) and (max-width: 600px) {
-  .mini { width: 38px; height: 42px; font-size: 17px; }
-  .drum { min-height: 40px; }
+  .mini { width: 34px; height: 38px; font-size: 16px; }
+  .drum { min-height: 36px; }
 }

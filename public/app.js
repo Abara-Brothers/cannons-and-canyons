@@ -4002,7 +4002,15 @@ function golfTopColor(wx, base) {
 const TEE_COLS = { champ: '#16181c', mens: '#f2f5f7', womens: '#ff5a52', junior: '#ffd23f' };
 function drawTeeBox() {
   const g = S.golf; if (!g || !g.tee) return;
-  const sets = g.tees ? Object.entries(g.tees) : [['mens', g.tee]];
+  let sets = g.tees ? Object.entries(g.tees) : [['mens', g.tee]];
+  // Fixed-size boxes overlap on screen when the camera is far out — in that
+  // case show only the set being PLAYED, so markers never pile up.
+  if (sets.length > 1) {
+    const xs = sets.map(([, tx]) => wx2s(tx)).sort((a, b) => a - b);
+    let minGap = Infinity;
+    for (let i = 1; i < xs.length; i++) minGap = Math.min(minGap, xs[i] - xs[i - 1]);
+    if (minGap < 78) sets = sets.filter(([set]) => set === (g.teeSet || 'mens'));
+  }
   for (const [set, tx] of sets) {
     const sx = wx2s(tx);
     if (sx < -140 || sx > view.cssW + 140) continue;
@@ -4048,11 +4056,10 @@ function drawGolfCup() {
   ctx.lineTo(sx + u * 1.7 + wob, gy - u * 4.05);
   ctx.lineTo(sx + u * 0.07, gy - u * 3.55);
   ctx.closePath(); ctx.fill();
-  // capture ring: the rest radius that counts as holed
-  const rr = g.cup.r * cam.zoom;
-  ctx.strokeStyle = 'rgba(182,255,90,0.4)'; ctx.lineWidth = Math.max(1, u * 0.1);
-  ctx.setLineDash([6, 7]);
-  ctx.beginPath(); ctx.moveTo(sx - rr, gy + u * 0.35); ctx.lineTo(sx + rr, gy + u * 0.35); ctx.stroke();
+  // hole marker dash: FIXED width — nothing on the pin changes with zoom
+  ctx.strokeStyle = 'rgba(182,255,90,0.45)'; ctx.lineWidth = 1.4;
+  ctx.setLineDash([5, 6]);
+  ctx.beginPath(); ctx.moveTo(sx - 14, gy + u * 0.35); ctx.lineTo(sx + 14, gy + u * 0.35); ctx.stroke();
   ctx.setLineDash([]);
 }
 
@@ -4067,7 +4074,7 @@ function drawProps() {
     if (sx < -80 || sx > view.cssW + 80) continue;
     if (p.kind === 'barrel') {
       const gy = wy2s(surfaceAt(p.x));
-      const u = Math.max(7, Math.min(15, 230 * cam.zoom));       // drum half-width px
+      const u = 11;                                              // constant screen size
       const hgt = u * 2.5;
       ctx.fillStyle = '#b8352c';
       ctx.fillRect(sx - u, gy - hgt, u * 2, hgt);
@@ -4083,7 +4090,7 @@ function drawProps() {
     } else if (p.kind === 'bunker') {
       const deckY = wy2s(p.deck);
       const x0 = wx2s(p.x - p.w), x1 = wx2s(p.x + p.w);
-      const u = Math.max(6, Math.min(14, 230 * cam.zoom));
+      const u = 10;                                              // constant screen size
       // Parapet lip along the deck edge + a casemate block with a firing slit.
       ctx.fillStyle = '#9aa4ac';
       ctx.fillRect(x0, deckY - u * 0.5, x1 - x0, u * 0.5);
@@ -4117,7 +4124,7 @@ function drawCrates() {
     const wy = t >= 1 ? grounded : 300 + ease * (grounded - 300);
     const sx = wx2s(c.x), sy = wy2s(wy);
     if (sx < -90 || sx > view.cssW + 90) continue;
-    const u = Math.max(8, Math.min(17, 250 * cam.zoom));         // crate half-size px
+    const u = 13;                                                // constant screen size
     if (t < 1) {                                                 // parachute canopy + lines
       const cw = u * 3.1, ch = u * 2.0, cy2 = sy - u * 2.1 - ch;
       ctx.fillStyle = '#e8e2d2';
@@ -4475,24 +4482,19 @@ function drawAim() {
       ? Math.hypot(landed[0] - t.x, landed[1] - (t.y - 150)) <= selW.radius
       : false;
     const hot = danger || selfBlast;
+    // Only the FIRST ~30% of the flight is drawn, fading to nothing — enough
+    // to read the launch and the curve, while the fall stays the player's
+    // judgement. (The full path is still integrated for the red warning.)
+    const shown = Math.max(4, Math.ceil(dots.length * 0.3));
     ctx.fillStyle = hot ? 'rgba(255,90,82,.9)' : 'rgba(255,210,63,.9)';
-    for (let i = 0; i < dots.length; i++) {
+    for (let i = 0; i < shown; i++) {
       const dsx = wx2s(dots[i][0]), dsy = wy2s(dots[i][1]);
       if (dsx < -20 || dsx > view.cssW + 20 || dsy < -20 || dsy > view.cssH + 20) continue;
-      const k = 2.6 - Math.min(1.2, i / dots.length);          // dots thin with distance
-      ctx.globalAlpha = 0.85 - (i / dots.length) * 0.45;
+      const k = 2.6 - (i / shown) * 1.2;                       // dots thin along the hint
+      ctx.globalAlpha = 0.85 * (1 - i / shown);                // ...and fade out fully
       ctx.fillRect(dsx - k / 2, dsy - k / 2, k, k);
     }
     ctx.globalAlpha = 1;
-    if (burst) {                                     // apex burst: splitting chevrons
-      const bx = wx2s(burst[0]), by = wy2s(burst[1]);
-      ctx.strokeStyle = 'rgba(255,210,63,.95)'; ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(bx, by); ctx.lineTo(bx - 7, by + 9);
-      ctx.moveTo(bx, by); ctx.lineTo(bx, by + 11);
-      ctx.moveTo(bx, by); ctx.lineTo(bx + 7, by + 9);
-      ctx.stroke();
-    }
   }
 
   const col = pct < 0.5 ? lerpColor([76, 232, 143], [255, 210, 63], pct / 0.5)
@@ -4929,7 +4931,7 @@ function drawProjectiles() {
   const trail = ORD_TRAIL[wid] || 'rgba(255,220,150,.5)';
   // Fixed screen size (the camera spans a 12x zoom range — a world-scaled round
   // would vanish when zoomed out). Same clamping idea as tankScreen's radius.
-  const R0 = Math.max(6, Math.min(11, 150 * cam.zoom));
+  const R0 = 9;                                                  // shells: one size at every zoom
   for (const pr of A.projectiles) {
     if (A.elapsed - pr.delay < pr.from) continue;
     if (pr.done && pr.exploded) continue;
@@ -4950,7 +4952,7 @@ function drawProjectiles() {
 // A falling bomb: tapered body + boxed tail fins, canted along its own velocity.
 // Polygons and one quadratic — no arcs.
 function drawBomb(sx, sy, trail) {
-  const u = Math.max(2.2, Math.min(5, 200 * cam.zoom));
+  const u = 3.8;                                                 // bombs: one size at every zoom
   const a = trail.length >= 2
     ? Math.atan2(trail[trail.length - 1][1] - trail[trail.length - 2][1],
                  trail[trail.length - 1][0] - trail[trail.length - 2][0])
