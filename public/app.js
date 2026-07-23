@@ -2654,13 +2654,21 @@ function buildCareer() {
     `<div class="cs-row"><span>Best golf round</span><b>${PROF.golfBest != null ? PROF.golfBest + ' strokes' : '—'}</b></div>` +
     `<div class="cs-row"><span>Holes in one</span><b>${PROF.aces || 0}</b></div>` +
     `<div class="cs-row"><span>Alien / zombie kills, best run</span><b>${PROF.hordeBest.aliens || 0} / ${PROF.hordeBest.zombies || 0}</b></div>`;
+  // Every challenge SHOWS what it actually asks for — no hidden tooltips.
   $('careerAchs').innerHTML = ACHS.map(([id, nm, desc]) => {
     const got = !!PROF.ach[id];
-    return `<div class="ach${got ? ' got' : ''}" title="${desc}">` +
-      `<span class="ach-ic">${got ? UI_IC.crown : UI_IC.lock}</span><span class="ach-nm">${nm}</span></div>`;
+    return `<div class="ach${got ? ' got' : ''}">` +
+      `<span class="ach-ic">${got ? UI_IC.crown : UI_IC.lock}</span>` +
+      `<span class="ach-txt"><b>${nm}</b><i>${desc}</i></span></div>`;
   }).join('');
 }
 $('careerBtn').onclick = () => { buildCareer(); $('careerModal').classList.remove('hidden'); };
+$('careerTabs').addEventListener('click', (e) => {
+  const t = e.target.closest('.tab'); if (!t) return;
+  for (const el of $('careerTabs').children) el.classList.toggle('active', el === t);
+  for (const pane of document.querySelectorAll('#careerModal .tabpane'))
+    pane.classList.toggle('active', pane.dataset.pane === t.dataset.tab);
+});
 $('careerCloseBtn').onclick = () => $('careerModal').classList.add('hidden');
 $('careerModal').onclick = (e) => { if (e.target.id === 'careerModal') $('careerModal').classList.add('hidden'); };
 refreshCareerChip();
@@ -3102,6 +3110,29 @@ function tankScreen(i) {
 // with scorch (plus smoke and flames from stepEffects).
 // "Clean Sweep" tank palette + barrel geometry. Shared by drawTank and the
 // muzzle-blast helper so the shot always leaves the very end of the gun.
+
+// ---- Paint jobs -----------------------------------------------------------------
+// The menu swatch now paints the ARMOUR — hull, skirts, turret, hatch, mantlet —
+// while tracks, wheels and gun steel stay military dark. The locked tank
+// geometry is untouched; only fills change. Palettes derive from the three
+// swatch tones and are cached per skin.
+const hexRgb = (h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+const rgbHex = (c) => '#' + c.map(v => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, '0')).join('');
+const hexMix = (a, b, t) => { const A = hexRgb(a), B = hexRgb(b); return rgbHex([0, 1, 2].map(k => A[k] + (B[k] - A[k]) * t)); };
+const PAINT_CACHE = {};
+function tankPaint(skinId) {
+  if (PAINT_CACHE[skinId]) return PAINT_CACHE[skinId];
+  const sk = SKINS[skinId] || SKINS.olive;
+  const pal = {
+    skirt: hexMix(sk.dark, '#0c0e12', 0.25), skirtDk: hexMix(sk.dark, '#0c0e12', 0.45),
+    hull: sk.mid, hullLite: hexMix(sk.mid, sk.lite, 0.55),
+    turret: hexMix(sk.mid, '#0c0e12', 0.22), hatch: hexMix(sk.mid, '#0c0e12', 0.08),
+    mantlet: hexMix(sk.mid, sk.lite, 0.3),
+  };
+  PAINT_CACHE[skinId] = pal;
+  return pal;
+}
+
 const TANK_G = {
   track: '#121418', wheel: '#252931', skirt: '#2e333b', skirtDk: '#262b32',
   hull: '#3a3f47', hullLite: '#474d57', turret: '#31363d', hatch: '#3e444d',
@@ -4234,6 +4265,7 @@ function drawTank(i) {
   // Seat accent (pennant/turret band). SEAT_COLORS[0..1] are the exact old duel
   // colours, so a 2-player match renders identically — this only gives seats 2
   // and 3 their own colour instead of both drawing as seat 1. No geometry change.
+  const PG = tankPaint(S.skins[i] || SEAT_SKIN[i % SEAT_SKIN.length]);
   const P = { lite: sk.lite, mid: sk.mid, dark: sk.dark, accent: seatColor(i) };
   const steel = '#9aa1ad', steelDk = '#565d68';
   const hp = S.hp[i];
@@ -4265,9 +4297,9 @@ function drawTank(i) {
     ctx.beginPath(); ctx.arc(wx, sy + r * 0.24, r * 0.155, 0, Math.PI * 2); ctx.fill();
   }
   // Side skirt with panel breaks
-  ctx.fillStyle = TANK_G.skirt;
+  ctx.fillStyle = PG.skirt;
   ctx.fillRect(sx - r * 1.26, sy - r * 0.20, r * 2.52, r * 0.30);
-  ctx.fillStyle = TANK_G.skirtDk;
+  ctx.fillStyle = PG.skirtDk;
   for (let k = 0; k < 3; k++) ctx.fillRect(sx - r * 0.96 + k * r * 0.66, sy - r * 0.15, r * 0.46, r * 0.17);
 
   // Low wedge hull
@@ -4279,8 +4311,8 @@ function drawTank(i) {
     ctx.lineTo(sx + r * 1.35, sy - r * 0.18);
     ctx.closePath();
   };
-  ctx.fillStyle = TANK_G.hull; hullPath(); ctx.fill();
-  ctx.fillStyle = TANK_G.hullLite;                     // lighter rear quarter
+  ctx.fillStyle = PG.hull; hullPath(); ctx.fill();
+  ctx.fillStyle = PG.hullLite;                     // lighter rear quarter
   ctx.beginPath();
   ctx.moveTo(sx - front * r * 1.35, sy - r * 0.18);
   ctx.lineTo(sx - front * r * 0.99, sy - r * 0.58);
@@ -4290,7 +4322,7 @@ function drawTank(i) {
 
   // Low flat turret
   const tb = sy - r * 0.58;
-  ctx.fillStyle = TANK_G.turret;
+  ctx.fillStyle = PG.turret;
   ctx.beginPath();
   ctx.moveTo(sx - front * r * 0.76, tb);
   ctx.lineTo(sx - front * r * 0.52, tb - r * 0.36);
@@ -4300,7 +4332,7 @@ function drawTank(i) {
   // Player paint reads as a turret band so the two tanks stay tellable apart
   ctx.fillStyle = P.mid;
   ctx.fillRect(sx - front * r * 0.50, tb - r * 0.30, r * 0.84, r * 0.10);
-  ctx.fillStyle = TANK_G.hatch;                        // commander hatch
+  ctx.fillStyle = PG.hatch;                        // commander hatch
   roundedRect(sx - front * r * 0.34, tb - r * 0.49, r * 0.30, r * 0.13, r * 0.05); ctx.fill();
 
   if (hp < 70) {
@@ -4338,7 +4370,7 @@ function drawTank(i) {
   const nx = -sinA, ny = cosA;                       // perpendicular to the barrel
 
   ctx.lineCap = 'butt';
-  ctx.fillStyle = TANK_G.mantlet;                    // mantlet collar
+  ctx.fillStyle = PG.mantlet;                    // mantlet collar
   ctx.beginPath(); ctx.arc(bx, by, r * 0.23, 0, Math.PI * 2); ctx.fill();
   ctx.strokeStyle = TANK_G.barrel; ctx.lineWidth = Math.max(3, r * 0.30);
   ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx + cosA * bLenR, by + sinA * bLenR); ctx.stroke();

@@ -774,14 +774,21 @@ body.golf .fuel { display: none; }
 .hd-modes li { margin-bottom: clamp(4px, 1vh, 8px); }
 
 /* Career */
-.career-wrap { display: grid; grid-template-columns: 1.15fr 1fr; gap: clamp(6px, 1.4vw, 14px); margin: 6px 0 12px; min-height: 0; }
-@media (orientation: portrait) { .career-wrap { grid-template-columns: 1fr; } }
+.career-wrap { margin: 6px 0 12px; min-height: 0; }
+#careerModal .tabpane { margin-bottom: 10px; }
+#careerModal .car-stats { column-count: 2; column-gap: 18px; }
+@media (orientation: portrait) { #careerModal .car-stats { column-count: 1; } }
 .cs-row { display: flex; justify-content: space-between; gap: 10px; padding: clamp(2px, 0.55vh, 4.5px) 0; border-bottom: 1px solid rgba(255,255,255,.05); font-size: clamp(9.5px, 1.5vh, 12px); }
 .cs-row span { color: var(--muted); }
 .cs-row b { color: var(--text); }
 .cs-sep { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 7px; }
-.car-achs { display: grid; grid-template-columns: repeat(2, 1fr); gap: clamp(3px, 0.7vh, 5px); align-content: start; }
-.ach { display: flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 8px; padding: clamp(2px, 0.7vh, 5px) 7px; opacity: .45; }
+.car-achs { display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(3px, 0.7vh, 6px); align-content: start; }
+@media (max-width: 700px) { .car-achs { grid-template-columns: repeat(2, 1fr); } }
+@media (orientation: portrait) { .car-achs { grid-template-columns: 1fr; } }
+.ach { display: flex; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 8px; padding: clamp(2px, 0.6vh, 5px) 8px; opacity: .45; }
+.ach-txt { min-width: 0; text-align: left; }
+.ach-txt b { display: block; font-size: clamp(8.5px, 1.4vh, 11px); }
+.ach-txt i { display: block; font-style: normal; font-size: clamp(7.5px, 1.2vh, 9.5px); line-height: 1.25; color: var(--muted); }
 .ach.got { opacity: 1; border-color: rgba(255, 210, 63, .5); background: rgba(255, 210, 63, .08); }
 .ach-ic svg { width: clamp(10px, 1.8vh, 14px); height: clamp(10px, 1.8vh, 14px); display: block; color: #ffd23f; }
 .ach .ach-ic svg { color: #6b7488; }

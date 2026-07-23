@@ -405,10 +405,16 @@
   <div id="careerModal" class="overlay hidden">
     <div class="overlay-card menu-card">
       <div class="result">Career</div>
-      <div class="career-wrap">
-        <div class="car-stats" id="careerStats"></div>
-        <div class="car-achs" id="careerAchs"></div>
+      <div class="tabrow" id="careerTabs" role="tablist">
+        <button type="button" class="tab active" data-tab="stats">Stats</button>
+        <button type="button" class="tab" data-tab="challenges">Challenges</button>
       </div>
+      <section class="tabpane active" data-pane="stats">
+        <div class="car-stats" id="careerStats"></div>
+      </section>
+      <section class="tabpane" data-pane="challenges">
+        <div class="car-achs" id="careerAchs"></div>
+      </section>
       <button id="careerCloseBtn" class="btn big primary">Close</button>
     </div>
   </div>

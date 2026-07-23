@@ -1121,15 +1121,22 @@ export function prepareGolfHole(terrain, teeX, cupX, allTees) {
       terrain[px] = terrain[px] * (1 - t) + tLevel * t;
     }
   }
-  // The GREEN: WIDE and properly FLAT — level the whole apron to one height
-  // rather than averaging it (flattenZone leaves a lean on slopes).
-  const gHalf = 2200;
+  // The GREEN: the ENTIRE putting surface is one dead-flat plane — every
+  // column inside the green sits at exactly the cup's level. The blend into
+  // the fairway happens OUTSIDE the green, in the fringe collar.
+  const gHalf = 2200, fringe = 620;
   const gLevel = surfaceAt(terrain, cupX);
-  for (let gx = Math.max(0, Math.round(cupX - gHalf)); gx <= Math.min(nL - 1, Math.round(cupX + gHalf)); gx++) {
-    const t = Math.min(1, Math.max(0, (gHalf - Math.abs(gx - cupX)) / 420));   // feathered fringe
-    terrain[gx] = terrain[gx] * (1 - t) + gLevel * t;
+  for (let gx = Math.max(0, Math.round(cupX - gHalf - fringe)); gx <= Math.min(nL - 1, Math.round(cupX + gHalf + fringe)); gx++) {
+    const dx2 = Math.abs(gx - cupX);
+    if (dx2 <= gHalf) terrain[gx] = gLevel;                                    // pure table-top
+    else terrain[gx] = terrain[gx] * ((dx2 - gHalf) / fringe) + gLevel * (1 - (dx2 - gHalf) / fringe);
   }
   smooth(terrain, 1);
+  // smooth() rounds the fringe shoulders — re-assert the table-top so not one
+  // column inside the green deviates from the cup level.
+  for (let gx = Math.max(0, Math.round(cupX - gHalf)); gx <= Math.min(nL - 1, Math.round(cupX + gHalf)); gx++) {
+    terrain[gx] = gLevel;
+  }
   for (let dx = -120; dx <= 120; dx++) {
     const x = Math.round(cupX + dx);
     if (x < 0 || x >= nL) continue;
