@@ -4468,7 +4468,14 @@ function drawAim() {
       if (!selW.pierce && py >= surfaceAt(px)) { landed = [px, surfaceAt(px)]; break; }
       if (i % 10 === 4) dots.push([px, py]);         // a dot every ~1/12 s of flight
     }
-    ctx.fillStyle = danger ? 'rgba(255,90,82,.9)' : 'rgba(255,210,63,.9)';
+    // The arc warns in RED when this shot would hurt YOU: muzzle buried, or
+    // the landing sits inside your own weapon's blast radius. (No landing
+    // marker — reading the fall is part of the craft.)
+    const selfBlast = landed && selW.radius
+      ? Math.hypot(landed[0] - t.x, landed[1] - (t.y - 150)) <= selW.radius
+      : false;
+    const hot = danger || selfBlast;
+    ctx.fillStyle = hot ? 'rgba(255,90,82,.9)' : 'rgba(255,210,63,.9)';
     for (let i = 0; i < dots.length; i++) {
       const dsx = wx2s(dots[i][0]), dsy = wy2s(dots[i][1]);
       if (dsx < -20 || dsx > view.cssW + 20 || dsy < -20 || dsy > view.cssH + 20) continue;
@@ -4477,19 +4484,7 @@ function drawAim() {
       ctx.fillRect(dsx - k / 2, dsy - k / 2, k, k);
     }
     ctx.globalAlpha = 1;
-    if (landed) {                                    // the landing mark: X + pulse ring
-      const lx = wx2s(landed[0]), ly = wy2s(landed[1]);
-      const pu = 6 + Math.sin(performance.now() / 240) * 1.5;
-      ctx.strokeStyle = danger ? 'rgba(255,90,82,.95)' : 'rgba(255,210,63,.95)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(lx - 5, ly - 5); ctx.lineTo(lx + 5, ly + 5);
-      ctx.moveTo(lx + 5, ly - 5); ctx.lineTo(lx - 5, ly + 5);
-      ctx.stroke();
-      ctx.setLineDash([4, 5]);
-      ctx.strokeRect(lx - pu, ly - pu, pu * 2, pu * 2);
-      ctx.setLineDash([]);
-    } else if (burst) {                              // apex burst: splitting chevrons
+    if (burst) {                                     // apex burst: splitting chevrons
       const bx = wx2s(burst[0]), by = wy2s(burst[1]);
       ctx.strokeStyle = 'rgba(255,210,63,.95)'; ctx.lineWidth = 2;
       ctx.beginPath();

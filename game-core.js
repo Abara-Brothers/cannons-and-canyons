@@ -297,7 +297,7 @@ export const WEAPON_BY_ID = Object.fromEntries(WEAPONS.map(w => [w.id, w]));
 export function menuEntry(w) {
   return { id: w.id, name: w.name, color: w.color, ammo: w.ammo, desc: w.desc,
            speedMul: w.speedMul, gravityMul: w.gravityMul || 1,
-           pierce: !!w.pierce, apex: !!w.split };
+           pierce: !!w.pierce, apex: !!w.split, radius: w.radius || 0 };
 }
 export function weaponMenu() {
   return WEAPONS.filter(w => !w.bossOnly && !w.golfOnly && !w.aiOnly).map(menuEntry);
