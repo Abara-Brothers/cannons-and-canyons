@@ -4442,7 +4442,8 @@ function drawAim() {
   // Your own tank is mid-warp — the reticle would snap to the new x the moment
   // applyResolve lands. Hide it until the tank has materialised.
   if (S.warp && S.warp.seat === S.you && S.warp.t < S.warp.dur) return;
-  const t = S.tanks[S.you]; const aim = myAim(); const dir = facingOf(S.you);
+  const t = S.tanks[S.you]; if (!t) return;
+  const aim = myAim(); const dir = facingOf(S.you);
   const rad = aim.angle * Math.PI / 180;
   const sx = wx2s(t.x), sy = wy2s(surfaceAt(t.x) - 24);
   const pct = aim.power / 100;
@@ -4460,7 +4461,10 @@ function drawAim() {
   // rounds (cluster/napalm) trace to their burst point.
   const msx = wx2s(mox), msy = wy2s(moy);
   ctx.save();
-  {
+  // The whole hint is wrapped so NO edge case (short flight, odd weapon data)
+  // can ever throw inside the render loop — a mid-frame exception here leaks
+  // ctx.save() state and quietly wrecks everything drawn after it.
+  try {
     const selW = (S.weapons || []).find(w => w.id === S.selected) || {};
     const speed = aim.power * 58 * (selW.speedMul || 1);
     const G = 900 * (selW.gravityMul || 1), DTs = 1 / 120;
@@ -4485,7 +4489,9 @@ function drawAim() {
     // Only the FIRST ~30% of the flight is drawn, fading to nothing — enough
     // to read the launch and the curve, while the fall stays the player's
     // judgement. (The full path is still integrated for the red warning.)
-    const shown = Math.max(4, Math.ceil(dots.length * 0.3));
+    // NEVER more dots than exist: a steep or point-blank shot may land within
+    // a handful of steps and produce 0-3 dots.
+    const shown = Math.min(dots.length, Math.max(4, Math.ceil(dots.length * 0.3)));
     ctx.fillStyle = hot ? 'rgba(255,90,82,.9)' : 'rgba(255,210,63,.9)';
     for (let i = 0; i < shown; i++) {
       const dsx = wx2s(dots[i][0]), dsy = wy2s(dots[i][1]);
@@ -4494,6 +4500,7 @@ function drawAim() {
       ctx.globalAlpha = 0.85 * (1 - i / shown);                // ...and fade out fully
       ctx.fillRect(dsx - k / 2, dsy - k / 2, k, k);
     }
+  } catch {} finally {
     ctx.globalAlpha = 1;
   }
 
