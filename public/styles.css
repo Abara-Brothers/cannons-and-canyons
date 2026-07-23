@@ -426,7 +426,8 @@ body.in-game .bg-canyon { display: none; }
 /* ---------- Overlay ---------- */
 .overlay { position: absolute; inset: 0; background: rgba(6,9,20,.82); display: flex; align-items: center; justify-content: center; padding: 22px; z-index: 20; backdrop-filter: blur(4px); }
 .overlay.hidden { display: none; }
-.overlay-card { width: 100%; max-width: 400px; background: var(--panel); border: 1px solid var(--line); border-radius: 22px; padding: 28px 22px; text-align: center; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 14px; }
+.overlay-card { width: 100%; max-width: 400px; max-height: 94dvh; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 22px; padding: clamp(14px, 3.2vh, 28px) 22px; text-align: center; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: clamp(7px, 1.6vh, 14px); }
+.menu-card { overflow-y: hidden; }   /* fitted menus never scroll — they compress */
 .result { font-size: 30px; font-weight: 900; }
 .result.win { color: var(--good); } .result.lose { color: var(--p1); } .result.draw { color: var(--accent); }
 .final-scores { display: flex; justify-content: center; gap: 24px; font-size: 18px; }
@@ -850,3 +851,24 @@ body.golf .fuel { display: none; }
   box-shadow: 0 4px 14px rgba(60, 232, 143, .28);
 }
 #createBtn:active { transform: translateY(1px); }
+
+/* ---- Draft screen: 12 weapons in two short rows on landscape so the SAVE
+   button always has room; portrait stacks 3-wide. ---- */
+.arm-card { max-width: 720px; width: min(96vw, 720px); }
+.arm-card .arm-grid { grid-template-columns: repeat(6, 1fr); }
+.arm-card .arm-cell { flex-direction: column; text-align: center; gap: 3px; padding: clamp(4px, 1vh, 8px) 4px; font-size: clamp(8.5px, 1.5vh, 11px); }
+.arm-card .arm-cell svg { width: clamp(15px, 3vh, 22px); height: clamp(15px, 3vh, 22px); }
+.arm-card .result { font-size: clamp(19px, 3.6vh, 30px); }
+@media (orientation: portrait) {
+  .arm-card .arm-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* ---- Aim controls: proper touch targets — taller drums, taller buttons ---- */
+.stepper { padding: 5px; }
+.mini { width: 46px; height: 48px; font-size: 21px; }
+.drum { min-height: 46px; align-items: center; }
+.drum .dc.cur { font-size: clamp(17px, 3vh, 21px); }
+@media (orientation: landscape) and (max-height: 600px) {
+  .mini { width: 38px; height: 42px; font-size: 17px; }
+  .drum { min-height: 40px; }
+}
