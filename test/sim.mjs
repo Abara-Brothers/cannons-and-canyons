@@ -84,4 +84,4 @@ function finish() {
   console.log(JSON.stringify(summary, null, 2));
   process.exit(summary.errors.length ? 1 : 0);
 }
-setTimeout(() => { summary.errors.push('timeout'); finish(); }, 60000);   // remote runs pay an RTT per turn
+setTimeout(() => { summary.errors.push('timeout'); finish(); }, 90000);   // remote runs pay an RTT per turn (~2.7s/shot x 24)

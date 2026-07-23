@@ -117,8 +117,11 @@ function bossFriendlyFirePass() {
       const watch = (raw2) => {
         const d = JSON.parse(raw2);
         if (d.type === 'dot') {
+          // The WARLORD keeps fighting during the window and its magma fire
+          // legitimately burns humans for 8 a bite — only the nuke fallout's
+          // 5-damage signature counts as friendly fire here.
           for (let i = 0; i < d.hp.length; i++) {
-            if (i !== bossSeat && d.hp[i] < hpAtBlast[i]) fail(`fallout tick burned human seat ${i}: ${hpAtBlast[i]} -> ${d.hp[i]}`);
+            if (i !== bossSeat && (d.damage[i] || 0) === 5) fail(`fallout tick burned human seat ${i} for 5`);
           }
         }
       };
