@@ -10,6 +10,7 @@ import {
   laneBounds,
   generateTerrain, generateTrees, spawnTanks, surfaceAt, simulateShot, terrainDiff,
   weaponMenu, startingAmmo, WEAPON_BY_ID, tickHazards, burnTick, aiShot, mergeScorch,
+  LOADOUT_POOL, validLoadout, loadoutAmmo,
   fireDamage, FIRE_TICK,
   BIOMES, BIOME_IDS, biomeLavaY, generateProps, generateRuins, prepareGolfHole,
 } from './game-core.js';
@@ -25,6 +26,44 @@ const RESUME_GRACE_MS = Number(process.env.RESUME_GRACE_MS) || 120000;
 const SKINS = ['olive', 'desert', 'jungle', 'midnight', 'arctic', 'gold'];
 const SEAT_SKIN = ['olive', 'desert', 'jungle', 'midnight'];   // fallback paint per seat
 const sanitizeSkin = (s, seat) => (SKINS.includes(s) ? s : SEAT_SKIN[seat % SEAT_SKIN.length]);
+
+// ---- Callsign hygiene ----------------------------------------------------------
+// Names are the one player-authored string everyone else must look at, so they
+// get scrubbed here at the door: printable ASCII only, and a profanity check
+// with leetspeak folded out. A dirty name is swapped for a clean callsign
+// (picked by name-hash so the same input always maps to the same fallback).
+const LEET = { '0': 'o', '1': 'i', '3': 'e', '4': 'a', '5': 's', '7': 't', '8': 'b', '@': 'a', '$': 's', '!': 'i', '+': 't' };
+const BAD_SUB = ['fuck', 'shit', 'cunt', 'bitch', 'bastard', 'asshole', 'arsehole', 'dick', 'cock', 'pussy',
+  'wank', 'twat', 'slut', 'whore', 'nigg', 'negro', 'fagg', 'dyke', 'kike', 'spic', 'chink', 'gook', 'coon',
+  'paki', 'retard', 'rape', 'rapist', 'pedo', 'paedo', 'nazi', 'hitler', 'porn', 'penis', 'vagin', 'anus',
+  'semen', 'jizz', 'dildo', 'blowjob', 'handjob', 'boner', 'nutsack'];
+const BAD_WORD = ['ass', 'arse', 'tit', 'tits', 'cum', 'hoe', 'fag', 'anal', 'kkk', 'fap', 'smd', 'stfu', 'wtf', 'sex'];
+const FALLBACK_NAMES = ['Ranger', 'Maverick', 'Bulwark', 'Sentry', 'Nomad', 'Havoc', 'Granite', 'Longshot', 'Bracken', 'Cinder'];
+const foldLeet = (s) => String(s).toLowerCase().split('').map(c => LEET[c] || c).join('');
+const lettersOf = (s) => foldLeet(s).replace(/[^a-z]/g, '');
+function isProfane(raw) {
+  const flat = lettersOf(raw);
+  if (BAD_SUB.some(w => flat.includes(w))) return true;
+  // Short words only count as whole tokens, so "Bass Master" and "Titan" pass.
+  return String(raw).toLowerCase().split(/[^a-z0-9@$!+]+/).map(lettersOf).some(t => BAD_WORD.includes(t));
+}
+function sanitizeName(raw, seat = 0) {
+  const name = String(raw ?? '').replace(/[^\x20-\x7e]/g, '').replace(/\s+/g, ' ').trim().slice(0, 14);
+  if (!name) return `Player ${seat + 1}`;
+  if (!isProfane(name)) return name;
+  const h = [...name].reduce((a, c) => (a * 31 + c.charCodeAt(0)) | 0, 7);
+  return FALLBACK_NAMES[Math.abs(h) % FALLBACK_NAMES.length];
+}
+
+// ---- Teams ----------------------------------------------------------------------
+// Boss Fight is strictly co-op: the humans are one side, the WARLORD the other,
+// and NOTHING a player fires — blast, splash, fire, gas, fallout, nanobots —
+// may hurt their own side (their own tank included).
+function sameSide(room, a, b) {
+  if (room.mode !== 'boss') return false;
+  const bs = bossSeatOf(room);
+  return (a === bs) === (b === bs);
+}
 
 // ---- Static file server ----------------------------------------------------
 const MIME = {
@@ -142,6 +181,19 @@ function killDead(room) {
 //       'golf'    -> 1..2 humans, 9 holes, no damage
 //       'aliens'  -> 1..2 humans vs waves of xeno saucers
 //       'zombies' -> 1..2 humans vs waves of rotting hulks
+// A loadout arrives as an array of weapon ids; anything malformed becomes null
+// and the seat falls back to the default kit at start.
+const sanitizeLoadout = (picks) => (validLoadout(picks) ? picks.slice() : null);
+const DEFAULT_LOADOUT = ['cannon', 'mortar', 'cluster', 'napalm', 'airstrike'];
+function randomLoadout() {
+  const pool = LOADOUT_POOL.slice();
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  return pool.slice(0, 5);
+}
+
 function createRoom(hostWs, name, skin, opts = {}) {
   const code = makeCode();
   const MODES = ['duel', 'ffa', 'boss', 'golf', 'aliens', 'zombies'];
@@ -150,7 +202,7 @@ function createRoom(hostWs, name, skin, opts = {}) {
   const room = {
     code, mode, max, hostSeat: 0,
     players: [
-      { ws: hostWs, name: name || 'Player 1', token: makeToken(), connected: true, dropTimer: null, skin: sanitizeSkin(skin, 0) },
+      { ws: hostWs, name: sanitizeName(name, 0), token: makeToken(), connected: true, dropTimer: null, skin: sanitizeSkin(skin, 0) },
     ],
     state: 'waiting',
     terrain: null, tanks: null,
@@ -201,6 +253,7 @@ function snapshot(room, seat) {
     biome: room.biome, ruins: room.ruins ? room.ruins.ranges : undefined,
     boss: bossSeatOf(room) >= 0 ? bossSeatOf(room) : undefined,
     kinds: room.players.map(p => (p.boss ? 'mech' : p.horde ? (room.horde ? room.horde.kind : 'tank') : 'tank')),
+    loadouts: room.loadouts || undefined,
     horde: room.horde ? { kills: room.horde.kills, target: room.horde.target, wave: room.horde.wave } : undefined,
     nano: room.nanoBots && room.nanoBots.some(b => b > 0) ? room.nanoBots : undefined,
     scales: room.tanks.map(t => t.scale || 1),
@@ -446,7 +499,7 @@ function startGame(room) {
   room.tanks = spawnTanks(room.terrain, room.seed, n);   // ordered left -> right
   room.hp = new Array(n).fill(MAX_HP);
   room.hpMax = new Array(n).fill(MAX_HP);
-  room.crates = []; room.crateSeq = 1;
+  room.crates = []; room.crateSeq = 1; room.crateDrops = 0;
   room.shield = new Array(n).fill(0);
   room.turnCount = 0; room.bossShots = 0;
   room.nanoBots = new Array(n).fill(0);
@@ -466,7 +519,12 @@ function startGame(room) {
       room.hp[i] = hp; room.hpMax[i] = hp;
     }
   } else room.horde = null;
-  room.ammo = Array.from({ length: n }, () => startingAmmo());
+  const loadoutMode = room.mode === 'duel' || room.mode === 'ffa';
+  room.loadouts = room.players.map((pl, i) => {
+    if (!loadoutMode) return null;
+    return sanitizeLoadout(pl.loadout) || (pl.bot ? randomLoadout() : DEFAULT_LOADOUT.slice());
+  });
+  room.ammo = Array.from({ length: n }, (_, i) => (loadoutMode ? loadoutAmmo(room.loadouts[i]) : startingAmmo()));
   // Everyone starts turned toward the middle of the map. (n=2 -> [1, -1], as before.)
   room.facing = room.tanks.map((_, i) => (i < n / 2 ? 1 : -1));
   room.hazards = []; room.hazardSeq = 1; room.scorch = [];
@@ -482,7 +540,16 @@ function beginTurn(room) {
   room.turnCount = (room.turnCount || 0) + 1;
   hordeRespawn(room);
   maybeDropCrate(room);
-  broadcast(room, { type: 'turn', turn: room.turn, fuel: room.fuel, alive: aliveFlags(room) });
+  // A loadout player who is completely dry gets one emergency cannon shell —
+  // the duel must always be able to end.
+  if ((room.mode === 'duel' || room.mode === 'ffa') && room.ammo[room.turn]) {
+    const a = room.ammo[room.turn];
+    if (Object.values(a).every(v => !v)) a.cannon = 1;
+  }
+  broadcast(room, {
+    type: 'turn', turn: room.turn, fuel: room.fuel, alive: aliveFlags(room),
+    ammo: room.ammo[room.turn], ammoSeat: room.turn,
+  });
   scheduleBot(room);
 }
 
@@ -494,11 +561,15 @@ function beginTurn(room) {
 const CRATE_KINDS = ['railgun', 'ammo', 'shield', 'repair'];
 const CRATE_AMMO_POOL = ['mortar', 'volley', 'cluster', 'napalm', 'airstrike', 'buster', 'teleport'];
 const CRATE_REACH = 380;
+// Every NPC holds its aim for a beat before firing — a human-readable tell.
+// Tests shrink it via the env knob so suites stay fast.
+const BOT_FIRE_MS = Number(process.env.BOT_FIRE_MS || 1500);
 
 function maybeDropCrate(room) {
   if (room.mode === 'golf' || room.state !== 'playing') return;
   if (room.turnCount < 3 || (room.turnCount - 3) % 4 !== 0) return;   // turn 3, 7, 11, ...
   if (room.crates.length >= 2) return;
+  if ((room.crateDrops || 0) >= 4) return;           // hard cap: 4 drops per match
   for (let tries = 0; tries < 14; tries++) {
     const x = Math.round(1800 + Math.random() * (WORLD_W - 3600));
     const clearTanks = room.tanks.every((t, i) => t.alive === false || Math.abs(t.x - x) > 2000);
@@ -507,6 +578,7 @@ function maybeDropCrate(room) {
     const kind = CRATE_KINDS[Math.floor(Math.random() * CRATE_KINDS.length)];
     const crate = { id: room.crateSeq++, x, y: Math.round(surfaceAt(room.terrain, x) * 10) / 10, kind };
     room.crates.push(crate);
+    room.crateDrops = (room.crateDrops || 0) + 1;
     broadcast(room, { type: 'crate', crate });
     return;
   }
@@ -572,7 +644,7 @@ function scheduleBot(room) {
   const cur = room.players[room.turn];
   if (!room.vsBot || room.state !== 'playing' || !cur || !cur.bot) return;
   if (!room.players.some(p => p && !p.bot && p.connected)) return;   // nobody watching
-  clearTimeout(room.botTimer);
+  clearTimeout(room.botTimer); clearInterval(room.botWalker);
   room.botTimer = setTimeout(() => botAct(room), 850 + Math.random() * 750);
 }
 
@@ -586,21 +658,62 @@ function botAct(room) {
   const bot = room.players[seat];
   if (!bot || !bot.bot) return;
   const me = room.tanks[seat];
+  // 1) A reachable crate outranks tactics — supplies win fights.
   let target = null, best = Infinity;
   for (const c of room.crates) {
     const d = Math.abs(c.x - me.x);
     if (d < best && d <= MOVE_BUDGET - 200) { best = d; target = c; }
   }
-  if (!target || best <= CRATE_REACH - 40) return botFire(room);
-  const dir = target.x > me.x ? 1 : -1;
-  const id = target.id;
-  room.botTimer = setInterval(() => {
-    if (room.state !== 'playing' || room.turn !== seat) { clearInterval(room.botTimer); return; }
-    const stillThere = room.crates.some(c => c.id === id);
-    const arrived = Math.abs(target.x - room.tanks[seat].x) <= CRATE_REACH - 40;
-    if (!stillThere || arrived || room.fuel < MOVE_STEP) {
-      clearInterval(room.botTimer);
-      room.botTimer = setTimeout(() => botFire(room), 500);
+  if (target && best > CRATE_REACH - 40) {
+    return botWalk(room, seat, target.x > me.x ? 1 : -1, { crateId: target.id, crateX: target.x });
+  }
+  // 2) Otherwise reposition. Every bot — the WARLORD included — moves most
+  //    turns: range-keeping with a coin flip on top so it can't be pattern-read.
+  const plan = botPlan(room, seat);
+  if (!plan) return botFire(room);
+  botWalk(room, seat, plan.dir, { steps: plan.steps });
+}
+
+// Distance-keeping with deliberate noise. Close-range bots usually break away,
+// long-range bots usually close in, mid-range bots drift — and one turn in ten
+// the whole plan is inverted as a feint, so humans can't lead their shots on a
+// predicted heading.
+function botPlan(room, seat) {
+  const me = room.tanks[seat];
+  const meP = room.players[seat];
+  let foe = null, d = Infinity;
+  for (let i = 0; i < room.tanks.length; i++) {
+    if (i === seat || room.tanks[i].alive === false) continue;
+    if (sameSide(room, seat, i)) continue;
+    if (meP.horde && room.players[i] && room.players[i].horde) continue;   // the pack ignores the pack
+    const dd = Math.abs(room.tanks[i].x - me.x);
+    if (dd < d) { d = dd; foe = room.tanks[i]; }
+  }
+  if (!foe) return null;
+  const toward = foe.x > me.x ? 1 : -1;
+  const r = Math.random();
+  let dir = 0;
+  if (d < 3400)       dir = r < 0.62 ? -toward : (r < 0.82 ? toward : 0);
+  else if (d > 13000) dir = r < 0.62 ? toward : (r < 0.82 ? -toward : 0);
+  else                dir = r < 0.34 ? toward : (r < 0.62 ? -toward : 0);
+  if (r > 0.9) dir = -dir;                                                 // the feint
+  if (me.x < 2200) dir = 1; else if (me.x > (room.worldW || WORLD_W) - 2200) dir = -1;
+  if (!dir) return null;
+  return { dir, steps: 8 + Math.floor(Math.random() * 22) };
+}
+
+// Drive, then shoot. One walker per room; it hands off to botFire when the
+// crate is collected, the step budget is spent, or the tank runs out of fuel.
+function botWalk(room, seat, dir, opts = {}) {
+  clearInterval(room.botWalker);
+  let steps = opts.steps ?? 999;
+  room.botWalker = setInterval(() => {
+    if (room.state !== 'playing' || room.turn !== seat) { clearInterval(room.botWalker); return; }
+    const crateGone = opts.crateId != null && !room.crates.some(c => c.id === opts.crateId);
+    const arrived = opts.crateX != null && Math.abs(opts.crateX - room.tanks[seat].x) <= CRATE_REACH - 40;
+    if (crateGone || arrived || --steps < 0 || room.fuel < MOVE_STEP) {
+      clearInterval(room.botWalker);
+      botFire(room);
       return;
     }
     handleMove(room, seat, dir);
@@ -632,9 +745,9 @@ function botFire(room) {
       d = Math.min(d, Math.abs(room.tanks[i].x - me.x));
     }
     if (room.bossShots % 4 === 0) wid = 'b_quake';
-    else if (d > 11000) wid = room.bossShots % 2 ? 'b_lance' : 'b_barrage';
-    else if (d > 4500) wid = ['b_twin', 'b_barrage', 'b_flame'][room.bossShots % 3];
-    else wid = room.bossShots % 2 ? 'b_flame' : 'b_twin';
+    else if (d > 11000) wid = room.bossShots % 2 ? 'b_spear' : 'b_hellstorm';
+    else if (d > 4500) wid = ['b_gatling', 'b_hellstorm', 'b_magma'][room.bossShots % 3];
+    else wid = room.bossShots % 2 ? 'b_magma' : 'b_gatling';
   }
   // Horde enemies hunt HUMANS. Hand the gunnery brain a view of the field with
   // fellow horde seats marked dead so it never opens fire on its own pack.
@@ -650,7 +763,7 @@ function botFire(room) {
   broadcast(room, { type: 'aim', seat, angle: shot.angle, power: shot.power, weapon: shot.weapon });
   room.botTimer = setTimeout(() => {
     if (room.state === 'playing' && room.turn === seat) resolveFire(room, seat, shot.weapon, shot.angle, shot.power);
-  }, 550);
+  }, BOT_FIRE_MS);
 }
 
 // Unlimited shots — the match only ends when a tank is destroyed.
@@ -668,6 +781,7 @@ function endGame(room) {
   room.state = 'over';
   clearTimeout(room.clock);
   clearTimeout(room.botTimer);
+  clearInterval(room.botWalker);
   clearInterval(room.dotTimer); room.dotTimer = null;
   clearInterval(room.fireTimer); room.fireTimer = null;
   clearInterval(room.nanoTimer); room.nanoTimer = null;
@@ -749,6 +863,11 @@ function resolveFire(room, seat, weaponId, angle, power) {
   );
 
   if (w.ammo < 99) room.ammo[seat][w.id] = Math.max(0, (room.ammo[seat][w.id] || 0) - 1);
+  // No friendly fire in Boss Fight: a teammate caught in your blast walks away.
+  for (let i = 0; i < result.damage.length; i++) {
+    if (sameSide(room, seat, i)) result.damage[i] = 0;
+  }
+  if (result.nano && sameSide(room, seat, result.nano.seat)) result.nano = null;
   // A supply-crate shield soaks 65% of the next blast that actually hurts you,
   // then breaks. Applied BEFORE the hp loop so the wire damage, the floaters and
   // the hp all agree; fire bites and lava bypass it deliberately.
@@ -814,6 +933,7 @@ function resolveFire(room, seat, weaponId, angle, power) {
   // Crates: a blast can crack one open for the shooter, and survivors re-settle
   // onto whatever the shot left of the ground beneath them.
   cratesAfterShot(room, seat, result);
+  if (room.crates.length) broadcast(room, { type: 'crates', crates: room.crates });
   if (result.nano) startNano(room, result.nano);
   // Give the shot animation a beat, then play out any fire/toxic burn before the
   // next turn (real-time damage-over-time; the turn holds until it finishes).
@@ -872,7 +992,8 @@ function fireBite(room) {
   if (room.state !== 'playing') return stopFire(room);
   const aliveBefore = aliveFlags(room);
   const now = Date.now();
-  const dmg = fireDamage(room.hazards, room.tanks);      // spends one bite per blaze
+  const dmg = fireDamage(room.hazards, room.tanks,       // spends one bite per blaze
+    (owner, ti) => owner != null && sameSide(room, owner, ti));
   const before = room.hazards.length;
   room.hazards = room.hazards.filter(h => h.until == null || h.until > now);
   let hurt = false;
@@ -973,6 +1094,7 @@ function handleMove(room, seat, dir) {
 function teardown(room, notify) {
   clearTimeout(room.clock);
   clearTimeout(room.botTimer);
+  clearInterval(room.botWalker);
   clearInterval(room.dotTimer);
   clearInterval(room.fireTimer);
   clearInterval(room.nanoTimer);
@@ -1057,6 +1179,7 @@ wss.on('connection', (ws) => {
     switch (msg.type) {
       case 'create': {
         const r = createRoom(ws, msg.name, msg.skin, { mode: msg.mode, max: msg.max });
+        r.players[0].loadout = sanitizeLoadout(msg.loadout);
         send(ws, { type: 'created', code: r.code, mode: r.mode, max: r.max });
         send(ws, lobbyPayload(r, 0));
         break;
@@ -1070,7 +1193,7 @@ wss.on('connection', (ws) => {
         let seat = r.players.indexOf(null);                 // reuse a lobby hole first
         if (seat < 0) { seat = r.players.length; r.players.push(null); }
         r.players[seat] = {
-          ws, name: msg.name || `Player ${seat + 1}`, token: makeToken(),
+          ws, name: sanitizeName(msg.name, seat), token: makeToken(), loadout: sanitizeLoadout(msg.loadout),
           connected: true, dropTimer: null, skin: sanitizeSkin(msg.skin, seat),
         };
         ws.roomCode = code; ws.seat = seat;
@@ -1083,11 +1206,12 @@ wss.on('connection', (ws) => {
         if (waiting && waiting !== ws && waiting.readyState === 1) {
           const host = waiting; waiting = null;
           const r = createRoom(host, host._qname, host._qskin, { mode: 'duel' });
-          r.players.push({ ws, name: msg.name || 'Player 2', token: makeToken(), connected: true, dropTimer: null, skin: sanitizeSkin(msg.skin, 1) });
+          r.players[0].loadout = host._qloadout || null;
+          r.players.push({ ws, name: sanitizeName(msg.name, 1), token: makeToken(), connected: true, dropTimer: null, skin: sanitizeSkin(msg.skin, 1), loadout: sanitizeLoadout(msg.loadout) });
           ws.roomCode = r.code; ws.seat = 1;
           startGame(r);
         } else {
-          waiting = ws; ws._qname = msg.name || 'Player 1'; ws._qskin = msg.skin;
+          waiting = ws; ws._qname = sanitizeName(msg.name, 0); ws._qskin = msg.skin; ws._qloadout = sanitizeLoadout(msg.loadout);
           send(ws, { type: 'queued' });
         }
         break;
@@ -1097,6 +1221,7 @@ wss.on('connection', (ws) => {
         const diff = ['easy', 'medium', 'hard'].includes(msg.difficulty) ? msg.difficulty : 'medium';
         // CPU games stay strictly 2-player.
         const r = createRoom(ws, msg.name, msg.skin, { mode: 'duel' });
+        r.players[0].loadout = sanitizeLoadout(msg.loadout);
         r.vsBot = true;
         r.players[1] = {
           ws: null, bot: true, difficulty: diff,

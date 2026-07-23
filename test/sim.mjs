@@ -17,11 +17,19 @@ const a = client('A'), b = client('B');
 let code = null;
 const summary = { shots: 0, craters: 0, maxProjectiles: 0, hazardsSeen: 0, hpFinal: null, gameover: null, errors: [] };
 
-// Cycle through every weapon (splits, airstrike, hazards, wall, buster) to exercise all paths.
-const ROTATION = ['cannon', 'mortar', 'volley', 'cluster', 'napalm', 'gas', 'airstrike', 'buster', 'wall', 'teleport', 'nuke', 'cannon'];   // railgun is crate-only now (ammo 0) — firing it would be refused
+// Duels now run on 5-pick loadouts (2 rounds each + everyone's nuke), so the
+// clients carry complementary kits and each walks its OWN kit twice — between
+// them every weapon path (splits, airstrike, hazards, wall, buster, teleport,
+// nuke) is exercised. Railgun stays crate-only. Past its 11 rounds a client
+// fires plain cannon: that's the server's emergency shell, tested for free.
+const LOADOUT_A = ['cannon', 'volley', 'napalm', 'airstrike', 'wall'];
+const LOADOUT_B = ['mortar', 'cluster', 'gas', 'buster', 'teleport'];
+const rotOf = (picks) => [...picks, 'nuke', ...picks];
+const ROT_A = rotOf(LOADOUT_A), ROT_B = rotOf(LOADOUT_B);
 function fire(c, shotIndex) {
   const power = 68 + (shotIndex % 7) * 4;
-  const weapon = ROTATION[shotIndex % ROTATION.length];
+  const rot = c.seat === 0 ? ROT_A : ROT_B;
+  const weapon = shotIndex < rot.length ? rot[shotIndex] : 'cannon';
   c.ws.send(JSON.stringify({ type: 'fire', weapon, angle: 45, power }));
 }
 
@@ -65,9 +73,9 @@ function attach(c) {
 }
 attach(a); attach(b);
 
-a.ws.on('open', () => a.ws.send(JSON.stringify({ type: 'create', name: 'A' })));
+a.ws.on('open', () => a.ws.send(JSON.stringify({ type: 'create', name: 'A', loadout: LOADOUT_A })));
 const joinIv = setInterval(() => {
-  if (code && b.ws.readyState === 1) { clearInterval(joinIv); b.ws.send(JSON.stringify({ type: 'join', code, name: 'B' })); }
+  if (code && b.ws.readyState === 1) { clearInterval(joinIv); b.ws.send(JSON.stringify({ type: 'join', code, name: 'B', loadout: LOADOUT_B })); }
 }, 30);
 
 let done = false;
@@ -76,4 +84,4 @@ function finish() {
   console.log(JSON.stringify(summary, null, 2));
   process.exit(summary.errors.length ? 1 : 0);
 }
-setTimeout(() => { summary.errors.push('timeout'); finish(); }, 20000);
+setTimeout(() => { summary.errors.push('timeout'); finish(); }, 32000);

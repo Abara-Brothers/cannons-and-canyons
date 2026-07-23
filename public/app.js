@@ -44,7 +44,8 @@ const S = {
   deferred: [],                        // HP/elimination work held until the shell in flight lands
   warp: null,                          // active Teleport warp (see startWarp)
   mush: null,                          // active Tactical Nuke mushroom cloud (see startMushroom)
-  particles: [], floaters: [], rings: [], flash: 0, shake: 0,
+  particles: [], floaters: [], rings: [], quakes: [], flash: 0, shake: 0,
+  bossCharge: null,                    // WARLORD wind-up between its aim and its shot
   muzzle: [],                          // directional HD muzzle blasts (own render pass)
   plane: null,                         // Air Strike delivery aircraft (cosmetic, own render pass)
   charging: false, pullPointer: null,
@@ -93,9 +94,9 @@ function buildSkinRow() {
     b.style.background = `linear-gradient(180deg, ${sk.lite}, ${sk.dark})`;
     const open = skinUnlocked(id);
     b.title = sk.name + (open ? '' : (id === 'midnight' ? ' — defeat the WARLORD to unlock' : ' — Supporter Pack'));
-    if (!open) b.innerHTML = '<span class="lock">🔒</span>';
+    if (!open) b.innerHTML = `<span class="lock">${UI_IC.lock}</span>`;
     b.onclick = () => {
-      if (!open) { showToast(id === 'midnight' ? 'Defeat the WARLORD in a Boss Raid to unlock this.' : 'Supporter Pack paint — see the shop soon!'); return; }
+      if (!open) { showToast(id === 'midnight' ? 'Defeat the WARLORD in a Boss Fight to unlock this.' : 'Supporter Pack paint — see the shop soon!'); return; }
       localStorage.setItem('cc_skin', id);
       buildSkinRow();
     };
@@ -106,6 +107,18 @@ function buildSkinRow() {
 // ---------------------------------------------------------------------------
 // Custom weapon icons + trajectory badges (inline SVG, one per weapon)
 // ---------------------------------------------------------------------------
+// Small hand-drawn UI glyphs. Emojis are banned from this game's UI outright —
+// anything pictorial is our own SVG.
+const UI_IC = {
+  speakerOn: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 9v6h4l5 4.4V4.6L8 9z"/><path d="M15.8 8.6a4.8 4.8 0 0 1 0 6.8M18.3 6.1a8.2 8.2 0 0 1 0 11.8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  speakerOff: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 9v6h4l5 4.4V4.6L8 9z"/><path d="M16 9.4l5.2 5.2M21.2 9.4L16 14.6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>',
+  lock: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="5.4" y="10.6" width="13.2" height="9.8" rx="2.4"/><path d="M8.2 10.6V8.2a3.8 3.8 0 0 1 7.6 0v2.4" fill="none" stroke="currentColor" stroke-width="2.3"/></svg>',
+  crown: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 18h18l-1.2-9-4.6 3.4L12 5.6 8.8 12.4 4.2 9z"/><rect x="4.4" y="19.2" width="15.2" height="2" rx="1"/></svg>',
+  sword: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.8 2.6l1.6 1.6-9.4 11.2-2-2-1.4-.6z"/><path d="M7.6 14.2l2.2 2.2-2 2-1.3 3-3-1.3 2-2-1.1-2.7 2.5-2.5z"/></svg>',
+  shieldIc: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.4l8 3v6.2c0 5-3.4 8.4-8 10-4.6-1.6-8-5-8-10V5.4z"/></svg>',
+  coin: '<svg viewBox="0 0 24 24" fill="currentColor"><ellipse cx="10" cy="16.6" rx="7.6" ry="3.6"/><ellipse cx="10" cy="12.8" rx="7.6" ry="3.6"/><ellipse cx="14" cy="8" rx="7.6" ry="3.6"/><ellipse cx="14" cy="7" rx="7.6" ry="3.4" fill="#ffd97a"/></svg>',
+};
+
 const ICONS = {
   cannon: `<svg viewBox="0 0 24 24"><path d="M3.4 8.6h8.2l4.1 1.9a2.6 2.6 0 010 3l-4.1 1.9H3.4z" fill="#b8c2d2"/><path d="M3.4 8.6h8.2l3.4 1.6H3.4z" fill="#dde4ee"/><rect x="4.6" y="8.1" width="2.1" height="7.8" rx=".5" fill="#c98a4b"/><path d="M15.7 9.6l4.9 1.6a1 1 0 010 1.6l-4.9 1.6a2.6 2.6 0 000-4.8z" fill="#ff5a52"/><path d="M1.6 8.1h1.9v7.8H1.6z" fill="#7c8698"/></svg>`,
   mortar: `<svg viewBox="0 0 24 24"><path d="M12 1.6c2.5 3 3.9 5.6 3.9 8.6v6.3H8.1V10.2c0-3 1.4-5.6 3.9-8.6z" fill="#4d5a44"/><path d="M12 1.6c1.2 1.5 2.1 2.8 2.7 4.1l-1 1.8H8.9C9.7 5.5 10.7 3.7 12 1.6z" fill="#ffb02e"/><rect x="7.8" y="11.4" width="8.4" height="1.9" fill="#2f3a2b"/><path d="M9.2 16.5h5.6l1.9 5.9-2.5-1.7-2.2 1.9-2.2-1.9-2.5 1.7z" fill="#3a4436"/></svg>`,
@@ -279,7 +292,7 @@ window.addEventListener('keydown', () => { Audio.ensure(); }, { capture: true })
 
 $('muteBtn').onclick = () => {
   Audio.muted = !Audio.muted; localStorage.setItem('pt_mute', Audio.muted ? '1' : '0');
-  $('muteBtn').textContent = Audio.muted ? '🔇' : '🔊';
+  $('muteBtn').innerHTML = Audio.muted ? UI_IC.speakerOff : UI_IC.speakerOn;
   if (!Audio.muted) Audio.ensure();
 };
 
@@ -481,7 +494,7 @@ function handle(m) {
     case 'start': applySnapshot(m); saveResume(m.code, m.token); break;
     case 'hole':
       applySnapshot(m); saveResume(m.code, m.token);
-      showToast(`⛳ Hole ${m.golf ? m.golf.hole : '?'} of 9 — Par ${m.golf ? m.golf.par : '?'}`);
+      showToast(`Hole ${m.golf ? m.golf.hole : '?'} of 9 — Par ${m.golf ? m.golf.par : '?'}`);
       break;
     case 'restore':
       applySnapshot(m); saveResume(m.code, m.token);
@@ -497,9 +510,17 @@ function handle(m) {
     case 'face': if (m.seat !== S.you) S.facing[m.seat] = m.dir; break;
     case 'crate':
       S.crates.push({ ...m.crate, dropT: 0 });   // parachute in from the sky
-      showToast('📦 Supply drop incoming!');
+      showToast('SUPPLY DROP INBOUND');
       break;
     case 'crateTaken': deferHp(() => applyCrateTaken(m)); break;
+    case 'crates':      // post-shot re-settle: survivors follow the new ground
+      deferHp(() => {
+        for (const cu of m.crates) {
+          const c = S.crates.find(k => k.id === cu.id);
+          if (c) { c.x = cu.x; c.y = cu.y; }
+        }
+      });
+      break;
     case 'respawn':
       deferHp(() => {
         if (S.tanks[m.seat]) { S.tanks[m.seat].x = m.x; S.tanks[m.seat].y = m.y; }
@@ -507,14 +528,14 @@ function handle(m) {
         if (m.hpMax) S.hpMax = m.hpMax.slice();
         if (m.alive) S.alive = m.alive.slice();
         S.horde = { kills: m.kills, target: m.target, wave: m.wave };
-        S.floaters.push({ x: m.x, y: m.y - 500, text: `☠ WAVE ${m.wave} INBOUND`, age: 0, life: 1.9, color: '#b6ff5a' });
+        S.floaters.push({ x: m.x, y: m.y - 500, text: `WAVE ${m.wave} INBOUND`, age: 0, life: 1.9, color: '#b6ff5a' });
         updateHud();
       });
       break;
     case 'wave':
       deferHp(() => {
         S.horde = { kills: m.kills, target: m.target, wave: m.wave };
-        showToast(`☠ ${m.kills}/${m.target} down`);
+        showToast(`${m.kills}/${m.target} DOWN`);
         updateDock();
       });
       break;
@@ -526,7 +547,11 @@ function handle(m) {
       });
       showToast(`${S.names[m.seat] || 'A player'} left — tank scuttled`);
       break;
-    case 'aim': if (m.seat !== S.you) { S.aim[m.seat] = { angle: clampAimC(m.angle), power: Number(m.power) || 60 }; } break;
+    case 'aim':
+      if (m.seat !== S.you) { S.aim[m.seat] = { angle: clampAimC(m.angle), power: Number(m.power) || 60 }; }
+      // The WARLORD telegraphs: from its aim to its shot it visibly charges.
+      if (m.seat === S.boss && m.weapon) S.bossCharge = { weapon: m.weapon, t0: performance.now() };
+      break;
     case 'move': {
       const prev = S.tanks[m.seat] ? S.tanks[m.seat].x : m.x;
       S.tanks[m.seat] = { x: m.x, y: m.y };
@@ -536,7 +561,7 @@ function handle(m) {
       if (m.seat === S.you) { S.fuel = m.fuel; updateFuel(); }
       break;
     }
-    case 'shot': enqueueShot(m); break;
+    case 'shot': if (m.by === S.boss) S.bossCharge = null; enqueueShot(m); break;
     case 'dot': applyDot(m); break;
     case 'gameover':
       clearResume();
@@ -599,6 +624,59 @@ function myName() {
   return n;
 }
 
+// ---- Armoury -----------------------------------------------------------------
+// Duel and free-for-all run on a 5-weapon loadout: pick five from the pool,
+// two rounds each; the nuke is issued regardless and the railgun stays
+// supply-drop-only. The pick lives in localStorage and rides along on every
+// create / join / quick / vs-CPU intent — so it applies even to instant
+// matches that never sit in a lobby.
+const ARM_POOL = ['cannon', 'mortar', 'volley', 'cluster', 'napalm', 'gas', 'airstrike', 'buster', 'wall', 'teleport', 'nano', 'minigun'];
+const ARM_DEFAULT = ['cannon', 'mortar', 'cluster', 'napalm', 'airstrike'];
+let armPicks = (() => {
+  try {
+    const p = JSON.parse(localStorage.getItem('cc_loadout') || 'null');
+    if (Array.isArray(p) && p.length === 5 && new Set(p).size === 5 && p.every(id => ARM_POOL.includes(id))) return p;
+  } catch {}
+  return ARM_DEFAULT.slice();
+})();
+const myLoadout = () => armPicks.slice();
+function armSave() {
+  try { localStorage.setItem('cc_loadout', JSON.stringify(armPicks)); } catch {}
+  $('armouryCount').textContent = `${armPicks.length} picked`;
+}
+function buildArmoury() {
+  const grid = $('armouryGrid'); grid.innerHTML = '';
+  for (const id of ARM_POOL) {
+    const w = HELP_WEAPONS.find(h => h.id === id) || { name: id, desc: '' };
+    const cell = document.createElement('button');
+    cell.type = 'button';
+    cell.dataset.wid = id;
+    cell.innerHTML = `${ICONS[id] || ''}<span>${w.name}<i>${w.desc}</i></span>`;
+    cell.onclick = () => {
+      const at = armPicks.indexOf(id);
+      if (at >= 0) armPicks.splice(at, 1);
+      else if (armPicks.length < 5) armPicks.push(id);
+      paintArmoury();
+    };
+    grid.appendChild(cell);
+  }
+  paintArmoury();
+}
+function paintArmoury() {
+  const full = armPicks.length === 5;
+  for (const cell of $('armouryGrid').children) {
+    const picked = armPicks.includes(cell.dataset.wid);
+    cell.className = 'arm-cell' + (picked ? ' picked' : full ? ' dim' : '');
+  }
+  const st = $('armouryStatus');
+  st.textContent = full ? '5 of 5 picked — locked and loaded' : `${armPicks.length} of 5 picked`;
+  st.classList.toggle('ready', full);
+  $('armouryCloseBtn').disabled = !full;
+}
+$('armouryBtn').onclick = () => { buildArmoury(); $('armouryModal').classList.remove('hidden'); };
+$('armouryCloseBtn').onclick = () => { armSave(); $('armouryModal').classList.add('hidden'); };
+armSave();
+
 let ccMode = 'duel', ccMax = 4;
 (function initMode() {
   const mr = $('modeRow'), cr = $('countRow');
@@ -616,9 +694,9 @@ let ccMode = 'duel', ccMax = 4;
 })();
 $('createBtn').onclick = () => {
   Audio.ensure(); $('homeError').textContent = '';
-  intent({ type: 'create', name: myName(), skin: mySkin(), mode: ccMode, max: ccMode === 'ffa' ? ccMax : 2 });
+  intent({ type: 'create', name: myName(), skin: mySkin(), mode: ccMode, max: ccMode === 'ffa' ? ccMax : 2, loadout: myLoadout() });
 };
-$('quickBtn').onclick = () => { Audio.ensure(); S.quick = true; $('homeError').textContent = ''; intent({ type: 'quick', name: myName(), skin: mySkin() }); };
+$('quickBtn').onclick = () => { Audio.ensure(); S.quick = true; $('homeError').textContent = ''; intent({ type: 'quick', name: myName(), skin: mySkin(), loadout: myLoadout() }); };
 
 // Single-player vs CPU, with a difficulty selector.
 let cpuDifficulty = localStorage.getItem('pt_diff') || 'medium';
@@ -631,7 +709,7 @@ let cpuDifficulty = localStorage.getItem('pt_diff') || 'medium';
   });
   sync();
 })();
-$('cpuBtn').onclick = () => { Audio.ensure(); $('homeError').textContent = ''; intent({ type: 'ai', difficulty: cpuDifficulty, name: myName(), skin: mySkin() }); };
+$('cpuBtn').onclick = () => { Audio.ensure(); $('homeError').textContent = ''; intent({ type: 'ai', difficulty: cpuDifficulty, name: myName(), skin: mySkin(), loadout: myLoadout() }); };
 
 // Orientation preference. This does NOT rotate anything — the browser owns that.
 // It only records whether the player has accepted portrait; when they haven't,
@@ -661,7 +739,7 @@ $('joinBtn').onclick = () => {
   const code = ($('codeInput').value || '').toUpperCase().trim();
   if (code.length < 3) { $('homeError').textContent = 'Enter the 4-letter code.'; return; }
   $('homeError').textContent = '';
-  intent({ type: 'join', code, name: myName(), skin: mySkin() });
+  intent({ type: 'join', code, name: myName(), skin: mySkin(), loadout: myLoadout() });
 };
 $('codeInput').addEventListener('input', (e) => { e.target.value = e.target.value.toUpperCase(); });
 $('cancelBtn').onclick = () => { sendMsg({ type: 'leave' }); sendMsg({ type: 'cancelQuick' }); S.code = null; S.quick = false; showScreen('home'); };
@@ -704,7 +782,7 @@ function renderLobby(m) {
   const filled = m.players.filter(Boolean).length;
   $('lobbyHeading').textContent =
     m.mode === 'ffa'  ? `Free-for-all — ${filled}/${m.max} commanders` :
-    m.mode === 'boss' ? `Boss Raid — ${filled}/${m.max} vs WARLORD-7` :
+    m.mode === 'boss' ? `Boss Fight — ${filled}/${m.max} vs WARLORD-7` :
     m.mode === 'golf' ? `Artillery Golf — ${filled}/${m.max} on the tee` :
     m.mode === 'aliens' ? `Alien Invasion — ${filled}/${m.max} defenders` :
     m.mode === 'zombies' ? `Zombie Uprising — ${filled}/${m.max} survivors` :
@@ -765,6 +843,8 @@ function applySnapshot(m) {
   S.boss = (m.boss != null) ? m.boss : -1;
   S.scales = (m.scales || []).slice();
   S.kinds = (m.kinds || []).slice();
+  S.loadout = (m.loadouts && m.loadouts[m.you]) || null;
+  if (S.loadout && !S.loadout.includes(S.selected) && S.selected !== 'railgun') S.selected = null;
   S.horde = m.horde || null;
   S.golf = m.golf || null;
   S.nanoBots = (m.nano || new Array(S.n).fill(0)).slice();
@@ -789,7 +869,8 @@ function applySnapshot(m) {
   S.playing = true; S.quick = false; S.anim = null; S.queue = []; S.pendingOver = null; S.warp = null;
   clearKillcam();
   S.deferred = [];                     // start/restore hp+alive win outright — discard held work
-  S.particles = []; S.floaters = []; S.rings = []; S.muzzle = []; S.flash = 0; S.shake = 0;
+  S.particles = []; S.floaters = []; S.rings = []; S.quakes = []; S.muzzle = []; S.flash = 0; S.shake = 0;
+  S.bossCharge = null;
   S.plane = null;
   S.mush = null;                       // a nuke cloud must never survive into the next match
   S.chainQueue = [];
@@ -807,18 +888,22 @@ function applySnapshot(m) {
 
 function onTurn(m) {
   S.turn = m.turn; S.fuel = m.fuel;
+  if (m.ammoSeat === S.you && m.ammo) S.ammo = m.ammo;   // e.g. the emergency shell
   // 'turn' arrives ~300ms after the server resolved the shot, long before the
   // client finishes replaying the flight. In FFA these flags carry the kill —
   // applied here they grey the scoreboard card AND delete the tank from the
   // canvas (the draw loop skips S.alive[i] === false) while the shell is still
   // in the air. Elimination belongs to the blast; hold it behind the same gate.
   if (m.alive) deferHp(() => { S.alive = m.alive.slice(); updateHud(); });
-  if (m.turn === S.you && (S.ammo[S.selected] ?? 99) <= 0) S.selected = firstAvailableWeapon();
+  if (m.turn === S.you && (!S.selected || (S.ammo[S.selected] ?? 99) <= 0)) S.selected = firstAvailableWeapon();
   updateFuel(); updateDock(); buildWeaponStrip();
 }
 
 function firstAvailableWeapon() {
-  for (const w of S.weapons) if ((S.ammo[w.id] ?? w.ammo) > 0) return w.id;
+  for (const w of S.weapons) {
+    if (S.loadout && w.id !== 'nuke' && w.id !== 'railgun' && !S.loadout.includes(w.id)) continue;
+    if ((S.ammo[w.id] ?? w.ammo) > 0) return w.id;
+  }
   return 'cannon';
 }
 
@@ -843,7 +928,7 @@ function buildScoreboard() {
       '<div class="pval"><span class="score">100</span><span class="shots">HP</span></div>' +
       '<div class="hpbar"><i></i></div>';
     el.querySelector('.pname').textContent =
-      (i === S.boss ? '👑 ' : '') + (S.names[i] || `Player ${i + 1}`) + (i === S.you ? ' (you)' : '');
+      (S.names[i] || `Player ${i + 1}`) + (i === S.you ? ' (you)' : '');
     if (i === S.boss) el.classList.add('bossrow');
     row.appendChild(el);
   }
@@ -861,7 +946,9 @@ function updateBossBar() {
   }
   const hp = Math.max(0, Math.round(S.hp[S.boss] ?? 0));
   const cap = (S.hpMax && S.hpMax[S.boss]) || 400;
-  bar.querySelector('.bb-name').textContent = '👑 ' + (S.names[S.boss] || 'BOSS');
+  const nameEl = bar.querySelector('.bb-name');
+  nameEl.innerHTML = UI_IC.crown + ' ';
+  nameEl.append(S.names[S.boss] || 'BOSS');
   bar.querySelector('.bb-num').textContent = `${hp} / ${cap}`;
   bar.querySelector('.bb-track i').style.width = `${Math.max(0, Math.min(100, (hp / cap) * 100))}%`;
   bar.classList.toggle('dead', S.alive[S.boss] === false);
@@ -878,7 +965,7 @@ function updateHud() {
     if (S.golf) {                          // golf cards show STROKES, not health
       const done = S.golf.done && S.golf.done[i];
       el.querySelector('.score').textContent = `${(S.golf.strokes && S.golf.strokes[i]) || 0}`;
-      el.querySelector('.shots').textContent = done ? '⛳ IN' : `STR · tot ${(S.golf.totals && S.golf.totals[i]) || 0}`;
+      el.querySelector('.shots').textContent = done ? 'IN' : `STR · tot ${(S.golf.totals && S.golf.totals[i]) || 0}`;
       el.querySelector('.hpbar').style.display = 'none';
       el.classList.toggle('acting', !!S.playing && S.turn === i);
       el.classList.remove('dead');
@@ -906,9 +993,9 @@ function canAim() { return S.playing; }
 function updateDock() {
   const active = myTurn();
   $('turnLabel').textContent = S.golf
-    ? `⛳ Hole ${S.golf.hole}/9 · Par ${S.golf.par}` + (active ? ' — your shot' : (S.playing ? ` — ${S.names[S.turn]}` : ''))
+    ? `Hole ${S.golf.hole}/9 · Par ${S.golf.par}` + (active ? ' — your shot' : (S.playing ? ` — ${S.names[S.turn]}` : ''))
     : S.horde
-    ? `☠ ${S.horde.kills}/${S.horde.target} down · Wave ${S.horde.wave}` + (active ? ' — YOUR TURN' : (S.playing ? ` — ${S.names[S.turn]}` : ''))
+    ? `${S.horde.kills}/${S.horde.target} down · Wave ${S.horde.wave}` + (active ? ' — YOUR TURN' : (S.playing ? ` — ${S.names[S.turn]}` : ''))
     : active ? 'YOUR TURN' : (S.playing ? `${S.names[S.turn]}'s turn — line up your shot` : '');
   $('fireBtn').disabled = !active;
   $('moveLeft').disabled = !active || S.fuel < MOVE_MIN;
@@ -918,6 +1005,9 @@ function updateDock() {
 function buildWeaponStrip() {
   const strip = $('weaponStrip'); strip.innerHTML = '';
   for (const w of S.weapons) {
+    // Loadout matches: only your five picks, the everyone-nuke, and the
+    // supply-drop railgun make chips. Everything else stays out of the dock.
+    if (S.loadout && w.id !== 'nuke' && w.id !== 'railgun' && !S.loadout.includes(w.id)) continue;
     const left = S.ammo[w.id] ?? w.ammo;
     const chip = document.createElement('button');
     chip.dataset.wid = w.id;
@@ -1333,6 +1423,22 @@ function detonate(det) {
   // Teleport: no blast at all — the whole event IS the warp. Handled first so a
   // teleport det never falls into the round-particle burst-puff branch below.
   if (det.tp) { startWarp(det.tp); return; }
+  // Seismic Slam: no fireball — the EARTH convulses. Ground rings, rock chunks
+  // and a set of dust pillars via S.quakes; drawQuakes renders the columns.
+  if (S.anim && S.anim.m && S.anim.m.weapon === 'b_quake') {
+    S.rings.push({ x: det.x, y: det.y, r: det.r * 0.08, rMax: det.r * 2.6, age: 0, life: 0.75, color: '#c98a4b' });
+    S.rings.push({ x: det.x, y: det.y, r: det.r * 0.05, rMax: det.r * 1.5, age: 0, life: 0.5, color: '#ffd9a0' });
+    S.quakes.push({ x: det.x, y: det.y, r: det.r, age: 0, life: 0.95 });
+    for (let k = 0; k < 30; k++) {
+      const a = -Math.PI / 2 + (Math.random() - 0.5) * 1.9, sp = 300 + Math.random() * 900;
+      S.particles.push({ x: det.x + (Math.random() - 0.5) * det.r * 0.8, y: det.y,
+        vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 0.5 + Math.random() * 0.5, age: 0,
+        r: 2.2 + Math.random() * 3, g: 1.6, shape: 'rect', color: k % 3 ? '#7a5f3c' : '#4d3b22' });
+    }
+    S.shake = Math.max(S.shake, 26);
+    Audio.boom(det.r);
+    return;
+  }
   // Nano dart: a burst of cyan machine-chips instead of fire, and a warning on
   // the victim. The actual per-second bites arrive as 'dot' src:'nano' ticks.
   if (det.nano != null) {
@@ -1343,7 +1449,7 @@ function detonate(det) {
         shape: 'spark', color: k % 3 ? '#6be7ff' : '#ffffff' });
     }
     const vt = S.tanks[det.nano];
-    if (vt) S.floaters.push({ x: vt.x, y: vt.y - 430, text: '⚠ NANOBOTS ATTACHED', age: 0, life: 1.7, color: '#6be7ff' });
+    if (vt) S.floaters.push({ x: vt.x, y: vt.y - 430, text: 'NANOBOTS ATTACHED', age: 0, life: 1.7, color: '#6be7ff' });
     Audio.boom(200);
     return;
   }
@@ -1466,7 +1572,7 @@ function applyResolve(m) {
   if (m.golf) {
     S.golf = { ...(S.golf || {}), ...m.golf };
     const t = S.tanks[m.golf.noteSeat];
-    const NOTES = { holed: '⛳ SUNK IT!', hazard: 'HAZARD +1', oob: 'OUT OF BOUNDS +1', capped: 'PICKED UP' };
+    const NOTES = { holed: 'SUNK IT!', hazard: 'HAZARD +1', oob: 'OUT OF BOUNDS +1', capped: 'PICKED UP' };
     if (m.golf.note && t) S.floaters.push({ x: t.x, y: t.y - 420, text: NOTES[m.golf.note] || '', age: 0, life: 1.8, color: m.golf.note === 'holed' ? '#b6ff5a' : '#ffd23f' });
   }
   updateHud(); buildWeaponStrip();
@@ -1488,7 +1594,7 @@ function applyCrateTaken(m) {
   if (m.shield) S.shield = m.shield.slice();
   if (m.ammoSeat === S.you && m.ammo) { S.ammo = m.ammo; buildWeaponStrip(); }
   const t = S.tanks[m.seat];
-  if (t) S.floaters.push({ x: t.x, y: t.y - 380, text: (m.how === 'shot' ? '📦💥 ' : '📦 ') + (m.detail || m.kind.toUpperCase()), age: 0, life: 1.6, color: '#ffd23f' });
+  if (t) S.floaters.push({ x: t.x, y: t.y - 380, text: (m.how === 'shot' ? 'CRACKED OPEN: ' : 'SUPPLIES: ') + (m.detail || m.kind.toUpperCase()), age: 0, life: 1.6, color: '#ffd23f' });
   updateHud();
 }
 
@@ -2017,11 +2123,11 @@ function onGameOver(m) {
     return;
   }
   if (m.team) {                                  // team-mode verdicts (boss / horde)
-    if (S.mode === 'aliens' && m.team === 'players') { title = 'INVASION REPELLED! 🏆'; cls = 'win'; win = true; }
+    if (S.mode === 'aliens' && m.team === 'players') { title = 'INVASION REPELLED!'; cls = 'win'; win = true; }
     else if (S.mode === 'aliens' && m.team === 'horde') { title = 'The invasion overruns you'; cls = 'lose'; }
-    else if (S.mode === 'zombies' && m.team === 'players') { title = 'HORDE CLEARED! 🏆'; cls = 'win'; win = true; }
+    else if (S.mode === 'zombies' && m.team === 'players') { title = 'HORDE CLEARED!'; cls = 'win'; win = true; }
     else if (S.mode === 'zombies' && m.team === 'horde') { title = 'Consumed by the horde…'; cls = 'lose'; }
-    else if (m.team === 'players') { title = 'WARLORD-7 DESTROYED! 🏆'; cls = 'win'; win = true; }
+    else if (m.team === 'players') { title = 'WARLORD-7 DESTROYED!'; cls = 'win'; win = true; }
     else if (m.team === 'boss') { title = 'Your squad was wiped out'; cls = 'lose'; }
     else { title = 'Mutual destruction!'; cls = 'draw'; }
     Audio.chime(win);
@@ -2032,7 +2138,7 @@ function onGameOver(m) {
       for (let i = 0; i < S.n; i++) {
         if (i === S.boss) continue;
         rows.push(`<div class="br-row" style="--seat:${seatColor(i)}"><span class="br-name">${S.names[i] || ''}</span>` +
-          `<span class="br-stat">⚔ ${m.stats.dealt[i] || 0} dealt</span><span class="br-stat">🛡 ${m.stats.received[i] || 0} taken</span></div>`);
+          `<span class="br-stat">${UI_IC.sword} ${m.stats.dealt[i] || 0} dealt</span><span class="br-stat">${UI_IC.shieldIc} ${m.stats.received[i] || 0} taken</span></div>`);
       }
       const rep = document.createElement('div');
       rep.id = 'battleReport';
@@ -2042,11 +2148,11 @@ function onGameOver(m) {
     }
     // The spoils: felling the WARLORD unlocks the Midnight paint, permanently.
     if (m.loot && win) {
-      let lootLine = '💰 WAR SPOILS: salvage recovered';
+      let lootLine = `${UI_IC.coin} WAR SPOILS: salvage recovered`;
       try {
         if (localStorage.getItem('cc_loot_midnight') !== '1') {
           localStorage.setItem('cc_loot_midnight', '1');
-          lootLine = '💰 WAR SPOILS: <b>Midnight paint unlocked!</b>';
+          lootLine = `${UI_IC.coin} WAR SPOILS: <b>Midnight paint unlocked!</b>`;
         }
       } catch {}
       const lt = document.createElement('div');
@@ -2155,7 +2261,7 @@ function stepEffects(dt) {
   stepPlane(dt);
   // Supply crates float down on their chutes (~2.4s), purely cosmetic — the
   // server considers a crate collectable the moment it broadcasts it.
-  for (const c of S.crates) if (c.dropT < 1) c.dropT = Math.min(1, c.dropT + dt / 2.4);
+  for (const c of S.crates) if (c.dropT < 1) c.dropT = Math.min(1, c.dropT + dt / 4.6);
   // Staggered chain explosions from barrels/bunkers.
   if (S.chainQueue.length) {
     const now = performance.now();
@@ -2190,6 +2296,8 @@ function stepEffects(dt) {
   S.floaters = S.floaters.filter(f => f.age < f.life);
   for (const r of S.rings) r.age += dt;
   S.rings = S.rings.filter(r => r.age < r.life);
+  for (const q of S.quakes) q.age += dt;
+  S.quakes = S.quakes.filter(q => q.age < q.life);
   if (S.particles.length < 220) {
     for (const h of S.hazards) {
       if (h.type === 'fire') {
@@ -2281,6 +2389,7 @@ function draw() {
     drawProjectiles();
     drawMuzzleFlashes();      // over the gun and the shell, under damage numbers
     drawRings();
+    drawQuakes();
     drawParticles(false);     // soil chips + sparks — too small to ever hide a tank
     drawFloaters();
   }
@@ -2580,82 +2689,171 @@ function tankTilt(i, r) {
 // rail gun that follows its aim and shares the recoil spring. Drawn ~1.8x the
 // player silhouette to match its server hitbox scale.
 // ---------------------------------------------------------------------------
-const MECH = { dk: '#1d2127', mid: '#2c323b', lite: '#3f4752', trim: '#552e33', glow: '#ff3b30' };
+// The WARLORD-7 mecha-tank. Modelled on its concept art: a hunched armoured
+// carcass on QUAD track pods, desert digi-camo plating, a beaked sensor cowl,
+// one arm ending in a triple gatling cluster (this is the gun that follows its
+// aim) and the other in a raised missile-pod claw, a six-tube rocket rack on
+// its back — and a ridge of armour spikes down the spine, because it earned
+// them. Deterministic pixel-camo (no per-frame RNG), polygons and rects only.
+const MEK = {
+  tan: '#b3a175', dk: '#7e7050', pale: '#d7c89c', patch: '#665d42',
+  gun: '#3a3e35', dark: '#23262c', glow: '#ff3b30', steel: '#8d9298',
+};
+function camoPatch(x, y, w, h, seed) {
+  // stable two-tone digital camo: cell grid with a hash deciding each cell
+  const cols = 6, rows = 3;
+  for (let cy = 0; cy < rows; cy++) {
+    for (let cx = 0; cx < cols; cx++) {
+      const hsh = Math.abs((seed * 73856093) ^ (cx * 19349663) ^ (cy * 83492791)) % 100;
+      if (hsh < 26) ctx.fillStyle = MEK.patch;
+      else if (hsh < 44) ctx.fillStyle = MEK.pale;
+      else continue;
+      ctx.fillRect(x + (cx / cols) * w, y + (cy / rows) * h, w / cols * 0.86, h / rows * 0.8);
+    }
+  }
+}
 function drawMech(i) {
   if (!S.tanks[i]) return;
   let { sx, sy, r } = tankScreen(i);
   r *= 1.8;
-  const front = facingOf(i), dir = front;
+  const dir = facingOf(i);
   ctx.save();
 
-  // ground shadow
+  // ground shadow spanning both pods
   ctx.fillStyle = 'rgba(10,12,16,0.35)';
-  ctx.fillRect(sx - r * 1.5, sy - r * 0.04, r * 3.0, r * 0.12);
+  ctx.fillRect(sx - r * 1.75, sy - r * 0.04, r * 3.5, r * 0.12);
 
-  // tracked chassis
-  ctx.fillStyle = MECH.dk;
-  ctx.fillRect(sx - r * 1.45, sy - r * 0.5, r * 2.9, r * 0.5);
-  ctx.fillStyle = MECH.mid;
-  ctx.fillRect(sx - r * 1.3, sy - r * 0.62, r * 2.6, r * 0.18);
-  ctx.fillStyle = '#14171c';                                   // road wheels as dark sockets
-  for (let k = -2; k <= 2; k++) ctx.fillRect(sx + k * r * 0.52 - r * 0.12, sy - r * 0.34, r * 0.24, r * 0.24);
+  // QUAD tracks: two armoured pods, each a full track unit with skirt + wheels
+  for (const [px0, px1] of [[-1.7, -0.12], [0.12, 1.7]]) {
+    const x0 = sx + px0 * r, x1 = sx + px1 * r, w = x1 - x0;
+    ctx.fillStyle = MEK.dark;                                   // track run
+    ctx.fillRect(x0, sy - r * 0.42, w, r * 0.42);
+    ctx.fillStyle = '#14171c';                                  // road wheels
+    for (let k = 0; k < 3; k++) ctx.fillRect(x0 + w * (0.14 + k * 0.3), sy - r * 0.3, w * 0.16, r * 0.24);
+    ctx.fillStyle = MEK.tan;                                    // armoured skirt
+    ctx.fillRect(x0 - r * 0.06, sy - r * 0.66, w + r * 0.12, r * 0.3);
+    camoPatch(x0 - r * 0.06, sy - r * 0.66, w + r * 0.12, r * 0.3, 11 + px0 * 7);
+    ctx.fillStyle = MEK.dk;                                     // skirt lip
+    ctx.fillRect(x0 - r * 0.06, sy - r * 0.4, w + r * 0.12, r * 0.07);
+  }
 
-  // hydraulic struts up to the torso
-  ctx.strokeStyle = MECH.lite; ctx.lineWidth = Math.max(2, r * 0.14); ctx.lineCap = 'butt';
+  // hull deck bridging the pods
+  ctx.fillStyle = MEK.dk;
+  ctx.fillRect(sx - r * 1.2, sy - r * 0.86, r * 2.4, r * 0.26);
+
+  // hunched torso: a big beaked carcass leaning over its facing
+  const lean = dir * r * 0.16;
+  ctx.fillStyle = MEK.tan;
   ctx.beginPath();
-  ctx.moveTo(sx - r * 0.8, sy - r * 0.6); ctx.lineTo(sx - r * 0.45, sy - r * 1.15);
-  ctx.moveTo(sx + r * 0.8, sy - r * 0.6); ctx.lineTo(sx + r * 0.45, sy - r * 1.15);
-  ctx.stroke();
-
-  // torso — angular armoured block
-  ctx.fillStyle = MECH.mid;
-  ctx.beginPath();
-  ctx.moveTo(sx - r * 1.05, sy - r * 1.1);
-  ctx.lineTo(sx + r * 1.05, sy - r * 1.1);
-  ctx.lineTo(sx + r * 0.85, sy - r * 1.95);
-  ctx.lineTo(sx - r * 0.85, sy - r * 1.95);
+  ctx.moveTo(sx - r * 1.0 + lean * 0.2, sy - r * 0.84);              // rear hip
+  ctx.lineTo(sx - r * 1.16 + lean, sy - r * 1.9);                    // rear shoulder hump
+  ctx.lineTo(sx - r * 0.3 + lean, sy - r * 2.42);                    // spine crest
+  ctx.lineTo(sx + r * 0.62 + lean, sy - r * 2.3);                    // brow
+  ctx.lineTo(sx + r * 1.12 + lean, sy - r * 1.72);                   // beak tip
+  ctx.lineTo(sx + r * 0.78 + lean, sy - r * 1.34);                   // jaw
+  ctx.lineTo(sx + r * 0.88 + lean * 0.4, sy - r * 0.84);             // front hip
   ctx.closePath(); ctx.fill();
-  ctx.fillStyle = MECH.lite;                                    // glacis highlight
-  ctx.fillRect(sx - r * 0.85 * dir - (dir > 0 ? 0 : 0), sy - r * 1.95, r * 0.22 * dir, r * 0.85);
-  ctx.fillStyle = MECH.trim;                                    // warning chevrons
-  for (let k = 0; k < 3; k++) ctx.fillRect(sx - r * 0.45 + k * r * 0.34, sy - r * 1.32, r * 0.2, r * 0.1);
+  camoPatch(sx - r * 1.05 + lean, sy - r * 2.3, r * 1.9, r * 1.3, 29);
+  ctx.fillStyle = MEK.dk;                                            // underbelly shade
+  ctx.fillRect(sx - r * 0.98 + lean * 0.5, sy - r * 1.06, r * 1.8, r * 0.22);
 
-  // head + eye slit (glows toward its facing)
-  ctx.fillStyle = MECH.dk;
-  ctx.fillRect(sx - r * 0.5, sy - r * 2.35, r * 1.0, r * 0.42);
-  ctx.fillStyle = MECH.glow;
-  ctx.fillRect(sx - r * 0.34 + dir * r * 0.1, sy - r * 2.24, r * 0.62, Math.max(1.5, r * 0.09));
-  ctx.fillStyle = 'rgba(255,90,82,0.28)';                       // eye bloom
-  ctx.fillRect(sx - r * 0.44 + dir * r * 0.1, sy - r * 2.3, r * 0.86, r * 0.22);
+  // beak cowl plating + eye visor (glows toward its facing)
+  ctx.fillStyle = MEK.dk;
+  ctx.beginPath();
+  ctx.moveTo(sx + r * 0.3 + lean, sy - r * 2.3);
+  ctx.lineTo(sx + r * 1.12 + lean, sy - r * 1.72);
+  ctx.lineTo(sx + r * 0.78 + lean, sy - r * 1.34);
+  ctx.lineTo(sx + r * 0.34 + lean, sy - r * 1.78);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = MEK.glow;
+  ctx.fillRect(sx + r * (0.4 + 0.1 * dir) + lean, sy - r * 2.02, r * 0.42, Math.max(1.5, r * 0.09));
+  ctx.fillStyle = 'rgba(255,90,82,0.28)';
+  ctx.fillRect(sx + r * (0.32 + 0.1 * dir) + lean, sy - r * 2.1, r * 0.62, r * 0.24);
 
-  // shoulder missile rack on the back side
-  const bx = sx - dir * r * 0.95;
-  ctx.fillStyle = MECH.mid;
-  ctx.fillRect(bx - r * 0.42, sy - r * 2.5, r * 0.84, r * 0.55);
+  // SPIKES along the spine crest — the trophy ridge
+  ctx.fillStyle = MEK.dark;
+  for (let k = 0; k < 5; k++) {
+    const t = k / 4;
+    const bx = sx + (-1.06 + t * 1.28) * r + lean;
+    const by = sy - r * (1.94 + Math.sin(t * Math.PI) * 0.5);
+    const hgt = r * (0.34 + (k % 2) * 0.14);
+    ctx.beginPath();
+    ctx.moveTo(bx - r * 0.09, by);
+    ctx.lineTo(bx + r * 0.02 * (k % 2 ? 1 : -1), by - hgt);
+    ctx.lineTo(bx + r * 0.11, by);
+    ctx.closePath(); ctx.fill();
+  }
+
+  // back rocket rack: 2x3 tube block on the rear shoulder
+  const rkx = sx - dir * r * 1.05 + lean * 0.4, rky = sy - r * 2.06;
+  ctx.fillStyle = MEK.dk;
+  ctx.fillRect(rkx - r * 0.44, rky, r * 0.88, r * 0.6);
+  camoPatch(rkx - r * 0.44, rky, r * 0.88, r * 0.6, 47);
   ctx.fillStyle = '#0f1216';
-  for (let k = 0; k < 3; k++) ctx.fillRect(bx - r * 0.3 + k * r * 0.24, sy - r * 2.42, r * 0.16, r * 0.16);
-  ctx.fillStyle = MECH.trim;
-  ctx.fillRect(bx - r * 0.42, sy - r * 2.0, r * 0.84, r * 0.06);
+  for (let ry = 0; ry < 2; ry++)
+    for (let rx = 0; rx < 3; rx++)
+      ctx.fillRect(rkx - r * 0.34 + rx * r * 0.26, rky + r * 0.08 + ry * r * 0.26, r * 0.18, r * 0.18);
 
-  // spinal rail gun — same aim/recoil conventions as drawTank, tilt-free
+  // missile-pod ARM on the off side: raised claw pod, cells forward
+  const pax = sx - dir * r * 0.55 + lean * 0.3;
+  ctx.strokeStyle = MEK.dk; ctx.lineWidth = Math.max(3, r * 0.2); ctx.lineCap = 'butt';
+  ctx.beginPath(); ctx.moveTo(pax, sy - r * 1.7); ctx.lineTo(pax - dir * r * 0.5, sy - r * 1.15); ctx.stroke();
+  ctx.fillStyle = MEK.tan;
+  ctx.fillRect(pax - dir * r * 0.94, sy - r * 1.5, r * 0.78, r * 0.62);
+  camoPatch(pax - dir * r * 0.94, sy - r * 1.5, r * 0.78, r * 0.62, 61);
+  ctx.fillStyle = '#0f1216';
+  for (let k = 0; k < 2; k++)
+    for (let j = 0; j < 2; j++)
+      ctx.fillRect(pax - dir * r * (0.84 - k * 0.3), sy - r * (1.4 - j * 0.28), r * 0.18, r * 0.18);
+
+  // GATLING ARM on the facing side — this is the gun that tracks its aim
   const aim = S.aim[i] || { angle: 45, power: 60 };
   const rad = aim.angle * Math.PI / 180;
   const cosA = Math.cos(rad) * dir, sinA = -Math.sin(rad);
-  const px = sx + dir * r * 0.47, py = sy - r * 1.86;
-  const rc = S.recoil[i] || 0;
-  const bLen = r * 1.5 - r * 0.5 * Math.pow(rc, 1.8);
-  ctx.strokeStyle = MECH.lite; ctx.lineWidth = Math.max(3, r * 0.22);
-  ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px + cosA * bLen, py + sinA * bLen); ctx.stroke();
-  ctx.strokeStyle = MECH.glow; ctx.lineWidth = Math.max(1, r * 0.06);       // rail charge line
+  const gx0 = sx + dir * r * 0.62 + lean, gy0 = sy - r * 1.5;
+  const rc = Math.pow(S.recoil[i] || 0, 1.8);
+  const bLen = r * (1.35 - 0.4 * rc);
+  ctx.strokeStyle = MEK.dk; ctx.lineWidth = Math.max(3, r * 0.22);   // shoulder actuator
+  ctx.beginPath(); ctx.moveTo(sx + dir * r * 0.3 + lean, sy - r * 1.8); ctx.lineTo(gx0, gy0); ctx.stroke();
+  // triple rotary barrels: three parallel lines splaying from the hub
+  const perpX = -sinA * dir, perpY = cosA * dir;   // unit-ish perpendicular
+  for (let k = -1; k <= 1; k++) {
+    ctx.strokeStyle = k === 0 ? MEK.steel : MEK.gun;
+    ctx.lineWidth = Math.max(2, r * 0.1);
+    ctx.beginPath();
+    ctx.moveTo(gx0 + perpX * k * r * 0.09, gy0 + perpY * k * r * 0.09);
+    ctx.lineTo(gx0 + cosA * bLen + perpX * k * r * 0.09, gy0 + sinA * bLen + perpY * k * r * 0.09);
+    ctx.stroke();
+  }
+  ctx.fillStyle = MEK.gun;                                           // gatling hub
+  ctx.fillRect(gx0 - r * 0.17, gy0 - r * 0.17, r * 0.34, r * 0.34);
+  ctx.strokeStyle = MEK.dark; ctx.lineWidth = Math.max(3, r * 0.26); // muzzle shroud
   ctx.beginPath();
-  ctx.moveTo(px + cosA * r * 0.2, py + sinA * r * 0.2);
-  ctx.lineTo(px + cosA * bLen * 0.92, py + sinA * bLen * 0.92);
+  ctx.moveTo(gx0 + cosA * (bLen - r * 0.05), gy0 + sinA * (bLen - r * 0.05));
+  ctx.lineTo(gx0 + cosA * (bLen + r * 0.16), gy0 + sinA * (bLen + r * 0.16));
   ctx.stroke();
-  ctx.strokeStyle = MECH.dk; ctx.lineWidth = Math.max(4, r * 0.34);         // muzzle housing
-  ctx.beginPath();
-  ctx.moveTo(px + cosA * (bLen - r * 0.02), py + sinA * (bLen - r * 0.02));
-  ctx.lineTo(px + cosA * (bLen + r * 0.22), py + sinA * (bLen + r * 0.22));
-  ctx.stroke();
+
+  // wind-up: between the WARLORD's aim and its shot, energy visibly gathers on
+  // the gatling hub — cyan for the Phase Spear, furnace-orange for the rest.
+  if (S.bossCharge && i === S.boss) {
+    const t = Math.min(1, (performance.now() - S.bossCharge.t0) / 1400);
+    const col = S.bossCharge.weapon === 'b_spear' ? '#8affde' : '#ffb84d';
+    const mzx = gx0 + cosA * bLen, mzy = gy0 + sinA * bLen;
+    ctx.strokeStyle = col; ctx.lineWidth = Math.max(1, r * 0.06);
+    for (let k = 0; k < 6; k++) {
+      const a2 = (performance.now() / 130 + k * 1.05) % (Math.PI * 2);
+      const rr = r * (0.62 - 0.34 * t);
+      ctx.globalAlpha = 0.25 + 0.6 * t;
+      ctx.beginPath();
+      ctx.moveTo(mzx + Math.cos(a2) * rr, mzy + Math.sin(a2) * rr);
+      ctx.lineTo(mzx + Math.cos(a2) * rr * 0.35, mzy + Math.sin(a2) * rr * 0.35);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 0.2 + 0.5 * t;
+    ctx.fillStyle = col;
+    ctx.fillRect(mzx - r * 0.09, mzy - r * 0.09, r * 0.18, r * 0.18);
+    ctx.globalAlpha = 1;
+  }
 
   ctx.restore();
 }
@@ -3373,8 +3571,13 @@ function drawCrates() {
   const KIND_COL = { railgun: '#3ce88f', ammo: '#ffd23f', shield: '#54c8ff', repair: '#b6ff5a' };
   for (const c of S.crates) {
     const t = c.dropT ?? 1;
-    const ease = 1 - Math.pow(1 - t, 2.2);                       // decelerating fall
-    const wy = c.y - (1 - ease) * 3600;
+    const ease = 1 - Math.pow(1 - t, 1.6);                       // decelerating fall
+    // The chute rides down from the VERY top of the world (y=300 is above every
+    // peak), and a landed crate reads the terrain LIVE — if the ground under it
+    // is blasted away or heaped up, the box rides the new surface and can never
+    // end up buried.
+    const grounded = surfaceAt(c.x);
+    const wy = t >= 1 ? grounded : 300 + ease * (grounded - 300);
     const sx = wx2s(c.x), sy = wy2s(wy);
     if (sx < -90 || sx > view.cssW + 90) continue;
     const u = Math.max(8, Math.min(17, 250 * cam.zoom));         // crate half-size px
@@ -3411,17 +3614,40 @@ function drawCrates() {
     for (const [cxk, cyk] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
       ctx.fillRect(bx0 + cxk * (bw - u * 0.34), by0 + cyk * (bh - u * 0.34), u * 0.34, u * 0.34);
     }
-    // stencilled star
+    // Contents stencil — read what's inside from across the canyon: a cross
+    // for repairs, a shield chevron, a rail slug, or a fan of shells.
     ctx.fillStyle = 'rgba(240,240,235,0.92)';
-    const stx = sx - bw * 0.06, sty = by0 + bh * 0.46, sr = u * 0.42;
-    ctx.beginPath();
-    for (let k = 0; k < 10; k++) {
-      const a = -Math.PI / 2 + (k * Math.PI) / 5;
-      const rr = k % 2 === 0 ? sr : sr * 0.45;
-      const px2 = stx + Math.cos(a) * rr, py2 = sty + Math.sin(a) * rr;
-      k === 0 ? ctx.moveTo(px2, py2) : ctx.lineTo(px2, py2);
+    ctx.strokeStyle = 'rgba(240,240,235,0.92)';
+    const gx = sx - bw * 0.06, gy2 = by0 + bh * 0.44, gr = u * 0.5;
+    if (c.kind === 'repair') {
+      ctx.fillRect(gx - gr * 0.3, gy2 - gr, gr * 0.6, gr * 2);
+      ctx.fillRect(gx - gr, gy2 - gr * 0.3, gr * 2, gr * 0.6);
+    } else if (c.kind === 'shield') {
+      ctx.lineWidth = Math.max(1.5, u * 0.16);
+      ctx.beginPath();
+      ctx.moveTo(gx, gy2 - gr);
+      ctx.lineTo(gx + gr * 0.9, gy2 - gr * 0.45);
+      ctx.lineTo(gx + gr * 0.9, gy2 + gr * 0.2);
+      ctx.lineTo(gx, gy2 + gr);
+      ctx.lineTo(gx - gr * 0.9, gy2 + gr * 0.2);
+      ctx.lineTo(gx - gr * 0.9, gy2 - gr * 0.45);
+      ctx.closePath(); ctx.stroke();
+    } else if (c.kind === 'railgun') {
+      ctx.fillRect(gx - gr, gy2 - gr * 0.17, gr * 1.5, gr * 0.34);
+      ctx.beginPath();
+      ctx.moveTo(gx + gr * 0.45, gy2 - gr * 0.38); ctx.lineTo(gx + gr, gy2); ctx.lineTo(gx + gr * 0.45, gy2 + gr * 0.38);
+      ctx.closePath(); ctx.fill();
+      ctx.fillRect(gx - gr, gy2 - gr * 0.62, gr * 0.85, Math.max(1, u * 0.09));
+      ctx.fillRect(gx - gr, gy2 + gr * 0.53, gr * 0.85, Math.max(1, u * 0.09));
+    } else {                                                     // ammo
+      for (let k = -1; k <= 1; k++) {
+        const cx2 = gx + k * gr * 0.6;
+        ctx.fillRect(cx2 - gr * 0.15, gy2 - gr * 0.25, gr * 0.3, gr * 1.0);
+        ctx.beginPath();
+        ctx.moveTo(cx2 - gr * 0.15, gy2 - gr * 0.25); ctx.lineTo(cx2, gy2 - gr * 0.72); ctx.lineTo(cx2 + gr * 0.15, gy2 - gr * 0.25);
+        ctx.closePath(); ctx.fill();
+      }
     }
-    ctx.closePath(); ctx.fill();
     ctx.fillStyle = KIND_COL[c.kind] || '#ffd23f';               // contents tag
     ctx.fillRect(bx0, by0 + bh - Math.max(2, u * 0.34), bw, Math.max(2, u * 0.34));
     // Ground marker once landed so a distant crate is spottable.
@@ -3929,6 +4155,61 @@ const ORD = {
     ctx.fillRect(-0.16 * R, -0.24 * R, 0.11 * R, 0.48 * R);
     oPoly('#8a93a8', 0.98 * R, -0.30 * R, 1.38 * R, 0, 0.98 * R, 0.30 * R);
   },
+  // ---- WARLORD ordnance ---------------------------------------------------------
+  // Shredder Storm: a fat sawtooth tracer with a heat halo. Reads as a wall of
+  // metal even at speed.
+  bossslug(R) {
+    ctx.globalAlpha = 0.35;
+    oPoly('#ffb84d', -2.2 * R, -0.34 * R, 0.9 * R, -0.34 * R, 0.9 * R, 0.34 * R, -2.2 * R, 0.34 * R);
+    ctx.globalAlpha = 1;
+    oPoly('#8a6a3a', -1.3 * R, -0.3 * R, 0.7 * R, -0.3 * R, 1.25 * R, 0, 0.7 * R, 0.3 * R, -1.3 * R, 0.3 * R);
+    oPoly('#ffe9c4', -0.8 * R, -0.12 * R, 0.85 * R, -0.12 * R, 1.1 * R, 0, 0.85 * R, 0.12 * R, -0.8 * R, 0.12 * R);
+    oPoly('#ffb84d', -1.55 * R, -0.2 * R, -1.3 * R, 0, -1.55 * R, 0.2 * R);
+  },
+  // Hellstorm: a finned rocket riding its own exhaust; the flame flickers with
+  // the playback position so a rack of eight never strobes in unison.
+  bossmissile(R, pos) {
+    const fl = 0.7 + 0.3 * Math.sin((pos || 0) * 1.7);
+    oPoly('#ff9d3d', -2.1 * R * fl, -0.16 * R, -1.15 * R, -0.3 * R, -1.15 * R, 0.3 * R, -2.1 * R * fl, 0.16 * R);
+    oPoly('#ffe2b0', -1.7 * R * fl, -0.08 * R, -1.15 * R, -0.16 * R, -1.15 * R, 0.16 * R, -1.7 * R * fl, 0.08 * R);
+    oPoly('#5d4a35', -1.2 * R, -0.62 * R, -0.7 * R, -0.24 * R, -1.2 * R, -0.24 * R);
+    oPoly('#5d4a35', -1.2 * R, 0.62 * R, -0.7 * R, 0.24 * R, -1.2 * R, 0.24 * R);
+    oOgive(-1.2 * R, 0.5 * R, 1.3 * R, 0.26 * R, '#b8a888');
+    ctx.fillStyle = '#7d3b1e'; ctx.fillRect(-0.2 * R, -0.26 * R, 0.4 * R, 0.52 * R);
+  },
+  // Magma Spew: the shell is a cracked slag boulder, the gobs are molten teeth.
+  magmashell(R) {
+    oPoly('#3a2c26', -1.1 * R, -0.3 * R, -0.45 * R, -0.85 * R, 0.5 * R, -0.7 * R, 1.1 * R, 0, 0.55 * R, 0.8 * R, -0.6 * R, 0.65 * R);
+    ctx.strokeStyle = '#ff6a3d'; ctx.lineWidth = Math.max(1, R * 0.14);
+    ctx.beginPath();
+    ctx.moveTo(-0.7 * R, -0.2 * R); ctx.lineTo(0.1 * R, 0.05 * R); ctx.lineTo(0.7 * R, -0.3 * R);
+    ctx.moveTo(-0.2 * R, 0.6 * R); ctx.lineTo(0.05 * R, 0.02 * R);
+    ctx.stroke();
+  },
+  magmagob(R) {
+    oPoly('#ff6a3d', -0.95 * R, 0, -0.4 * R, -0.7 * R, 0.5 * R, -0.55 * R, 0.95 * R, 0.1 * R, 0.3 * R, 0.75 * R, -0.5 * R, 0.55 * R);
+    oPoly('#ffd9a0', -0.4 * R, -0.2 * R, 0.25 * R, -0.25 * R, 0.4 * R, 0.2 * R, -0.2 * R, 0.3 * R);
+  },
+  // Phase Spear: a long coherent energy dart with after-images phasing behind it.
+  phasespear(R) {
+    const k = 0.6 + 0.4 * Math.sin(performance.now() / 70);
+    ctx.globalAlpha = 0.22;
+    oPoly('#8affde', -3.4 * R, -0.14 * R, -1.2 * R, -0.14 * R, -1.2 * R, 0.14 * R, -3.4 * R, 0.14 * R);
+    ctx.globalAlpha = 0.45;
+    oPoly('#8affde', -2.4 * R, -0.2 * R, -0.6 * R, -0.2 * R, -0.6 * R, 0.2 * R, -2.4 * R, 0.2 * R);
+    ctx.globalAlpha = 1;
+    oPoly('#37e0b0', -1.6 * R, -0.24 * R, 1.7 * R, 0, -1.6 * R, 0.24 * R);
+    oPoly(`rgba(235,255,250,${k})`, -0.8 * R, -0.1 * R, 1.5 * R, 0, -0.8 * R, 0.1 * R);
+  },
+  // Seismic Slam: a blunt piledriver — all mass, no grace.
+  quakehammer(R) {
+    oTail(-1.5 * R, -0.8 * R, 0.6 * R, '#5d4a35');
+    ctx.fillStyle = '#8a7458'; ctx.fillRect(-0.9 * R, -0.5 * R, 1.5 * R, R);
+    ctx.fillStyle = '#c9b391'; ctx.fillRect(-0.9 * R, -0.5 * R, 1.5 * R, 0.3 * R);
+    ctx.fillStyle = '#3b3227'; ctx.fillRect(0.6 * R, -0.66 * R, 0.55 * R, 1.32 * R);
+    ctx.fillStyle = '#c98a4b'; ctx.fillRect(0.28 * R, -0.5 * R, 0.18 * R, R);
+  },
+
   // ---- Horde ordnance ---------------------------------------------------------
   // Plasma Bolt: a green energy shard — nested diamonds with a pulsing core.
   plasma(R) {
@@ -4006,12 +4287,12 @@ function ordnanceKind(A, pr) {
   if (w === 'airstrike') return 'bomb';
   if (w === 'cluster')   return pr.delay > 0 ? 'bomblet'  : 'cluster';
   if (w === 'napalm')    return pr.delay > 0 ? 'firebomb' : 'napalm';
-  // The WARLORD's kit borrows the matching player ordnance art.
-  if (w === 'b_twin')    return 'cannon';
-  if (w === 'b_barrage') return 'volley';
-  if (w === 'b_flame')   return pr.delay > 0 ? 'firebomb' : 'napalm';
-  if (w === 'b_lance')   return 'railgun';
-  if (w === 'b_quake')   return 'buster';
+  // The WARLORD's arsenal is all its own — nothing borrowed from the players.
+  if (w === 'b_gatling')   return 'bossslug';
+  if (w === 'b_hellstorm') return 'bossmissile';
+  if (w === 'b_magma')     return pr.delay > 0 ? 'magmagob' : 'magmashell';
+  if (w === 'b_spear')     return 'phasespear';
+  if (w === 'b_quake')     return 'quakehammer';
   // Horde kits get their own silhouettes so alien/zombie fire reads on-theme.
   if (w === 'a_plasma')  return 'plasma';
   if (w === 'a_pods')    return pr.delay > 0 ? 'spore' : 'podshell';
@@ -4022,9 +4303,11 @@ function ordnanceKind(A, pr) {
   return ORD[w] ? w : 'cannon';          // cannon is the sensible default round
 }
 const ORD_SCALE = { nuke: 1.30, mortar: 1.12, buster: 1.10, bomb: 0.92, firebomb: 0.85, bomblet: 0.72,
-                    spore: 0.70, grub: 0.62, corpse: 1.18, podshell: 1.05, grubsack: 1.05 };
+                    spore: 0.70, grub: 0.62, corpse: 1.18, podshell: 1.05, grubsack: 1.05,
+                    bossslug: 0.85, bossmissile: 1.15, magmashell: 1.05, magmagob: 0.8, phasespear: 1.25, quakehammer: 1.35 };
 const ORD_SPIN  = { bomblet: 0.16, firebomb: 0.10, wall: 0.07,
-                    spore: 0.12, grub: 0.22, corpse: 0.09, grubsack: 0.08 };   // radians per path point
+                    spore: 0.12, grub: 0.22, corpse: 0.09, grubsack: 0.08,
+                    magmagob: 0.15 };   // radians per path point
 const ORD_TRAIL = {
   golfball: 'rgba(244,246,242,.5)',
   nano: 'rgba(107,231,255,.65)',
@@ -4035,6 +4318,8 @@ const ORD_TRAIL = {
   wall: 'rgba(160,120,70,.45)', teleport: 'rgba(200,107,255,.55)', nuke: 'rgba(182,255,90,.5)',
   a_plasma: 'rgba(125,255,106,.65)', a_pods: 'rgba(176,107,255,.5)', a_lance: 'rgba(255,107,240,.7)',
   z_spit: 'rgba(157,222,75,.55)', z_grubs: 'rgba(196,179,106,.45)', z_lob: 'rgba(122,138,74,.5)',
+  b_gatling: 'rgba(255,184,77,.75)', b_hellstorm: 'rgba(255,157,61,.6)', b_magma: 'rgba(255,106,61,.6)',
+  b_spear: 'rgba(138,255,222,.85)', b_quake: 'rgba(201,138,75,.55)',
 };
 
 // Heading straight off the server's path — the client never decides anything.
@@ -4111,6 +4396,29 @@ function projPos(pr) {
   const i = Math.floor(pr.pos), f = pr.pos - i;
   if (i >= path.length - 1) return { x: path[path.length - 1][0], y: path[path.length - 1][1] };
   return { x: path[i][0] * (1 - f) + path[i + 1][0] * f, y: path[i][1] * (1 - f) + path[i + 1][1] * f };
+}
+
+// Seismic Slam aftermath: columns of dust and shattered rock heaving out of
+// the ground, then sagging back. Rectangles and polygons only — house rule.
+function drawQuakes() {
+  for (const q of S.quakes) {
+    const k = q.age / q.life;                       // 0 → 1 over the effect
+    const up = Math.sin(Math.min(1, k * 1.6) * Math.PI);  // rise fast, settle slow
+    const gy = wy2s(surfaceAt(q.x));
+    for (let c = -3; c <= 3; c++) {
+      const wx = q.x + c * q.r * 0.28;
+      const sx = wx2s(wx);
+      const jag = 0.7 + ((Math.abs(c * 2654435761) % 97) / 97) * 0.6;   // stable per column
+      const h = Math.max(0, up * q.r * 0.5 * jag * (1 - Math.abs(c) * 0.18)) * cam.zoom;
+      const w = Math.max(2, q.r * 0.11 * cam.zoom);
+      ctx.globalAlpha = (1 - k) * 0.85;
+      ctx.fillStyle = c % 2 ? '#6b543a' : '#87683f';
+      ctx.fillRect(sx - w / 2, gy - h, w, h);
+      ctx.fillStyle = '#c9b391';
+      ctx.fillRect(sx - w / 2, gy - h, w, Math.max(1.5, h * 0.12));
+    }
+    ctx.globalAlpha = 1;
+  }
 }
 
 function drawRings() {
@@ -4255,7 +4563,7 @@ function boot() {
   if (hadName) $('nameInput').value = savedName();
   else setCallsign(rollCallsign(null));
   applyOrientPref();
-  $('muteBtn').textContent = Audio.muted ? '🔇' : '🔊';
+  $('muteBtn').innerHTML = Audio.muted ? UI_IC.speakerOff : UI_IC.speakerOn;
   buildSkinRow();
   const params = new URLSearchParams(location.search);
   const room = params.get('room');

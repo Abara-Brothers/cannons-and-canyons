@@ -58,7 +58,7 @@ input:focus { outline: 2px solid var(--accent); border-color: transparent; }
 /* Scrollable so nothing is ever clipped on short screens; `safe center` keeps it
    centered when it fits but falls back to top-aligned (never cuts off the top)
    when the card is taller than the viewport. Safe-area padding clears notches. */
-#home, #lobby {
+#lobby {
   align-items: center;
   justify-content: safe center;
   overflow-y: auto;
@@ -192,11 +192,6 @@ body.in-game .bg-canyon { display: none; }
 }
 
 /* ---- Card composition ---------------------------------------------------- */
-#home .home-card { max-width: 440px; background: rgba(20,27,51,.86); backdrop-filter: blur(10px); }
-#home .hero    { display: flex; flex-direction: column; gap: 5px; }
-#home .deck    { display: flex; flex-direction: column; gap: 9px; }
-#home .loadout { display: flex; flex-direction: column; gap: 8px; text-align: left; }
-#home .tagline { margin: 4px 0 2px; }
 
 /* ---- Callsign field ------------------------------------------------------ */
 .callsign {
@@ -257,7 +252,6 @@ body.in-game .bg-canyon { display: none; }
 /* ---- Loadout strip ------------------------------------------------------- */
 .opt-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: .16em; color: var(--muted); }
 .optline { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-#home .skinrow { flex-wrap: wrap; }
 .orientrow { display: flex; gap: 6px; flex: 0 0 auto; }
 .orient {
   appearance: none; cursor: pointer; padding: 8px 11px; border-radius: 10px;
@@ -522,62 +516,14 @@ body.in-game .bg-canyon { display: none; }
 }
 
 /* ==========================================================================
-   TITLE SCREEN — LANDSCAPE
-   Two orthogonal queries on purpose: WIDTH decides the two-column poster
-   layout, HEIGHT decides the vertical compaction. #home keeps overflow-y:auto
-   and `justify-content: safe center` throughout — if any of this still
-   overflows a very short screen, it scrolls exactly as it does today.
+   TITLE SCREEN — LANDSCAPE (lobby only; the home dashboard sizes itself with
+   vh-clamps further down and never scrolls)
    ========================================================================== */
-@media (orientation: landscape) and (min-width: 640px) {
-  #home .home-card {
-    max-width: 860px;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.06fr);
-    grid-template-areas: "hero deck"
-                         "load deck";
-    align-items: start; gap: 10px 20px;
-  }
-  #home .hero    { grid-area: hero; text-align: left; }
-  #home .loadout { grid-area: load; align-self: end; }
-  #home .deck    { grid-area: deck; }
-  #home .gtitle      { justify-content: flex-start; }
-  #home .title-rule  { margin-left: 0; margin-right: auto; }
-}
-
 @media (orientation: landscape) and (max-height: 600px) {
-  #home, #lobby {
+  #lobby {
     padding-top: max(10px, env(safe-area-inset-top));
     padding-bottom: max(10px, env(safe-area-inset-bottom));
   }
-  #home .home-card       { padding: 14px 16px; gap: 8px 18px; border-radius: 18px; }
-  #home .gtitle          { font-size: clamp(24px, 4.6vw, 34px); }
-  #home .title-rule      { margin-top: 6px; height: 2px; }
-  #home .byline          { font-size: 9.5px; letter-spacing: .2em; }
-  #home .tagline         { font-size: 12.5px; margin: 2px 0 0; }
-  #home .callsign        { margin-top: 6px; padding: 3px 4px 3px 11px; }
-  #home .callsign input  { padding: 5px 0; font-size: 15.5px; }
-  #home .reroll          { width: 34px; height: 34px; }
-  #home .reroll svg      { width: 17px; height: 17px; }
-  #home .playdeck        { gap: 7px; }
-  #home .playcard        { padding: 8px 11px; gap: 9px; }
-  #home .tile.hot .playcard { padding: 10px 11px; }
-  #home .playcard .pc-ico   { width: 28px; height: 28px; border-radius: 8px; }
-  #home .playcard .pc-ico svg { width: 17px; height: 17px; }
-  #home .playcard .pc-txt b { font-size: 14.5px; }
-  #home .tile.hot .pc-txt b { font-size: 16px; }
-  #home .playcard .pc-txt i { font-size: 10.5px; }
-  #home .tile .suboptions   { padding: 0 8px 8px; gap: 5px; }
-  #home .mode, #home .cnt   { padding: 7px 0; font-size: 12px; }
-  #home .diff               { padding: 6px 0; font-size: 11.5px; }
-  #home .or                 { margin: 2px 0; font-size: 11px; }
-  #home .code-input         { font-size: 17px; padding: 9px; letter-spacing: .28em; }
-  #home .join-row .btn      { padding: 9px 14px; font-size: 14px; }
-  #home .error              { min-height: 14px; font-size: 12px; }
-  #home .swatch             { width: 28px; height: 28px; }
-  #home .orient             { padding: 6px 9px; font-size: 11px; }
-  /* The footnote repeats what the game itself teaches in the first 5 seconds —
-     drop it here to buy back a row. */
-  #home .footnote           { display: none; }
 }
 
 /* ---------- Artillery Golf ---------- */
@@ -626,3 +572,166 @@ body.golf .fuel { display: none; }
 .hw-name { font-weight: 700; font-size: 13px; }
 .hw-name i { display: block; font-style: normal; font-weight: 400; font-size: 10.5px; color: #8a93a8; }
 .hw-desc { font-size: 12.5px; line-height: 1.4; color: var(--ink-dim, #c5cde0); }
+
+/* ---- Home dashboard 2.0 -------------------------------------------------------
+   Three fixed bands (head / main / foot) sized with vh-clamps so the whole
+   thing ALWAYS fits the viewport. #home never scrolls — that is the contract. */
+#home { overflow: hidden; padding: 0; }
+.hs {
+  width: 100%; height: 100%; min-height: 0;
+  max-width: 1100px; margin: 0 auto;
+  display: flex; flex-direction: column;
+  gap: clamp(6px, 1.5vh, 14px);
+  padding: calc(env(safe-area-inset-top) + clamp(8px, 2vh, 20px))
+           max(clamp(10px, 3vw, 28px), env(safe-area-inset-right))
+           calc(env(safe-area-inset-bottom) + clamp(6px, 1.5vh, 14px))
+           max(clamp(10px, 3vw, 28px), env(safe-area-inset-left));
+}
+
+/* Band 1: brand + identity */
+.hs-head { display: flex; align-items: center; justify-content: space-between; gap: 10px 18px; flex-wrap: wrap; }
+.hs-title { font-size: clamp(20px, 5.2vh, 40px); justify-content: flex-start; }
+.hs-by { margin: 2px 0 0; font-size: clamp(8px, 1.3vh, 11px); color: var(--muted); text-transform: uppercase; letter-spacing: .26em; }
+.hs-by b { color: var(--primary); font-weight: 800; }
+.hs-id { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.hs-cs {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px;
+  padding: clamp(4px, 0.9vh, 8px) 10px;
+}
+.hs-cs:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(84,200,255,.22); }
+.hs-cs-label { font-size: 10px; text-transform: uppercase; letter-spacing: .18em; color: var(--muted); }
+.hs-cs input { border: 0; background: transparent; padding: 2px 0; width: clamp(110px, 16vw, 170px); font-weight: 700; font-size: clamp(13px, 1.9vh, 16px); }
+.hs-cs input:focus { outline: none; }
+.hs-reroll { border: 0; background: transparent; color: var(--accent); width: 26px; height: 26px; padding: 2px; cursor: pointer; }
+.hs-reroll svg { width: 100%; height: 100%; }
+.hs-help {
+  display: flex; align-items: center; gap: 7px;
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
+  border-radius: 12px; padding: clamp(5px, 1vh, 9px) 12px; font-weight: 700;
+  font-size: clamp(11px, 1.7vh, 14px); cursor: pointer;
+}
+.hs-help svg { width: 17px; height: 17px; color: var(--accent); }
+
+/* Band 2: the two action columns */
+.hs-main {
+  flex: 1; min-height: 0;
+  display: grid; grid-template-columns: 1fr 1fr; gap: clamp(8px, 1.6vw, 16px);
+  align-content: stretch;
+}
+.hs-col { display: flex; flex-direction: column; gap: clamp(6px, 1.4vh, 12px); min-height: 0; min-width: 0; }
+.hs-quick {
+  display: flex; align-items: center; gap: 12px; text-align: left;
+  border: 0; border-radius: 16px; cursor: pointer; color: #2b1002;
+  background: linear-gradient(160deg, #ffb056 0%, #ff7a2e 55%, #f0561d 100%);
+  box-shadow: 0 8px 22px rgba(240, 96, 30, .35);
+  padding: clamp(10px, 2.2vh, 18px) clamp(12px, 1.6vw, 18px);
+}
+.hs-quick:active { transform: translateY(1px); }
+.hs-quick-ico { flex: 0 0 auto; width: clamp(26px, 4.6vh, 38px); height: clamp(26px, 4.6vh, 38px); border-radius: 10px; background: rgba(255,255,255,.28); display: grid; place-items: center; }
+.hs-quick-ico svg { width: 70%; height: 70%; }
+.hs-quick-txt b { display: block; font-size: clamp(14px, 2.6vh, 20px); font-weight: 900; letter-spacing: .02em; }
+.hs-quick-txt i { display: block; font-style: normal; font-size: clamp(10px, 1.6vh, 12.5px); opacity: .85; }
+.hs-panel {
+  background: rgba(20, 27, 51, .78); border: 1px solid var(--line); border-radius: 16px;
+  padding: clamp(8px, 1.6vh, 14px); display: flex; flex-direction: column; gap: clamp(6px, 1.2vh, 10px);
+  min-height: 0;
+}
+.hs-panel-head { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: clamp(12px, 1.9vh, 15px); }
+.hs-panel-head svg { width: clamp(15px, 2.4vh, 19px); height: clamp(15px, 2.4vh, 19px); color: var(--accent); flex: 0 0 auto; }
+.hs-panel-head i { font-style: normal; font-weight: 500; font-size: clamp(9px, 1.4vh, 11.5px); color: var(--muted); margin-left: auto; }
+.hs-row { display: flex; align-items: center; gap: 8px; }
+.hs-row .diffrow { flex: 1; display: flex; gap: 6px; }
+.hs-row .diff { flex: 1; }
+.hs-go {
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
+  font-weight: 800; font-size: clamp(12px, 1.8vh, 14px);
+  border-radius: 11px; padding: clamp(6px, 1.3vh, 10px) 16px; cursor: pointer;
+}
+.hs-go.primary { background: var(--accent); border-color: var(--accent); color: #0a1020; }
+.hs-go:active { transform: translateY(1px); }
+.hs-create { flex: 1; }
+.modegrid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(5px, 1vh, 8px);
+  min-height: 0;
+}
+.modegrid .mode {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: clamp(2px, 0.7vh, 6px);
+  padding: clamp(5px, 1.3vh, 11px) 4px; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
+  font-weight: 700; font-size: clamp(9.5px, 1.5vh, 12.5px); cursor: pointer;
+}
+.modegrid .mode svg { width: clamp(16px, 3vh, 24px); height: clamp(16px, 3vh, 24px); }
+.modegrid .mode.active { color: #0a1020; background: var(--accent); border-color: var(--accent); }
+#countRow { display: flex; gap: 6px; }
+#countRow.hidden { display: none; }
+#countRow .cnt { flex: 1; }
+#codeInput.code-input { flex: 1; min-width: 0; text-align: center; letter-spacing: .4em; font-weight: 800; }
+
+/* Band 3: kit strip */
+.hs-foot { display: flex; align-items: center; gap: clamp(6px, 1vw, 12px); flex-wrap: wrap; }
+.hs-chip {
+  display: flex; align-items: center; gap: 8px;
+  background: rgba(20, 27, 51, .78); border: 1px solid var(--line); border-radius: 999px;
+  padding: clamp(4px, 0.9vh, 7px) 12px; color: var(--text);
+  font-size: clamp(10px, 1.5vh, 12px); min-height: clamp(28px, 4.6vh, 38px);
+}
+.hs-chip > span { color: var(--muted); text-transform: uppercase; letter-spacing: .14em; font-size: clamp(8.5px, 1.3vh, 10px); }
+.hs-armoury { cursor: pointer; font-weight: 800; }
+.hs-armoury svg { width: 17px; height: 17px; color: var(--primary); }
+.hs-armoury b { color: var(--accent); font-weight: 800; }
+.hs-error { margin: 0 0 0 auto; }
+.hs-foot .skinrow { display: flex; gap: 5px; }
+.hs-foot .skinrow .skin { width: clamp(18px, 3.4vh, 26px); height: clamp(18px, 3.4vh, 26px); }
+.hs-foot .orientrow { display: flex; gap: 5px; }
+.hs-foot .orient { padding: 3px 8px; font-size: clamp(9px, 1.4vh, 11px); }
+.hs-foot .orient svg { width: 13px; height: 13px; }
+
+/* Narrow / portrait: stack the columns; everything stays inside the viewport
+   because the bands share the height budget and panels compress via clamps. */
+@media (max-width: 640px), (orientation: portrait) and (max-width: 900px) {
+  .hs-main { grid-template-columns: 1fr; overflow: hidden; }
+  .hs-title { font-size: clamp(19px, 3.4vh, 30px); }
+  .hs-quick-txt i { display: none; }
+  .modegrid .mode { flex-direction: row; justify-content: flex-start; padding-left: 9px; gap: 7px; }
+  .hs-foot { gap: 5px; }
+}
+/* Very short landscape phones: tighten the brand row so the panels get room. */
+@media (max-height: 430px) {
+  .hs-title { font-size: clamp(17px, 4.6vh, 24px); }
+  .hs-by { display: none; }
+  .hs-quick-txt i { display: none; }
+  .hs-panel-head i { display: none; }
+}
+
+/* ---- Armoury modal ---- */
+.arm-sub { text-align: left; margin: 6px 0 10px; font-size: 12.5px; line-height: 1.45; }
+.arm-grid {
+  overflow-y: auto; min-height: 0; flex: 1;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 7px;
+  margin-bottom: 10px;
+}
+.arm-cell {
+  display: flex; align-items: center; gap: 8px; text-align: left;
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
+  border-radius: 11px; padding: 7px 9px; cursor: pointer; font-weight: 700; font-size: 12px;
+}
+.arm-cell svg { width: 22px; height: 22px; flex: 0 0 auto; }
+.arm-cell i { display: block; font-style: normal; font-weight: 400; font-size: 9.5px; color: var(--muted); }
+.arm-cell.picked { border-color: var(--accent); background: rgba(84, 200, 255, .16); box-shadow: inset 0 0 0 1px var(--accent); }
+.arm-cell.dim { opacity: .45; }
+.arm-status { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+.arm-status.ready { color: #3ce88f; }
+
+/* FIRE button flame */
+.fire .fire-ic { width: 1.05em; height: 1.05em; vertical-align: -0.16em; margin-left: 2px; }
+
+/* mute button icon */
+.mute svg { width: 20px; height: 20px; display: block; margin: auto; }
+
+/* Inline UI glyph sizing (battle report, spoils, boss bar, skin locks) */
+.br-stat svg { width: 12px; height: 12px; vertical-align: -1.5px; margin-right: 2px; }
+#lootLine svg { width: 14px; height: 14px; vertical-align: -2px; margin-right: 3px; }
+#bossbar .bb-name svg { width: 14px; height: 14px; vertical-align: -2.5px; margin-right: 2px; }
+.skin .lock svg { width: 13px; height: 13px; display: block; margin: auto; color: #dfe6f2; }
+.drive svg { width: 22px; height: 22px; }

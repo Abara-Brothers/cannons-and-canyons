@@ -69,5 +69,5 @@ function wrapUp(already) {
     if (!bossFired) fail('the WARLORD never fired');
     step('ALL GOOD');
     finish();
-  }, already ? 100 : 4000);   // leave room for one more boss turn
+  }, already ? 100 : 9000);   // leave room for one more boss turn (walk + 1.5s hold)
 }

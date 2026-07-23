@@ -201,11 +201,11 @@ export const WEAPONS = [
     desc: 'Supply-drop exclusive. Flat hypervelocity slug that punches through hills.' },
   { id: 'cluster',  name: 'Cluster Bomb',  color: '#ffd23f', ammo: 2,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 0, radius: 0, terrain: 'none',
-    split: { count: 5, spreadSpeed: 700, radius: 570, damage: 14, terrain: 'crater' },
+    split: { count: 5, spreadSpeed: 450, radius: 570, damage: 14, terrain: 'crater' },
     desc: 'Bursts at the apex into five bomblets.' },
   { id: 'napalm',   name: 'Napalm',        color: '#ff6a3d', ammo: 2,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 0, radius: 0, terrain: 'none',
-    split: { count: 8, spreadSpeed: 1150, radius: 630, damage: 7, terrain: 'scorch',
+    split: { count: 8, spreadSpeed: 760, radius: 630, damage: 7, terrain: 'scorch',
              hazard: { type: 'fire', ms: FIRE_MS, bites: FIRE_BITES, dmg: FIRE_DMG, r: 430 } },
     desc: 'Splashes burning fuel over a wide area — burns the ground black, never moves it.' },
   { id: 'gas',      name: 'Toxic Gas',     color: '#9dde4b', ammo: 2,
@@ -240,31 +240,31 @@ export const WEAPONS = [
     shots: 14, spread: 7, speedMul: 1.0, damage: 3, radius: 170, terrain: 'crater', burst: true,
     desc: 'Fourteen rounds in one long ripping burst. Death by a thousand cuts.' },
   // ---- WARLORD-7 kit (bossOnly: never in a player's menu or loadout) ---------
-  { id: 'b_twin',    name: 'Twin Autocannon', color: '#ff6b6b', ammo: 99, bossOnly: true,
-    shots: 2, spread: 5,  speedMul: 1.0, damage: 16, radius: 650, terrain: 'crater',
-    desc: 'Paired shells from the shoulder mounts.' },
-  { id: 'b_barrage', name: 'Missile Barrage', color: '#ff9d3d', ammo: 99, bossOnly: true,
-    shots: 8, spread: 34, speedMul: 1.0, damage: 7, radius: 480, terrain: 'crater',
-    desc: 'A whole rack of rockets, saturating the slope.' },
-  { id: 'b_flame',   name: 'Flame Vent',      color: '#ff6a3d', ammo: 99, bossOnly: true,
+  { id: 'b_gatling',   name: 'Shredder Storm',  color: '#ffb84d', ammo: 99, bossOnly: true,
+    shots: 10, spread: 9,  speedMul: 1.15, damage: 4, radius: 240, terrain: 'crater', burst: true,
+    desc: 'Both arm cannons spin up and hose the slope with tracer.' },
+  { id: 'b_hellstorm', name: 'Hellstorm Rack',  color: '#ff9d3d', ammo: 99, bossOnly: true,
+    shots: 8, spread: 26, speedMul: 1.0, damage: 8, radius: 500, terrain: 'crater', burst: true,
+    desc: 'The back rack empties — finned rockets rain in a rolling chain.' },
+  { id: 'b_magma',     name: 'Magma Spew',      color: '#ff6a3d', ammo: 99, bossOnly: true,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 0, radius: 0, terrain: 'none',
-    split: { count: 6, spreadSpeed: 1000, radius: 560, damage: 6, terrain: 'scorch',
+    split: { count: 5, spreadSpeed: 620, radius: 540, damage: 7, terrain: 'scorch',
              hazard: { type: 'fire', ms: FIRE_MS, bites: FIRE_BITES, dmg: FIRE_DMG, r: 430 } },
-    desc: 'Vents burning reactor fuel over the ground.' },
-  { id: 'b_lance',   name: 'Rail Lance',      color: '#3ce88f', ammo: 99, bossOnly: true,
-    shots: 1, spread: 0,  speedMul: 1.7, gravityMul: 0.3, damage: 34, radius: 380, terrain: 'crater',
+    desc: 'Hawks up gobs of reactor slag that burn where they splatter.' },
+  { id: 'b_spear',     name: 'Phase Spear',     color: '#8affde', ammo: 99, bossOnly: true,
+    shots: 1, spread: 0,  speedMul: 1.8, gravityMul: 0.25, damage: 36, radius: 380, terrain: 'crater',
     pierce: true, proximity: 140,
-    desc: 'A hypervelocity lance from the spinal rail.' },
-  { id: 'b_quake',   name: 'Seismic Slam',    color: '#c98a4b', ammo: 99, bossOnly: true,
+    desc: 'A charged energy spear that phases straight through terrain.' },
+  { id: 'b_quake',     name: 'Seismic Slam',    color: '#c98a4b', ammo: 99, bossOnly: true,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 26, radius: 1400, terrain: 'crater', dig: 0.5,
-    desc: 'A ground-pounder round that cracks the earth open.' },
+    desc: 'A piledriver round that cracks the earth open.' },
   // ---- Horde kits (aiOnly: alien saucers / zombie hulks only) ----------------
   { id: 'a_plasma', name: 'Plasma Bolt',    color: '#7dff6a', ammo: 99, aiOnly: true,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 14, radius: 620, terrain: 'crater',
     desc: 'Superheated xeno-plasma. Splashes green.' },
   { id: 'a_pods',   name: 'Spore Pods',     color: '#b06bff', ammo: 99, aiOnly: true,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 0, radius: 0, terrain: 'none',
-    split: { count: 4, spreadSpeed: 900, radius: 430, damage: 6, terrain: 'crater' },
+    split: { count: 4, spreadSpeed: 550, radius: 430, damage: 6, terrain: 'crater' },
     desc: 'A pod that bursts into four falling spores.' },
   { id: 'a_lance',  name: 'Phase Lance',    color: '#ff6bf0', ammo: 99, aiOnly: true,
     shots: 1, spread: 0,  speedMul: 1.6, gravityMul: 0.3, damage: 18, radius: 300, terrain: 'crater',
@@ -276,7 +276,7 @@ export const WEAPONS = [
     desc: 'A gob of something best not examined.' },
   { id: 'z_grubs',  name: 'Grave Grubs',    color: '#c4b36a', ammo: 99, aiOnly: true,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 0, radius: 0, terrain: 'none',
-    split: { count: 5, spreadSpeed: 800, radius: 380, damage: 5, terrain: 'crater' },
+    split: { count: 5, spreadSpeed: 500, radius: 380, damage: 5, terrain: 'crater' },
     desc: 'A sack of biting things that scatters on impact.' },
   { id: 'z_lob',    name: 'Corpse Lob',     color: '#7a8a4a', ammo: 99, aiOnly: true,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 18, radius: 820, terrain: 'crater',
@@ -299,6 +299,26 @@ export function weaponMenu() {
 export function startingAmmo() {
   const a = {};
   for (const w of WEAPONS) if (!w.bossOnly && !w.golfOnly && !w.aiOnly) a[w.id] = w.ammo;
+  return a;
+}
+
+// Duel / free-for-all loadouts: before the match each player picks exactly
+// LOADOUT_SIZE weapons from this pool. Picks carry 2 rounds each; the nuke is
+// issued to everyone regardless; the railgun stays supply-drop exclusive.
+export const LOADOUT_SIZE = 5;
+export const LOADOUT_POOL = WEAPONS
+  .filter(w => !w.bossOnly && !w.golfOnly && !w.aiOnly && w.id !== 'nuke' && w.id !== 'railgun')
+  .map(w => w.id);
+export function validLoadout(picks) {
+  return Array.isArray(picks) && picks.length === LOADOUT_SIZE &&
+    new Set(picks).size === LOADOUT_SIZE && picks.every(id => LOADOUT_POOL.includes(id));
+}
+export function loadoutAmmo(picks) {
+  const a = {};
+  for (const w of WEAPONS) if (!w.bossOnly && !w.golfOnly && !w.aiOnly) a[w.id] = 0;
+  for (const id of picks) a[id] = 2;
+  a.nuke = 1;          // everyone gets the big one
+  a.railgun = 0;       // crate-exclusive, as always
   return a;
 }
 
@@ -595,7 +615,7 @@ export function burnTick(hazards, tanks, lavaY = LAVA_Y) {
 // burns anything standing in it for FIRE_DMG. Overlapping patches deliberately
 // do NOT stack (`=`, not `+=`): standing in fire is standing in fire, so an
 // 8-bomblet napalm still only does 8 per bite, 24 over its 6-second life.
-export function fireDamage(hazards, tanks) {
+export function fireDamage(hazards, tanks, exempt) {
   const n = tanks.length;
   const dmg = new Array(n).fill(0);
   for (const h of hazards) {
@@ -604,6 +624,7 @@ export function fireDamage(hazards, tanks) {
     const bite = h.dmg || FIRE_DMG;
     for (let ti = 0; ti < n; ti++) {
       if (tanks[ti].alive === false) continue;
+      if (exempt && exempt(h.owner, ti)) continue;   // e.g. no friendly fire in Boss Fight
       // Overlapping clouds take the WORST bite, they don't stack — standing in
       // fire is standing in fire, gas on top doesn't double-cook you.
       if (distToTank(h.x, h.y, tanks[ti]) <= h.r) dmg[ti] = Math.max(dmg[ti], bite);

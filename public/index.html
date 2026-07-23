@@ -68,100 +68,126 @@
   </div>
 
   <!-- ============ HOME ============ -->
+  <!-- The dashboard is a fixed three-band layout (head / main / foot) sized in
+       viewport units and clamp()s so it ALWAYS fits: #home never scrolls, on
+       any screen, either orientation. All icons are hand-drawn inline SVG —
+       no emojis anywhere in this game's UI (house rule). -->
   <section id="home" class="screen active">
-    <!-- Three direct children only: .hero / .deck / .loadout. In landscape the
-         card becomes a grid and these three become named areas — no wrapper
-         divs and no DOM reordering needed. -->
-    <div class="home-card">
+    <div class="hs">
 
-      <div class="hero">
-        <h1 class="gtitle">
-          <span class="w">Canyons</span><span class="amp">&amp;</span><span class="w">Cannons</span>
-        </h1>
-        <div class="title-rule" aria-hidden="true"></div>
-        <p class="byline">made by <b>Abara Brothers</b></p>
-        <p class="tagline">Cross-canyon artillery duel. Arc your shells over the peaks — live.</p>
-        <button id="helpHomeBtn" type="button" class="howto">❓ How to play &amp; weapon guide</button>
-
-        <div class="callsign">
-          <span class="cs-label">Callsign</span>
-          <input id="nameInput" maxlength="14" placeholder="Commander" autocomplete="off"
-                 spellcheck="false" aria-label="Your callsign" />
-          <button id="rerollBtn" type="button" class="reroll" title="Roll a new callsign" aria-label="Roll a new callsign">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M3 7h3.4a4 4 0 0 1 3.3 1.8l4.6 6.4A4 4 0 0 0 17.6 17H21"/>
-              <path d="M3 17h3.4a4 4 0 0 0 3.3-1.8l4.6-6.4A4 4 0 0 1 17.6 7H21"/>
-              <path d="M18.4 4.4L21 7l-2.6 2.6"/><path d="M18.4 14.4L21 17l-2.6 2.6"/>
-            </svg>
+      <header class="hs-head">
+        <div class="hs-brand">
+          <h1 class="gtitle hs-title"><span class="w">Canyons</span><span class="amp">&amp;</span><span class="w">Cannons</span></h1>
+          <p class="hs-by">made by <b>Abara Brothers</b></p>
+        </div>
+        <div class="hs-id">
+          <label class="hs-cs">
+            <span class="hs-cs-label">Callsign</span>
+            <input id="nameInput" maxlength="14" placeholder="Commander" autocomplete="off"
+                   spellcheck="false" aria-label="Your callsign" />
+            <button id="rerollBtn" type="button" class="hs-reroll" title="Roll a new callsign" aria-label="Roll a new callsign">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 7h3.4a4 4 0 0 1 3.3 1.8l4.6 6.4A4 4 0 0 0 17.6 17H21"/>
+                <path d="M3 17h3.4a4 4 0 0 0 3.3-1.8l4.6-6.4A4 4 0 0 1 17.6 7H21"/>
+                <path d="M18.4 4.4L21 7l-2.6 2.6"/><path d="M18.4 14.4L21 17l-2.6 2.6"/>
+              </svg>
+            </button>
+          </label>
+          <button id="helpHomeBtn" type="button" class="hs-help" aria-label="How to play">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8.6 9a3.4 3.4 0 1 1 4.6 3.2c-1 .4-1.2 1-1.2 2.1"/><path d="M12 17.6v.2"/></svg>
+            <span>How to play</span>
           </button>
         </div>
-      </div>
+      </header>
 
-      <div class="deck">
-        <div class="playdeck">
+      <div class="hs-main">
 
-          <!-- PRIMARY: the only orange thing on the screen. -->
-          <div class="tile hot">
-            <button id="quickBtn" type="button" class="playcard">
-              <span class="pc-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M13.6 2 4 13.4h6L9.2 22 20 10.2h-6.6z"/></svg></span>
-              <span class="pc-txt"><b>Quick match</b><i>Straight into a duel with the next player looking</i></span>
-              <span class="pc-go" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></span>
-            </button>
-          </div>
+        <div class="hs-col">
+          <button id="quickBtn" type="button" class="hs-quick">
+            <span class="hs-quick-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M13.6 2 4 13.4h6L9.2 22 20 10.2h-6.6z"/></svg></span>
+            <span class="hs-quick-txt"><b>Quick match</b><i>Straight into a duel with the next player looking</i></span>
+          </button>
 
-          <div class="tile">
-            <button id="createBtn" type="button" class="playcard">
-              <span class="pc-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 2.6a1 1 0 0 1 1.6-.8l9 5.2a1 1 0 0 1 0 1.7l-9 5.2A1 1 0 0 1 6 13z"/><rect x="3.2" y="2" width="2.2" height="20" rx="1.1"/></svg></span>
-              <span class="pc-txt"><b>Create a game</b><i>Get a 4-letter code and invite your friends</i></span>
-              <span class="pc-go" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></span>
-            </button>
-            <div class="suboptions">
-              <div class="modrow" id="modeRow" role="group" aria-label="Game mode">
-                <button type="button" class="mode active" data-mode="duel">⚔️ Duel</button>
-                <button type="button" class="mode" data-mode="ffa">💥 Free-for-all</button>
-                <button type="button" class="mode" data-mode="boss">🤖 Boss Raid</button>
-                <button type="button" class="mode" data-mode="golf">⛳ Golf</button>
-                <button type="button" class="mode" data-mode="aliens">👽 Alien Invasion</button>
-                <button type="button" class="mode" data-mode="zombies">🧟 Zombie Uprising</button>
-              </div>
-              <div class="countrow hidden" id="countRow" role="group" aria-label="Players">
-                <button type="button" class="cnt" data-max="3">3 players</button>
-                <button type="button" class="cnt active" data-max="4">4 players</button>
-              </div>
+          <div class="hs-panel">
+            <div class="hs-panel-head">
+              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="3.6" y="8" width="16.8" height="11.4" rx="3.6"/><rect x="10.8" y="2.4" width="2.4" height="4.4" rx="1.2"/><rect x="0.8" y="11" width="2.2" height="5.2" rx="1.1"/><rect x="21" y="11" width="2.2" height="5.2" rx="1.1"/><rect x="7.4" y="11.6" width="3.1" height="3.6" rx="1.2" fill="#0b1020"/><rect x="13.5" y="11.6" width="3.1" height="3.6" rx="1.2" fill="#0b1020"/></svg>
+              <span>Play the computer</span>
             </div>
-          </div>
-
-          <div class="tile">
-            <button id="cpuBtn" type="button" class="playcard">
-              <span class="pc-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="3.6" y="8" width="16.8" height="11.4" rx="3.6"/><rect x="10.8" y="2.4" width="2.4" height="4.4" rx="1.2"/><rect x="0.8" y="11" width="2.2" height="5.2" rx="1.1"/><rect x="21" y="11" width="2.2" height="5.2" rx="1.1"/><rect x="7.4" y="11.6" width="3.1" height="3.6" rx="1.2" fill="#0b1020"/><rect x="13.5" y="11.6" width="3.1" height="3.6" rx="1.2" fill="#0b1020"/></svg></span>
-              <span class="pc-txt"><b>Play the computer</b><i>Solo drill — no waiting, no second phone</i></span>
-              <span class="pc-go" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></span>
-            </button>
-            <div class="suboptions">
+            <div class="hs-row">
               <div class="diffrow" id="diffRow" role="group" aria-label="CPU difficulty">
                 <button type="button" class="diff" data-diff="easy">Easy</button>
                 <button type="button" class="diff active" data-diff="medium">Medium</button>
                 <button type="button" class="diff" data-diff="hard">Hard</button>
               </div>
+              <button id="cpuBtn" type="button" class="hs-go">Start</button>
             </div>
           </div>
 
+          <div class="hs-panel">
+            <div class="hs-panel-head">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12.2 12h9.2M17.6 12v3.6M21 12v2.6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" fill="none"/></svg>
+              <span>Join a code</span>
+            </div>
+            <div class="hs-row">
+              <input id="codeInput" class="code-input" maxlength="4" placeholder="CODE" autocomplete="off" />
+              <button id="joinBtn" type="button" class="hs-go">Join</button>
+            </div>
+          </div>
         </div>
 
-        <div class="or"><span>or join a code</span></div>
-
-        <div class="join-row">
-          <input id="codeInput" class="code-input" maxlength="4" placeholder="CODE" autocomplete="off" />
-          <button id="joinBtn" class="btn">Join</button>
+        <div class="hs-col">
+          <div class="hs-panel hs-create">
+            <div class="hs-panel-head">
+              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 2.6a1 1 0 0 1 1.6-.8l9 5.2a1 1 0 0 1 0 1.7l-9 5.2A1 1 0 0 1 6 13z"/><rect x="3.2" y="2" width="2.2" height="20" rx="1.1"/></svg>
+              <span>Create a game</span><i>4-letter code for your friends</i>
+            </div>
+            <div class="modegrid" id="modeRow" role="group" aria-label="Game mode">
+              <button type="button" class="mode active" data-mode="duel">
+                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4.4 3.2l13.9 13.9-1.8 1.8L2.6 5z"/><path d="M19.6 3.2L5.7 17.1l1.8 1.8L21.4 5z"/><rect x="2.2" y="19.6" width="8.2" height="2.3" rx="1.1"/><rect x="13.6" y="19.6" width="8.2" height="2.3" rx="1.1"/></svg>
+                <span>Duel</span>
+              </button>
+              <button type="button" class="mode" data-mode="ffa">
+                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1.4l1.9 6.4 6.4-4-4 6.4 6.3 1.8-6.3 1.8 4 6.4-6.4-4-1.9 6.4-1.8-6.4-6.4 4 4-6.4L1.4 12l6.3-1.8-4-6.4 6.4 4z"/></svg>
+                <span>Free-for-all</span>
+              </button>
+              <button type="button" class="mode" data-mode="boss">
+                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 7.6L12 3l7 4.6v8L12 20l-7-4.4z"/><rect x="7.2" y="10.2" width="9.6" height="2.8" fill="#0b1020"/><path d="M9 3.8L7.6 1.4M15 3.8l1.4-2.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                <span>Boss Fight</span>
+              </button>
+              <button type="button" class="mode" data-mode="golf">
+                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="10.9" y="2.6" width="1.9" height="15.4"/><path d="M12.8 3l7.2 2.7-7.2 2.7z"/><path d="M3.6 21.4c3.2-2.6 13.6-2.6 16.8 0z"/></svg>
+                <span>Golf</span>
+              </button>
+              <button type="button" class="mode" data-mode="aliens">
+                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M1.8 13.4l10.2-3.6 10.2 3.6-10.2 3.6z"/><path d="M8.4 10.6C8.9 7.9 10.3 6 12 6s3.1 1.9 3.6 4.6L12 11.9z"/><rect x="3.8" y="18.8" width="2" height="2.6"/><rect x="11" y="19.8" width="2" height="2.6"/><rect x="18.2" y="18.8" width="2" height="2.6"/></svg>
+                <span>Aliens</span>
+              </button>
+              <button type="button" class="mode" data-mode="zombies">
+                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.4c-4.7 0-8.2 3.3-8.2 7.8 0 2.7 1.3 4.8 3.1 6.1V20h2.7v-2.2h1.6V20h1.6v-2.2h1.6V20h2.7v-3.7c1.8-1.3 3.1-3.4 3.1-6.1 0-4.5-3.5-7.8-8.2-7.8z"/><circle cx="8.7" cy="10.3" r="2" fill="#0b1020"/><circle cx="15.3" cy="10.3" r="2" fill="#0b1020"/><path d="M12 12.4l1.4 2.8h-2.8z" fill="#0b1020"/></svg>
+                <span>Zombies</span>
+              </button>
+            </div>
+            <div class="countrow hidden" id="countRow" role="group" aria-label="Players">
+              <button type="button" class="cnt" data-max="3">3 players</button>
+              <button type="button" class="cnt active" data-max="4">4 players</button>
+            </div>
+            <button id="createBtn" type="button" class="hs-go primary">Create game</button>
+          </div>
         </div>
-        <p id="homeError" class="error"></p>
+
       </div>
 
-      <div class="loadout">
-        <div class="opt-label">Tank paint</div>
-        <div class="skinrow" id="skinRow"></div>
-        <div class="optline">
-          <span class="opt-label">Hold your phone</span>
+      <footer class="hs-foot">
+        <button id="armouryBtn" type="button" class="hs-chip hs-armoury">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="2.6" y="8.4" width="18.8" height="12" rx="1.6"/><path d="M2.6 12h18.8" stroke="#0b1020" stroke-width="1.4"/><rect x="9.4" y="6" width="5.2" height="2.4" rx="1"/><g fill="#0b1020"><rect x="6.6" y="14.4" width="2.2" height="4"/><rect x="10.9" y="14.4" width="2.2" height="4"/><rect x="15.2" y="14.4" width="2.2" height="4"/></g></svg>
+          <span>Armoury</span><b id="armouryCount">5 picked</b>
+        </button>
+        <div class="hs-chip">
+          <span>Tank paint</span>
+          <div class="skinrow" id="skinRow"></div>
+        </div>
+        <div class="hs-chip">
+          <span>Hold your phone</span>
           <div class="orientrow" id="orientRow" role="group" aria-label="Preferred orientation">
             <button type="button" class="orient active" data-orient="landscape" aria-label="Play in landscape">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/></svg>Sideways
@@ -171,16 +197,32 @@
             </button>
           </div>
         </div>
-      </div>
+        <p id="homeError" class="error hs-error"></p>
+      </footer>
 
     </div>
-    <p class="footnote">Best on two phones. Drag to aim — pull farther to charge.</p>
   </section>
+
+  <!-- ============ ARMOURY ============ -->
+  <!-- Duel / free-for-all loadout: pick exactly five weapons; the Tactical Nuke
+       is issued to every commander regardless and the Railgun only ever comes
+       out of a supply drop. Rows are built by app.js from the same hand-drawn
+       icon set the in-game dock uses. -->
+  <div id="armouryModal" class="overlay hidden">
+    <div class="overlay-card help-card">
+      <div class="result">Armoury</div>
+      <p class="muted arm-sub">Pick <b>5</b> weapons for Duel and Free-for-all — each carries <b>2 rounds</b>.
+        Everyone gets the <b>Tactical Nuke</b>; the <b>Railgun</b> only drops in supply crates.</p>
+      <div id="armouryGrid" class="arm-grid"></div>
+      <div class="arm-status" id="armouryStatus">5 of 5 picked</div>
+      <button id="armouryCloseBtn" class="btn big primary">Save loadout</button>
+    </div>
+  </div>
 
   <!-- ============ LOBBY / WAITING ============ -->
   <section id="lobby" class="screen">
     <div class="home-card">
-      <div class="logo small">⛰️ CANYONS <em>&amp;</em> CANNONS</div>
+      <div class="logo small">CANYONS <em>&amp;</em> CANNONS</div>
       <p class="byline">made by <b>Abara Brothers</b></p>
       <h2 id="lobbyHeading">Waiting for your opponent…</h2>
       <p class="muted" id="lobbyHint">Send this link or code. The battle starts the moment they join.</p>
@@ -207,7 +249,7 @@
 
     <div id="stage">
       <canvas id="canvas"></canvas>
-      <button id="muteBtn" class="mute" title="Sound on/off">🔊</button>
+      <button id="muteBtn" class="mute" title="Sound on/off" aria-label="Sound on/off"></button>
       <div class="zoomctl">
         <button id="zoomIn" class="zbtn" title="Zoom in" aria-label="Zoom in">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21M7.5 10.5h6M10.5 7.5v6"/></svg>
@@ -249,12 +291,12 @@
         </div>
 
         <div class="drive-row">
-          <button class="drive" id="moveLeft">◀</button>
+          <button class="drive" id="moveLeft" aria-label="Drive left"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
           <div class="fuel"><div class="fuel-bar" id="fuelBar"></div><span>FUEL</span></div>
-          <button class="drive" id="moveRight">▶</button>
+          <button class="drive" id="moveRight" aria-label="Drive right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></button>
         </div>
 
-        <button id="fireBtn" class="btn big fire">FIRE 🔥</button>
+        <button id="fireBtn" class="btn big fire">FIRE <svg class="fire-ic" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 22c-4 0-7-2.6-7-6.5C5 10 9 8.5 9 4c2.5 1.5 3.6 4 3.2 6.2C14 9 15 7.5 15 5.5c3 2.3 4 5.5 4 8 0 5-3 8.5-7 8.5z"/><path d="M12 22c-2 0-3.5-1.6-3.5-3.7 0-2.4 2-3.5 3.2-5.8 1.6 1.8 3.8 3.2 3.8 5.7S14 22 12 22z" fill="#ffd9a0"/></svg></button>
       </div>
     </footer>
 
@@ -274,9 +316,9 @@
           <h3>Controls</h3>
           <ul>
             <li><b>Aim</b> — drag anywhere on the battlefield to set your angle and power at once, or nudge them precisely with the <b>ANGLE</b> and <b>POWER</b> steppers.</li>
-            <li><b>Drive</b> — the ◀ ▶ buttons move your tank along the ground. Driving burns <b>FUEL</b>, which refills at the start of every turn.</li>
+            <li><b>Drive</b> — the left/right arrow buttons move your tank along the ground. Driving burns <b>FUEL</b>, which refills at the start of every turn.</li>
             <li><b>Fire</b> — one shot per turn. Pick a weapon from the strip first; the number on each card is its remaining ammo.</li>
-            <li><b>Camera</b> — pinch or use the ＋/− buttons to zoom, and the ▲/▼ buttons to look up or down. The view follows the shell automatically.</li>
+            <li><b>Camera</b> — pinch or use the zoom buttons, and the up/down arrows to look around. The view follows the shell automatically.</li>
             <li><b>Supply drops</b> — crates parachute in mid-match. Drive into one to claim it, or shoot it open and take the contents from range. Crates carry repairs, shields, ammo — and the Railgun, which you can't get any other way.</li>
           </ul>
         </section>
@@ -291,12 +333,12 @@
         <section class="help-sec">
           <h3>Game modes</h3>
           <ul>
-            <li><b>⚔️ Duel</b> — one on one, last tank standing.</li>
-            <li><b>💥 Free-for-all</b> — up to four commanders, no teams.</li>
-            <li><b>🤖 Boss Raid</b> — team up against WARLORD-7, a mecha with its own arsenal. Bring friends.</li>
-            <li><b>⛳ Golf</b> — nine holes of artillery golf. Fewest shots into the cup wins; longer holes carry a bigger par.</li>
-            <li><b>👽 Alien Invasion</b> — survive the saucers and destroy 8 of them. They come back stronger each wave.</li>
-            <li><b>🧟 Zombie Uprising</b> — same fight, uglier enemy. Put down 8 rotting hulks before they put you down.</li>
+            <li><b>Duel</b> — one on one, last tank standing. Bring your Armoury loadout: five weapons, two rounds each, plus everyone’s nuke.</li>
+            <li><b>Free-for-all</b> — up to four commanders, no teams. Armoury loadouts apply here too.</li>
+            <li><b>Boss Fight</b> — team up against WARLORD-7, a mecha with its own arsenal. No friendly fire — your shells never hurt your squad.</li>
+            <li><b>Golf</b> — nine holes of artillery golf. Fewest shots into the cup wins; longer holes carry a bigger par.</li>
+            <li><b>Alien Invasion</b> — survive the saucers and destroy 8 of them. They come back stronger each wave.</li>
+            <li><b>Zombie Uprising</b> — same fight, uglier enemy. Put down 8 rotting hulks before they put you down.</li>
           </ul>
         </section>
       </div>
