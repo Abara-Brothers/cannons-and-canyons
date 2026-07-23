@@ -80,6 +80,15 @@ function bossFriendlyFirePass() {
   const sendB = (m) => B.send(JSON.stringify(m));
   let code = null, seatA = -1, bossSeat = -1, baseHp = null, fired = false, shotSeen = false;
 
+  // The first turn is RANDOM (2 humans + the WARLORD). Bravo plinks a cannon
+  // shot on its own turns so the rotation always reaches Alpha's nuke.
+  let seatB = -1;
+  B.on('message', (raw) => {
+    const m = JSON.parse(raw);
+    if (m.type === 'start') seatB = m.you;
+    if (m.type === 'turn' && m.turn === seatB) sendB({ type: 'fire', weapon: 'cannon', angle: 55, power: 45 });
+  });
+
   A.on('open', () => sendA({ type: 'create', name: 'Alpha', skin: 'olive', mode: 'boss' }));
   A.on('message', (raw) => {
     const m = JSON.parse(raw);
