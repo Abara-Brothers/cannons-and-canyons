@@ -309,12 +309,13 @@ export function startingAmmo() {
   return a;
 }
 
-// Duel / free-for-all loadouts: before the match each player picks exactly
-// LOADOUT_SIZE weapons from this pool. Picks carry 2 rounds each; the nuke is
-// issued to everyone regardless; the railgun stays supply-drop exclusive.
+// Combat-mode loadouts: each player drafts LOADOUT_SIZE weapons from this
+// pool, 2 rounds each. STANDARD ISSUE regardless of picks: the Cannon
+// (unlimited — every mode except golf) and the Tactical Nuke (one). The
+// railgun stays supply-drop exclusive.
 export const LOADOUT_SIZE = 5;
 export const LOADOUT_POOL = WEAPONS
-  .filter(w => !w.bossOnly && !w.golfOnly && !w.aiOnly && w.id !== 'nuke' && w.id !== 'railgun')
+  .filter(w => !w.bossOnly && !w.golfOnly && !w.aiOnly && w.id !== 'nuke' && w.id !== 'railgun' && w.id !== 'cannon')
   .map(w => w.id);
 // Duel / free-for-all / Boss Fight run on 5 picks; the survival modes hand out
 // 7 (a longer fight against respawning waves needs the deeper bag). Golf gets
@@ -331,6 +332,7 @@ export function loadoutAmmo(picks) {
   const a = {};
   for (const w of WEAPONS) if (!w.bossOnly && !w.golfOnly && !w.aiOnly) a[w.id] = 0;
   for (const id of picks) a[id] = 2;
+  a.cannon = 99;       // standard issue: the unlimited sidearm, every mode
   a.nuke = 1;          // everyone gets the big one
   a.railgun = 0;       // crate-exclusive, as always
   return a;

@@ -46,14 +46,14 @@ function wait(ws, type, ms = 8000) {
 
 try {
   const host = await open('host');
-  send(host, { type: 'create', name: 'Ava', skin: 'olive', mode: 'ffa', max: 4, loadout: ['cannon', 'mortar', 'cluster', 'napalm', 'airstrike'] });
+  send(host, { type: 'create', name: 'Ava', skin: 'olive', mode: 'ffa', max: 4, loadout: ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'] });
   const { code } = await wait(host, 'created');
   await wait(host, 'lobby');
 
   const others = [];
   for (const nm of ['Ben', 'Cleo', 'Dev']) {
     const ws = await open(nm);
-    send(ws, { type: 'join', code, name: nm, skin: 'desert', loadout: ['cannon', 'mortar', 'cluster', 'napalm', 'airstrike'] });
+    send(ws, { type: 'join', code, name: nm, skin: 'desert', loadout: ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'] });
     others.push(ws); await sleep(120);
   }
   const clients = [host, ...others];

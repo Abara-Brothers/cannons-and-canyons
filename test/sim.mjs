@@ -22,7 +22,7 @@ const summary = { shots: 0, craters: 0, maxProjectiles: 0, hazardsSeen: 0, hpFin
 // them every weapon path (splits, airstrike, hazards, wall, buster, teleport,
 // nuke) is exercised. Railgun stays crate-only. Past its 11 rounds a client
 // fires plain cannon: that's the server's emergency shell, tested for free.
-const LOADOUT_A = ['cannon', 'volley', 'napalm', 'airstrike', 'wall'];
+const LOADOUT_A = ['volley', 'napalm', 'airstrike', 'wall', 'minigun'];
 const LOADOUT_B = ['mortar', 'cluster', 'gas', 'buster', 'teleport'];
 const rotOf = (picks) => [...picks, 'nuke', ...picks];
 const ROT_A = rotOf(LOADOUT_A), ROT_B = rotOf(LOADOUT_B);

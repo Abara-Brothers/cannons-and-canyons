@@ -19,7 +19,7 @@ let bSawDrop = false, bSawBack = false;
 const b = new WebSocket(URL);
 const a1 = new WebSocket(URL);
 
-a1.on('open', () => a1.send(JSON.stringify({ type: 'create', name: 'A', skin: 'jungle', loadout: ['cannon', 'mortar', 'cluster', 'napalm', 'airstrike'] })));
+a1.on('open', () => a1.send(JSON.stringify({ type: 'create', name: 'A', skin: 'jungle', loadout: ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'] })));
 a1.on('message', (raw) => {
   const m = JSON.parse(raw);
   if (m.type === 'created') { code = m.code; step('created ' + code); }
@@ -42,7 +42,7 @@ a1.on('message', (raw) => {
 
 b.on('open', () => {
   const iv = setInterval(() => {
-    if (code && b.readyState === 1) { clearInterval(iv); b.send(JSON.stringify({ type: 'join', code, name: 'B', loadout: ['cannon', 'mortar', 'cluster', 'napalm', 'airstrike'] })); }
+    if (code && b.readyState === 1) { clearInterval(iv); b.send(JSON.stringify({ type: 'join', code, name: 'B', loadout: ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'] })); }
   }, 30);
 });
 b.on('message', (raw) => {

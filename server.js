@@ -227,8 +227,8 @@ function killDead(room) {
 // A loadout arrives as an array of weapon ids; anything malformed becomes null
 // and the seat falls back to the default kit at start.
 const sanitizeLoadout = (picks, n = 5) => (validLoadout(picks, n) ? picks.slice() : null);
-const DEFAULT_LOADOUT = ['cannon', 'mortar', 'cluster', 'napalm', 'airstrike'];
-const DEFAULT_LOADOUT7 = ['cannon', 'mortar', 'cluster', 'napalm', 'airstrike', 'buster', 'volley'];
+const DEFAULT_LOADOUT = ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'];
+const DEFAULT_LOADOUT7 = ['mortar', 'cluster', 'napalm', 'airstrike', 'volley', 'buster', 'gas'];
 const defaultLoadoutFor = (n) => (n >= 7 ? DEFAULT_LOADOUT7.slice() : DEFAULT_LOADOUT.slice());
 function randomLoadout(n = 5) {
   const pool = LOADOUT_POOL.slice();

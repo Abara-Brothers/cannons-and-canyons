@@ -45,9 +45,10 @@ function loadoutPass() {
     if (!lo || lo.join() !== picks.join()) fail(`snapshot loadout is ${JSON.stringify(lo)}, expected ${JSON.stringify(picks)}`);
     for (const id of picks) if (m.ammo[id] !== 2) fail(`picked ${id} has ammo ${m.ammo[id]}, expected 2`);
     if (m.ammo.nuke !== 1) fail(`nuke ammo ${m.ammo.nuke}, expected 1 (everyone gets it)`);
-    for (const id of ['cannon', 'mortar', 'cluster', 'napalm', 'airstrike', 'volley', 'buster']) {
+    for (const id of ['mortar', 'cluster', 'napalm', 'airstrike', 'volley', 'buster']) {
       if (m.ammo[id] !== 0) fail(`unpicked ${id} has ammo ${m.ammo[id]}, expected 0`);
     }
+    if (m.ammo.cannon !== 99) fail(`cannon ammo ${m.ammo.cannon}, expected 99 (standard issue)`);
     if ((m.loadouts || []).length && !Array.isArray(m.loadouts[1 - m.you])) fail('the CPU seat has no loadout of its own');
     step('loadout ammo map correct (5 picks x2 + nuke)');
     try { ws.close(); } catch {}
@@ -68,9 +69,10 @@ function fallbackPass() {
       return;   // say nothing — let the deadline hand us the defaults
     }
     if (m.type !== 'pickDone') return;
-    for (const id of ['cannon', 'mortar', 'cluster', 'napalm', 'airstrike']) {
+    for (const id of ['mortar', 'cluster', 'napalm', 'airstrike', 'volley']) {
       if (m.ammo[id] !== 2) fail(`fallback ${id} ammo ${m.ammo[id]}, expected 2 (default kit)`);
     }
+    if (m.ammo.cannon !== 99) fail(`fallback cannon ammo ${m.ammo.cannon}, expected 99 (standard issue)`);
     if (m.ammo.nuke !== 1) fail(`fallback nuke ammo ${m.ammo.nuke}, expected 1`);
     step('silent drafter got the default kit at the deadline');
     try { ws.close(); } catch {}
@@ -85,7 +87,7 @@ function draftPass() {
   const sendA = (m) => A.send(JSON.stringify(m));
   const sendB = (m) => B.send(JSON.stringify(m));
   const picksA = ['gas', 'wall', 'teleport', 'nano', 'minigun'];
-  const picksB = ['cannon', 'volley', 'napalm', 'buster', 'mortar'];
+  const picksB = ['volley', 'napalm', 'buster', 'mortar', 'cluster'];
   let code = null, sawPick = false, sawDone = false, sawTurn = false;
   A.on('message', (raw) => {
     const m = JSON.parse(raw);
@@ -133,10 +135,10 @@ function bossFriendlyFirePass() {
     if (m.type === 'turn' && m.turn === seatB) sendB({ type: 'fire', weapon: 'cannon', angle: 55, power: 45 });
   });
 
-  A.on('open', () => sendA({ type: 'create', name: 'Alpha', skin: 'olive', mode: 'boss', loadout: ['cannon', 'mortar', 'cluster', 'napalm', 'airstrike'] }));
+  A.on('open', () => sendA({ type: 'create', name: 'Alpha', skin: 'olive', mode: 'boss', loadout: ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'] }));
   A.on('message', (raw) => {
     const m = JSON.parse(raw);
-    if (m.type === 'created') { code = m.code; const jb = () => sendB({ type: 'join', code, name: 'Bravo', skin: 'desert', loadout: ['cannon', 'mortar', 'cluster', 'napalm', 'airstrike'] }); B.on('open', jb); if (B.readyState === 1) jb(); }
+    if (m.type === 'created') { code = m.code; const jb = () => sendB({ type: 'join', code, name: 'Bravo', skin: 'desert', loadout: ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'] }); B.on('open', jb); if (B.readyState === 1) jb(); }
     if (m.type === 'lobby' && m.players.filter(Boolean).length === 2) sendA({ type: 'startMatch' });
     if (m.type === 'start') {
       seatA = m.you; bossSeat = m.boss; baseHp = m.hp.slice();

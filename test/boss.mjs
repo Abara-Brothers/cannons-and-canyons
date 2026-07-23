@@ -16,7 +16,7 @@ const send = (m) => ws.send(JSON.stringify(m));
 
 let bossSeat = -1, mySeat = -1, bossFired = false, myTurnSeen = false, shots = 0;
 
-ws.on('open', () => send({ type: 'create', name: 'Raider', skin: 'olive', mode: 'boss', max: 2, loadout: ['cannon', 'mortar', 'cluster', 'napalm', 'airstrike'] }));
+ws.on('open', () => send({ type: 'create', name: 'Raider', skin: 'olive', mode: 'boss', max: 2, loadout: ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'] }));
 ws.on('message', (raw) => {
   const m = JSON.parse(raw);
   if (m.type === 'created') {

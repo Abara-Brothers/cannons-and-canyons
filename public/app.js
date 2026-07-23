@@ -808,8 +808,8 @@ function myName() {
 // The weapon draft happens AT MATCH START, not on the dashboard: when the
 // snapshot arrives with `pick`, this screen opens over the battlefield and the
 // first turn only begins once everyone has locked five (or seven) in.
-const ARM_POOL = ['cannon', 'mortar', 'volley', 'cluster', 'napalm', 'gas', 'airstrike', 'buster', 'wall', 'teleport', 'nano', 'minigun'];
-const ARM_DEFAULT = ['cannon', 'mortar', 'cluster', 'napalm', 'airstrike'];
+const ARM_POOL = ['mortar', 'volley', 'cluster', 'napalm', 'gas', 'airstrike', 'buster', 'wall', 'teleport', 'nano', 'minigun'];
+const ARM_DEFAULT = ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'];
 let armNeed = 5;
 let armPicks = [];
 function armPrefill() {
@@ -824,7 +824,7 @@ function openDraft(n) {
   armPicks = armPrefill();
   document.querySelector('#armouryModal .arm-sub').innerHTML =
     `Pick <b>${armNeed}</b> weapons for this battle — each carries <b>2 rounds</b>. ` +
-    'Everyone gets the <b>Tactical Nuke</b>; the <b>Railgun</b> only drops in supply crates.';
+    'The <b>Cannon</b> (unlimited) and the <b>Tactical Nuke</b> are standard issue; the <b>Railgun</b> only drops in supply crates.';
   buildArmoury();
   $('armouryModal').classList.remove('hidden');
 }
@@ -1089,7 +1089,7 @@ function onTurn(m) {
 function firstAvailableWeapon() {
   for (const w of S.weapons) {
     // mirror the dock: anything you hold ammo for is selectable
-    if (S.loadout && w.id !== 'nuke' && w.id !== 'railgun' &&
+    if (S.loadout && w.id !== 'cannon' && w.id !== 'nuke' && w.id !== 'railgun' &&
         !S.loadout.includes(w.id) && (S.ammo[w.id] ?? 0) <= 0) continue;
     if ((S.ammo[w.id] ?? w.ammo) > 0) return w.id;
   }
@@ -1201,7 +1201,7 @@ function buildWeaponStrip() {
     // railgun always get chips — and so does ANY weapon you actually hold ammo
     // for (a crate prize, the emergency reserve shell). Only never-owned
     // off-loadout weapons stay out of the dock.
-    if (S.loadout && w.id !== 'nuke' && w.id !== 'railgun' &&
+    if (S.loadout && w.id !== 'cannon' && w.id !== 'nuke' && w.id !== 'railgun' &&
         !S.loadout.includes(w.id) && (S.ammo[w.id] ?? 0) <= 0) continue;
     const left = S.ammo[w.id] ?? w.ammo;
     const chip = document.createElement('button');
