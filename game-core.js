@@ -284,7 +284,7 @@ export const WEAPONS = [
   // ---- Artillery Golf (golfOnly: the mode's single weapon) -------------------
   { id: 'golfball',  name: 'Golf Ball',       color: '#f4f6f2', ammo: 99, golfOnly: true,
     shots: 1, spread: 0,  speedMul: 0.9, damage: 0, radius: 0, terrain: 'none',
-    bounce: { rest: 0.55, fric: 0.92, stop: 60, max: 32 },   // long satisfying roll-out
+    bounce: { rest: 0.55, fric: 0.88, stop: 72, max: 30 },   // long satisfying roll-out
     desc: 'Dimpled, honest, and utterly indifferent to your feelings.' },
 ];
 
@@ -309,9 +309,16 @@ export const LOADOUT_SIZE = 5;
 export const LOADOUT_POOL = WEAPONS
   .filter(w => !w.bossOnly && !w.golfOnly && !w.aiOnly && w.id !== 'nuke' && w.id !== 'railgun')
   .map(w => w.id);
-export function validLoadout(picks) {
-  return Array.isArray(picks) && picks.length === LOADOUT_SIZE &&
-    new Set(picks).size === LOADOUT_SIZE && picks.every(id => LOADOUT_POOL.includes(id));
+// Duel / free-for-all / Boss Fight run on 5 picks; the survival modes hand out
+// 7 (a longer fight against respawning waves needs the deeper bag). Golf gets
+// none — the ball is the whole kit.
+export function loadoutSizeFor(mode) {
+  if (mode === 'golf') return 0;
+  return (mode === 'aliens' || mode === 'zombies') ? 7 : 5;
+}
+export function validLoadout(picks, n = LOADOUT_SIZE) {
+  return Array.isArray(picks) && picks.length === n &&
+    new Set(picks).size === n && picks.every(id => LOADOUT_POOL.includes(id));
 }
 export function loadoutAmmo(picks) {
   const a = {};
@@ -946,7 +953,7 @@ export function aiShot(terrain, tanks, by, difficulty, facing, weaponId = 'canno
   }
 
   // Difficulty → aim jitter. Bell-ish noise from two uniforms in [-1,1].
-  const errByDiff = { easy: 15, medium: 8, hard: 3.5, boss: 3 };
+  const errByDiff = { easy: 15, medium: 8, hard: 3.5, boss: 2.2 };   // the WARLORD shoots like it means it
   const e = errByDiff[difficulty] || errByDiff.medium;
   const noise = () => Math.random() + Math.random() - 1;
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -958,7 +965,7 @@ export function aiShot(terrain, tanks, by, difficulty, facing, weaponId = 'canno
 function integrate(terrain, tanks, ox, oy, vx, vy, opts) {
   const path = [[round1(ox), round1(oy)]];
   const grav = GRAVITY * (opts.gravMul || 1);
-  let x = ox, y = oy, t = 0, step = 0, prevVy = vy, bounces = 0;
+  let x = ox, y = oy, t = 0, step = 0, prevVy = vy, bounces = 0, rollT0 = -1;
   // The muzzle now sits INSIDE the firer's own (much larger) hitbox, so the shell
   // must be allowed to leave its own tank before it can collide with it.
   let leftOwn = (opts.by == null) || !pointHitsTank(ox, oy, tanks[opts.by]);
@@ -1022,7 +1029,11 @@ function integrate(terrain, tanks, ox, oy, vx, vy, opts) {
         vy = ty2 * bz.fric - vn * ny2 * bz.rest;
         y = gy - 0.5;
         path.push([round1(x), round1(gy)]);
-        if (Math.hypot(vx, vy) < bz.stop || bounces > bz.max) {
+        if (rollT0 < 0) rollT0 = t;
+        // Rest when it's slow, out of bounces, or has been running the slopes
+        // too long — a smoothed course can re-accelerate a ball downhill for
+        // ever, and 'for ever' must not carry it off the edge of the world.
+        if (Math.hypot(vx, vy) < bz.stop || bounces > bz.max || t - rollT0 > 6.5) {
           return { path, hit: false, rest: { x: round1(x), y: round1(gy) }, x, y: gy, vx, vy };
         }
         continue;
@@ -1086,7 +1097,7 @@ export function terrainDiff(before, after) {
 // ---- Artillery Golf -----------------------------------------------------------
 // Dress a generated terrain as a golf hole: a flat tee box, a flat green, and a
 // crisp cup notch sunk into it. Returns the cup's surface y.
-export function prepareGolfHole(terrain, teeX, cupX) {
+export function prepareGolfHole(terrain, teeX, cupX, allTees) {
   // A raw battlefield is a wall, not a course: a par-3 dead-ended by a 3000-unit
   // spire just bounces the ball back to the tee (observed). Two wide box-blurs
   // keep the macro elevation — ridges, valleys, doglegs — but knock spires and
@@ -1101,10 +1112,18 @@ export function prepareGolfHole(terrain, teeX, cupX) {
       terrain[x] = terrain[x] * 0.35 + avg * 0.65;
     }
   }
-  flattenZone(terrain, teeX, 850);           // the tee box
-  // The GREEN: wide and properly FLAT — level the whole apron to one height
+  // Every tee box — championship back through junior forward — gets its own
+  // dead-flat pad, levelled to ITS OWN height (not averaged on a slope).
+  for (const tx of (allTees && allTees.length ? allTees : [teeX])) {
+    const tLevel = surfaceAt(terrain, tx);
+    for (let px = Math.max(0, Math.round(tx - 460)); px <= Math.min(nL - 1, Math.round(tx + 460)); px++) {
+      const t = Math.min(1, Math.max(0, (460 - Math.abs(px - tx)) / 160));
+      terrain[px] = terrain[px] * (1 - t) + tLevel * t;
+    }
+  }
+  // The GREEN: WIDE and properly FLAT — level the whole apron to one height
   // rather than averaging it (flattenZone leaves a lean on slopes).
-  const gHalf = 1500;
+  const gHalf = 2200;
   const gLevel = surfaceAt(terrain, cupX);
   for (let gx = Math.max(0, Math.round(cupX - gHalf)); gx <= Math.min(nL - 1, Math.round(cupX + gHalf)); gx++) {
     const t = Math.min(1, Math.max(0, (gHalf - Math.abs(gx - cupX)) / 420));   // feathered fringe

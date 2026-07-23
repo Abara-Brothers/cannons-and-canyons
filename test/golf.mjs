@@ -63,8 +63,10 @@ ws.on('message', (raw) => {
 
 function swing() {
   // Aim at the cup with a crude range guess; the cap (par+4) bounds the hole.
+  // The ball ROLLS a long way now — aim deliberately short and let the
+  // roll-out do the work; the point here is course FLOW, not sinking it.
   const dist = Math.max(400, cup.x - myX);
-  const power = Math.max(18, Math.min(96, Math.sqrt(dist * 900) / (58 * 0.9) * 1.02));
+  const power = Math.max(18, Math.min(68, Math.sqrt(dist * 620) / (58 * 0.9)));
   shots++;
   send({ type: 'fire', weapon: 'golfball', angle: 44, power });
 }

@@ -56,20 +56,64 @@ function loadoutPass() {
 }
 
 function fallbackPass() {
+  // Malformed picks now mean: you'll draft in-game — and if you never lock in,
+  // the deadline issues the default kit. We deliberately stay silent and let
+  // PICK_MS expire (the suite runs the server with a short window).
   const ws = new WebSocket(URL);
   ws.on('open', () => ws.send(JSON.stringify({ type: 'ai', difficulty: 'easy', name: 'Fallback', skin: 'olive', loadout: ['gas', 'gas', 'gas'] })));
   ws.on('message', (raw) => {
     const m = JSON.parse(raw);
-    if (m.type !== 'start') return;
-    // malformed picks -> the default kit
+    if (m.type === 'start') {
+      if (!m.pick) fail('fallback: malformed loadout should open the draft window');
+      return;   // say nothing — let the deadline hand us the defaults
+    }
+    if (m.type !== 'pickDone') return;
     for (const id of ['cannon', 'mortar', 'cluster', 'napalm', 'airstrike']) {
       if (m.ammo[id] !== 2) fail(`fallback ${id} ammo ${m.ammo[id]}, expected 2 (default kit)`);
     }
     if (m.ammo.nuke !== 1) fail(`fallback nuke ammo ${m.ammo.nuke}, expected 1`);
-    step('malformed loadout fell back to the default kit');
+    step('silent drafter got the default kit at the deadline');
     try { ws.close(); } catch {}
-    bossFriendlyFirePass();
+    draftPass();
   });
+}
+
+// ---- Pass 2.5: the MATCH-START DRAFT — no loadout supplied, so the server
+// must open a pick window, accept picks mid-match-setup, and only then begin.
+function draftPass() {
+  const A = new WebSocket(URL), B = new WebSocket(URL);
+  const sendA = (m) => A.send(JSON.stringify(m));
+  const sendB = (m) => B.send(JSON.stringify(m));
+  const picksA = ['gas', 'wall', 'teleport', 'nano', 'minigun'];
+  const picksB = ['cannon', 'volley', 'napalm', 'buster', 'mortar'];
+  let code = null, sawPick = false, sawDone = false, sawTurn = false;
+  A.on('message', (raw) => {
+    const m = JSON.parse(raw);
+    if (m.type === 'created') { code = m.code; const jb = () => sendB({ type: 'join', code, name: 'Drafter B' }); B.on('open', jb); if (B.readyState === 1) jb(); }
+    if (m.type === 'start') {
+      if (!m.pick || m.pick.n !== 5) fail(`draft: start.pick is ${JSON.stringify(m.pick)}, expected {n:5}`);
+      else sawPick = true;
+      sendA({ type: 'loadout', picks: picksA });
+    }
+    if (m.type === 'pickDone') {
+      sawDone = true;
+      const lo = m.loadouts && m.loadouts[0];
+      if (!lo || lo.join() !== picksA.join()) fail(`draft: seat 0 loadout came back as ${JSON.stringify(lo)}`);
+      if (m.ammoSeat === 0 && m.ammo && m.ammo.gas !== 2) fail(`draft: gas ammo ${m.ammo && m.ammo.gas}, expected 2`);
+    }
+    if (m.type === 'turn') {
+      if (!sawDone) fail('draft: a turn began BEFORE the draft finished');
+      sawTurn = true;
+      try { A.close(); B.close(); } catch {}
+      if (sawPick && sawDone && sawTurn) step('match-start draft: pick window -> both locked -> battle began');
+      bossFriendlyFirePass();
+    }
+  });
+  B.on('message', (raw) => {
+    const m = JSON.parse(raw);
+    if (m.type === 'start') setTimeout(() => sendB({ type: 'loadout', picks: picksB }), 250);
+  });
+  A.on('open', () => sendA({ type: 'create', name: 'Drafter A', skin: 'olive', mode: 'duel' }));
 }
 
 // ---- Pass 3: Boss Fight friendly fire -----------------------------------------
@@ -89,10 +133,10 @@ function bossFriendlyFirePass() {
     if (m.type === 'turn' && m.turn === seatB) sendB({ type: 'fire', weapon: 'cannon', angle: 55, power: 45 });
   });
 
-  A.on('open', () => sendA({ type: 'create', name: 'Alpha', skin: 'olive', mode: 'boss' }));
+  A.on('open', () => sendA({ type: 'create', name: 'Alpha', skin: 'olive', mode: 'boss', loadout: ['cannon', 'mortar', 'cluster', 'napalm', 'airstrike'] }));
   A.on('message', (raw) => {
     const m = JSON.parse(raw);
-    if (m.type === 'created') { code = m.code; B.on('open', () => sendB({ type: 'join', code, name: 'Bravo', skin: 'desert' })); if (B.readyState === 1) sendB({ type: 'join', code, name: 'Bravo', skin: 'desert' }); }
+    if (m.type === 'created') { code = m.code; const jb = () => sendB({ type: 'join', code, name: 'Bravo', skin: 'desert', loadout: ['cannon', 'mortar', 'cluster', 'napalm', 'airstrike'] }); B.on('open', jb); if (B.readyState === 1) jb(); }
     if (m.type === 'lobby' && m.players.filter(Boolean).length === 2) sendA({ type: 'startMatch' });
     if (m.type === 'start') {
       seatA = m.you; bossSeat = m.boss; baseHp = m.hp.slice();

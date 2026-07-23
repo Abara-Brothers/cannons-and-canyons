@@ -184,18 +184,14 @@
                   <option value="junior">Junior</option>
                 </select>
               </label>
-              <button id="createBtn" type="button" class="hs-go primary">Create game</button>
             </div>
+            <button id="createBtn" type="button" class="hs-go primary">CREATE GAME</button>
           </div>
         </div>
 
       </div>
 
       <footer class="hs-foot">
-        <button id="armouryBtn" type="button" class="hs-chip hs-armoury">
-          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="2.6" y="8.4" width="18.8" height="12" rx="1.6"/><path d="M2.6 12h18.8" stroke="#0b1020" stroke-width="1.4"/><rect x="9.4" y="6" width="5.2" height="2.4" rx="1"/><g fill="#0b1020"><rect x="6.6" y="14.4" width="2.2" height="4"/><rect x="10.9" y="14.4" width="2.2" height="4"/><rect x="15.2" y="14.4" width="2.2" height="4"/></g></svg>
-          <span>Armoury</span><b id="armouryCount">5 picked</b>
-        </button>
         <button id="careerBtn" type="button" class="hs-chip hs-armoury">
           <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="9" r="5.4"/><circle cx="12" cy="9" r="2.6" fill="#0b1020"/><path d="M8.2 13.4L6 21l6-2.6L18 21l-2.2-7.6z"/></svg>
           <span>Career</span><b id="careerWins"></b>
@@ -298,12 +294,12 @@
         <div class="aim-readout">
           <div class="stepper">
             <button class="mini" data-adj="angle" data-dir="-1">‹</button>
-            <div class="readout"><label>ANGLE</label><b id="angleVal">45°</b></div>
+            <div class="readout drum-wrap"><label>ANGLE</label><div class="drum" id="angleDrum" data-adj="angle"></div></div>
             <button class="mini" data-adj="angle" data-dir="1">›</button>
           </div>
           <div class="stepper">
             <button class="mini" data-adj="power" data-dir="-1">–</button>
-            <div class="readout"><label>POWER</label><b id="powerVal">60</b></div>
+            <div class="readout drum-wrap"><label>POWER</label><div class="drum" id="powerDrum" data-adj="power"></div></div>
             <button class="mini" data-adj="power" data-dir="1">+</button>
           </div>
         </div>

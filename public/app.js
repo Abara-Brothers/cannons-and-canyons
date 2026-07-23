@@ -616,6 +616,36 @@ window.addEventListener('visibilitychange', () => { if (!document.hidden) resync
 window.addEventListener('pageshow', () => resyncOnReturn());
 window.addEventListener('focus', () => resyncOnReturn());
 
+// ---- Turn nudges (Web Push) -----------------------------------------------------
+// Async duels: take your turn whenever — the opponent gets a system notification
+// when it's theirs. Requires the service worker; on iOS the game must be added
+// to the Home Screen first (that's an Apple rule, not ours).
+try { if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js'); } catch {}
+function urlB64ToU8(b64) {
+  const pad = '='.repeat((4 - (b64.length % 4)) % 4);
+  const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+async function enableTurnPings() {
+  try {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      showToast('Notifications need the installed app on this device'); return;
+    }
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { showToast('Notifications blocked'); return; }
+    const reg = await navigator.serviceWorker.ready;
+    const res = await fetch('/push/key');
+    const { key } = await res.json();
+    if (!key) { showToast('Nudges are not enabled on this server'); return; }
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToU8(key) });
+    sendMsg({ type: 'pushSub', sub: sub.toJSON() });
+  } catch {
+    showToast('Could not enable nudges here');
+  }
+}
+$('notifyBtn').onclick = () => { Audio.ensure(); enableTurnPings(); };
+
 let pendingIntent = null;
 function flushIntent() { if (pendingIntent) { sendMsg(pendingIntent); pendingIntent = null; } }
 function intent(m) { if (S.connected) sendMsg(m); else pendingIntent = m; }
@@ -647,6 +677,16 @@ function handle(m) {
       S.crates.push({ ...m.crate, dropT: 0 });   // parachute in from the sky
       showToast('SUPPLY DROP INBOUND');
       break;
+    case 'pickDone':
+      S.picking = false;
+      S.loadout = (m.loadouts && m.loadouts[S.you]) || S.loadout;
+      if (m.ammoSeat === S.you && m.ammo) S.ammo = m.ammo;
+      $('armouryModal').classList.add('hidden');
+      S.selected = firstAvailableWeapon();
+      buildWeaponStrip(); updateDock();
+      showToast('LOADOUTS LOCKED — BATTLE ON');
+      break;
+    case 'pushOk': showToast('Nudges on — play whenever, we will fetch you'); break;
     case 'crateTaken': deferHp(() => applyCrateTaken(m)); break;
     case 'crates':      // post-shot re-settle: survivors follow the new ground
       deferHp(() => {
@@ -765,19 +805,28 @@ function myName() {
 // supply-drop-only. The pick lives in localStorage and rides along on every
 // create / join / quick / vs-CPU intent — so it applies even to instant
 // matches that never sit in a lobby.
+// The weapon draft happens AT MATCH START, not on the dashboard: when the
+// snapshot arrives with `pick`, this screen opens over the battlefield and the
+// first turn only begins once everyone has locked five (or seven) in.
 const ARM_POOL = ['cannon', 'mortar', 'volley', 'cluster', 'napalm', 'gas', 'airstrike', 'buster', 'wall', 'teleport', 'nano', 'minigun'];
 const ARM_DEFAULT = ['cannon', 'mortar', 'cluster', 'napalm', 'airstrike'];
-let armPicks = (() => {
+let armNeed = 5;
+let armPicks = [];
+function armPrefill() {
   try {
     const p = JSON.parse(localStorage.getItem('cc_loadout') || 'null');
-    if (Array.isArray(p) && p.length === 5 && new Set(p).size === 5 && p.every(id => ARM_POOL.includes(id))) return p;
+    if (Array.isArray(p)) return p.filter(id => ARM_POOL.includes(id)).slice(0, armNeed);
   } catch {}
-  return ARM_DEFAULT.slice();
-})();
-const myLoadout = () => armPicks.slice();
-function armSave() {
-  try { localStorage.setItem('cc_loadout', JSON.stringify(armPicks)); } catch {}
-  $('armouryCount').textContent = `${armPicks.length} picked`;
+  return ARM_DEFAULT.slice(0, armNeed);
+}
+function openDraft(n) {
+  armNeed = n;
+  armPicks = armPrefill();
+  document.querySelector('#armouryModal .arm-sub').innerHTML =
+    `Pick <b>${armNeed}</b> weapons for this battle — each carries <b>2 rounds</b>. ` +
+    'Everyone gets the <b>Tactical Nuke</b>; the <b>Railgun</b> only drops in supply crates.';
+  buildArmoury();
+  $('armouryModal').classList.remove('hidden');
 }
 function buildArmoury() {
   const grid = $('armouryGrid'); grid.innerHTML = '';
@@ -790,7 +839,7 @@ function buildArmoury() {
     cell.onclick = () => {
       const at = armPicks.indexOf(id);
       if (at >= 0) armPicks.splice(at, 1);
-      else if (armPicks.length < 5) armPicks.push(id);
+      else if (armPicks.length < armNeed) armPicks.push(id);
       paintArmoury();
     };
     grid.appendChild(cell);
@@ -798,19 +847,22 @@ function buildArmoury() {
   paintArmoury();
 }
 function paintArmoury() {
-  const full = armPicks.length === 5;
+  const full = armPicks.length === armNeed;
   for (const cell of $('armouryGrid').children) {
     const picked = armPicks.includes(cell.dataset.wid);
     cell.className = 'arm-cell' + (picked ? ' picked' : full ? ' dim' : '');
   }
   const st = $('armouryStatus');
-  st.textContent = full ? '5 of 5 picked — locked and loaded' : `${armPicks.length} of 5 picked`;
+  st.textContent = full ? `${armNeed} of ${armNeed} picked — locked and loaded` : `${armPicks.length} of ${armNeed} picked`;
   st.classList.toggle('ready', full);
   $('armouryCloseBtn').disabled = !full;
 }
-$('armouryBtn').onclick = () => { buildArmoury(); $('armouryModal').classList.remove('hidden'); };
-$('armouryCloseBtn').onclick = () => { armSave(); $('armouryModal').classList.add('hidden'); };
-armSave();
+$('armouryCloseBtn').onclick = () => {
+  try { localStorage.setItem('cc_loadout', JSON.stringify(armPicks)); } catch {}
+  sendMsg({ type: 'loadout', picks: armPicks.slice() });
+  $('armouryModal').classList.add('hidden');
+  showToast('Locked in — waiting for the others…');
+};
 
 let ccMode = 'duel', ccMax = 4;
 (function initMode() {
@@ -831,15 +883,15 @@ $('teeSel').value = ccTees;
 $('teeSel').onchange = () => { ccTees = $('teeSel').value; try { localStorage.setItem('cc_tees', ccTees); } catch {} };
 $('createBtn').onclick = () => {
   Audio.ensure(); $('homeError').textContent = '';
-  intent({ type: 'create', name: myName(), skin: mySkin(), mode: ccMode, max: ccMode === 'ffa' ? ccMax : 2, loadout: myLoadout(), tees: ccTees });
+  intent({ type: 'create', name: myName(), skin: mySkin(), mode: ccMode, max: ccMode === 'ffa' ? ccMax : 2, tees: ccTees });
 };
-$('quickBtn').onclick = () => { Audio.ensure(); S.quick = true; $('homeError').textContent = ''; intent({ type: 'quick', name: myName(), skin: mySkin(), loadout: myLoadout() }); };
+$('quickBtn').onclick = () => { Audio.ensure(); S.quick = true; $('homeError').textContent = ''; intent({ type: 'quick', name: myName(), skin: mySkin() }); };
 
 // Single-player vs CPU, with a difficulty selector.
 let cpuDifficulty = localStorage.getItem('pt_diff') || 'medium';
 $('diffSel').value = cpuDifficulty;
 $('diffSel').onchange = () => { cpuDifficulty = $('diffSel').value; localStorage.setItem('pt_diff', cpuDifficulty); };
-$('cpuBtn').onclick = () => { Audio.ensure(); $('homeError').textContent = ''; intent({ type: 'ai', difficulty: cpuDifficulty, name: myName(), skin: mySkin(), loadout: myLoadout() }); };
+$('cpuBtn').onclick = () => { Audio.ensure(); $('homeError').textContent = ''; intent({ type: 'ai', difficulty: cpuDifficulty, name: myName(), skin: mySkin() }); };
 
 // Landscape is the ONLY supported orientation. There is no preference and no
 // opt-out: body never gets .portrait-ok, so the CSS rotate prompt covers the
@@ -852,7 +904,7 @@ $('joinBtn').onclick = () => {
   const code = ($('codeInput').value || '').toUpperCase().trim();
   if (code.length < 3) { $('homeError').textContent = 'Enter the 4-letter code.'; return; }
   $('homeError').textContent = '';
-  intent({ type: 'join', code, name: myName(), skin: mySkin(), loadout: myLoadout() });
+  intent({ type: 'join', code, name: myName(), skin: mySkin() });
 };
 $('codeInput').addEventListener('input', (e) => { e.target.value = e.target.value.toUpperCase(); });
 $('cancelBtn').onclick = () => { sendMsg({ type: 'leave' }); sendMsg({ type: 'cancelQuick' }); S.code = null; S.quick = false; showScreen('home'); };
@@ -957,6 +1009,9 @@ function applySnapshot(m) {
   S.scales = (m.scales || []).slice();
   S.kinds = (m.kinds || []).slice();
   S.loadout = (m.loadouts && m.loadouts[m.you]) || null;
+  S.picking = !!m.pick;
+  if (m.pick && !S.loadout) setTimeout(() => openDraft(m.pick.n), 60);
+  else $('armouryModal').classList.add('hidden');
   if (S.loadout && !S.loadout.includes(S.selected) && S.selected !== 'railgun') S.selected = null;
   S.horde = m.horde || null;
   S.golf = m.golf || null;
@@ -1113,12 +1168,15 @@ function canAim() { return S.playing; }
 
 function updateDock() {
   const active = myTurn();
+  const pin = S.golf && S.golf.cup && S.tanks[S.you]
+    ? ` · ${Math.max(0, Math.round(Math.abs(S.golf.cup.x - S.tanks[S.you].x))).toLocaleString()} to the pin`
+    : '';
   $('turnLabel').textContent = S.golf
-    ? `Hole ${S.golf.hole}/9 · Par ${S.golf.par}` + (active ? ' — your shot' : (S.playing ? ` — ${S.names[S.turn]}` : ''))
+    ? `Hole ${S.golf.hole}/9 · Par ${S.golf.par}${pin}` + (active ? ' — your shot' : (S.playing ? ` — ${S.names[S.turn]}` : ''))
     : S.horde
     ? `${S.horde.kills}/${S.horde.target} down · Wave ${S.horde.wave}` + (active ? ' — YOUR TURN' : (S.playing ? ` — ${S.names[S.turn]}` : ''))
     : active ? 'YOUR TURN' : (S.playing ? `${S.names[S.turn]}'s turn — line up your shot` : '');
-  $('fireBtn').disabled = !active;
+  $('fireBtn').disabled = !active || !!S.picking;
   $('moveLeft').disabled = !active || S.fuel < MOVE_MIN;
   $('moveRight').disabled = !active || S.fuel < MOVE_MIN;
 }
@@ -1187,10 +1245,64 @@ window.addEventListener('orientationchange', hideWeaponName);
 // Aim controls (available even while waiting for your turn)
 // ---------------------------------------------------------------------------
 function myAim() { return S.aim[S.you]; }
-function updateAimUI() {
+// The ANGLE / POWER readouts are DRUM SLIDERS: the current value sits in the
+// middle with three neighbours ghosted either side; drag left/right to roll
+// through values (tap a neighbour to jump), and the ‹ › buttons still step.
+function drumRange(kind) {
+  return kind === 'angle'
+    ? [S.aimMin ?? -60, S.aimMax ?? 240]
+    : [1, 100];
+}
+function renderDrum(kind) {
+  const el = kind === 'angle' ? $('angleDrum') : $('powerDrum');
+  if (!el) return;
   const a = myAim();
-  $('angleVal').textContent = Math.round(a.angle) + '°';
-  $('powerVal').textContent = Math.round(a.power);
+  const val = Math.round(kind === 'angle' ? a.angle : a.power);
+  const [lo, hi] = drumRange(kind);
+  const suffix = kind === 'angle' ? '°' : '';
+  let html = '';
+  for (let off = -3; off <= 3; off++) {
+    const v = val + off;
+    const ok = v >= lo && v <= hi;
+    html += `<span class="dc${off === 0 ? ' cur' : ''}" data-v="${ok ? v : ''}" style="opacity:${off === 0 ? 1 : (0.62 - Math.abs(off) * 0.14).toFixed(2)}">${ok ? v + (off === 0 ? suffix : '') : ''}</span>`;
+  }
+  el.innerHTML = html;
+}
+function updateAimUI() {
+  renderDrum('angle');
+  renderDrum('power');
+}
+// drag-to-roll + tap-to-jump
+for (const kind of ['angle', 'power']) {
+  const el = kind === 'angle' ? $('angleDrum') : $('powerDrum');
+  if (!el) continue;
+  let drag = null;
+  el.addEventListener('pointerdown', (e) => {
+    if (!canAim()) return;
+    e.preventDefault();
+    const a = myAim();
+    drag = { x0: e.clientX, v0: Math.round(kind === 'angle' ? a.angle : a.power), moved: false };
+    el.setPointerCapture(e.pointerId);
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x0;
+    if (Math.abs(dx) > 4) drag.moved = true;
+    const [lo, hi] = drumRange(kind);
+    const v = Math.max(lo, Math.min(hi, drag.v0 + Math.round(dx / 13)));   // 13px per notch
+    const a = myAim();
+    if (kind === 'angle') setAim(v, a.power); else setAim(a.angle, v);
+  });
+  const done = (e) => {
+    if (drag && !drag.moved && e.target.classList && e.target.classList.contains('dc') && e.target.dataset.v !== '') {
+      const v = +e.target.dataset.v;                    // tap a neighbour: jump to it
+      const a = myAim();
+      if (canAim()) { if (kind === 'angle') setAim(v, a.power); else setAim(a.angle, v); }
+    }
+    drag = null;
+  };
+  el.addEventListener('pointerup', done);
+  el.addEventListener('pointercancel', () => { drag = null; });
 }
 let lastAimSent = 0;
 function relayAim() {
@@ -1323,18 +1435,36 @@ $('fireBtn').onclick = () => {
 // shape. Columns fall with gravity easing, radiating out from the blast;
 // raised earthworks pile up with a soft settle instead.
 // ---------------------------------------------------------------------------
-function startTerrainCollapse(diff) {
+// The shot's terrain change is QUEUED up front and released in pieces: every
+// detonation frees the columns around its own impact, so an airstrike carves
+// crater after crater under each falling bomb instead of one big reveal at
+// the end. applyResolve releases anything left over as a safety net.
+function queueTerrainDiff(diff) {
   finishTerrainAnim();                       // snap any still-running collapse
+  if (!diff) return;
   const { from, values } = diff;
   const old = new Array(values.length);
   for (let i = 0; i < values.length; i++) old[i] = S.terrain[from + i];
-  const mid = (values.length - 1) / 2;
-  const delays = new Array(values.length);
-  for (let i = 0; i < values.length; i++) {
-    delays[i] = (Math.abs(i - mid) / Math.max(1, mid)) * 0.14 + Math.random() * 0.08;
-  }
-  S.terrainAnim = { from, old, target: values.slice(), delays, t: 0, dur: 0.55 };
+  S.terrainAnim = { from, old, target: values.slice(), delays: new Array(values.length).fill(Infinity), t: 0, dur: 0.55 };
 }
+function releaseTerrainCols(x0, x1) {
+  const A = S.terrainAnim; if (!A) return;
+  const i0 = Math.max(0, Math.floor(x0 - A.from));
+  const i1 = Math.min(A.target.length - 1, Math.ceil(x1 - A.from));
+  if (i1 < i0) return;
+  const mid = (i0 + i1) / 2;
+  for (let i = i0; i <= i1; i++) {
+    if (A.delays[i] !== Infinity) continue;
+    A.delays[i] = A.t + (Math.abs(i - mid) / Math.max(1, (i1 - i0) / 2)) * 0.12 + Math.random() * 0.06;
+  }
+}
+function releaseAllTerrain() {
+  const A = S.terrainAnim; if (!A) return;
+  for (let i = 0; i < A.delays.length; i++) {
+    if (A.delays[i] === Infinity) A.delays[i] = A.t + Math.random() * 0.08;
+  }
+}
+function startTerrainCollapse(diff) { queueTerrainDiff(diff); releaseAllTerrain(); }
 function finishTerrainAnim() {
   const A = S.terrainAnim; if (!A) return;
   for (let i = 0; i < A.target.length; i++) S.terrain[A.from + i] = A.target[i];
@@ -1576,6 +1706,7 @@ function startNextShot() {
     if (end >= lastEnd) { lastEnd = end; lastDet = i; }
   }
   S.anim = { m, elapsed: 0, projectiles, lastDet, settleTimer: 0, resolved: false, strike: null };
+  queueTerrainDiff(m.terrainDiff);   // craters release under each detonation
   armAirstrike(S.anim, m);    // slow-motion window + the delivery aircraft
   muzzleBlast(m.by);          // barrel recoil + flash out of the cannon
   Audio.fire();
@@ -1635,6 +1766,12 @@ function advanceAnim(dt) {
 }
 
 function detonate(det) {
+  // FIRST: this blast frees its own patch of the queued terrain change — the
+  // ground breaks where and WHEN each bomb lands.
+  if (det && Number.isFinite(det.x)) {
+    const relR = Math.max(700, (det.r || 0) * 1.3 + 200);
+    releaseTerrainCols(det.x - relR, det.x + relR);
+  }
   // Teleport: no blast at all — the whole event IS the warp. Handled first so a
   // teleport det never falls into the round-particle burst-puff branch below.
   if (det.tp) { startWarp(det.tp); return; }
@@ -1753,7 +1890,10 @@ function detonate(det) {
 
 function applyResolve(m) {
   trackMyShot(m);
-  if (m.terrainDiff) startTerrainCollapse(m.terrainDiff);
+  if (m.terrainDiff) {
+    if (!S.terrainAnim) queueTerrainDiff(m.terrainDiff);   // direct path (no replay queued it)
+    releaseAllTerrain();                                   // free whatever no blast claimed
+  }
   S.tanks = m.tanks.map(t => ({ x: t.x, y: t.y }));
   // HP only ever falls within a match — take the min so a burn 'dot' that
   // already arrived can't be undone by this (higher) pre-burn snapshot.
@@ -3043,6 +3183,8 @@ function drawMech(i) {
   // hull deck bridging the pods
   ctx.fillStyle = MEK.dk;
   ctx.fillRect(sx - r * 1.2, sy - r * 0.86, r * 2.4, r * 0.26);
+  const hpFrac = S.hpMax && S.hpMax[i] ? Math.max(0, (S.hp[i] || 0) / S.hpMax[i]) : 1;
+  const tnow = performance.now();
 
   // hunched torso: a big beaked carcass leaning over its facing
   const lean = dir * r * 0.16;
@@ -3059,6 +3201,32 @@ function drawMech(i) {
   camoPatch(sx - r * 1.05 + lean, sy - r * 2.3, r * 1.9, r * 1.3, 29);
   ctx.fillStyle = MEK.dk;                                            // underbelly shade
   ctx.fillRect(sx - r * 0.98 + lean * 0.5, sy - r * 1.06, r * 1.8, r * 0.22);
+
+  // reactor heart: a caged core in the torso, pulsing hotter as the WARLORD
+  // takes damage — at low health it beats fast and angry.
+  const beat = 0.55 + 0.45 * Math.sin(tnow / (hpFrac < 0.35 ? 130 : 320));
+  const rcx = sx - r * 0.18 + lean, rcy = sy - r * 1.5;
+  ctx.fillStyle = `rgba(255,${Math.round(120 * hpFrac + 40)},30,${(0.35 + 0.45 * beat).toFixed(2)})`;
+  ctx.fillRect(rcx - r * 0.17, rcy - r * 0.17, r * 0.34, r * 0.34);
+  ctx.fillStyle = MEK.dark;                                          // cage bars
+  ctx.fillRect(rcx - r * 0.2, rcy - r * 0.035, r * 0.4, r * 0.07);
+  ctx.fillRect(rcx - r * 0.035, rcy - r * 0.2, r * 0.07, r * 0.4);
+
+  // battle damage: below half health the plating blackens and arcs spit
+  if (hpFrac < 0.5) {
+    ctx.fillStyle = 'rgba(16,14,12,0.55)';
+    ctx.fillRect(sx - r * 0.85 + lean, sy - r * 2.1, r * 0.5, r * 0.34);
+    ctx.fillRect(sx + r * 0.15 + lean, sy - r * 1.35, r * 0.42, r * 0.26);
+    ctx.fillRect(sx - r * 1.35, sy - r * 0.6, r * 0.4, r * 0.2);
+    if (Math.sin(tnow / 90 + i) > 0.86) {                           // sputtering short-circuit
+      ctx.strokeStyle = '#8affde'; ctx.lineWidth = Math.max(1, r * 0.05);
+      ctx.beginPath();
+      ctx.moveTo(sx - r * 0.6 + lean, sy - r * 1.95);
+      ctx.lineTo(sx - r * 0.48 + lean, sy - r * 1.78);
+      ctx.lineTo(sx - r * 0.58 + lean, sy - r * 1.66);
+      ctx.stroke();
+    }
+  }
 
   // beak cowl plating + eye visor (glows toward its facing)
   ctx.fillStyle = MEK.dk;
@@ -3118,10 +3286,12 @@ function drawMech(i) {
   const bLen = r * (1.35 - 0.4 * rc);
   ctx.strokeStyle = MEK.dk; ctx.lineWidth = Math.max(3, r * 0.22);   // shoulder actuator
   ctx.beginPath(); ctx.moveTo(sx + dir * r * 0.3 + lean, sy - r * 1.8); ctx.lineTo(gx0, gy0); ctx.stroke();
-  // triple rotary barrels: three parallel lines splaying from the hub
+  // triple rotary barrels — while the WARLORD charges a shot they visibly
+  // SPIN (the bright barrel cycles through the three positions)
   const perpX = -sinA * dir, perpY = cosA * dir;   // unit-ish perpendicular
+  const spinHot = S.bossCharge && i === S.boss ? (Math.floor(tnow / 90) % 3) - 1 : 0;
   for (let k = -1; k <= 1; k++) {
-    ctx.strokeStyle = k === 0 ? MEK.steel : MEK.gun;
+    ctx.strokeStyle = k === spinHot ? MEK.steel : MEK.gun;
     ctx.lineWidth = Math.max(2, r * 0.1);
     ctx.beginPath();
     ctx.moveTo(gx0 + perpX * k * r * 0.09, gy0 + perpY * k * r * 0.09);
@@ -3769,8 +3939,8 @@ function drawPlane() {
 // links and an ice hole as frost — same course language, same biome.
 function golfTopColor(wx, base) {
   const g = S.golf; if (!g || !g.cup) return null;
-  const inGreen = Math.abs(wx - g.cup.x) <= 1500;
-  const inFringe = !inGreen && Math.abs(wx - g.cup.x) <= 1950;
+  const inGreen = Math.abs(wx - g.cup.x) <= 2200;
+  const inFringe = !inGreen && Math.abs(wx - g.cup.x) <= 2750;
   const inFair = wx >= g.tee - 700 && wx <= g.cup.x + 700;
   // The green is REAL turf on every biome — mown lawn stripes, whether the
   // course runs through snow, sand or alpine meadow.
@@ -3780,21 +3950,33 @@ function golfTopColor(wx, base) {
   return mixToward(base, [20, 26, 18], 0.22);                  // the rough
 }
 
+// Real-course tee colours: championship black at the back, then men's white,
+// women's red, junior gold up front. Every box is drawn; the set being PLAYED
+// gets the glowing mat.
+const TEE_COLS = { champ: '#16181c', mens: '#f2f5f7', womens: '#ff5a52', junior: '#ffd23f' };
 function drawTeeBox() {
   const g = S.golf; if (!g || !g.tee) return;
-  const sx = wx2s(g.tee);
-  if (sx < -140 || sx > view.cssW + 140) return;
-  const gy = wy2s(surfaceAt(g.tee));
-  const u = Math.max(8, Math.min(18, 250 * cam.zoom));
-  ctx.fillStyle = 'rgba(20,30,18,0.55)';                        // tee mat
-  ctx.fillRect(sx - u * 3.2, gy - Math.max(1, u * 0.14), u * 6.4, Math.max(2, u * 0.22));
-  ctx.fillStyle = '#f2f5f7';                                    // tee markers
-  for (const s of [-1, 1]) {
-    ctx.beginPath();
-    ctx.moveTo(sx + s * u * 3.0, gy - u * 0.85);
-    ctx.lineTo(sx + s * u * 3.0 + u * 0.3, gy);
-    ctx.lineTo(sx + s * u * 3.0 - u * 0.3, gy);
-    ctx.closePath(); ctx.fill();
+  const sets = g.tees ? Object.entries(g.tees) : [['mens', g.tee]];
+  for (const [set, tx] of sets) {
+    const sx = wx2s(tx);
+    if (sx < -140 || sx > view.cssW + 140) continue;
+    const gy = wy2s(surfaceAt(tx));
+    const u = Math.max(8, Math.min(18, 250 * cam.zoom));
+    const active = set === (g.teeSet || 'mens');
+    ctx.fillStyle = active ? 'rgba(60,232,143,0.5)' : 'rgba(20,30,18,0.55)';   // tee mat
+    ctx.fillRect(sx - u * 2.6, gy - Math.max(1, u * 0.14), u * 5.2, Math.max(2, u * 0.22));
+    ctx.fillStyle = TEE_COLS[set] || '#f2f5f7';                                // set-coloured markers
+    for (const s of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(sx + s * u * 2.4, gy - u * 0.85);
+      ctx.lineTo(sx + s * u * 2.4 + u * 0.3, gy);
+      ctx.lineTo(sx + s * u * 2.4 - u * 0.3, gy);
+      ctx.closePath(); ctx.fill();
+      if ((TEE_COLS[set] || '') === '#16181c') {                 // black markers get a rim
+        ctx.strokeStyle = '#8a93a8'; ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    }
   }
 }
 
@@ -3803,7 +3985,9 @@ function drawGolfCup() {
   const sx = wx2s(g.cup.x);
   if (sx < -60 || sx > view.cssW + 60) return;
   const gy = wy2s(surfaceAt(g.cup.x));
-  const u = Math.max(9, Math.min(20, 260 * cam.zoom));
+  // The flag is the course's yardstick: a CONSTANT screen size at every zoom,
+  // so how small the fairway looks against it tells you how far you are.
+  const u = 13;
   // cup shadow (the notch itself is carved into the terrain server-side)
   ctx.fillStyle = 'rgba(10,12,16,0.55)';
   ctx.fillRect(sx - u * 0.5, gy - u * 0.12, u, u * 0.3);

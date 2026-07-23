@@ -20,7 +20,7 @@ const send = (m) => ws.send(JSON.stringify(m));
 let mySeat = -1, enemySeats = [], enemyFired = false, waveSeen = false,
     respawnSeen = false, shots = 0, tanks = [], terrain = null;
 
-ws.on('open', () => send({ type: 'create', name: 'Defender', skin: 'olive', mode: 'aliens', max: 2 }));
+ws.on('open', () => send({ type: 'create', name: 'Defender', skin: 'olive', mode: 'aliens', max: 2, loadout: ['cannon', 'mortar', 'cluster', 'napalm', 'airstrike', 'buster', 'volley'] }));
 ws.on('message', (raw) => {
   const m = JSON.parse(raw);
   if (m.type === 'created') {
@@ -100,7 +100,7 @@ function zombiePass() {
   const z = new WebSocket(URL);
   const zsend = (m) => z.send(JSON.stringify(m));
   const done = setTimeout(() => { fail('zombie pass timeout'); finish(); }, 15000);
-  z.on('open', () => zsend({ type: 'create', name: 'Survivor', skin: 'olive', mode: 'zombies', max: 2 }));
+  z.on('open', () => zsend({ type: 'create', name: 'Survivor', skin: 'olive', mode: 'zombies', max: 2, loadout: ['cannon', 'mortar', 'cluster', 'napalm', 'airstrike', 'buster', 'volley'] }));
   z.on('message', (raw) => {
     const m = JSON.parse(raw);
     if (m.type === 'lobby') zsend({ type: 'startMatch' });

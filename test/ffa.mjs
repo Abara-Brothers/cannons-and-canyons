@@ -47,7 +47,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 try {
   // ---- Lobby: host creates a 4-player FFA, three others join ----------------
   const host = await open('host');
-  send(host, { type: 'create', name: 'Ava', skin: 'olive', mode: 'ffa', max: 4 });
+  send(host, { type: 'create', name: 'Ava', skin: 'olive', mode: 'ffa', max: 4, loadout: ['cannon', 'mortar', 'cluster', 'napalm', 'airstrike'] });
   const created = await wait(host, 'created');
   if (created.mode !== 'ffa') fail(`created.mode is '${created.mode}', expected 'ffa'`);
   if (created.max !== 4) fail(`created.max is ${created.max}, expected 4`);
@@ -60,7 +60,7 @@ try {
   const others = [];
   for (const nm of ['Ben', 'Cleo', 'Dev']) {
     const ws = await open(nm);
-    send(ws, { type: 'join', code, name: nm, skin: 'desert' });
+    send(ws, { type: 'join', code, name: nm, skin: 'desert', loadout: ['cannon', 'mortar', 'cluster', 'napalm', 'airstrike'] });
     others.push(ws);
     await sleep(120);
   }
@@ -92,7 +92,7 @@ try {
 
   // ---- A late joiner must be refused ---------------------------------------
   const late = await open('late');
-  send(late, { type: 'join', code, name: 'Eve', skin: 'gold' });
+  send(late, { type: 'join', code, name: 'Eve', skin: 'gold', loadout: ['cannon', 'mortar', 'cluster', 'napalm', 'airstrike'] });
   const je = await wait(late, 'joinError');
   if (!/already started/i.test(je.reason)) fail(`late join reason was '${je.reason}'`);
   late.close();

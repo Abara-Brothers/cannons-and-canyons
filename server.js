@@ -10,7 +10,7 @@ import {
   laneBounds,
   generateTerrain, generateTrees, spawnTanks, surfaceAt, simulateShot, terrainDiff,
   weaponMenu, startingAmmo, WEAPON_BY_ID, tickHazards, burnTick, aiShot, mergeScorch,
-  LOADOUT_POOL, validLoadout, loadoutAmmo,
+  LOADOUT_POOL, validLoadout, loadoutAmmo, loadoutSizeFor,
   fireDamage, FIRE_TICK,
   BIOMES, BIOME_IDS, biomeLavaY, generateProps, generateRuins, prepareGolfHole,
 } from './game-core.js';
@@ -226,15 +226,36 @@ function killDead(room) {
 //       'zombies' -> 1..2 humans vs waves of rotting hulks
 // A loadout arrives as an array of weapon ids; anything malformed becomes null
 // and the seat falls back to the default kit at start.
-const sanitizeLoadout = (picks) => (validLoadout(picks) ? picks.slice() : null);
+const sanitizeLoadout = (picks, n = 5) => (validLoadout(picks, n) ? picks.slice() : null);
 const DEFAULT_LOADOUT = ['cannon', 'mortar', 'cluster', 'napalm', 'airstrike'];
-function randomLoadout() {
+const DEFAULT_LOADOUT7 = ['cannon', 'mortar', 'cluster', 'napalm', 'airstrike', 'buster', 'volley'];
+const defaultLoadoutFor = (n) => (n >= 7 ? DEFAULT_LOADOUT7.slice() : DEFAULT_LOADOUT.slice());
+function randomLoadout(n = 5) {
   const pool = LOADOUT_POOL.slice();
   for (let i = pool.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [pool[i], pool[j]] = [pool[j], pool[i]];
   }
-  return pool.slice(0, 5);
+  return pool.slice(0, n);
+}
+// The weapon draft happens AT THE START OF THE MATCH: anyone who arrives
+// without picks gets this long to choose before the defaults are issued.
+const PICK_MS = Number(process.env.PICK_MS || 25000);
+function finishPicking(room) {
+  if (!room.picking) return;
+  clearTimeout(room.pickTimer);
+  room.picking = false;
+  const n = room.pickN;
+  for (let i = 0; i < room.players.length; i++) {
+    if (!room.loadouts[i]) {
+      room.loadouts[i] = defaultLoadoutFor(n);
+      room.ammo[i] = loadoutAmmo(room.loadouts[i]);
+    }
+  }
+  for (let i = 0; i < room.players.length; i++) {
+    send(room.players[i].ws, { type: 'pickDone', loadouts: room.loadouts, ammo: room.ammo[i], ammoSeat: i });
+  }
+  beginTurn(room);
 }
 
 function createRoom(hostWs, name, skin, opts = {}) {
@@ -282,6 +303,7 @@ function snapshot(room, seat) {
       : weaponMenu(),
     golf: room.golf ? {
       hole: room.golf.hole, holes: 9, par: room.golf.par, cup: room.golf.cup, tee: room.golf.tee,
+      tees: room.golf.tees, teeSet: room.golf.teeSet,
       strokes: room.golf.strokes.map(r => r[room.golf.hole - 1] || 0),
       totals: room.golf.strokes.map(r => r.reduce((a, b) => a + b, 0)),
       done: room.golf.done.slice(),
@@ -297,6 +319,7 @@ function snapshot(room, seat) {
     boss: bossSeatOf(room) >= 0 ? bossSeatOf(room) : undefined,
     kinds: room.players.map(p => (p.boss ? 'mech' : p.horde ? (room.horde ? room.horde.kind : 'tank') : 'tank')),
     loadouts: room.loadouts || undefined,
+    pick: room.picking ? { n: room.pickN } : undefined,
     horde: room.horde ? { kills: room.horde.kills, target: room.horde.target, wave: room.horde.wave } : undefined,
     nano: room.nanoBots && room.nanoBots.some(b => b > 0) ? room.nanoBots : undefined,
     scales: room.tanks.map(t => t.scale || 1),
@@ -385,9 +408,9 @@ function hordeRespawn(room) {
 // further still, with the world sized to the hole (min 36k). The four tee sets
 // slide the TEE BOX forward — the cup never moves, exactly like a real course.
 const GOLF_HOLES = [
-  { d: 12500,  par: 3, biome: 'alpine' }, { d: 20200,  par: 3, biome: 'desert' }, { d: 106200, par: 4, biome: 'ice' },
-  { d: 16300,  par: 3, biome: 'alpine' }, { d: 132000, par: 5, biome: 'desert' }, { d: 86400,  par: 4, biome: 'ice' },
-  { d: 155000, par: 5, biome: 'alpine' }, { d: 18200,  par: 3, biome: 'desert' }, { d: 124200, par: 4, biome: 'ice' },
+  { d: 16500,  par: 3, biome: 'alpine' }, { d: 20200,  par: 3, biome: 'desert' }, { d: 106200, par: 4, biome: 'ice' },
+  { d: 17800,  par: 3, biome: 'alpine' }, { d: 132000, par: 5, biome: 'desert' }, { d: 86400,  par: 4, biome: 'ice' },
+  { d: 155000, par: 5, biome: 'alpine' }, { d: 19500,  par: 3, biome: 'desert' }, { d: 124200, par: 4, biome: 'ice' },
 ];
 const TEE_SETS = { champ: 1.0, mens: 0.92, womens: 0.84, junior: 0.72 };
 const sanitizeTees = (t) => (Object.prototype.hasOwnProperty.call(TEE_SETS, t) ? t : 'mens');
@@ -423,10 +446,16 @@ function nextHole(room, first) {
   room.terrain = generateTerrain(seed, 2, H.biome, room.worldW);
   // The cup sits at full championship distance; friendlier tee sets move the
   // TEE forward along the fairway.
-  const tf = TEE_SETS[room.tees || 'mens'] || 1;
   g.cup = { x: Math.min(room.worldW - 2000, 2200 + H.d), r: 650 };    // a proper bucket
-  g.tee = Math.max(1400, Math.round(g.cup.x - H.d * tf));
-  g.cup.y = prepareGolfHole(room.terrain, g.tee, g.cup.x);
+  // Every tee box exists on the course — championship at the back, junior at
+  // the front — and each player spawns on the set the host chose.
+  g.tees = {};
+  for (const [set, tf2] of Object.entries(TEE_SETS)) {
+    g.tees[set] = Math.max(1400, Math.round(g.cup.x - H.d * tf2));
+  }
+  g.teeSet = room.tees || 'mens';
+  g.tee = g.tees[g.teeSet];
+  g.cup.y = prepareGolfHole(room.terrain, g.tee, g.cup.x, Object.values(g.tees));
   room.trees = generateTrees(room.terrain, seed, 2);
   room.tanks = room.players.map(() => ({ x: g.tee, y: surfaceAt(room.terrain, g.tee), alive: true }));
   g.done.fill(false);
@@ -472,6 +501,7 @@ function golfShot(room, seat, msg) {
     ammo: room.ammo[seat], ammoSeat: seat,
     golf: {
       hole: g.hole, holes: GOLF_HOLES.length, par: g.par, cup: g.cup,
+      tees: g.tees, teeSet: g.teeSet,
       strokes: g.strokes.map(r => r[hi]),
       totals: g.strokes.map(r => r.reduce((a, b) => a + b, 0)),
       done: g.done.slice(), note, noteSeat: seat,
@@ -569,19 +599,28 @@ function startGame(room) {
       room.hp[i] = hp; room.hpMax[i] = hp;
     }
   } else room.horde = null;
-  const loadoutMode = room.mode === 'duel' || room.mode === 'ffa';
-  room.loadouts = room.players.map((pl, i) => {
-    if (!loadoutMode) return null;
-    return sanitizeLoadout(pl.loadout) || (pl.bot ? randomLoadout() : DEFAULT_LOADOUT.slice());
+  // EVERY combat mode drafts a loadout now (5 picks; survival modes 7). A seat
+  // that pre-supplied picks (or is a bot) is ready instantly; everyone else
+  // gets the pick screen and PICK_MS to choose.
+  room.pickN = loadoutSizeFor(room.mode);
+  room.loadouts = room.players.map((pl) => {
+    if (pl.bot) return pl.boss || pl.horde ? null : randomLoadout(room.pickN);
+    return sanitizeLoadout(pl.loadout, room.pickN);
   });
-  room.ammo = Array.from({ length: n }, (_, i) => (loadoutMode ? loadoutAmmo(room.loadouts[i]) : startingAmmo()));
+  room.ammo = Array.from({ length: n }, (_, i) => (room.loadouts[i] ? loadoutAmmo(room.loadouts[i]) : startingAmmo()));
+  room.picking = room.players.some((pl, i) => !pl.bot && !room.loadouts[i]);
   // Everyone starts turned toward the middle of the map. (n=2 -> [1, -1], as before.)
   room.facing = room.tanks.map((_, i) => (i < n / 2 ? 1 : -1));
   room.hazards = []; room.hazardSeq = 1; room.scorch = [];
   room.turn = Math.floor(Math.random() * n);
   room.state = 'playing';
   for (let i = 0; i < n; i++) send(room.players[i].ws, { type: 'start', ...snapshot(room, i) });
-  beginTurn(room);
+  if (room.picking) {
+    clearTimeout(room.pickTimer);
+    room.pickTimer = setTimeout(() => finishPicking(room), PICK_MS);
+  } else {
+    beginTurn(room);
+  }
 }
 
 // No shot-clock: players take as long as they like. Turns only advance on fire.
@@ -590,9 +629,9 @@ function beginTurn(room) {
   room.turnCount = (room.turnCount || 0) + 1;
   hordeRespawn(room);
   maybeDropCrate(room);
-  // A loadout player who is completely dry gets one emergency cannon shell —
-  // the duel must always be able to end.
-  if ((room.mode === 'duel' || room.mode === 'ffa') && room.ammo[room.turn]) {
+  // A drafted player who is completely dry gets one emergency cannon shell —
+  // the match must always be able to end.
+  if (room.loadouts && room.loadouts[room.turn] && room.ammo[room.turn]) {
     const a = room.ammo[room.turn];
     if (Object.values(a).every(v => !v)) a.cannon = 1;
   }
@@ -747,10 +786,21 @@ function botPlan(room, seat) {
   const toward = foe.x > me.x ? 1 : -1;
   const r = Math.random();
   let dir = 0;
-  if (d < 3400)       dir = r < 0.62 ? -toward : (r < 0.82 ? toward : 0);
-  else if (d > 13000) dir = r < 0.62 ? toward : (r < 0.82 ? -toward : 0);
-  else                dir = r < 0.34 ? toward : (r < 0.62 ? -toward : 0);
-  if (r > 0.9) dir = -dir;                                                 // the feint
+  if (meP.boss) {
+    // The WARLORD moves with intent: healthy, it stalks its mark into
+    // mid-range where the gatling and magma do their work; wounded, it opens
+    // the gap and leans on the spear and the slam.
+    const hurt = room.hp[seat] / (room.hpMax[seat] || 400) < 0.35;
+    if (hurt)            dir = d < 12000 ? -toward : 0;
+    else if (d > 7000)   dir = toward;
+    else if (d < 3800)   dir = -toward;
+    else                 dir = r < 0.4 ? toward : 0;
+  } else {
+    if (d < 3400)       dir = r < 0.62 ? -toward : (r < 0.82 ? toward : 0);
+    else if (d > 13000) dir = r < 0.62 ? toward : (r < 0.82 ? -toward : 0);
+    else                dir = r < 0.34 ? toward : (r < 0.62 ? -toward : 0);
+    if (r > 0.9) dir = -dir;                                               // the feint
+  }
   if (me.x < 2200) dir = 1; else if (me.x > (room.worldW || WORLD_W) - 2200) dir = -1;
   if (!dir) return null;
   const steps = meP.horde ? 6 + Math.floor(Math.random() * 10) : 8 + Math.floor(Math.random() * 22);
@@ -811,21 +861,33 @@ function botFire(room) {
   if (bot.boss) {
     room.bossShots = (room.bossShots || 0) + 1;
     const me = room.tanks[seat];
-    let d = Infinity;
-    for (let i = 0; i < room.tanks.length; i++) {
-      if (i === seat || room.tanks[i].alive === false) continue;
-      d = Math.min(d, Math.abs(room.tanks[i].x - me.x));
-    }
-    if (room.bossShots % 4 === 0) wid = 'b_quake';
+    // Target selection: finish the WOUNDED. The gunnery brain aims at the
+    // nearest living tank, so every other human is masked off the field.
+    const humans = room.players.map((p, i) => i)
+      .filter(i => i !== seat && !room.players[i].bot && room.tanks[i].alive !== false && room.hp[i] > 0);
+    let mark = -1;
+    for (const i of humans) if (mark < 0 || room.hp[i] < room.hp[mark]) mark = i;
+    if (mark >= 0) room.bossMark = mark;
+    const d = mark >= 0 ? Math.abs(room.tanks[mark].x - me.x) : Infinity;
+    // Cluster punish: two humans bunched together eat a Seismic Slam.
+    const bunched = humans.length > 1 && humans.some(a2 =>
+      humans.some(b2 => a2 !== b2 && Math.abs(room.tanks[a2].x - room.tanks[b2].x) < 2600));
+    const hurt = room.hp[seat] / (room.hpMax[seat] || 400) < 0.35;   // enraged
+    if (bunched) wid = 'b_quake';
+    else if (hurt) wid = room.bossShots % 2 ? 'b_spear' : 'b_quake';  // heavy hitters only
+    else if (room.bossShots % 4 === 0) wid = 'b_quake';
     else if (d > 11000) wid = room.bossShots % 2 ? 'b_spear' : 'b_hellstorm';
     else if (d > 4500) wid = ['b_gatling', 'b_hellstorm', 'b_magma'][room.bossShots % 3];
     else wid = room.bossShots % 2 ? 'b_magma' : 'b_gatling';
   }
-  // Horde enemies hunt HUMANS. Hand the gunnery brain a view of the field with
-  // fellow horde seats marked dead so it never opens fire on its own pack.
-  const field = bot.horde
-    ? room.tanks.map((t, j) => (j !== seat && room.players[j] && room.players[j].horde ? { ...t, alive: false } : t))
-    : room.tanks;
+  // Horde enemies hunt HUMANS (packmates masked); the WARLORD hunts its MARK
+  // (everyone else masked), so the weakest survivor takes the heat.
+  let field = room.tanks;
+  if (bot.horde) {
+    field = room.tanks.map((t, j) => (j !== seat && room.players[j] && room.players[j].horde ? { ...t, alive: false } : t));
+  } else if (bot.boss && room.bossMark != null && room.tanks[room.bossMark] && room.tanks[room.bossMark].alive !== false) {
+    field = room.tanks.map((t, j) => (j !== seat && j !== room.bossMark ? { ...t, alive: false } : t));
+  }
   const shot = aiShot(room.terrain, field, seat, bot.difficulty, room.facing[seat], wid);
   // Turn the turret toward its target, then show the barrel swing, then fire.
   if (shot.dir && shot.dir !== room.facing[seat]) {
@@ -885,7 +947,7 @@ function endGame(room) {
 }
 
 function handleFire(room, seat, msg) {
-  if (room.state !== 'playing' || room.turn !== seat) return;
+  if (room.state !== 'playing' || room.turn !== seat || room.picking) return;
   if (room.mode === 'golf') return golfShot(room, seat, msg);   // one club, no ammo
   const w = WEAPON_BY_ID[msg.weapon];
   if (!w) return;
@@ -1146,7 +1208,7 @@ function nanoTick(room) {
 }
 
 function handleMove(room, seat, dir) {
-  if (room.state !== 'playing' || room.turn !== seat) return;
+  if (room.state !== 'playing' || room.turn !== seat || room.picking) return;
   if (room.mode === 'golf') return;    // you walk to your BALL, not wherever you like
   if (room.fuel < MOVE_STEP) return;
   const tank = room.tanks[seat];
@@ -1176,7 +1238,7 @@ function teardown(room, notify) {
   clearInterval(room.botWalker);
   clearInterval(room.dotTimer);
   clearInterval(room.fireTimer);
-  clearInterval(room.nanoTimer); clearTimeout(room.nanoSeek);
+  clearInterval(room.nanoTimer); clearTimeout(room.nanoSeek); clearTimeout(room.pickTimer);
   for (const p of room.players) if (p) clearTimeout(p.dropTimer);
   if (notify) broadcast(room, { type: 'opponentLeft' });
   rooms.delete(room.code);
@@ -1314,6 +1376,17 @@ wss.on('connection', (ws) => {
         break;
       }
       case 'resume': handleResume(ws, msg); break;
+      case 'loadout': {
+        // The match-start draft: accept picks while the draft window is open.
+        if (!room || !room.picking || ws.seat == null) break;
+        const pl3 = room.players[ws.seat];
+        const picks = sanitizeLoadout(msg.picks, room.pickN);
+        if (!pl3 || pl3.bot || !picks || room.loadouts[ws.seat]) break;
+        room.loadouts[ws.seat] = picks;
+        room.ammo[ws.seat] = loadoutAmmo(picks);
+        if (room.players.every((pl, i) => pl.bot || room.loadouts[i])) finishPicking(room);
+        break;
+      }
       case 'pushSub': {
         // Turn-nudge opt-in: hang the browser subscription off the player so a
         // disconnected seat can still be pinged when its turn comes up.
@@ -1372,6 +1445,7 @@ wss.on('connection', (ws) => {
       }
       case 'fire': if (room) handleFire(room, ws.seat, msg); break;
       case 'rematch': {
+        if (room) for (const pl of room.players) if (pl && !pl.bot) pl.loadout = null;   // fresh draft every game
         // Everyone still in the room must be present. Eliminated players are still
         // "in the room" — elimination is per-match, not per-room.
         if (room && room.state === 'over' && room.players.length >= 2
