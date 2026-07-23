@@ -819,22 +819,25 @@ body.golf .fuel { display: none; }
 
 /* ---- Drum sliders (angle / power) ----------------------------------------- */
 .drum-wrap { min-width: 0; }
+/* Fixed geometry: every cell has a SET width (tabular digits included), so the
+   control never breathes or shifts while you roll through values. */
 .drum {
-  display: flex; align-items: baseline; justify-content: center; gap: 2px;
-  min-width: 148px; touch-action: none; cursor: ew-resize; user-select: none;
-  overflow: hidden; white-space: nowrap;
+  display: flex; align-items: center; justify-content: center; gap: 2px;
+  width: 170px; min-width: 170px; max-width: 170px;
+  touch-action: none; cursor: ew-resize; user-select: none;
+  overflow: hidden; white-space: nowrap; font-variant-numeric: tabular-nums;
 }
 .drum .dc {
-  flex: 0 0 auto; text-align: center; min-width: 17px;
+  flex: 0 0 18px; width: 18px; overflow: hidden; text-align: center;
   font-size: 10.5px; font-weight: 600; color: var(--muted); pointer-events: auto;
 }
 .drum .dc.cur {
-  min-width: 44px; font-size: clamp(15px, 2.6vh, 18px); font-weight: 900; color: var(--text);
+  flex: 0 0 48px; width: 48px; font-size: clamp(15px, 2.6vh, 18px); font-weight: 900; color: var(--text);
 }
 @media (max-width: 700px) {
-  .drum { min-width: 108px; }
-  .drum .dc { min-width: 12px; font-size: 8.5px; }
-  .drum .dc.cur { min-width: 34px; }
+  .drum { width: 128px; min-width: 128px; max-width: 128px; }
+  .drum .dc { flex: 0 0 13px; width: 13px; font-size: 8.5px; }
+  .drum .dc.cur { flex: 0 0 36px; width: 36px; }
 }
 
 /* The primary action of the whole dashboard: CREATE GAME — big, and the

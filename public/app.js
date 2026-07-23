@@ -1289,7 +1289,7 @@ for (const kind of ['angle', 'power']) {
     const dx = e.clientX - drag.x0;
     if (Math.abs(dx) > 4) drag.moved = true;
     const [lo, hi] = drumRange(kind);
-    const v = Math.max(lo, Math.min(hi, drag.v0 + Math.round(dx / 13)));   // 13px per notch
+    const v = Math.max(lo, Math.min(hi, drag.v0 - Math.round(dx / 13)));   // reel: strip follows the finger
     const a = myAim();
     if (kind === 'angle') setAim(v, a.power); else setAim(a.angle, v);
   });
