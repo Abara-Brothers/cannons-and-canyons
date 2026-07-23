@@ -291,9 +291,16 @@ export const WEAPONS = [
 export const WEAPON_BY_ID = Object.fromEntries(WEAPONS.map(w => [w.id, w]));
 
 // Public weapon info for the client UI (no physics numbers needed there).
+// One menu entry — includes the ballistic facts (speed/gravity multipliers,
+// pierce, apex-burst) so the client's aim preview can trace the EXACT arc the
+// server will integrate.
+export function menuEntry(w) {
+  return { id: w.id, name: w.name, color: w.color, ammo: w.ammo, desc: w.desc,
+           speedMul: w.speedMul, gravityMul: w.gravityMul || 1,
+           pierce: !!w.pierce, apex: !!w.split };
+}
 export function weaponMenu() {
-  return WEAPONS.filter(w => !w.bossOnly && !w.golfOnly && !w.aiOnly)
-    .map(w => ({ id: w.id, name: w.name, color: w.color, ammo: w.ammo, desc: w.desc }));
+  return WEAPONS.filter(w => !w.bossOnly && !w.golfOnly && !w.aiOnly).map(menuEntry);
 }
 
 export function startingAmmo() {

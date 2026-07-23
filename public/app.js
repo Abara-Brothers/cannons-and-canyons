@@ -4446,23 +4446,59 @@ function drawAim() {
   const moy = (t.y - 274) - Math.sin(rad) * 410;
   const danger = moy >= surfaceAt(mox) - 8;
 
-  // The preview arrow leaves from the BARREL TIP — the same point the shell
-  // actually spawns from — not from the hull.
+  // THE TRUE ARC: integrate the selected weapon's exact ballistics (same
+  // constants and Euler step as the server: G 900, 58 u/s per power point,
+  // DT 1/120) from the muzzle tip, and mark precisely where it lands. Pierce
+  // rounds (railgun) trace through terrain with no landing mark; apex-burst
+  // rounds (cluster/napalm) trace to their burst point.
   const msx = wx2s(mox), msy = wy2s(moy);
-  const len = 30 + pct * 130;
-  const ex = msx + Math.cos(rad) * dir * len, ey = msy - Math.sin(rad) * len;
   ctx.save();
-  ctx.setLineDash([5, 6]); ctx.lineWidth = 2;
-  ctx.strokeStyle = danger ? 'rgba(255,90,82,.95)' : 'rgba(255,210,63,.9)';
-  ctx.beginPath(); ctx.moveTo(msx, msy); ctx.lineTo(ex, ey); ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.fillStyle = danger ? 'rgba(255,90,82,.95)' : 'rgba(255,210,63,.95)';
-  const ah = 7, aa = Math.atan2(-(ey - sy), (ex - sx));
-  ctx.beginPath();
-  ctx.moveTo(ex, ey);
-  ctx.lineTo(ex - Math.cos(aa - 0.4) * ah, ey + Math.sin(aa - 0.4) * ah);
-  ctx.lineTo(ex - Math.cos(aa + 0.4) * ah, ey + Math.sin(aa + 0.4) * ah);
-  ctx.closePath(); ctx.fill();
+  {
+    const selW = (S.weapons || []).find(w => w.id === S.selected) || {};
+    const speed = aim.power * 58 * (selW.speedMul || 1);
+    const G = 900 * (selW.gravityMul || 1), DTs = 1 / 120;
+    let px = mox, py = moy, vx = Math.cos(rad) * dir * speed, vy = -Math.sin(rad) * speed;
+    let landed = null, burst = null, prevVy = vy;
+    const dots = [];
+    for (let i = 0; i < 3120; i++) {                 // 26 s cap, same as the sim
+      vy += G * DTs; px += vx * DTs; py += vy * DTs;
+      if (selW.apex && prevVy < 0 && vy >= 0) { burst = [px, py]; break; }
+      prevVy = vy;
+      if (px < 0 || px > WW() || py > WH()) break;
+      if (!selW.pierce && py >= surfaceAt(px)) { landed = [px, surfaceAt(px)]; break; }
+      if (i % 10 === 4) dots.push([px, py]);         // a dot every ~1/12 s of flight
+    }
+    ctx.fillStyle = danger ? 'rgba(255,90,82,.9)' : 'rgba(255,210,63,.9)';
+    for (let i = 0; i < dots.length; i++) {
+      const dsx = wx2s(dots[i][0]), dsy = wy2s(dots[i][1]);
+      if (dsx < -20 || dsx > view.cssW + 20 || dsy < -20 || dsy > view.cssH + 20) continue;
+      const k = 2.6 - Math.min(1.2, i / dots.length);          // dots thin with distance
+      ctx.globalAlpha = 0.85 - (i / dots.length) * 0.45;
+      ctx.fillRect(dsx - k / 2, dsy - k / 2, k, k);
+    }
+    ctx.globalAlpha = 1;
+    if (landed) {                                    // the landing mark: X + pulse ring
+      const lx = wx2s(landed[0]), ly = wy2s(landed[1]);
+      const pu = 6 + Math.sin(performance.now() / 240) * 1.5;
+      ctx.strokeStyle = danger ? 'rgba(255,90,82,.95)' : 'rgba(255,210,63,.95)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(lx - 5, ly - 5); ctx.lineTo(lx + 5, ly + 5);
+      ctx.moveTo(lx + 5, ly - 5); ctx.lineTo(lx - 5, ly + 5);
+      ctx.stroke();
+      ctx.setLineDash([4, 5]);
+      ctx.strokeRect(lx - pu, ly - pu, pu * 2, pu * 2);
+      ctx.setLineDash([]);
+    } else if (burst) {                              // apex burst: splitting chevrons
+      const bx = wx2s(burst[0]), by = wy2s(burst[1]);
+      ctx.strokeStyle = 'rgba(255,210,63,.95)'; ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(bx, by); ctx.lineTo(bx - 7, by + 9);
+      ctx.moveTo(bx, by); ctx.lineTo(bx, by + 11);
+      ctx.moveTo(bx, by); ctx.lineTo(bx + 7, by + 9);
+      ctx.stroke();
+    }
+  }
 
   const col = pct < 0.5 ? lerpColor([76, 232, 143], [255, 210, 63], pct / 0.5)
     : lerpColor([255, 210, 63], [255, 90, 82], (pct - 0.5) / 0.5);

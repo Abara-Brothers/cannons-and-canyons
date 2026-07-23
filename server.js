@@ -9,7 +9,7 @@ import {
   WORLD_W, WORLD_H, MOVE_BUDGET, MOVE_STEP, MAX_HP, LAVA_Y, AIM_MIN, AIM_MAX, clampAim,
   laneBounds,
   generateTerrain, generateTrees, spawnTanks, surfaceAt, simulateShot, terrainDiff,
-  weaponMenu, startingAmmo, WEAPON_BY_ID, tickHazards, burnTick, aiShot, mergeScorch,
+  weaponMenu, menuEntry, startingAmmo, WEAPON_BY_ID, tickHazards, burnTick, aiShot, mergeScorch,
   LOADOUT_POOL, validLoadout, loadoutAmmo, loadoutSizeFor,
   fireDamage, FIRE_TICK,
   BIOMES, BIOME_IDS, biomeLavaY, generateProps, generateRuins, prepareGolfHole,
@@ -299,7 +299,7 @@ function snapshot(room, seat) {
     trees: room.trees,
     tanks: room.tanks.map(t => ({ x: Math.round(t.x * 10) / 10, y: Math.round(t.y * 10) / 10 })),
     weapons: room.mode === 'golf'
-      ? [{ id: 'golfball', name: WEAPON_BY_ID.golfball.name, color: WEAPON_BY_ID.golfball.color, ammo: 99, desc: WEAPON_BY_ID.golfball.desc }]
+      ? [{ ...menuEntry(WEAPON_BY_ID.golfball), ammo: 99 }]
       : weaponMenu(),
     golf: room.golf ? {
       hole: room.golf.hole, holes: 9, par: room.golf.par, cup: room.golf.cup, tee: room.golf.tee,
