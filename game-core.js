@@ -234,8 +234,8 @@ export const WEAPONS = [
     desc: 'One warhead. Leaves fallout that keeps hurting.' },
   { id: 'nano',     name: 'Nano Swarm',    color: '#6be7ff', ammo: 2,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 4, radius: 260, terrain: 'none',
-    nano: { bots: 10, dmg: 3, r: 760 },
-    desc: 'A dart that bursts into 10 nanobots — they latch on and eat 3 health each.' },
+    nano: { bots: 10, dmg: 3, r: 1000 },   // seek radius — bots crawl to their prey
+    desc: 'A dart that releases 10 seeker bots — they hunt the nearest enemy, latch on and detonate for 3 damage each.' },
   { id: 'minigun',  name: 'Minigun',       color: '#aeb9c9', ammo: 2,
     shots: 14, spread: 7, speedMul: 1.0, damage: 3, radius: 170, terrain: 'crater', burst: true,
     desc: 'Fourteen rounds in one long ripping burst. Death by a thousand cuts.' },
@@ -284,7 +284,7 @@ export const WEAPONS = [
   // ---- Artillery Golf (golfOnly: the mode's single weapon) -------------------
   { id: 'golfball',  name: 'Golf Ball',       color: '#f4f6f2', ammo: 99, golfOnly: true,
     shots: 1, spread: 0,  speedMul: 0.9, damage: 0, radius: 0, terrain: 'none',
-    bounce: { rest: 0.55, fric: 0.84, stop: 100, max: 24 },   // long satisfying roll-out
+    bounce: { rest: 0.55, fric: 0.92, stop: 60, max: 32 },   // long satisfying roll-out
     desc: 'Dimpled, honest, and utterly indifferent to your feelings.' },
 ];
 
@@ -836,16 +836,17 @@ export function simulateShot(state, shot) {
         // onto any ground this shot reshaped) and BEFORE settle() below.
         if (w.teleport) d.tp = teleportTank(state, by, fp.x);
       }
-      // A nano dart that lands tags the nearest living tank in reach — the
-      // server runs the bot clock; the flag here just tells it who.
+      // A nano dart that lands releases seekers: they hunt the nearest living
+      // ENEMY tank inside the seek radius (never the firer), crawl onto it and
+      // detonate — the server runs that clock; the flag here just says who.
       if (w.nano && fp.hit) {
         let ns = -1, nd = Infinity;
         for (let ti = 0; ti < state.tanks.length; ti++) {
-          if (state.tanks[ti].alive === false) continue;
+          if (ti === by || state.tanks[ti].alive === false) continue;
           const dd = Math.hypot(state.tanks[ti].x - fp.x, state.tanks[ti].y - fp.y);
           if (dd <= w.nano.r && dd < nd) { nd = dd; ns = ti; }
         }
-        if (ns >= 0) { nanoOut = { seat: ns, bots: w.nano.bots, dmg: w.nano.dmg }; if (d) d.nano = ns; }
+        if (ns >= 0) { nanoOut = { seat: ns, bots: w.nano.bots, dmg: w.nano.dmg, x: fp.x, y: fp.y }; if (d) d.nano = ns; }
       }
       projectiles.push({ path: fp.path, det: d, delay: w.burst ? i * 6 : 0 });
     }

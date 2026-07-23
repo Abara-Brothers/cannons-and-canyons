@@ -46,10 +46,11 @@ const S = {
   mush: null,                          // active Tactical Nuke mushroom cloud (see startMushroom)
   particles: [], floaters: [], rings: [], quakes: [], flash: 0, shake: 0,
   bossCharge: null,                    // WARLORD wind-up between its aim and its shot
+  nanoSwarmFx: null,                   // seeker swarm in transit (impact point -> victim)
   muzzle: [],                          // directional HD muzzle blasts (own render pass)
   plane: null,                         // Air Strike delivery aircraft (cosmetic, own render pass)
   charging: false, pullPointer: null,
-  userZoom: 1, panY: 0,
+  userZoom: 1, panY: 0, panX: 0,
   recoil: [0, 0],                      // barrel kick when firing (1 → 0)
   lean: [0, 0], leanV: [0, 0], leanTarget: [0, 0], moveAt: [0, 0],  // drive lean + settle rock
 };
@@ -355,7 +356,7 @@ function cameraTarget() {
   tz = Math.min(0.32, Math.max(minMapZoom(), tz));
   const focus = S.tanks[S.you] || S.tanks[0];
   const vw = view.cssW / tz, vh = view.cssH / tz;
-  let tx = focus.x;
+  let tx = focus.x + (S.panX || 0);
   // Vertical: frame the acting tank (with arc headroom) while aiming; near full
   // zoom-out, drift to the midpoint of both tanks so both stay on screen. Blend on
   // the zoom level alone: 1 at min zoom → 0 once zoomed to 1.6× min (aiming).
@@ -441,6 +442,22 @@ function holdPan(btn, dir) {
 }
 holdPan($('panUp'), -1);
 holdPan($('panDown'), 1);
+// Horizontal pan — scouting long golf holes (and any wide map) left/right.
+function holdPanX(btn, dir) {
+  let iv = null;
+  const step = () => {
+    const amt = (view.cssW / Math.max(cam.zoom, 1e-4)) * 0.06 * dir;
+    S.panX = Math.max(-WW(), Math.min(WW(), (S.panX || 0) + amt));
+  };
+  const start = (e) => { e.preventDefault(); step(); iv = setInterval(step, 55); };
+  const stop = () => { clearInterval(iv); iv = null; };
+  btn.addEventListener('pointerdown', start);
+  btn.addEventListener('pointerup', stop);
+  btn.addEventListener('pointerleave', stop);
+  btn.addEventListener('pointercancel', stop);
+}
+holdPanX($('panLeft'), -1);
+holdPanX($('panRight'), 1);
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
   S.userZoom = clampUserZoom(S.userZoom * (e.deltaY > 0 ? 0.9 : 1.111));
@@ -461,9 +478,111 @@ function loadResume() {
 function clearResume() { try { localStorage.removeItem('cc_resume'); } catch {} }
 
 // ---------------------------------------------------------------------------
+// Career profile + achievements (local, per device). Every hook feeds PROF and
+// runs the achievement checks; the Career screen renders it.
+// ---------------------------------------------------------------------------
+const ACHS = [
+  ['first_blood', 'First Blood', 'Win your first match'],
+  ['thread', 'By a Thread', 'Win a battle with 5 Health or less remaining'],
+  ['untouchable', 'Untouchable', 'Win a battle without taking any damage'],
+  ['horizon', 'Over the Horizon', 'Damage an enemy from 20,000+ range'],
+  ['tunnel', 'Tunnel Rat', 'Take a kill with the Railgun — straight through the mountain'],
+  ['nuclear', 'Nuclear Option', 'Finish an enemy with the Tactical Nuke'],
+  ['swarm', 'Swarm Lord', 'Finish an enemy with the Nano Swarm'],
+  ['melt', 'Into the Melt', 'See an enemy die in the lava on a volcanic map'],
+  ['robber', 'Crate Robber', 'Shoot a supply crate open from range'],
+  ['warlord', 'Warlord Slayer', 'Win a Boss Fight'],
+  ['exterminator', 'Exterminator', 'Repel the Alien Invasion'],
+  ['gravekeeper', 'Gravekeeper', 'Clear the Zombie Uprising'],
+  ['ace', 'Hole in One', 'Sink the ball in a single stroke'],
+  ['underpar', 'Under Par', 'Finish the 9 holes under par'],
+];
+const PROF = (() => {
+  try {
+    const p = JSON.parse(localStorage.getItem('cc_career') || 'null');
+    if (p && p.v === 1) return p;
+  } catch {}
+  return { v: 1, modes: {}, weapons: {}, shots: 0, hits: 0, maxDmg: 0, longest: 0,
+           kills: 0, aces: 0, golfBest: null, hordeBest: { aliens: 0, zombies: 0 }, ach: {} };
+})();
+function saveProf() { try { localStorage.setItem('cc_career', JSON.stringify(PROF)); } catch {} }
+function modeStat(mode) { return PROF.modes[mode] || (PROF.modes[mode] = { w: 0, l: 0 }); }
+function award(id) {
+  if (PROF.ach[id]) return;
+  PROF.ach[id] = Date.now();
+  saveProf();
+  const a = ACHS.find(x => x[0] === id);
+  if (a) showToast(`ACHIEVEMENT — ${a[1]}`);
+}
+// One shot of mine just resolved: log usage, damage, range, and eliminations.
+function trackMyShot(m) {
+  if (m.by !== S.you) return;
+  PROF.shots++;
+  PROF.weapons[m.weapon] = (PROF.weapons[m.weapon] || 0) + 1;
+  let dealt = 0;
+  for (let i = 0; i < (m.damage || []).length; i++) if (i !== S.you) dealt += m.damage[i] || 0;
+  if (dealt > 0) {
+    PROF.hits++;
+    if (dealt > PROF.maxDmg) PROF.maxDmg = Math.round(dealt);
+    // range = my tank to the farthest detonation of this shot
+    const myX = S.tanks[S.you] ? S.tanks[S.you].x : 0;
+    for (const pr of (m.projectiles || [])) {
+      if (!pr.det) continue;
+      const dist = Math.abs(pr.det.x - myX);
+      if (dist > PROF.longest) PROF.longest = Math.round(dist);
+      if (dist >= 20000) award('horizon');
+    }
+  }
+  saveProf();
+}
+// An enemy went down during MY replay — credit the kill to my current weapon.
+function trackMyKill(seat) {
+  PROF.kills++;
+  const w = S.anim && S.anim.m ? S.anim.m.weapon : null;
+  if (w === 'railgun') award('tunnel');
+  if (w === 'nuke') award('nuclear');
+  const t = S.tanks[seat];
+  if (S.biome === 'volcanic' && t && S.lavaY && t.y >= S.lavaY - 320) award('melt');
+  saveProf();
+}
+function trackGameOver(m) {
+  const mode = S.mode || 'duel';
+  const ms = modeStat(mode);
+  let won = false;
+  if (m.golf) {
+    const mine = m.golf.totals[S.you] ?? m.golf.totals[0];
+    won = m.golf.totals.length < 2 || m.winner === S.you;
+    if (PROF.golfBest == null || mine < PROF.golfBest) PROF.golfBest = mine;
+    if (won && mine < m.golf.parTotal) award('underpar');
+  } else if (m.team) {
+    won = m.team === 'players';
+    if (won && mode === 'boss') award('warlord');
+    if (won && mode === 'aliens') award('exterminator');
+    if (won && mode === 'zombies') award('gravekeeper');
+    if (S.horde) PROF.hordeBest[mode] = Math.max(PROF.hordeBest[mode] || 0, S.horde.kills || 0);
+  } else {
+    won = m.winner === S.you;
+  }
+  ms[won ? 'w' : 'l']++;
+  refreshCareerChip();
+  if (won) {
+    award('first_blood');
+    if (!m.golf) {
+      const hp = S.hp[S.you] ?? 0, cap = (S.hpMax && S.hpMax[S.you]) || 150;
+      if (hp > 0 && hp <= 5) award('thread');
+      if (hp >= cap) award('untouchable');
+    }
+  }
+  saveProf();
+}
+
+// ---------------------------------------------------------------------------
 // Networking
 // ---------------------------------------------------------------------------
 function connect() {
+  // Never stack sockets: boot, the retry loop and resyncOnReturn can all land
+  // here — if a live or connecting socket exists, it wins.
+  if (S.ws && (S.ws.readyState === 0 || S.ws.readyState === 1)) return;
   const remote = window.CC_SERVER;                   // set in config.js for packaged app builds
   const host = remote || location.host;
   const proto = remote ? 'wss' : (location.protocol === 'https:' ? 'wss' : 'ws');
@@ -480,6 +599,22 @@ function connect() {
   ws.onmessage = (e) => { let m; try { m = JSON.parse(e.data); } catch { return; } handle(m); };
 }
 function sendMsg(m) { if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify(m)); }
+
+// Coming back from the background (app switch, phone lock, tab switch) is the
+// classic dead-buttons moment: the socket may have died silently, a replay may
+// be frozen mid-flight holding the deferHp gate shut, or we may simply have
+// missed broadcasts. One rule un-sticks everything: on return, reconnect if the
+// socket is gone, otherwise ask the server for a fresh restore snapshot —
+// applySnapshot rebuilds turn/hp/ammo state and clears any stuck animation.
+function resyncOnReturn() {
+  if (!S.playing) return;
+  const st = S.ws ? S.ws.readyState : 3;
+  if (st === 1) sendMsg({ type: 'sync' });
+  else if (st !== 0) connect();          // 0 = already reconnecting, leave it be
+}
+window.addEventListener('visibilitychange', () => { if (!document.hidden) resyncOnReturn(); });
+window.addEventListener('pageshow', () => resyncOnReturn());
+window.addEventListener('focus', () => resyncOnReturn());
 
 let pendingIntent = null;
 function flushIntent() { if (pendingIntent) { sendMsg(pendingIntent); pendingIntent = null; } }
@@ -679,60 +814,38 @@ armSave();
 
 let ccMode = 'duel', ccMax = 4;
 (function initMode() {
-  const mr = $('modeRow'), cr = $('countRow');
+  const mr = $('modeRow');
   mr.addEventListener('click', (e) => {
     const b = e.target.closest('.mode'); if (!b) return;
     ccMode = b.dataset.mode;
     for (const el of mr.querySelectorAll('.mode')) el.classList.toggle('active', el === b);
-    cr.classList.toggle('hidden', ccMode !== 'ffa');
-  });
-  cr.addEventListener('click', (e) => {
-    const b = e.target.closest('.cnt'); if (!b) return;
-    ccMax = +b.dataset.max;
-    for (const el of cr.querySelectorAll('.cnt')) el.classList.toggle('active', el === b);
+    // Only the option that matters for the chosen mode is visible — the panel
+    // stays calm instead of stacking every control at once.
+    $('countWrap').classList.toggle('hidden', ccMode !== 'ffa');
+    $('teeWrap').classList.toggle('hidden', ccMode !== 'golf');
   });
 })();
+$('countSel').onchange = () => { ccMax = +$('countSel').value; };
+let ccTees = localStorage.getItem('cc_tees') || 'mens';
+$('teeSel').value = ccTees;
+$('teeSel').onchange = () => { ccTees = $('teeSel').value; try { localStorage.setItem('cc_tees', ccTees); } catch {} };
 $('createBtn').onclick = () => {
   Audio.ensure(); $('homeError').textContent = '';
-  intent({ type: 'create', name: myName(), skin: mySkin(), mode: ccMode, max: ccMode === 'ffa' ? ccMax : 2, loadout: myLoadout() });
+  intent({ type: 'create', name: myName(), skin: mySkin(), mode: ccMode, max: ccMode === 'ffa' ? ccMax : 2, loadout: myLoadout(), tees: ccTees });
 };
 $('quickBtn').onclick = () => { Audio.ensure(); S.quick = true; $('homeError').textContent = ''; intent({ type: 'quick', name: myName(), skin: mySkin(), loadout: myLoadout() }); };
 
 // Single-player vs CPU, with a difficulty selector.
 let cpuDifficulty = localStorage.getItem('pt_diff') || 'medium';
-(function initDiff() {
-  const row = $('diffRow');
-  const sync = () => { for (const el of row.querySelectorAll('.diff')) el.classList.toggle('active', el.dataset.diff === cpuDifficulty); };
-  row.addEventListener('click', (e) => {
-    const b = e.target.closest('.diff'); if (!b) return;
-    cpuDifficulty = b.dataset.diff; localStorage.setItem('pt_diff', cpuDifficulty); sync();
-  });
-  sync();
-})();
+$('diffSel').value = cpuDifficulty;
+$('diffSel').onchange = () => { cpuDifficulty = $('diffSel').value; localStorage.setItem('pt_diff', cpuDifficulty); };
 $('cpuBtn').onclick = () => { Audio.ensure(); $('homeError').textContent = ''; intent({ type: 'ai', difficulty: cpuDifficulty, name: myName(), skin: mySkin(), loadout: myLoadout() }); };
 
-// Orientation preference. This does NOT rotate anything — the browser owns that.
-// It only records whether the player has accepted portrait; when they haven't,
-// body lacks .portrait-ok and the CSS rotate prompt becomes eligible on the game
-// screen. Landscape is the default because the whole HUD is tuned for it.
-let ccOrient = localStorage.getItem('cc_orient') === 'portrait' ? 'portrait' : 'landscape';
-function applyOrientPref() {
-  document.body.classList.toggle('portrait-ok', ccOrient === 'portrait');
-  for (const el of $('orientRow').querySelectorAll('.orient'))
-    el.classList.toggle('active', el.dataset.orient === ccOrient);
-}
-function setOrient(v) {
-  ccOrient = v === 'portrait' ? 'portrait' : 'landscape';
-  try { localStorage.setItem('cc_orient', ccOrient); } catch {}
-  applyOrientPref();
-}
-$('orientRow').addEventListener('click', (e) => {
-  const b = e.target.closest('.orient'); if (!b) return;
-  setOrient(b.dataset.orient);
-});
-// Landscape is ENFORCED in-match: the prompt has no dismiss. The only way to
-// play upright is the Upright chip on the menu screen, so the prompt offers a
-// (confirmed) exit back to the menu for anyone whose OS rotation-lock is on.
+// Landscape is the ONLY supported orientation. There is no preference and no
+// opt-out: body never gets .portrait-ok, so the CSS rotate prompt covers the
+// game screen whenever a phone is held upright.
+// Landscape is ENFORCED in-match: the prompt has no dismiss and no opt-out —
+// it offers only a (confirmed) exit for anyone whose OS rotation-lock is on.
 $('rhLeaveBtn').onclick = () => { $('confirmLeave').classList.remove('hidden'); };
 $('joinBtn').onclick = () => {
   Audio.ensure();
@@ -870,12 +983,12 @@ function applySnapshot(m) {
   clearKillcam();
   S.deferred = [];                     // start/restore hp+alive win outright — discard held work
   S.particles = []; S.floaters = []; S.rings = []; S.quakes = []; S.muzzle = []; S.flash = 0; S.shake = 0;
-  S.bossCharge = null;
+  S.bossCharge = null; S.nanoSwarmFx = null;
   S.plane = null;
   S.mush = null;                       // a nuke cloud must never survive into the next match
   S.chainQueue = [];
   S.recoil = [0, 0];
-  S.charging = false; S.pullPointer = null; S.userZoom = 1; S.panY = 0;
+  S.charging = false; S.pullPointer = null; S.userZoom = 1; S.panY = 0; S.panX = 0;
   computeMinY();
   $('overlay').classList.add('hidden');
   showScreen('game');
@@ -1146,7 +1259,7 @@ canvas.addEventListener('pointerdown', (e) => {
   if (pointers.size === 2) {
     S.charging = false; S.pullPointer = null;
     const [a, b] = [...pointers.values()];
-    pinchStart = { d: Math.hypot(a.x - b.x, a.y - b.y), zoom: S.userZoom, cy: (a.y + b.y) / 2, panY: S.panY || 0 };
+    pinchStart = { d: Math.hypot(a.x - b.x, a.y - b.y), zoom: S.userZoom, cy: (a.y + b.y) / 2, panY: S.panY || 0, cx: (a.x + b.x) / 2, panX: S.panX || 0 };
     return;
   }
   if (!canAim()) return;
@@ -1163,6 +1276,8 @@ canvas.addEventListener('pointermove', (e) => {
     // Two-finger vertical drag pans the camera up/down (see more sky / terrain).
     const dcy = (a.y + b.y) / 2 - pinchStart.cy;
     if (cam.zoom > 0) S.panY = Math.max(-WH() * 0.7, Math.min(WH() * 0.7, pinchStart.panY - dcy / cam.zoom));
+    const dcx = ((a.x + b.x) / 2) - pinchStart.cx;
+    if (cam.zoom > 0) S.panX = Math.max(-WW(), Math.min(WW(), pinchStart.panX - dcx / cam.zoom));
     return;
   }
   if (S.charging && canAim()) aimFromPointer(evX(e), evY(e));
@@ -1264,7 +1379,96 @@ function flushDeferred() {
   for (const fn of q) fn();
 }
 
-function enqueueShot(m) { S.queue.push(m); if (!S.anim) startNextShot(); }
+function enqueueShot(m) {
+  if (m.killcam) startClipRecording();          // the fatal shot gets taped
+  S.queue.push(m);
+  if (!S.anim) startNextShot();
+}
+
+// ---------------------------------------------------------------------------
+// Sharing: a painted result card (always available) and a recording of the
+// killcam replay (where MediaRecorder + canvas.captureStream exist). The card
+// is the growth loop: one tap -> a branded image in the group chat.
+// ---------------------------------------------------------------------------
+let clipRec = null, clipChunks = [], lastClip = null;
+function clipMime() {
+  if (!window.MediaRecorder) return null;
+  for (const m of ['video/mp4', 'video/webm;codecs=vp9', 'video/webm']) {
+    try { if (MediaRecorder.isTypeSupported(m)) return m; } catch {}
+  }
+  return null;
+}
+function startClipRecording() {
+  const mime = clipMime();
+  if (!mime || clipRec || typeof canvas.captureStream !== 'function') return;
+  try {
+    const stream = canvas.captureStream(30);
+    clipChunks = []; lastClip = null;
+    clipRec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 2500000 });
+    clipRec.ondataavailable = (e) => { if (e.data && e.data.size) clipChunks.push(e.data); };
+    clipRec.onstop = () => {
+      if (clipChunks.length) lastClip = new Blob(clipChunks, { type: mime.split(';')[0] });
+      clipRec = null;
+      const b = $('shareClipBtn'); if (b && lastClip) b.classList.remove('hidden');
+    };
+    clipRec.start(250);
+    setTimeout(stopClipRecording, 12000);       // hard cap — a clip, not a broadcast
+  } catch { clipRec = null; }
+}
+function stopClipRecording() { try { if (clipRec && clipRec.state !== 'inactive') clipRec.stop(); } catch { clipRec = null; } }
+
+async function shareBlob(blob, filename, fallbackName) {
+  const file = new File([blob], filename, { type: blob.type });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: 'Canyons & Cannons', text: 'Canyons & Cannons — play me: https://canyons-and-cannons.onrender.com' }); return; } catch {}
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = fallbackName || filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  showToast('Saved — share it anywhere');
+}
+
+// Paint the 1200x630 result card: verdict, the standings, and the pitch.
+function buildResultCard() {
+  const R = S.lastResult || {};
+  const c = document.createElement('canvas'); c.width = 1200; c.height = 630;
+  const x = c.getContext('2d');
+  const g = x.createLinearGradient(0, 0, 0, 630);
+  g.addColorStop(0, '#0b1020'); g.addColorStop(0.62, '#182246'); g.addColorStop(1, '#3a2a48');
+  x.fillStyle = g; x.fillRect(0, 0, 1200, 630);
+  x.fillStyle = '#ffb45a';                                     // low sun
+  x.fillRect(920, 340, 150, 8); x.fillRect(940, 358, 110, 6); x.fillRect(958, 372, 74, 5);
+  x.fillStyle = '#131c38';                                     // far mesas
+  x.beginPath(); x.moveTo(0, 630); x.lineTo(0, 470); x.lineTo(170, 470); x.lineTo(230, 380); x.lineTo(330, 380); x.lineTo(390, 470); x.lineTo(560, 470); x.lineTo(640, 350); x.lineTo(760, 350); x.lineTo(830, 470); x.lineTo(1040, 470); x.lineTo(1100, 410); x.lineTo(1200, 410); x.lineTo(1200, 630); x.closePath(); x.fill();
+  x.fillStyle = '#0d1329';                                     // near rim
+  x.beginPath(); x.moveTo(0, 630); x.lineTo(0, 560); x.lineTo(300, 560); x.lineTo(360, 510); x.lineTo(520, 510); x.lineTo(580, 560); x.lineTo(1200, 560); x.lineTo(1200, 630); x.closePath(); x.fill();
+  x.textAlign = 'left';
+  x.fillStyle = '#ff9d3d';
+  x.font = '900 34px system-ui, sans-serif';
+  x.fillText('CANYONS & CANNONS', 64, 88);
+  x.fillStyle = R.win ? '#3ce88f' : '#ff6b6b';
+  x.font = '900 92px system-ui, sans-serif';
+  x.fillText(R.title || 'BATTLE COMPLETE', 60, 200);
+  x.fillStyle = '#aeb9d6';
+  x.font = '600 30px system-ui, sans-serif';
+  x.fillText(R.subtitle || '', 64, 250);
+  // standings
+  x.font = '700 34px system-ui, sans-serif';
+  let yy = 330;
+  for (const line of (R.lines || []).slice(0, 4)) {
+    x.fillStyle = line.me ? '#54c8ff' : '#e8ecf5';
+    x.fillText(line.text, 64, yy);
+    yy += 52;
+  }
+  x.fillStyle = '#ffd23f';
+  x.font = '700 26px system-ui, sans-serif';
+  if (R.statLine) x.fillText(R.statLine, 64, 560);
+  x.fillStyle = '#8a93a8';
+  x.textAlign = 'right';
+  x.font = '700 28px system-ui, sans-serif';
+  x.fillText('play me — canyons-and-cannons.onrender.com', 1140, 600);
+  return c;
+}
 
 // ---------------------------------------------------------------------------
 // KILLCAM. The server flags the fatal shot (`m.killcam`); the last stretch of
@@ -1459,8 +1663,11 @@ function detonate(det) {
         life: 0.4 + Math.random() * 0.4, age: 0, r: 1.6 + Math.random() * 1.6, g: 0.3,
         shape: 'spark', color: k % 3 ? '#6be7ff' : '#ffffff' });
     }
+    // The swarm doesn't teleport onto its prey — it CHASES. drawNanoBots lerps
+    // the bots from this impact point to the victim over the seek window.
+    S.nanoSwarmFx = { x: det.x, y: det.y, seat: det.nano, t0: performance.now(), seekMs: 1600, mine: !!(S.anim && S.anim.m && S.anim.m.by === S.you) };
     const vt = S.tanks[det.nano];
-    if (vt) S.floaters.push({ x: vt.x, y: vt.y - 430, text: 'NANOBOTS ATTACHED', age: 0, life: 1.7, color: '#6be7ff' });
+    if (vt) S.floaters.push({ x: det.x, y: det.y - 260, text: 'SEEKERS DEPLOYED', age: 0, life: 1.5, color: '#6be7ff' });
     Audio.boom(200);
     return;
   }
@@ -1545,6 +1752,7 @@ function detonate(det) {
 }
 
 function applyResolve(m) {
+  trackMyShot(m);
   if (m.terrainDiff) startTerrainCollapse(m.terrainDiff);
   S.tanks = m.tanks.map(t => ({ x: t.x, y: t.y }));
   // HP only ever falls within a match — take the min so a burn 'dot' that
@@ -1557,6 +1765,7 @@ function applyResolve(m) {
       if (m.alive[i] === false && S.alive[i] !== false) {
         S.alive[i] = false;
         showToast(`${S.names[i]} destroyed!`);
+        if (i !== S.you && S.anim && S.anim.m && S.anim.m.by === S.you) trackMyKill(i);
       }
     }
   }
@@ -1585,6 +1794,7 @@ function applyResolve(m) {
     const t = S.tanks[m.golf.noteSeat];
     const NOTES = { holed: 'SUNK IT!', hazard: 'HAZARD +1', oob: 'OUT OF BOUNDS +1', capped: 'PICKED UP' };
     if (m.golf.note && t) S.floaters.push({ x: t.x, y: t.y - 420, text: NOTES[m.golf.note] || '', age: 0, life: 1.8, color: m.golf.note === 'holed' ? '#b6ff5a' : '#ffd23f' });
+    if (m.golf.note === 'holed' && m.golf.noteSeat === S.you && m.golf.strokes && m.golf.strokes[S.you] === 1) { PROF.aces++; award('ace'); saveProf(); }
   }
   updateHud(); buildWeaponStrip();
   for (let i = 0; i < S.n; i++) {
@@ -1600,6 +1810,7 @@ function applyResolve(m) {
 // replaying it — and its `hp` already includes the BLAST damage, so applying it
 // on arrival is what makes the bar drop before impact. Gate it.
 function applyCrateTaken(m) {
+  if (m.how === 'shot' && m.seat === S.you) award('robber');
   S.crates = S.crates.filter(c => c.id !== m.id);
   if (m.hp) S.hp = m.hp.slice();             // pickups can RAISE health (repair) — trust the server
   if (m.shield) S.shield = m.shield.slice();
@@ -1614,13 +1825,32 @@ function applyDotNow(m) {
   // Fire ticks carry the live hazard list so a blaze that has burned out (6s)
   // vanishes here instead of lingering until the next shot lands.
   if (m.hazards) S.hazards = m.hazards;
-  if (m.nano) S.nanoBots = m.nano.slice();
+  if (m.nano) {
+    // A nano pulse = bots that just detonated on their victim: pop them with a
+    // cyan spark burst sized to how many went off.
+    if (m.src === 'nano' && S.nanoBots) {
+      for (let i = 0; i < m.nano.length; i++) {
+        const popped = (S.nanoBots[i] || 0) - (m.nano[i] || 0);
+        if (popped <= 0 || !S.tanks[i]) continue;
+        for (let k = 0; k < popped * 7; k++) {
+          const a = Math.random() * Math.PI * 2, sp = 200 + Math.random() * 420;
+          S.particles.push({ x: S.tanks[i].x + (Math.random() - 0.5) * 240, y: S.tanks[i].y - 180 - Math.random() * 240,
+            vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 0.35 + Math.random() * 0.3, age: 0,
+            r: 1.6 + Math.random() * 1.8, g: 0.4, shape: 'spark', color: k % 3 ? '#6be7ff' : '#ffffff' });
+        }
+        if ((m.nano[i] || 0) <= 0 && S.nanoSwarmFx && S.nanoSwarmFx.seat === i) S.nanoSwarmFx = null;
+      }
+    }
+    S.nanoBots = m.nano.slice();
+  }
   if (m.hp) S.hp = m.hp.map((h, i) => Math.min(S.hp[i], h));
   if (m.alive) {
     for (let i = 0; i < m.alive.length; i++) {
       if (m.alive[i] === false && S.alive[i] !== false) {
         S.alive[i] = false;
         showToast(`${S.names[i]} destroyed!`);
+        if (i !== S.you && m.src === 'nano' && S.nanoSwarmFx && S.nanoSwarmFx.mine) award('swarm');
+        if (i !== S.you && S.biome === 'volcanic' && S.tanks[i] && S.lavaY && S.tanks[i].y >= S.lavaY - 320) award('melt');
       }
     }
   }
@@ -2111,6 +2341,7 @@ function showToast(text) {
 function onGameOver(m) {
   S.playing = false;
   clearKillcam();
+  try { trackGameOver(m); } catch {}
   if (m.hp) S.hp = m.hp.slice();
   if (m.alive) S.alive = m.alive.slice();
   updateHud();
@@ -2182,6 +2413,15 @@ function onGameOver(m) {
   showOverlay(title, m.hp, cls, false);
 }
 function showOverlay(title, hp, cls, hideRematch) {
+  stopClipRecording();
+  // Freeze what the share card needs the moment the verdict is known.
+  S.lastResult = {
+    title: (title || '').replace(/[a-z].*$/s, (m0) => m0),      // keep as-is; card truncates visually
+    win: cls === 'win',
+    subtitle: `${({ duel: 'Duel', ffa: 'Free-for-all', boss: 'Boss Fight', golf: 'Artillery Golf', aliens: 'Alien Invasion', zombies: 'Zombie Uprising' })[S.mode] || 'Battle'} · ${S.biome || ''} canyon`,
+    lines: (hp || []).map((h, i) => ({ me: i === S.you, text: `${S.names[i] || 'Player'} — ${Math.max(0, h)} Health` })),
+    statLine: PROF.maxDmg ? `Career: ${PROF.kills} kills · biggest hit ${PROF.maxDmg} · longest ${PROF.longest}` : '',
+  };
   const rt = $('resultTitle'); rt.textContent = title; rt.className = 'result ' + cls;
   const oldRep = $('battleReport'); if (oldRep) oldRep.remove();
   const oldLoot = $('lootLine'); if (oldLoot) oldLoot.remove();
@@ -2190,8 +2430,18 @@ function showOverlay(title, hp, cls, hideRematch) {
     `<div class="fs" style="--seat:${seatColor(i)}"><b>${Math.max(0, h)}</b><span>${(S.names[i] || '')} Health</span></div>`
   ).join('') : '';
   $('rematchBtn').style.display = hideRematch ? 'none' : '';
+  const clipBtn = $('shareClipBtn');
+  if (clipBtn) clipBtn.classList.toggle('hidden', !lastClip);
   $('overlay').classList.remove('hidden');
 }
+$('shareCardBtn').onclick = () => {
+  buildResultCard().toBlob((b) => { if (b) shareBlob(b, 'canyons-result.png'); }, 'image/png');
+};
+$('shareClipBtn').onclick = () => {
+  if (!lastClip) return;
+  const ext = lastClip.type.includes('mp4') ? 'mp4' : 'webm';
+  shareBlob(lastClip, `canyons-replay.${ext}`);
+};
 $('rematchBtn').onclick = () => sendMsg({ type: 'rematch' });
 $('exitBtn').onclick = () => { clearResume(); sendMsg({ type: 'leave' }); location.href = location.origin; };
 
@@ -2214,7 +2464,7 @@ const HELP_WEAPONS = [
   { id: 'gas',      name: 'Toxic Gas',     note: '2 rounds',         desc: 'No blast — a wide lingering cloud that poisons anyone inside it every couple of seconds.' },
   { id: 'airstrike', name: 'Air Strike',   note: '2 beacons',        desc: 'Fire a beacon; a bomber flattens wherever it lands.' },
   { id: 'buster',   name: 'Bunker Buster', note: '2 rounds',         desc: 'Burrows deep before detonating — digs a brutal pit under whatever it hits.' },
-  { id: 'nano',     name: 'Nano Swarm',    note: '2 darts',          desc: 'A dart that bursts into 10 nanobots. They latch onto the nearest tank and eat 3 health each, one per second.' },
+  { id: 'nano',     name: 'Nano Swarm',    note: '2 darts',          desc: 'A dart that releases 10 seeker bots. They hunt the nearest enemy in range, latch on, and detonate for 3 damage each.' },
   { id: 'minigun',  name: 'Minigun',       note: '2 belts',          desc: 'Fourteen rounds in one long ripping burst. Death by a thousand cuts.' },
   { id: 'wall',     name: 'Earthworks',    note: '3 charges',        desc: 'Heaps up a huge mound of dirt where it lands. Deals no damage — pure cover.' },
   { id: 'teleport', name: 'Teleport',      note: '2 charges',        desc: 'Warp your tank to wherever the shell lands. No blast — pick your ground.' },
@@ -2226,12 +2476,54 @@ let helpBuilt = false;
 function buildHelp() {
   if (helpBuilt) return; helpBuilt = true;
   $('helpWeapons').innerHTML = HELP_WEAPONS.map(w =>
-    `<div class="hw-row"><span class="hw-ico">${ICONS[w.id] || ''}</span>` +
-    `<span class="hw-name">${w.name}<i>${w.note}</i></span>` +
-    `<span class="hw-traj">${TRAJ[w.id] || ''}</span>` +
-    `<span class="hw-desc">${w.desc}</span></div>`).join('');
+    `<button type="button" class="hw-cell" data-wid="${w.id}" title="${w.desc}">` +
+    `${ICONS[w.id] || ''}<span class="hw-nm">${w.name}</span>${TRAJ[w.id] || ''}</button>`).join('');
+  $('helpWeapons').addEventListener('click', (e) => {
+    const cell = e.target.closest('.hw-cell'); if (!cell) return;
+    const w = HELP_WEAPONS.find(x => x.id === cell.dataset.wid);
+    if (w) $('hwDetail').textContent = `${w.name} (${w.note}) — ${w.desc}`;
+    for (const el of $('helpWeapons').children) el.classList.toggle('sel', el === cell);
+  });
+  $('helpTabs').addEventListener('click', (e) => {
+    const t = e.target.closest('.tab'); if (!t) return;
+    for (const el of $('helpTabs').children) el.classList.toggle('active', el === t);
+    for (const pane of document.querySelectorAll('#helpModal .tabpane'))
+      pane.classList.toggle('active', pane.dataset.pane === t.dataset.tab);
+  });
 }
 const openHelp = () => { buildHelp(); $('helpModal').classList.remove('hidden'); };
+
+// ---- Career screen -------------------------------------------------------------
+function totalWins() { return Object.values(PROF.modes).reduce((a, s) => a + (s.w || 0), 0); }
+function refreshCareerChip() { const el = $('careerWins'); if (el) el.textContent = `${totalWins()} wins`; }
+function buildCareer() {
+  const fav = Object.entries(PROF.weapons).sort((a, b) => b[1] - a[1])[0];
+  const favName = fav ? ((HELP_WEAPONS.find(w => w.id === fav[0]) || {}).name || fav[0]) : null;
+  const acc = PROF.shots ? Math.round((PROF.hits / PROF.shots) * 100) : 0;
+  const MODES = [['duel', 'Duel'], ['ffa', 'Free-for-all'], ['boss', 'Boss Fight'], ['aliens', 'Aliens'], ['zombies', 'Zombies'], ['golf', 'Golf']];
+  $('careerStats').innerHTML =
+    MODES.map(([id, nm]) => {
+      const s = PROF.modes[id] || { w: 0, l: 0 };
+      return `<div class="cs-row"><span>${nm}</span><b>${s.w} W – ${s.l} L</b></div>`;
+    }).join('') +
+    `<div class="cs-row cs-sep"><span>Accuracy</span><b>${acc}% (${PROF.hits}/${PROF.shots})</b></div>` +
+    `<div class="cs-row"><span>Favourite weapon</span><b>${favName || '—'}</b></div>` +
+    `<div class="cs-row"><span>Kills</span><b>${PROF.kills}</b></div>` +
+    `<div class="cs-row"><span>Most damage, one shot</span><b>${PROF.maxDmg || 0}</b></div>` +
+    `<div class="cs-row"><span>Longest hit</span><b>${PROF.longest ? PROF.longest.toLocaleString() + ' u' : '—'}</b></div>` +
+    `<div class="cs-row"><span>Best golf round</span><b>${PROF.golfBest != null ? PROF.golfBest + ' strokes' : '—'}</b></div>` +
+    `<div class="cs-row"><span>Holes in one</span><b>${PROF.aces || 0}</b></div>` +
+    `<div class="cs-row"><span>Alien / zombie kills, best run</span><b>${PROF.hordeBest.aliens || 0} / ${PROF.hordeBest.zombies || 0}</b></div>`;
+  $('careerAchs').innerHTML = ACHS.map(([id, nm, desc]) => {
+    const got = !!PROF.ach[id];
+    return `<div class="ach${got ? ' got' : ''}" title="${desc}">` +
+      `<span class="ach-ic">${got ? UI_IC.crown : UI_IC.lock}</span><span class="ach-nm">${nm}</span></div>`;
+  }).join('');
+}
+$('careerBtn').onclick = () => { buildCareer(); $('careerModal').classList.remove('hidden'); };
+$('careerCloseBtn').onclick = () => $('careerModal').classList.add('hidden');
+$('careerModal').onclick = (e) => { if (e.target.id === 'careerModal') $('careerModal').classList.add('hidden'); };
+refreshCareerChip();
 $('helpBtn').onclick = openHelp;
 $('helpHomeBtn').onclick = openHelp;
 $('helpCloseBtn').onclick = () => $('helpModal').classList.add('hidden');
@@ -3478,9 +3770,13 @@ function drawPlane() {
 function golfTopColor(wx, base) {
   const g = S.golf; if (!g || !g.cup) return null;
   const inGreen = Math.abs(wx - g.cup.x) <= 1500;
+  const inFringe = !inGreen && Math.abs(wx - g.cup.x) <= 1950;
   const inFair = wx >= g.tee - 700 && wx <= g.cup.x + 700;
-  if (inGreen) return (Math.floor(wx / 300) % 2 === 0) ? mixToward(base, [255, 255, 255], 0.30) : mixToward(base, [255, 255, 255], 0.20);
-  if (inFair)  return (Math.floor(wx / 800) % 2 === 0) ? mixToward(base, [255, 255, 255], 0.10) : base;
+  // The green is REAL turf on every biome — mown lawn stripes, whether the
+  // course runs through snow, sand or alpine meadow.
+  if (inGreen) return (Math.floor(wx / 300) % 2 === 0) ? [88, 166, 74] : [70, 146, 60];
+  if (inFringe) return [58, 118, 52];                          // collar of deeper turf
+  if (inFair)  return (Math.floor(wx / 800) % 2 === 0) ? mixToward(base, [110, 190, 96], 0.28) : mixToward(base, [90, 168, 80], 0.18);
   return mixToward(base, [20, 26, 18], 0.22);                  // the rough
 }
 
@@ -3680,16 +3976,28 @@ function drawNanoBots(i) {
   const { sx, sy, r } = tankScreen(i);
   const n = Math.min(10, S.nanoBots[i] || 0);
   const tms = performance.now() / 1000;
+  // Seek phase: the swarm streams from the dart's impact point to its victim,
+  // each bot staggered so the pack reads as a crawling line, not a blob.
+  const fx = S.nanoSwarmFx;
+  const seeking = fx && fx.seat === i ? Math.min(1, (performance.now() - fx.t0) / fx.seekMs) : 1;
+  const ox = fx && fx.seat === i ? wx2s(fx.x) : sx;
+  const oy = fx && fx.seat === i ? wy2s(fx.y) : sy;
   ctx.fillStyle = '#6be7ff';
   for (let k = 0; k < n; k++) {
     const ph = tms * (1.3 + (k % 3) * 0.45) + k * 2.4;
-    const bx = sx + Math.sin(ph) * r * 1.1;
-    const by = sy - r * 0.55 - Math.abs(Math.sin(ph * 1.7 + k)) * r * 1.1;
+    const hx = sx + Math.sin(ph) * r * 1.1;
+    const hy = sy - r * 0.55 - Math.abs(Math.sin(ph * 1.7 + k)) * r * 1.1;
+    // per-bot progress: front-runners arrive first, stragglers scuttle behind
+    const lag = clamp01(seeking * 1.35 - (k / n) * 0.35);
+    const bx = ox + (hx - ox) * lag + Math.sin(ph * 3.1) * (1 - lag) * r * 0.5;
+    const by = oy + (hy - oy) * lag - Math.abs(Math.sin(ph * 2.3)) * (1 - lag) * r * 0.4;
     const s2 = Math.max(1.5, r * 0.12);
     ctx.fillRect(bx - s2 / 2, by - s2 / 2, s2, s2);
   }
-  ctx.fillStyle = 'rgba(107,231,255,0.16)';                    // faint interference haze
-  ctx.fillRect(sx - r * 1.4, sy - r * 1.9, r * 2.8, r * 1.9);
+  if (seeking >= 1) {
+    ctx.fillStyle = 'rgba(107,231,255,0.16)';                  // interference haze once latched
+    ctx.fillRect(sx - r * 1.4, sy - r * 1.9, r * 2.8, r * 1.9);
+  }
 }
 
 // ---- Crate shield -----------------------------------------------------------
@@ -4573,7 +4881,6 @@ function boot() {
   const hadName = !!savedName();
   if (hadName) $('nameInput').value = savedName();
   else setCallsign(rollCallsign(null));
-  applyOrientPref();
   $('muteBtn').innerHTML = Audio.muted ? UI_IC.speakerOff : UI_IC.speakerOn;
   buildSkinRow();
   const params = new URLSearchParams(location.search);

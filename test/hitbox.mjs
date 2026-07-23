@@ -142,6 +142,20 @@ const tanks = spawnTanks(terrain, 2024);
 const shot = aiShot(terrain, tanks, 1, 'hard');
 if (shot.angle === 45 && shot.power === 60) fail('aiShot returned the fallback 45/60 — self-clip latch missing');
 
+// 8 — nano seekers hunt ENEMIES only: a dart dropped at the firer's own feet
+//     must tag nobody, and a dart landing beside the enemy must tag the enemy.
+{
+  const selfDrop = fire('nano', 88, 8);            // lands basically at our feet
+  const selfTag = selfDrop.projectiles[0].det && selfDrop.projectiles[0].det.nano;
+  if (selfTag === 0) fail('nano tagged the FIRER — seekers must only hunt enemies');
+  let enemyTagged = false;
+  for (let pwr = 30; pwr <= 75 && !enemyTagged; pwr += 1.25) {
+    const r = fire('nano', 45, pwr);
+    if (r.nano && r.nano.seat === 1) enemyTagged = true;
+  }
+  if (!enemyTagged) fail('nano never tagged the enemy across the power sweep');
+}
+
 console.table(report);
 console.log(`cannon 45/60 lands at x=${endX}`);
 console.log(`aiShot(hard) -> angle ${shot.angle.toFixed(1)} power ${shot.power.toFixed(1)}`);

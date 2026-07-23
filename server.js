@@ -21,6 +21,9 @@ const PORT = process.env.PORT || 3000;
 // How long a disconnected player may return before their tank is scuttled.
 // Overridable so the test suite can exercise the forfeit path without a 2-min wait.
 const RESUME_GRACE_MS = Number(process.env.RESUME_GRACE_MS) || 120000;
+// Async games: a private duel holds a disconnected seat for a DAY — take your
+// turn whenever, your opponent's push nudge brings them back.
+const ASYNC_GRACE_MS = Number(process.env.ASYNC_GRACE_MS) || 24 * 60 * 60 * 1000;
 
 // Cosmetic tank paints (client renders them; validate ids here).
 const SKINS = ['olive', 'desert', 'jungle', 'midnight', 'arctic', 'gold'];
@@ -73,8 +76,48 @@ const MIME = {
   '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon',
 };
 
+// ---- Web Push (turn nudges) ---------------------------------------------------
+// VAPID keys come from env in production; otherwise they're generated once and
+// persisted next to the process so subscriptions survive restarts on the same
+// disk. If web-push is somehow unavailable, everything degrades to no-op.
+let webpush = null, vapidPublicKey = '';
+try {
+  webpush = (await import('web-push')).default;
+  let pub = process.env.VAPID_PUBLIC_KEY, priv = process.env.VAPID_PRIVATE_KEY;
+  if (!pub || !priv) {
+    const vf = path.join(process.cwd(), 'data', 'vapid.json');
+    try {
+      ({ pub, priv } = JSON.parse(fs.readFileSync(vf, 'utf8')));
+    } catch {
+      const k = webpush.generateVAPIDKeys();
+      pub = k.publicKey; priv = k.privateKey;
+      try { fs.mkdirSync(path.dirname(vf), { recursive: true }); fs.writeFileSync(vf, JSON.stringify({ pub, priv })); } catch {}
+    }
+  }
+  webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:jordan@bluepixel.com.au', pub, priv);
+  vapidPublicKey = pub;
+} catch { webpush = null; }
+
+function pushNudge(room, seat) {
+  const pl = room.players[seat];
+  if (!webpush || !pl || pl.bot || pl.connected || !pl.pushSub) return;
+  const opp = room.players.find((p, i) => p && i !== seat && !p.bot);
+  const payload = JSON.stringify({
+    title: 'Canyons & Cannons — your move',
+    body: opp ? `${opp.name} has taken their shot. Your turn.` : 'Your turn is up.',
+    url: `/?room=${room.code}`,
+  });
+  webpush.sendNotification(pl.pushSub, payload).catch((err) => {
+    if (err && (err.statusCode === 404 || err.statusCode === 410)) pl.pushSub = null;   // subscription expired
+  });
+}
+
 const server = http.createServer((req, res) => {
   let urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
+  if (urlPath === '/push/key') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ key: vapidPublicKey }));
+  }
   if (urlPath === '/') urlPath = '/index.html';
   const filePath = path.join(PUBLIC, path.normalize(urlPath));
   if (!filePath.startsWith(PUBLIC)) { res.writeHead(403); return res.end('Forbidden'); }
@@ -338,12 +381,16 @@ function hordeRespawn(room) {
 // Course width scales with PAR: par 3 = 150% of the battle map, par 4 = 200%,
 // par 5 = 250%. Hole distances are set per par so every hole is honest: a par 3
 // is one good carry, a par 4 one big + one short, a par 5 two full strokes in.
-const GOLF_PAR_W = { 3: 36000, 4: 48000, 5: 60000 };
+// Real course lengths: a par 4 now runs 4-5x the old yardage and a par 5
+// further still, with the world sized to the hole (min 36k). The four tee sets
+// slide the TEE BOX forward — the cup never moves, exactly like a real course.
 const GOLF_HOLES = [
-  { d: 7800,  par: 3, biome: 'alpine' }, { d: 12600, par: 3, biome: 'desert' }, { d: 23600, par: 4, biome: 'ice' },
-  { d: 10200, par: 3, biome: 'alpine' }, { d: 38750, par: 5, biome: 'desert' }, { d: 19200, par: 4, biome: 'ice' },
-  { d: 46250, par: 5, biome: 'alpine' }, { d: 11400, par: 3, biome: 'desert' }, { d: 27600, par: 4, biome: 'ice' },
+  { d: 12500,  par: 3, biome: 'alpine' }, { d: 20200,  par: 3, biome: 'desert' }, { d: 106200, par: 4, biome: 'ice' },
+  { d: 16300,  par: 3, biome: 'alpine' }, { d: 132000, par: 5, biome: 'desert' }, { d: 86400,  par: 4, biome: 'ice' },
+  { d: 155000, par: 5, biome: 'alpine' }, { d: 18200,  par: 3, biome: 'desert' }, { d: 124200, par: 4, biome: 'ice' },
 ];
+const TEE_SETS = { champ: 1.0, mens: 0.92, womens: 0.84, junior: 0.72 };
+const sanitizeTees = (t) => (Object.prototype.hasOwnProperty.call(TEE_SETS, t) ? t : 'mens');
 
 function startGolf(room) {
   const n = room.players.length;
@@ -369,13 +416,16 @@ function nextHole(room, first) {
   g.hole++;
   const H = GOLF_HOLES[g.hole - 1];
   g.par = H.par;
-  room.worldW = GOLF_PAR_W[H.par] || WORLD_W;
+  room.worldW = Math.max(36000, H.d + 12000);       // the world fits the hole
   room.biome = H.biome;
   room.lavaY = biomeLavaY(H.biome);
   const seed = (room.seed + g.hole * 7919) >>> 0;
   room.terrain = generateTerrain(seed, 2, H.biome, room.worldW);
-  g.tee = 2200;
-  g.cup = { x: Math.min(room.worldW - 1500, g.tee + H.d), r: 520 };   // a cup you can actually sink
+  // The cup sits at full championship distance; friendlier tee sets move the
+  // TEE forward along the fairway.
+  const tf = TEE_SETS[room.tees || 'mens'] || 1;
+  g.cup = { x: Math.min(room.worldW - 2000, 2200 + H.d), r: 650 };    // a proper bucket
+  g.tee = Math.max(1400, Math.round(g.cup.x - H.d * tf));
   g.cup.y = prepareGolfHole(room.terrain, g.tee, g.cup.x);
   room.trees = generateTrees(room.terrain, seed, 2);
   room.tanks = room.players.map(() => ({ x: g.tee, y: surfaceAt(room.terrain, g.tee), alive: true }));
@@ -503,7 +553,7 @@ function startGame(room) {
   room.shield = new Array(n).fill(0);
   room.turnCount = 0; room.bossShots = 0;
   room.nanoBots = new Array(n).fill(0);
-  clearInterval(room.nanoTimer); room.nanoTimer = null;
+  clearInterval(room.nanoTimer); room.nanoTimer = null; clearTimeout(room.nanoSeek);
   room.stat = { dealt: new Array(n).fill(0), received: new Array(n).fill(0) };
   const bSeat = bossSeatOf(room);
   if (bSeat >= 0) {                       // the mecha is a bigger, tougher target
@@ -550,6 +600,7 @@ function beginTurn(room) {
     type: 'turn', turn: room.turn, fuel: room.fuel, alive: aliveFlags(room),
     ammo: room.ammo[room.turn], ammoSeat: room.turn,
   });
+  pushNudge(room, room.turn);
   scheduleBot(room);
 }
 
@@ -645,7 +696,10 @@ function scheduleBot(room) {
   if (!room.vsBot || room.state !== 'playing' || !cur || !cur.bot) return;
   if (!room.players.some(p => p && !p.bot && p.connected)) return;   // nobody watching
   clearTimeout(room.botTimer); clearInterval(room.botWalker);
-  room.botTimer = setTimeout(() => botAct(room), 850 + Math.random() * 750);
+  // Survival enemies keep the pressure up: three of them share the clock, so
+  // each thinks, walks and fires on a much tighter cycle than a duel CPU.
+  const quick = cur.horde;
+  room.botTimer = setTimeout(() => botAct(room), quick ? 220 + Math.random() * 240 : 850 + Math.random() * 750);
 }
 
 // Bots want the supply drops too. If a crate is inside this turn's fuel budget,
@@ -699,7 +753,8 @@ function botPlan(room, seat) {
   if (r > 0.9) dir = -dir;                                                 // the feint
   if (me.x < 2200) dir = 1; else if (me.x > (room.worldW || WORLD_W) - 2200) dir = -1;
   if (!dir) return null;
-  return { dir, steps: 8 + Math.floor(Math.random() * 22) };
+  const steps = meP.horde ? 6 + Math.floor(Math.random() * 10) : 8 + Math.floor(Math.random() * 22);
+  return { dir, steps };
 }
 
 // Drive, then shoot. One walker per room; it hands off to botFire when the
@@ -780,7 +835,7 @@ function botFire(room) {
   broadcast(room, { type: 'aim', seat, angle: shot.angle, power: shot.power, weapon: shot.weapon });
   room.botTimer = setTimeout(() => {
     if (room.state === 'playing' && room.turn === seat) resolveFire(room, seat, shot.weapon, shot.angle, shot.power);
-  }, BOT_FIRE_MS);
+  }, bot.horde ? Math.min(550, BOT_FIRE_MS) : BOT_FIRE_MS);
 }
 
 // Unlimited shots — the match only ends when a tank is destroyed.
@@ -801,7 +856,7 @@ function endGame(room) {
   clearInterval(room.botWalker);
   clearInterval(room.dotTimer); room.dotTimer = null;
   clearInterval(room.fireTimer); room.fireTimer = null;
-  clearInterval(room.nanoTimer); room.nanoTimer = null;
+  clearInterval(room.nanoTimer); room.nanoTimer = null; clearTimeout(room.nanoSeek);
   killDead(room);
   const live = aliveSeats(room);
   let winner = live.length === 1 ? live[0] : -1;   // 0 left = mutual destruction
@@ -1045,11 +1100,17 @@ function fireBite(room) {
 // ---- Nano Swarm: bots gnaw on their host once a second -------------------------
 // 10 bots, 3 health each. Runs on its own clock like fire; a re-infection tops
 // the count back up to 10 rather than stacking.
+// Seekers take a beat to crawl onto their victim (the client animates the
+// chase), then the swarm detonates in rapid pulses of three bots at a time.
+const NANO_SEEK_MS = Number(process.env.NANO_SEEK_MS || 1600);
 function startNano(room, hit) {
   room.nanoBots[hit.seat] = Math.max(room.nanoBots[hit.seat] || 0, hit.bots);
   room.nanoDmg = hit.dmg || 3;
-  if (room.nanoTimer) return;
-  room.nanoTimer = setInterval(() => nanoTick(room), 1000);
+  clearTimeout(room.nanoSeek);
+  room.nanoSeek = setTimeout(() => {
+    if (room.nanoTimer) return;
+    room.nanoTimer = setInterval(() => nanoTick(room), 500);
+  }, NANO_SEEK_MS);
 }
 
 function nanoTick(room) {
@@ -1060,8 +1121,9 @@ function nanoTick(room) {
   for (let i = 0; i < room.hp.length; i++) {
     if ((room.nanoBots[i] || 0) <= 0) continue;
     if (room.tanks[i].alive === false) { room.nanoBots[i] = 0; continue; }
-    room.nanoBots[i]--;
-    dmg[i] = room.nanoDmg || 3;
+    const burst = Math.min(3, room.nanoBots[i]);   // three bots pop per pulse
+    room.nanoBots[i] -= burst;
+    dmg[i] = burst * (room.nanoDmg || 3);
     room.hp[i] = Math.max(0, Math.round((room.hp[i] - dmg[i]) * 10) / 10);
     if (room.stat) room.stat.received[i] += dmg[i];
     any = true;
@@ -1114,7 +1176,7 @@ function teardown(room, notify) {
   clearInterval(room.botWalker);
   clearInterval(room.dotTimer);
   clearInterval(room.fireTimer);
-  clearInterval(room.nanoTimer);
+  clearInterval(room.nanoTimer); clearTimeout(room.nanoSeek);
   for (const p of room.players) if (p) clearTimeout(p.dropTimer);
   if (notify) broadcast(room, { type: 'opponentLeft' });
   rooms.delete(room.code);
@@ -1154,7 +1216,7 @@ function handleClose(ws) {
       clearInterval(room.dotTimer); room.dotTimer = null;
       advance(room, seat);
     }
-  }, RESUME_GRACE_MS);
+  }, room.asyncOk ? ASYNC_GRACE_MS : RESUME_GRACE_MS);
   // If every human is gone, drop the room right away.
   if (!room.players.some(p => p && !p.bot && p.connected)) teardown(room);
 }
@@ -1197,6 +1259,8 @@ wss.on('connection', (ws) => {
       case 'create': {
         const r = createRoom(ws, msg.name, msg.skin, { mode: msg.mode, max: msg.max });
         r.players[0].loadout = sanitizeLoadout(msg.loadout);
+        if (r.mode === 'golf') r.tees = sanitizeTees(msg.tees);
+        r.asyncOk = r.mode === 'duel';        // invited duels are async-friendly
         send(ws, { type: 'created', code: r.code, mode: r.mode, max: r.max });
         send(ws, lobbyPayload(r, 0));
         break;
@@ -1250,6 +1314,25 @@ wss.on('connection', (ws) => {
         break;
       }
       case 'resume': handleResume(ws, msg); break;
+      case 'pushSub': {
+        // Turn-nudge opt-in: hang the browser subscription off the player so a
+        // disconnected seat can still be pinged when its turn comes up.
+        const pl2 = room && ws.seat != null ? room.players[ws.seat] : null;
+        if (pl2 && msg.sub && typeof msg.sub.endpoint === 'string' && msg.sub.endpoint.startsWith('https://')) {
+          pl2.pushSub = msg.sub;
+          send(ws, { type: 'pushOk' });
+        }
+        break;
+      }
+      case 'sync': {
+        // A client coming back from the background asks for the truth: ship a
+        // fresh restore snapshot so a frozen replay or a missed broadcast can
+        // never leave its buttons dead.
+        if (room && room.state === 'playing' && ws.seat != null) {
+          send(ws, { type: 'restore', ...snapshot(room, ws.seat) });
+        }
+        break;
+      }
       case 'aim': {
         if (!room || room.state !== 'playing') return;
         // Relay both players' aims so barrels track live (pre-aiming included).

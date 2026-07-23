@@ -114,11 +114,13 @@
               <span>Play the computer</span>
             </div>
             <div class="hs-row">
-              <div class="diffrow" id="diffRow" role="group" aria-label="CPU difficulty">
-                <button type="button" class="diff" data-diff="easy">Easy</button>
-                <button type="button" class="diff active" data-diff="medium">Medium</button>
-                <button type="button" class="diff" data-diff="hard">Hard</button>
-              </div>
+              <label class="hs-selwrap"><span>Difficulty</span>
+                <select id="diffSel" class="hs-select" aria-label="CPU difficulty">
+                  <option value="easy">Easy</option>
+                  <option value="medium" selected>Medium</option>
+                  <option value="hard">Hard</option>
+                </select>
+              </label>
               <button id="cpuBtn" type="button" class="hs-go">Start</button>
             </div>
           </div>
@@ -167,11 +169,23 @@
                 <span>Zombies</span>
               </button>
             </div>
-            <div class="countrow hidden" id="countRow" role="group" aria-label="Players">
-              <button type="button" class="cnt" data-max="3">3 players</button>
-              <button type="button" class="cnt active" data-max="4">4 players</button>
+            <div class="hs-row">
+              <label class="hs-selwrap hidden" id="countWrap"><span>Players</span>
+                <select id="countSel" class="hs-select" aria-label="Players">
+                  <option value="3">3 players</option>
+                  <option value="4" selected>4 players</option>
+                </select>
+              </label>
+              <label class="hs-selwrap hidden" id="teeWrap"><span>Tees</span>
+                <select id="teeSel" class="hs-select" aria-label="Tee set">
+                  <option value="champ">Championship</option>
+                  <option value="mens" selected>Men's</option>
+                  <option value="womens">Women's</option>
+                  <option value="junior">Junior</option>
+                </select>
+              </label>
+              <button id="createBtn" type="button" class="hs-go primary">Create game</button>
             </div>
-            <button id="createBtn" type="button" class="hs-go primary">Create game</button>
           </div>
         </div>
 
@@ -182,21 +196,15 @@
           <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="2.6" y="8.4" width="18.8" height="12" rx="1.6"/><path d="M2.6 12h18.8" stroke="#0b1020" stroke-width="1.4"/><rect x="9.4" y="6" width="5.2" height="2.4" rx="1"/><g fill="#0b1020"><rect x="6.6" y="14.4" width="2.2" height="4"/><rect x="10.9" y="14.4" width="2.2" height="4"/><rect x="15.2" y="14.4" width="2.2" height="4"/></g></svg>
           <span>Armoury</span><b id="armouryCount">5 picked</b>
         </button>
+        <button id="careerBtn" type="button" class="hs-chip hs-armoury">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="9" r="5.4"/><circle cx="12" cy="9" r="2.6" fill="#0b1020"/><path d="M8.2 13.4L6 21l6-2.6L18 21l-2.2-7.6z"/></svg>
+          <span>Career</span><b id="careerWins"></b>
+        </button>
         <div class="hs-chip">
           <span>Tank paint</span>
           <div class="skinrow" id="skinRow"></div>
         </div>
-        <div class="hs-chip">
-          <span>Hold your phone</span>
-          <div class="orientrow" id="orientRow" role="group" aria-label="Preferred orientation">
-            <button type="button" class="orient active" data-orient="landscape" aria-label="Play in landscape">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/></svg>Sideways
-            </button>
-            <button type="button" class="orient" data-orient="portrait" aria-label="Play in portrait">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/></svg>Upright
-            </button>
-          </div>
-        </div>
+
         <p id="homeError" class="error hs-error"></p>
       </footer>
 
@@ -233,6 +241,10 @@
       <button id="startMatchBtn" class="btn big primary hidden">Start battle</button>
       <button id="copyLinkBtn" class="btn big primary">Copy invite link</button>
       <button id="copyCodeBtn" class="btn">Copy code</button>
+      <button id="notifyBtn" class="btn">
+        <svg viewBox="0 0 24 24" fill="currentColor" style="width:15px;height:15px;vertical-align:-2px;margin-right:5px"><path d="M12 22a2.4 2.4 0 0 0 2.4-2.4H9.6A2.4 2.4 0 0 0 12 22zM19 16.4V11a7 7 0 0 0-5-6.7V3.6a2 2 0 1 0-4 0v.7A7 7 0 0 0 5 11v5.4L3 18.4v1h18v-1z"/></svg>
+        Nudge me when it's my turn
+      </button>
       <div class="spinner" aria-hidden="true"></div>
       <button id="cancelBtn" class="btn ghost">Cancel</button>
     </div>
@@ -262,6 +274,12 @@
         </button>
         <button id="panDown" class="zbtn" title="Look down" aria-label="Pan down">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 10l6 6 6-6"/></svg>
+        </button>
+        <button id="panLeft" class="zbtn" title="Look left" aria-label="Pan left">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 6l-6 6 6 6"/></svg>
+        </button>
+        <button id="panRight" class="zbtn" title="Look right" aria-label="Pan right">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 6l6 6-6 6"/></svg>
         </button>
       </div>
       <button id="helpBtn" class="leave" title="How to play" aria-label="How to play">
@@ -308,41 +326,94 @@
   </section>
 
   <!-- ============ HELP ============ -->
+  <!-- Tabbed so every pane fits the screen whole — dashboard menus never
+       scroll. The Basics pane teaches with pictures, not paragraphs. -->
   <div id="helpModal" class="overlay hidden">
-    <div class="overlay-card help-card">
+    <div class="overlay-card menu-card">
       <div class="result">How to play</div>
-      <div class="help-scroll">
-        <section class="help-sec">
-          <h3>Controls</h3>
-          <ul>
-            <li><b>Aim</b> — drag anywhere on the battlefield to set your angle and power at once, or nudge them precisely with the <b>ANGLE</b> and <b>POWER</b> steppers.</li>
-            <li><b>Drive</b> — the left/right arrow buttons move your tank along the ground. Driving burns <b>FUEL</b>, which refills at the start of every turn.</li>
-            <li><b>Fire</b> — one shot per turn. Pick a weapon from the strip first; the number on each card is its remaining ammo.</li>
-            <li><b>Camera</b> — pinch or use the zoom buttons, and the up/down arrows to look around. The view follows the shell automatically.</li>
-            <li><b>Supply drops</b> — crates parachute in mid-match. Drive into one to claim it, or shoot it open and take the contents from range. Crates carry repairs, shields, ammo — and the Railgun, which you can't get any other way.</li>
-          </ul>
-        </section>
-        <section class="help-sec">
-          <h3>Reading the trajectory</h3>
-          <p>Every weapon card shows a small <b>flight badge</b> next to its icon — that's the shape of its shot. A low flat line flies straight and fast, a tall arc lobs high over cover, a fan means several shells at once, and a shape at the end of the line is the payload it leaves behind (fire, gas, a dirt wall…). While you aim, the ghost arc from your barrel shows the first stretch of the real flight path.</p>
-        </section>
-        <section class="help-sec">
-          <h3>The arsenal</h3>
-          <div id="helpWeapons"></div>
-        </section>
-        <section class="help-sec">
-          <h3>Game modes</h3>
-          <ul>
-            <li><b>Duel</b> — one on one, last tank standing. Bring your Armoury loadout: five weapons, two rounds each, plus everyone’s nuke.</li>
-            <li><b>Free-for-all</b> — up to four commanders, no teams. Armoury loadouts apply here too.</li>
-            <li><b>Boss Fight</b> — team up against WARLORD-7, a mecha with its own arsenal. No friendly fire — your shells never hurt your squad.</li>
-            <li><b>Golf</b> — nine holes of artillery golf. Fewest shots into the cup wins; longer holes carry a bigger par.</li>
-            <li><b>Alien Invasion</b> — survive the saucers and destroy 8 of them. They come back stronger each wave.</li>
-            <li><b>Zombie Uprising</b> — same fight, uglier enemy. Put down 8 rotting hulks before they put you down.</li>
-          </ul>
-        </section>
+      <div class="tabrow" id="helpTabs" role="tablist">
+        <button type="button" class="tab active" data-tab="basics">Basics</button>
+        <button type="button" class="tab" data-tab="arsenal">Arsenal</button>
+        <button type="button" class="tab" data-tab="modes">Modes</button>
       </div>
+
+      <section class="tabpane active" data-pane="basics">
+        <div class="hd-row">
+          <figure class="hd-fig">
+            <svg viewBox="0 0 150 100" aria-hidden="true">
+              <path d="M8 84h134" stroke="#3a4661" stroke-width="3" stroke-linecap="round"/>
+              <rect x="20" y="72" width="30" height="10" rx="2" fill="#5b6572"/>
+              <rect x="28" y="64" width="14" height="8" rx="2" fill="#7c8698"/>
+              <path d="M40 66l12-10" stroke="#7c8698" stroke-width="3.4" stroke-linecap="round"/>
+              <path d="M52 56 C 76 22, 106 22, 128 62" stroke="#54c8ff" stroke-width="2.4" fill="none" stroke-dasharray="4 5"/>
+              <path d="M46 62l26 22" stroke="#ff9d3d" stroke-width="3" stroke-linecap="round"/>
+              <path d="M72 84l-9-2.4 4.4-8z" fill="#ff9d3d"/>
+              <circle cx="128" cy="62" r="4.6" fill="#ff5a52"/>
+            </svg>
+            <figcaption><b>Drag to aim</b> — pull away from your tank; further pull = more power</figcaption>
+          </figure>
+          <figure class="hd-fig">
+            <svg viewBox="0 0 150 100" aria-hidden="true">
+              <path d="M8 74h134" stroke="#3a4661" stroke-width="3" stroke-linecap="round"/>
+              <rect x="60" y="62" width="30" height="10" rx="2" fill="#5b6572"/>
+              <rect x="68" y="54" width="14" height="8" rx="2" fill="#7c8698"/>
+              <path d="M40 67h-16m4-5l-5 5 5 5" stroke="#b6ff5a" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M110 67h16m-4-5l5 5-5 5" stroke="#b6ff5a" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+              <rect x="30" y="86" width="90" height="8" rx="4" fill="#1c2440"/>
+              <rect x="30" y="86" width="58" height="8" rx="4" fill="#b6ff5a"/>
+            </svg>
+            <figcaption><b>Drive</b> — reposition on your turn; the fuel bar refills every turn</figcaption>
+          </figure>
+          <figure class="hd-fig">
+            <svg viewBox="0 0 150 100" aria-hidden="true">
+              <path d="M8 86h134" stroke="#3a4661" stroke-width="3" stroke-linecap="round"/>
+              <path d="M52 18 Q75 2 98 18 L88 30 Q75 24 62 30 Z" fill="#e8e2d2"/>
+              <path d="M56 22l12 30M94 22l-12 30M75 14v38" stroke="#e8e2d2" stroke-width="2"/>
+              <rect x="61" y="52" width="28" height="24" rx="2" fill="#c9a468"/>
+              <rect x="66" y="52" width="4" height="24" fill="#4c3b22"/>
+              <rect x="80" y="52" width="4" height="24" fill="#4c3b22"/>
+              <circle cx="122" cy="60" r="12" fill="none" stroke="#ff5a52" stroke-width="2.6"/>
+              <path d="M122 44v8M122 68v8M106 60h8M130 60h8" stroke="#ff5a52" stroke-width="2.6"/>
+            </svg>
+            <figcaption><b>Supply drops</b> — drive into a crate, or shoot it open from range</figcaption>
+          </figure>
+        </div>
+        <ul class="hd-list">
+          <li><b>One shot per turn</b> — pick a weapon from the strip; the number is its remaining ammo, and the little curve beside each icon is the shot's flight shape.</li>
+          <li><b>Camera</b> — pinch or use the zoom buttons; arrows pan the view in all four directions.</li>
+          <li><b>Duel &amp; Free-for-all</b> — you fight with your 5-weapon Armoury loadout, plus everyone's Tactical Nuke.</li>
+        </ul>
+      </section>
+
+      <section class="tabpane" data-pane="arsenal">
+        <div id="helpWeapons" class="hw-grid"></div>
+        <p class="hw-detail" id="hwDetail">Tap a weapon to read what it does.</p>
+      </section>
+
+      <section class="tabpane" data-pane="modes">
+        <ul class="hd-list hd-modes">
+          <li><b>Duel</b> — one on one, last tank standing.</li>
+          <li><b>Free-for-all</b> — up to four commanders, no teams.</li>
+          <li><b>Boss Fight</b> — squad up against WARLORD-7. No friendly fire: your shells never hurt your squad.</li>
+          <li><b>Golf</b> — nine holes of artillery golf; fewest strokes wins. Pick your tee set when you create the game.</li>
+          <li><b>Alien Invasion</b> — destroy 8 saucers; they return stronger each wave.</li>
+          <li><b>Zombie Uprising</b> — put down 8 rotting hulks before they reach you.</li>
+        </ul>
+      </section>
+
       <button id="helpCloseBtn" class="btn big primary">Got it</button>
+    </div>
+  </div>
+
+  <!-- ============ CAREER ============ -->
+  <div id="careerModal" class="overlay hidden">
+    <div class="overlay-card menu-card">
+      <div class="result">Career</div>
+      <div class="career-wrap">
+        <div class="car-stats" id="careerStats"></div>
+        <div class="car-achs" id="careerAchs"></div>
+      </div>
+      <button id="careerCloseBtn" class="btn big primary">Close</button>
     </div>
   </div>
 
@@ -351,6 +422,16 @@
     <div class="overlay-card">
       <div id="resultTitle" class="result">—</div>
       <div id="finalScores" class="final-scores"></div>
+      <div class="share-row">
+        <button id="shareCardBtn" class="btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="12" r="2.6"/><circle cx="17.5" cy="5.5" r="2.6"/><circle cx="17.5" cy="18.5" r="2.6"/><path d="M8.3 10.8l6.9-4M8.3 13.2l6.9 4"/></svg>
+          Share result card
+        </button>
+        <button id="shareClipBtn" class="btn hidden">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 5.6h11.4a1.6 1.6 0 0 1 1.6 1.6v9.6a1.6 1.6 0 0 1-1.6 1.6H4a1.6 1.6 0 0 1-1.6-1.6V7.2A1.6 1.6 0 0 1 4 5.6z"/><path d="M17.6 10.2l4-2.6v8.8l-4-2.6z"/></svg>
+          Share replay clip
+        </button>
+      </div>
       <button id="rematchBtn" class="btn big primary">Rematch</button>
       <button id="exitBtn" class="btn ghost">Back to menu</button>
     </div>
@@ -380,7 +461,6 @@
       </svg>
       <div class="rh-title">Turn your phone sideways</div>
       <p class="rh-sub">Canyons &amp; Cannons is built for landscape — you'll see far more of the canyon, and the controls shrink out of the way.</p>
-      <p class="rh-sub rh-note">Prefer upright? Pick <b>Upright</b> under “Hold your phone” on the menu screen.</p>
       <button id="rhLeaveBtn" type="button" class="btn ghost">Leave match</button>
     </div>
   </div>
