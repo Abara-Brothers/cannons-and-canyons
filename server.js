@@ -729,6 +729,23 @@ function botFire(room) {
   // kit: rail lance / missile rack at distance, autocannon and flame up close,
   // and every 4th shot a seismic slam whatever the range.
   let wid = 'cannon';
+  // Duel / free-for-all bots fight with their LOADOUT, not an endless cannon:
+  // most turns they pick a random armed weapon from their kit (that's what
+  // makes them read as unpredictable), holding the nuke until there's safe
+  // distance and leaving Earthworks/Teleport alone (the gunnery brain can't
+  // reason about either). Cannon stays the fallback sidearm.
+  if (!bot.boss && !bot.horde && (room.mode === 'duel' || room.mode === 'ffa')) {
+    const a = room.ammo[seat] || {};
+    const me = room.tanks[seat];
+    let dNear = Infinity;
+    for (let i = 0; i < room.tanks.length; i++) {
+      if (i === seat || room.tanks[i].alive === false) continue;
+      dNear = Math.min(dNear, Math.abs(room.tanks[i].x - me.x));
+    }
+    const usable = Object.keys(a).filter(id =>
+      (a[id] || 0) > 0 && id !== 'wall' && id !== 'teleport' && !(id === 'nuke' && dNear < 5200));
+    if (usable.length && Math.random() < 0.75) wid = usable[Math.floor(Math.random() * usable.length)];
+  }
   if (bot.horde && room.horde) {
     const cfg = HORDE[room.horde.theme];
     const idx = hordeSeats(room).indexOf(seat);

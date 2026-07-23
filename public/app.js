@@ -888,7 +888,13 @@ function applySnapshot(m) {
 
 function onTurn(m) {
   S.turn = m.turn; S.fuel = m.fuel;
-  if (m.ammoSeat === S.you && m.ammo) S.ammo = m.ammo;   // e.g. the emergency shell
+  if (m.ammoSeat === S.you && m.ammo) {
+    // The emergency shell: if we were completely dry and the server just slid
+    // one cannon round across the table, say so — otherwise it reads as a bug.
+    const wasDry = S.loadout && Object.values(S.ammo || {}).every(v => !v);
+    S.ammo = m.ammo;
+    if (wasDry && m.turn === S.you && (m.ammo.cannon || 0) > 0) showToast('RESERVE SHELL LOADED');
+  }
   // 'turn' arrives ~300ms after the server resolved the shot, long before the
   // client finishes replaying the flight. In FFA these flags carry the kill —
   // applied here they grey the scoreboard card AND delete the tank from the
@@ -901,7 +907,9 @@ function onTurn(m) {
 
 function firstAvailableWeapon() {
   for (const w of S.weapons) {
-    if (S.loadout && w.id !== 'nuke' && w.id !== 'railgun' && !S.loadout.includes(w.id)) continue;
+    // mirror the dock: anything you hold ammo for is selectable
+    if (S.loadout && w.id !== 'nuke' && w.id !== 'railgun' &&
+        !S.loadout.includes(w.id) && (S.ammo[w.id] ?? 0) <= 0) continue;
     if ((S.ammo[w.id] ?? w.ammo) > 0) return w.id;
   }
   return 'cannon';
@@ -1005,9 +1013,12 @@ function updateDock() {
 function buildWeaponStrip() {
   const strip = $('weaponStrip'); strip.innerHTML = '';
   for (const w of S.weapons) {
-    // Loadout matches: only your five picks, the everyone-nuke, and the
-    // supply-drop railgun make chips. Everything else stays out of the dock.
-    if (S.loadout && w.id !== 'nuke' && w.id !== 'railgun' && !S.loadout.includes(w.id)) continue;
+    // Loadout matches: your five picks, the everyone-nuke and the supply-drop
+    // railgun always get chips — and so does ANY weapon you actually hold ammo
+    // for (a crate prize, the emergency reserve shell). Only never-owned
+    // off-loadout weapons stay out of the dock.
+    if (S.loadout && w.id !== 'nuke' && w.id !== 'railgun' &&
+        !S.loadout.includes(w.id) && (S.ammo[w.id] ?? 0) <= 0) continue;
     const left = S.ammo[w.id] ?? w.ammo;
     const chip = document.createElement('button');
     chip.dataset.wid = w.id;
@@ -4404,10 +4415,10 @@ function drawQuakes() {
   for (const q of S.quakes) {
     const k = q.age / q.life;                       // 0 → 1 over the effect
     const up = Math.sin(Math.min(1, k * 1.6) * Math.PI);  // rise fast, settle slow
-    const gy = wy2s(surfaceAt(q.x));
     for (let c = -3; c <= 3; c++) {
       const wx = q.x + c * q.r * 0.28;
       const sx = wx2s(wx);
+      const gy = wy2s(surfaceAt(wx));   // each column roots in ITS OWN ground
       const jag = 0.7 + ((Math.abs(c * 2654435761) % 97) / 97) * 0.6;   // stable per column
       const h = Math.max(0, up * q.r * 0.5 * jag * (1 - Math.abs(c) * 0.18)) * cam.zoom;
       const w = Math.max(2, q.r * 0.11 * cam.zoom);
