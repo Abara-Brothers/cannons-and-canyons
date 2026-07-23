@@ -911,7 +911,6 @@ $('createBtn').onclick = () => {
   }
   intent({ type: 'create', name: myName(), skin: mySkin(), mode: ccMode, max: ccMode === 'ffa' ? ccMax : 2, tees: ccTees });
 };
-$('quickBtn').onclick = () => { Audio.ensure(); S.quick = true; $('homeError').textContent = ''; intent({ type: 'quick', name: myName(), skin: mySkin() }); };
 
 // Single-player vs CPU, with a difficulty selector.
 let cpuDifficulty = localStorage.getItem('pt_diff') || 'medium';
@@ -920,13 +919,66 @@ $('diffSel').onchange = () => { cpuDifficulty = $('diffSel').value; localStorage
 // Duel's opponent choice: a friend via code/link, or the CPU right here.
 function syncCreateRow() {
   const duel = ccMode === 'duel';
-  $('oppWrap').classList.toggle('hidden', !duel);
+  $('oppBtns').classList.toggle('hidden', !duel);
   $('diffWrap').classList.toggle('hidden', !(duel && ccOpp === 'cpu'));
   $('countWrap').classList.toggle('hidden', ccMode !== 'ffa');
   $('teeWrap').classList.toggle('hidden', ccMode !== 'golf');
   $('createBtn').textContent = duel && ccOpp === 'cpu' ? 'START VS COMPUTER' : 'CREATE GAME';
 }
-$('oppSel').onchange = () => { ccOpp = $('oppSel').value; syncCreateRow(); };
+// Opponent is two buttons now (Friend/online vs the Computer), not a dropdown.
+$('oppBtns').addEventListener('click', (e) => {
+  const b = e.target.closest('.opp'); if (!b) return;
+  ccOpp = b.dataset.opp;
+  for (const el of $('oppBtns').querySelectorAll('.opp')) el.classList.toggle('active', el === b);
+  syncCreateRow();
+});
+
+// Custom in-game dropdowns: a game-styled menu driving each hidden native
+// <select>, so every existing `.value` read and `.onchange` handler is untouched.
+function closeAllGsel() { for (const g of document.querySelectorAll('.gsel.open')) g.classList.remove('open'); document.body.classList.remove('dd-open'); }
+function buildGameSelect(sel) {
+  const wrap = document.createElement('div');
+  wrap.className = 'gsel';
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.className = 'gsel-btn'; btn.setAttribute('aria-haspopup', 'listbox');
+  btn.innerHTML = '<span class="gsel-cur"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+  const cur = btn.querySelector('.gsel-cur');
+  const list = document.createElement('div'); list.className = 'gsel-list'; list.setAttribute('role', 'listbox');
+  const paint = () => {
+    const o = sel.options[sel.selectedIndex];
+    cur.textContent = o ? o.textContent : '';
+    for (const el of list.children) el.classList.toggle('sel', el.dataset.val === sel.value);
+  };
+  for (const o of sel.options) {
+    const item = document.createElement('button');
+    item.type = 'button'; item.className = 'gsel-opt'; item.dataset.val = o.value;
+    item.textContent = o.textContent; item.setAttribute('role', 'option');
+    item.onclick = () => {
+      sel.value = o.value;
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      paint(); closeAllGsel();
+    };
+    list.appendChild(item);
+  }
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    const willOpen = !wrap.classList.contains('open');
+    closeAllGsel();
+    wrap.classList.toggle('open', willOpen);
+    document.body.classList.toggle('dd-open', willOpen);
+  };
+  sel.addEventListener('change', paint);
+  sel.classList.add('gsel-native');
+  wrap.appendChild(btn); wrap.appendChild(list);
+  sel.parentNode.insertBefore(wrap, sel.nextSibling);
+  paint();
+}
+function initGameSelects() {
+  for (const sel of document.querySelectorAll('select.hs-select')) buildGameSelect(sel);
+  document.addEventListener('click', (e) => { if (!e.target.closest('.gsel')) closeAllGsel(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAllGsel(); });
+}
+initGameSelects();
 
 // Landscape is the ONLY supported orientation. There is no preference and no
 // opt-out: body never gets .portrait-ok, so the CSS rotate prompt covers the
@@ -2552,9 +2604,16 @@ function onGameOver(m) {
     else { title = `${S.names[m.winner]} takes the round`; cls = 'lose'; }
     Audio.chime(win);
     const rt = $('resultTitle'); rt.textContent = title; rt.className = 'result ' + cls;
-    $('finalScores').innerHTML = g.totals.map((t, i) =>
-      `<div class="fs" style="--seat:${seatColor(i)}"><b>${t}</b><span>${(S.names[i] || '')} strokes</span></div>`
-    ).join('');
+    if (g.pars && g.strokes) {                     // full scorecard summary
+      $('finalScores').innerHTML =
+        '<div class="gc-scroll" style="width:100%"><table class="gc-table">' +
+        golfCardHTML({ grid: g.strokes, pars: g.pars, totals: g.totals, finished: true }) +
+        '</table></div>';
+    } else {                                       // legacy fallback: totals only
+      $('finalScores').innerHTML = g.totals.map((t, i) =>
+        `<div class="fs" style="--seat:${seatColor(i)}"><b>${t}</b><span>${(S.names[i] || '')} strokes</span></div>`
+      ).join('');
+    }
     $('rematchBtn').style.display = '';
     $('overlay').classList.remove('hidden');
     return;
@@ -2689,6 +2748,58 @@ function buildHelp() {
   });
 }
 const openHelp = () => { buildHelp(); $('helpModal').classList.remove('hidden'); };
+
+// ---- Golf scorecard ------------------------------------------------------------
+// Built from the golf wire: per-hole par (g.pars) + the full per-seat stroke
+// grid (g.grid, or g.strokes at gameover). Used both for the on-screen button
+// during the round and for the end-of-round summary.
+function golfToPar(v) { return v === 0 ? 'E' : (v > 0 ? '+' + v : String(v)); }
+function golfCardHTML(g) {
+  const pars = g.pars || [];
+  const grid = g.grid || [];
+  const H = pars.length;
+  const n = grid.length || (g.totals ? g.totals.length : 0);
+  const finished = !!g.finished;
+  const cur = g.hole || H;                       // 1-based current hole (H when finished)
+  const done = g.done || [];
+  const parTot = pars.reduce((a, b) => a + b, 0);
+  let head = '<tr><th class="gc-head">Hole</th>';
+  for (let h = 0; h < H; h++) head += `<th${h === 0 ? ' class="gc-sep"' : ''}>${h + 1}</th>`;
+  head += '<th class="gc-sep">Tot</th><th>+/-</th></tr>';
+  let parRow = '<tr class="gc-parrow"><td class="gc-head">Par</td>';
+  for (let h = 0; h < H; h++) parRow += `<td${h === 0 ? ' class="gc-sep"' : ''}>${pars[h]}</td>`;
+  parRow += `<td class="gc-sep gc-tot">${parTot}</td><td></td></tr>`;
+  let rows = '';
+  for (let s = 0; s < n; s++) {
+    let vs = 0, cells = '';
+    for (let h = 0; h < H; h++) {
+      const strokes = (grid[s] && grid[s][h]) || 0;
+      const holeDone = finished || (h < cur - 1) || (h === cur - 1 && !!done[s]);
+      let cls = h === 0 ? 'gc-sep' : '';
+      if (strokes > 0 && holeDone) {
+        const d = strokes - pars[h]; vs += d;
+        if (d < 0) cls += ' gc-under'; else if (d > 0) cls += ' gc-over';
+      }
+      if (!finished && h === cur - 1 && !done[s]) cls += ' gc-now';
+      cells += `<td class="${cls.trim()}">${strokes > 0 ? strokes : ''}</td>`;
+    }
+    const tot = (g.totals && g.totals[s] != null) ? g.totals[s]
+      : (grid[s] ? grid[s].reduce((a, b) => a + b, 0) : 0);
+    const vsCls = vs > 0 ? 'up' : vs < 0 ? 'down' : '';
+    const nm = (S.names && S.names[s]) || `P${s + 1}`;
+    rows += `<tr><td class="gc-name" style="--seat:${seatColor(s)}"><i></i>${nm}</td>${cells}` +
+      `<td class="gc-sep gc-tot">${tot}</td><td class="gc-vs ${vsCls}">${golfToPar(vs)}</td></tr>`;
+  }
+  return `<thead>${head}</thead><tbody>${parRow}${rows}</tbody>`;
+}
+function openGolfCard() {
+  if (!S.golf) return;
+  $('golfCardTable').innerHTML = golfCardHTML(S.golf);
+  $('golfCard').classList.remove('hidden');
+}
+$('golfCardBtn').onclick = () => openGolfCard();
+$('golfCardClose').onclick = () => $('golfCard').classList.add('hidden');
+$('golfCard').addEventListener('click', (e) => { if (e.target.id === 'golfCard') $('golfCard').classList.add('hidden'); });
 
 // ---- Career screen -------------------------------------------------------------
 function totalWins() { return Object.values(PROF.modes).reduce((a, s) => a + (s.w || 0), 0); }

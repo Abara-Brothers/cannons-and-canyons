@@ -357,6 +357,12 @@ html { background: var(--bg); }
 .leave { position: absolute; top: 10px; right: 10px; width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--line); background: rgba(10,14,30,.6); color: var(--text); cursor: pointer; backdrop-filter: blur(4px); z-index: 4; display: flex; align-items: center; justify-content: center; padding: 0; }
 .leave svg { width: 21px; height: 21px; }
 .leave:active { transform: scale(.95); }
+/* The top-right buttons STACK instead of overlapping (leave, help, and the
+   golf scorecard all shared top:10px/right:10px before). */
+#helpBtn { top: 58px; }
+#golfCardBtn { top: 106px; }
+.golf-only { display: none; }
+body.golf .golf-only { display: flex; }
 .btn.danger { color: var(--p1); }
 .zoomctl { position: absolute; top: 58px; left: 10px; display: flex; flex-direction: column; gap: 6px; z-index: 4; }
 .zbtn { width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--line); background: rgba(10,14,30,.6); color: var(--text); cursor: pointer; backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; padding: 0; }
@@ -636,6 +642,7 @@ body.golf .fuel { display: none; }
   align-content: stretch;
 }
 .hs-col { display: flex; flex-direction: column; gap: clamp(6px, calc(1.4 * var(--vhu)), 12px); min-height: 0; min-width: 0; }
+.hs-col-join { justify-content: center; }   /* the lone Join panel sits centred, not stranded at the top */
 .hs-quick {
   display: flex; align-items: center; gap: 12px; text-align: left;
   border: 0; border-radius: 16px; cursor: pointer; color: #2b1002;
@@ -758,7 +765,7 @@ body.golf .fuel { display: none; }
   max-width: 640px; width: min(calc(94 * var(--vwu)), 640px); max-height: calc(92 * var(--dvhu));
   display: flex; flex-direction: column; overflow: hidden;
 }
-.menu-card .result { flex: 0 0 auto; }
+.menu-card .result { flex: 0 0 auto; font-size: clamp(20px, calc(3.4 * var(--vhu)), 28px); }
 /* The action button ALWAYS survives a tight landscape screen: panes SCROLL
    inside themselves (stats, challenges, how-to-play are all browsable), the
    button never moves. */
@@ -768,8 +775,6 @@ body.golf .fuel { display: none; }
    so diagrams and rows breathe instead of cramping. */
 @media (orientation: landscape) and (max-height: 600px), (orientation: portrait) and (max-width: 600px) {
   .menu-card { max-width: 780px; width: min(calc(96 * var(--vwu)), 780px); }
-  .hd-fig figcaption { font-size: clamp(10px, calc(1.7 * var(--vhu)), 12px); }
-  .hd-list li { font-size: clamp(11px, calc(1.8 * var(--vhu)), 13px); }
 }
 .tabrow { display: flex; gap: 6px; margin: 8px 0 10px; }
 .tab {
@@ -784,11 +789,11 @@ body.golf .fuel { display: none; }
 /* Basics: three teaching diagrams */
 .hd-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(5px, calc(1 * var(--vwu)), 10px); margin-bottom: clamp(6px, calc(1.4 * var(--vhu)), 12px); }
 .hd-fig { margin: 0; background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: clamp(4px, calc(1 * var(--vhu)), 8px); }
-.hd-fig svg { width: 100%; height: auto; display: block; }
-.hd-fig figcaption { font-size: clamp(8.5px, calc(1.4 * var(--vhu)), 11px); line-height: 1.35; color: var(--muted); margin-top: 4px; text-align: left; }
+.hd-fig svg { width: 100%; max-width: 160px; height: auto; margin: 0 auto; display: block; }
+.hd-fig figcaption { font-size: clamp(9px, calc(1.45 * var(--vhu)), 11px); line-height: 1.35; color: var(--muted); margin-top: 4px; text-align: left; }
 .hd-fig figcaption b { color: var(--text); }
 .hd-list { margin: 0; padding-left: 17px; text-align: left; }
-.hd-list li { font-size: clamp(10px, calc(1.6 * var(--vhu)), 12.5px); line-height: 1.45; color: var(--ink-dim, #c5cde0); margin-bottom: clamp(3px, calc(0.8 * var(--vhu)), 6px); }
+.hd-list li { font-size: clamp(11px, calc(1.7 * var(--vhu)), 13px); line-height: 1.45; color: var(--ink-dim, #c5cde0); margin-bottom: clamp(3px, calc(0.8 * var(--vhu)), 6px); }
 
 /* Arsenal: compact cells + one live detail line */
 .hw-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: clamp(3px, calc(0.8 * var(--vhu)), 6px); }
@@ -797,11 +802,11 @@ body.golf .fuel { display: none; }
   border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
   border-radius: 9px; padding: clamp(3px, calc(0.9 * var(--vhu)), 7px) 2px; cursor: pointer;
 }
-.hw-cell svg:first-of-type { width: clamp(12px, calc(2.1 * var(--vhu)), 17px); height: clamp(12px, calc(2.1 * var(--vhu)), 17px); }
-.hw-cell svg:last-of-type { width: clamp(16px, calc(2.7 * var(--vhu)), 22px); height: clamp(10px, calc(1.6 * var(--vhu)), 13px); }
-.hw-nm { font-size: clamp(7.5px, calc(1.25 * var(--vhu)), 10px); font-weight: 700; }
+.hw-cell svg:first-of-type { width: clamp(16px, calc(2.6 * var(--vhu)), 20px); height: clamp(16px, calc(2.6 * var(--vhu)), 20px); }
+.hw-cell svg:last-of-type { width: clamp(20px, calc(3.2 * var(--vhu)), 26px); height: clamp(12px, calc(1.9 * var(--vhu)), 15px); }
+.hw-nm { font-size: clamp(9px, calc(1.45 * var(--vhu)), 11px); font-weight: 700; }
 .hw-cell.sel { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
-.hw-detail { margin: clamp(5px, calc(1.2 * var(--vhu)), 10px) 0 0; font-size: clamp(10px, calc(1.6 * var(--vhu)), 12.5px); color: var(--ink-dim, #c5cde0); text-align: left; min-height: 2.6em; }
+.hw-detail { margin: clamp(5px, calc(1.2 * var(--vhu)), 10px) 0 0; font-size: clamp(11px, calc(1.7 * var(--vhu)), 13px); color: var(--ink-dim, #c5cde0); text-align: left; min-height: 2.6em; }
 .hd-modes li { margin-bottom: clamp(4px, calc(1 * var(--vhu)), 8px); }
 
 /* Career */
@@ -844,6 +849,50 @@ body.golf .fuel { display: none; }
   cursor: pointer;
 }
 .hs-select:focus { outline: 2px solid var(--accent); }
+
+/* Opponent = two real buttons (a segmented toggle), not a dropdown. */
+.hs-oppbtns { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.hs-oppbtns.hidden { display: none; }
+.hs-oppbtns .opp {
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
+  font-weight: 700; font-size: clamp(10px, calc(1.55 * var(--vhu)), 13px);
+  border-radius: 11px; padding: clamp(6px, calc(1.3 * var(--vhu)), 10px) 8px; cursor: pointer;
+  min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.hs-oppbtns .opp.active { color: #0a1020; background: var(--accent); border-color: var(--accent); }
+.hs-oppbtns .opp:active { transform: translateY(1px); }
+
+/* Custom in-game dropdown — a game-styled menu built over a hidden native
+   <select> (the select stays the source of truth, so every existing .value /
+   .onchange keeps working). Opens UPWARD over the mode grid so it never
+   collides with the CREATE button or the panel's bottom edge. */
+.gsel-native { display: none !important; }
+.gsel { position: relative; flex: 1; min-width: 0; }
+.gsel-btn {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
+  font: inherit; font-weight: 700; font-size: clamp(11px, calc(1.7 * var(--vhu)), 13.5px);
+  border-radius: 10px; padding: clamp(5px, calc(1.1 * var(--vhu)), 9px) 11px; cursor: pointer;
+}
+.gsel-btn .gsel-cur { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gsel-btn svg { width: 13px; height: 13px; color: var(--accent); flex: 0 0 auto; transition: transform .15s ease; }
+.gsel.open .gsel-btn svg { transform: rotate(180deg); }
+.gsel-list {
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 5px);
+  background: var(--panel); border: 1px solid var(--line); border-radius: 11px;
+  box-shadow: 0 12px 34px rgba(0,0,0,.55); padding: 5px; z-index: 60;
+  display: none; max-height: 46dvh; overflow-y: auto; overscroll-behavior: contain;
+}
+.gsel.open .gsel-list { display: block; }
+.gsel-opt {
+  display: block; width: 100%; text-align: left; border: 0; background: transparent; color: var(--text);
+  font: inherit; font-weight: 600; font-size: clamp(11px, calc(1.7 * var(--vhu)), 13.5px);
+  padding: clamp(6px, calc(1.3 * var(--vhu)), 9px) 10px; border-radius: 8px; cursor: pointer;
+}
+.gsel-opt:hover, .gsel-opt:focus { background: var(--panel-2); outline: none; }
+.gsel-opt.sel { color: var(--accent); font-weight: 800; }
+/* An open dropdown must escape the narrow-mode overflow clip on .hs-main. */
+body.dd-open .hs-main { overflow: visible; }
 
 /* ---- Drum sliders (angle / power) ----------------------------------------- */
 .drum-wrap { min-width: 0; }
@@ -927,3 +976,26 @@ body.golf .fuel { display: none; }
   .fuel { min-width: 40px; }
   .btn.fire { min-width: 104px; padding-left: 14px; padding-right: 14px; font-size: 15px; }
 }
+
+/* ---- Golf scorecard (on-screen button + end-of-round summary) ------------- */
+.gcard { max-width: 760px; width: min(calc(97 * var(--vwu)), 760px); }
+.gc-scroll { min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; margin: 4px 0 12px; }
+.gc-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.gc-table th, .gc-table td {
+  padding: clamp(3px, calc(0.9 * var(--vhu)), 7px) clamp(3px, calc(0.7 * var(--vwu)), 9px);
+  text-align: center; font-size: clamp(10px, calc(1.6 * var(--vhu)), 13px);
+  border-bottom: 1px solid var(--line);
+}
+.gc-table thead th { color: var(--muted); font-weight: 800; letter-spacing: .04em; }
+.gc-table .gc-head { text-align: left; color: var(--muted); font-weight: 800; text-transform: uppercase; letter-spacing: .08em; white-space: nowrap; }
+.gc-table .gc-name { text-align: left; font-weight: 800; white-space: nowrap; }
+.gc-table .gc-name i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; background: var(--seat, var(--accent)); margin-right: 7px; vertical-align: -1px; }
+.gc-table tr.gc-parrow td, .gc-table tr.gc-parrow .gc-head { color: var(--muted); font-weight: 700; }
+.gc-table .gc-sep { border-left: 1px solid var(--line); }
+.gc-table .gc-tot { font-weight: 900; }
+.gc-table .gc-vs { font-weight: 900; }
+.gc-table td.gc-now { background: rgba(84, 200, 255, .14); }
+.gc-table td.gc-under { color: #3ce88f; }
+.gc-table td.gc-over { color: #ffb45a; }
+.gc-vs.up { color: #ffb45a; }
+.gc-vs.down { color: #3ce88f; }

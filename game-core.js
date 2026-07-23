@@ -294,11 +294,11 @@ export const WEAPONS = [
     // speedMul rides the combat power trims in the OPPOSITE direction so golf
     // ballistics never move: 52 × 1.0038 ≈ the original 58 × 0.9 launch speed.
     shots: 1, spread: 0,  speedMul: 1.0038, damage: 0, radius: 0, terrain: 'none',
-    bounce: { rest: 0.45, fric: 0.72, rr: 0.30 },    // bites on the pitch mark, ~2-3k release
+    bounce: { rest: 0.45, fric: 0.72, rr: 0.25 },    // bites on the pitch mark, rolls a touch longer
     desc: 'The honest mid-game club. Flies true, bites on landing.' },
   { id: 'driver',    name: 'Driver',          color: '#ffd23f', ammo: 99, golfOnly: true,
     shots: 1, spread: 0,  speedMul: 1.25, damage: 0, radius: 0, terrain: 'none',
-    bounce: { rest: 0.50, fric: 0.80, rr: 0.16 },    // longest carry AND the longest roll-out
+    bounce: { rest: 0.50, fric: 0.80, rr: 0.135 },   // longest carry AND the longest roll-out
     desc: 'Off the tee: maximum carry, and it runs forever on the fairway.' },
   { id: 'putter',    name: 'Putter',          color: '#8affde', ammo: 99, golfOnly: true,
     shots: 1, spread: 0,  speedMul: 0.20, damage: 0, radius: 0, terrain: 'none',
@@ -885,7 +885,7 @@ export function simulateShot(state, shot) {
       }
       const fp = integrate(state.terrain, state.tanks, iox, ioy, ivx, ivy,
         w.pierce ? { pierce: true, pierceBy: by, proximity: w.proximity || 0, gravMul, by }
-        : w.bounce ? { bounce: w.bounce, gravMul, by, maxT: 60, ground: !!w.ground }
+        : w.bounce ? { bounce: w.bounce, gravMul, by, maxT: 60, ground: !!w.ground, cup: state.cup }
         : { gravMul, by });
       let d = null;
       if (w.bounce) {
@@ -1096,6 +1096,14 @@ function integrate(terrain, tanks, ox, oy, vx, vy, opts) {
   while (t < maxT) {
     if (rolling) {
       const bz = opts.bounce;
+      // Cup capture: a ball crossing the hole slowly enough DROPS IN and stays
+      // there (no rolling back out). Too fast and it lips out and rolls on —
+      // exactly like a real green.
+      if (opts.cup && Math.abs(x - opts.cup.x) <= opts.cup.r && Math.abs(s) <= opts.cup.capV) {
+        const cx = opts.cup.x, cy = surfaceAt(terrain, cx);
+        path.push([round1(cx), round1(cy)]);
+        return { path, hit: false, rest: { x: round1(cx), y: round1(cy) }, x: cx, y: cy, vx: 0, vy: 0 };
+      }
       const k = (surfaceAt(terrain, x + 24) - surfaceAt(terrain, x - 24)) / 48;   // dy/dx, y-down
       const L = Math.hypot(k, 1);
       s += (GRAVITY * k / L) * DT;                       // slope pulls it downhill

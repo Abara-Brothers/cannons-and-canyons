@@ -102,12 +102,7 @@
 
       <div class="hs-main">
 
-        <div class="hs-col">
-          <button id="quickBtn" type="button" class="hs-quick">
-            <span class="hs-quick-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M13.6 2 4 13.4h6L9.2 22 20 10.2h-6.6z"/></svg></span>
-            <span class="hs-quick-txt"><b>Quick match</b><i>Straight into a duel with the next player looking</i></span>
-          </button>
-
+        <div class="hs-col hs-col-join">
           <div class="hs-panel">
             <div class="hs-panel-head">
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12.2 12h9.2M17.6 12v3.6M21 12v2.6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" fill="none"/></svg>
@@ -152,13 +147,11 @@
                 <span>Zombies</span>
               </button>
             </div>
-            <div class="hs-row">
-              <label class="hs-selwrap" id="oppWrap"><span>Opponent</span>
-                <select id="oppSel" class="hs-select" aria-label="Opponent">
-                  <option value="friend" selected>Friend / online (code)</option>
-                  <option value="cpu">Computer</option>
-                </select>
-              </label>
+            <div class="hs-oppbtns hidden" id="oppBtns" role="group" aria-label="Opponent">
+              <button type="button" class="opp active" data-opp="friend">Friend / online (code)</button>
+              <button type="button" class="opp" data-opp="cpu">Vs. Computer</button>
+            </div>
+            <div class="hs-row" id="optRow">
               <label class="hs-selwrap hidden" id="diffWrap"><span>Difficulty</span>
                 <select id="diffSel" class="hs-select" aria-label="CPU difficulty">
                   <option value="easy">Easy</option>
@@ -274,11 +267,14 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 6l6 6-6 6"/></svg>
         </button>
       </div>
+      <button id="leaveBtn" class="leave" title="Leave game" aria-label="Leave game">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M14 21H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8"/><path d="M17 16l4-4-4-4M21 12H9"/></svg>
+      </button>
       <button id="helpBtn" class="leave" title="How to play" aria-label="How to play">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M8.6 9a3.4 3.4 0 1 1 4.6 3.2c-1 .4-1.2 1-1.2 2.1"/><path d="M12 17.6v.2"/></svg>
       </button>
-      <button id="leaveBtn" class="leave" title="Leave game" aria-label="Leave game">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M14 21H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8"/><path d="M17 16l4-4-4-4M21 12H9"/></svg>
+      <button id="golfCardBtn" class="leave golf-only" title="Scorecard" aria-label="Scorecard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
       </button>
       <div id="toast"></div>
     </div>
@@ -394,6 +390,18 @@
       </section>
 
       <button id="helpCloseBtn" class="btn big primary">Got it</button>
+    </div>
+  </div>
+
+  <!-- ============ GOLF SCORECARD ============ -->
+  <!-- On-screen during a round (the scorecard button on the stage) and reused
+       for the end-of-round summary. The table is built by app.js from the golf
+       snapshot (per-hole par + the per-seat stroke grid). -->
+  <div id="golfCard" class="overlay hidden">
+    <div class="overlay-card menu-card gcard">
+      <div class="result">Scorecard</div>
+      <div class="gc-scroll"><table class="gc-table" id="golfCardTable"></table></div>
+      <button id="golfCardClose" class="btn big primary">Back to the round</button>
     </div>
   </div>
 

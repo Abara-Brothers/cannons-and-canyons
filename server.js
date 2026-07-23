@@ -302,8 +302,10 @@ function snapshot(room, seat) {
       ? ['golfball', 'driver', 'putter'].map((id) => ({ ...menuEntry(WEAPON_BY_ID[id]), ammo: 99 }))
       : weaponMenu(),
     golf: room.golf ? {
-      hole: room.golf.hole, holes: 9, par: room.golf.par, cup: room.golf.cup, tee: room.golf.tee,
+      hole: room.golf.hole, holes: GOLF_HOLES.length, par: room.golf.par, cup: room.golf.cup, tee: room.golf.tee,
       tees: room.golf.tees, teeSet: room.golf.teeSet,
+      pars: GOLF_HOLES.map(h => h.par),                       // per-hole par for the scorecard
+      grid: room.golf.strokes.map(r => r.slice()),            // full per-seat x per-hole matrix
       strokes: room.golf.strokes.map(r => r[room.golf.hole - 1] || 0),
       totals: room.golf.strokes.map(r => r.reduce((a, b) => a + b, 0)),
       done: room.golf.done.slice(),
@@ -481,7 +483,8 @@ function golfShot(room, seat, msg) {
   const clubW = WEAPON_BY_ID[msg.weapon];
   const club = clubW && clubW.golfOnly ? clubW.id : 'golfball';
   const result = simulateShot(
-    { terrain: room.terrain, tanks: room.tanks, lavaY: room.lavaY, biome: room.biome },
+    { terrain: room.terrain, tanks: room.tanks, lavaY: room.lavaY, biome: room.biome,
+      cup: { x: g.cup.x, r: g.cup.r, capV: 2200 } },   // capV = drop-in speed; faster balls lip out
     { by: seat, weapon: club, angle: msg.angle, power: msg.power, dir: room.facing[seat] }
   );
   const hi = g.hole - 1;
@@ -512,6 +515,8 @@ function golfShot(room, seat, msg) {
     golf: {
       hole: g.hole, holes: GOLF_HOLES.length, par: g.par, cup: g.cup,
       tees: g.tees, teeSet: g.teeSet,
+      pars: GOLF_HOLES.map(h => h.par),                       // per-hole par for the scorecard
+      grid: g.strokes.map(r => r.slice()),                    // full per-seat x per-hole matrix
       strokes: g.strokes.map(r => r[hi]),
       totals: g.strokes.map(r => r.reduce((a, b) => a + b, 0)),
       done: g.done.slice(), note, noteSeat: seat,
@@ -523,7 +528,7 @@ function golfShot(room, seat, msg) {
   // Real rolling can run well past the old cap — the hold must cover the whole
   // replay (maxT 60s of sim = 1800 points ≈ 16.2s of playback, plus settle).
   const ptsMs = ((result.projectiles[0] && result.projectiles[0].path.length) || 0) * 9;
-  room.clock = setTimeout(() => { room.clock = null; golfAdvance(room, seat); }, 600 + Math.min(20000, Math.round(ptsMs)));
+  room.clock = setTimeout(() => { room.clock = null; golfAdvance(room, seat); }, 1100 + Math.min(22000, Math.round(ptsMs)));
 }
 
 function golfAdvance(room, by) {
@@ -553,7 +558,7 @@ function finishGolf(room) {
   broadcast(room, {
     type: 'gameover', winner, team: null,
     hp: room.hp.map(h => Math.max(0, Math.round(h))), alive: aliveFlags(room),
-    golf: { totals, parTotal, strokes: room.golf.strokes },
+    golf: { totals, parTotal, pars: GOLF_HOLES.map(h => h.par), strokes: room.golf.strokes, done: room.golf.done.slice() },
   });
 }
 
