@@ -1,3 +1,10 @@
+/* Effective viewport units: 1 unit of app-height/width regardless of how the
+   phone is held — in portrait the app is rotated 90°, so the axes swap. */
+:root { --vhu: 1vh; --vwu: 1vw; --dvhu: 1vh; --dvwu: 1vw; --dvhu: 1dvh; --dvwu: 1dvw; }
+@media (orientation: portrait) {
+  :root { --vhu: 1vw; --vwu: 1vh; --dvhu: 1vw; --dvwu: 1vh; --dvhu: 1dvw; --dvwu: 1dvh; }
+}
+
 :root {
   --bg: #0b1020;
   --panel: #141b33;
@@ -168,7 +175,7 @@ body.in-game .bg-canyon { display: none; }
 .gtitle {
   margin: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
   gap: 0 .1em; line-height: .94; text-transform: uppercase;
-  font-size: clamp(30px, 8.4vw, 48px); font-weight: 900; letter-spacing: .015em;
+  font-size: clamp(30px, calc(8.4 * var(--vwu)), 48px); font-weight: 900; letter-spacing: .015em;
 }
 /* Extruded gradient lettering: background-clip paints the face, two hard
    drop-shadows are the bevel, the third is the cast shadow. */
@@ -255,7 +262,25 @@ body.in-game .bg-canyon { display: none; }
 
 /* ---- Rotate prompt ------------------------------------------------------- */
 .rotate-hint { display: none; }
-@media (orientation: portrait) and (max-width: 900px) {
+/* ==========================================================================
+   HARD LANDSCAPE LOCK — a browser cannot rotate the device, so in portrait the
+   ENTIRE app is laid out at calc(100 * var(--dvhu)) x calc(100 * var(--dvwu)) and rotated 90°: whatever way the
+   phone is held, the game IS landscape. Canvas input is safe (offsetX/Y are
+   local coords; sizing reads clientWidth). Every size-sensitive media query
+   below carries a portrait twin phrased against the EFFECTIVE (rotated) axes.
+   ========================================================================== */
+html { background: var(--bg); }
+@media (orientation: portrait) {
+  body {
+    position: fixed; top: 0; left: 100vw; left: 100dvw;
+    width: 100vh; width: 100dvh;
+    height: 100vw; height: 100dvw;
+    transform: rotate(90deg); transform-origin: top left;
+    overflow: hidden;
+  }
+}
+
+@media (orientation: portrait) and (max-width: 0px) {   /* retired: shim replaces the rotate prompt */
   body.in-game .rotate-hint {
     display: flex; position: absolute; inset: 0; z-index: 18;
     align-items: center; justify-content: center; text-align: center;
@@ -426,7 +451,7 @@ body.in-game .bg-canyon { display: none; }
 /* ---------- Overlay ---------- */
 .overlay { position: absolute; inset: 0; background: rgba(6,9,20,.82); display: flex; align-items: center; justify-content: center; padding: 22px; z-index: 20; backdrop-filter: blur(4px); }
 .overlay.hidden { display: none; }
-.overlay-card { width: 100%; max-width: 400px; max-height: 94dvh; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 22px; padding: clamp(14px, 3.2vh, 28px) 22px; text-align: center; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: clamp(7px, 1.6vh, 14px); }
+.overlay-card { width: 100%; max-width: 400px; max-height: calc(94 * var(--dvhu)); overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 22px; padding: clamp(14px, calc(3.2 * var(--vhu)), 28px) 22px; text-align: center; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: clamp(7px, calc(1.6 * var(--vhu)), 14px); }
 .menu-card { overflow-y: hidden; }   /* fitted menus never scroll — they compress */
 .result { font-size: 30px; font-weight: 900; }
 .result.win { color: var(--good); } .result.lose { color: var(--p1); } .result.draw { color: var(--accent); }
@@ -447,7 +472,7 @@ body.in-game .bg-canyon { display: none; }
 #game.killcam #hud-top, #game.killcam #dock { opacity: .26; filter: saturate(.35); pointer-events: none; }
 #game.killcam .mute, #game.killcam .leave, #game.killcam .zoomctl { opacity: 0; pointer-events: none; }
 
-@media (min-width: 620px) {
+@media (orientation: landscape) and (min-width: 620px), (orientation: portrait) and (min-height: 620px) {
   .aim-readout { grid-template-columns: 1fr 1fr; max-width: 640px; margin: 0 auto; width: 100%; }
   .control-rows { max-width: 640px; margin: 0 auto; width: 100%; }
   .weapon-strip { justify-content: center; }
@@ -455,7 +480,7 @@ body.in-game .bg-canyon { display: none; }
 
 /* Landscape phones: ultra-compact dock — icon-only weapons + one control row
    so the battlefield keeps nearly all of the screen. */
-@media (orientation: landscape) and (max-height: 600px) {
+@media (orientation: landscape) and (max-height: 600px), (orientation: portrait) and (max-width: 600px) {
   /* Slim single-row scoreboard: name · HP number · inline bar — minimal height. */
   #hud-top { flex-direction: row; align-items: center; padding: 1px 10px; gap: 10px; }
   .score-row { flex: 1 1 auto; gap: 6px; }
@@ -510,7 +535,7 @@ body.in-game .bg-canyon { display: none; }
    TITLE SCREEN — LANDSCAPE (lobby only; the home dashboard sizes itself with
    vh-clamps further down and never scrolls)
    ========================================================================== */
-@media (orientation: landscape) and (max-height: 600px) {
+@media (orientation: landscape) and (max-height: 600px), (orientation: portrait) and (max-width: 600px) {
   #lobby {
     padding-top: max(10px, env(safe-area-inset-top));
     padding-bottom: max(10px, env(safe-area-inset-bottom));
@@ -545,7 +570,7 @@ body.golf .fuel { display: none; }
   color: var(--ink-dim, #aeb9d6); font: inherit; font-size: 13px; cursor: pointer;
 }
 .howto:active { transform: translateY(1px); }
-.help-card { max-width: 560px; width: min(92vw, 560px); max-height: 86dvh; display: flex; flex-direction: column; }
+.help-card { max-width: 560px; width: min(calc(92 * var(--vwu)), 560px); max-height: calc(86 * var(--dvhu)); display: flex; flex-direction: column; }
 .help-scroll { overflow-y: auto; text-align: left; margin: 10px 0 14px; padding-right: 6px; min-height: 0; }
 .help-sec { margin-bottom: 16px; }
 .help-sec h3 { margin: 0 0 6px; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent, #ff9d3d); }
@@ -572,87 +597,87 @@ body.golf .fuel { display: none; }
   width: 100%; height: 100%; min-height: 0;
   max-width: 1100px; margin: 0 auto;
   display: flex; flex-direction: column;
-  gap: clamp(6px, 1.5vh, 14px);
-  padding: calc(env(safe-area-inset-top) + clamp(8px, 2vh, 20px))
-           max(clamp(10px, 3vw, 28px), env(safe-area-inset-right))
-           calc(env(safe-area-inset-bottom) + clamp(6px, 1.5vh, 14px))
-           max(clamp(10px, 3vw, 28px), env(safe-area-inset-left));
+  gap: clamp(6px, calc(1.5 * var(--vhu)), 14px);
+  padding: calc(env(safe-area-inset-top) + clamp(8px, calc(2 * var(--vhu)), 20px))
+           max(clamp(10px, calc(3 * var(--vwu)), 28px), env(safe-area-inset-right))
+           calc(env(safe-area-inset-bottom) + clamp(6px, calc(1.5 * var(--vhu)), 14px))
+           max(clamp(10px, calc(3 * var(--vwu)), 28px), env(safe-area-inset-left));
 }
 
 /* Band 1: brand + identity */
 .hs-head { display: flex; align-items: center; justify-content: space-between; gap: 10px 18px; flex-wrap: wrap; }
-.hs-title { font-size: clamp(20px, 5.2vh, 40px); justify-content: flex-start; }
-.hs-by { margin: 2px 0 0; font-size: clamp(8px, 1.3vh, 11px); color: var(--muted); text-transform: uppercase; letter-spacing: .26em; }
+.hs-title { font-size: clamp(20px, calc(5.2 * var(--vhu)), 40px); justify-content: flex-start; }
+.hs-by { margin: 2px 0 0; font-size: clamp(8px, calc(1.3 * var(--vhu)), 11px); color: var(--muted); text-transform: uppercase; letter-spacing: .26em; }
 .hs-by b { color: var(--primary); font-weight: 800; }
 .hs-id { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .hs-cs {
   display: flex; align-items: center; gap: 8px;
   background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px;
-  padding: clamp(4px, 0.9vh, 8px) 10px;
+  padding: clamp(4px, calc(0.9 * var(--vhu)), 8px) 10px;
 }
 .hs-cs:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(84,200,255,.22); }
 .hs-cs-label { font-size: 10px; text-transform: uppercase; letter-spacing: .18em; color: var(--muted); }
-.hs-cs input { border: 0; background: transparent; padding: 2px 0; width: clamp(110px, 16vw, 170px); font-weight: 700; font-size: clamp(13px, 1.9vh, 16px); }
+.hs-cs input { border: 0; background: transparent; padding: 2px 0; width: clamp(110px, calc(16 * var(--vwu)), 170px); font-weight: 700; font-size: clamp(13px, calc(1.9 * var(--vhu)), 16px); }
 .hs-cs input:focus { outline: none; }
 .hs-reroll { border: 0; background: transparent; color: var(--accent); width: 26px; height: 26px; padding: 2px; cursor: pointer; }
 .hs-reroll svg { width: 100%; height: 100%; }
 .hs-help {
   display: flex; align-items: center; gap: 7px;
   border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
-  border-radius: 12px; padding: clamp(5px, 1vh, 9px) 12px; font-weight: 700;
-  font-size: clamp(11px, 1.7vh, 14px); cursor: pointer;
+  border-radius: 12px; padding: clamp(5px, calc(1 * var(--vhu)), 9px) 12px; font-weight: 700;
+  font-size: clamp(11px, calc(1.7 * var(--vhu)), 14px); cursor: pointer;
 }
 .hs-help svg { width: 17px; height: 17px; color: var(--accent); }
 
 /* Band 2: the two action columns */
 .hs-main {
   flex: 1; min-height: 0;
-  display: grid; grid-template-columns: 1fr 1fr; gap: clamp(8px, 1.6vw, 16px);
+  display: grid; grid-template-columns: 1fr 1fr; gap: clamp(8px, calc(1.6 * var(--vwu)), 16px);
   align-content: stretch;
 }
-.hs-col { display: flex; flex-direction: column; gap: clamp(6px, 1.4vh, 12px); min-height: 0; min-width: 0; }
+.hs-col { display: flex; flex-direction: column; gap: clamp(6px, calc(1.4 * var(--vhu)), 12px); min-height: 0; min-width: 0; }
 .hs-quick {
   display: flex; align-items: center; gap: 12px; text-align: left;
   border: 0; border-radius: 16px; cursor: pointer; color: #2b1002;
   background: linear-gradient(160deg, #ffb056 0%, #ff7a2e 55%, #f0561d 100%);
   box-shadow: 0 8px 22px rgba(240, 96, 30, .35);
-  padding: clamp(10px, 2.2vh, 18px) clamp(12px, 1.6vw, 18px);
+  padding: clamp(10px, calc(2.2 * var(--vhu)), 18px) clamp(12px, calc(1.6 * var(--vwu)), 18px);
 }
 .hs-quick:active { transform: translateY(1px); }
-.hs-quick-ico { flex: 0 0 auto; width: clamp(26px, 4.6vh, 38px); height: clamp(26px, 4.6vh, 38px); border-radius: 10px; background: rgba(255,255,255,.28); display: grid; place-items: center; }
+.hs-quick-ico { flex: 0 0 auto; width: clamp(26px, calc(4.6 * var(--vhu)), 38px); height: clamp(26px, calc(4.6 * var(--vhu)), 38px); border-radius: 10px; background: rgba(255,255,255,.28); display: grid; place-items: center; }
 .hs-quick-ico svg { width: 70%; height: 70%; }
-.hs-quick-txt b { display: block; font-size: clamp(14px, 2.6vh, 20px); font-weight: 900; letter-spacing: .02em; }
-.hs-quick-txt i { display: block; font-style: normal; font-size: clamp(10px, 1.6vh, 12.5px); opacity: .85; }
+.hs-quick-txt b { display: block; font-size: clamp(14px, calc(2.6 * var(--vhu)), 20px); font-weight: 900; letter-spacing: .02em; }
+.hs-quick-txt i { display: block; font-style: normal; font-size: clamp(10px, calc(1.6 * var(--vhu)), 12.5px); opacity: .85; }
 .hs-panel {
   background: rgba(20, 27, 51, .78); border: 1px solid var(--line); border-radius: 16px;
-  padding: clamp(8px, 1.6vh, 14px); display: flex; flex-direction: column; gap: clamp(6px, 1.2vh, 10px);
+  padding: clamp(8px, calc(1.6 * var(--vhu)), 14px); display: flex; flex-direction: column; gap: clamp(6px, calc(1.2 * var(--vhu)), 10px);
   min-height: 0;
 }
-.hs-panel-head { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: clamp(12px, 1.9vh, 15px); }
-.hs-panel-head svg { width: clamp(15px, 2.4vh, 19px); height: clamp(15px, 2.4vh, 19px); color: var(--accent); flex: 0 0 auto; }
-.hs-panel-head i { font-style: normal; font-weight: 500; font-size: clamp(9px, 1.4vh, 11.5px); color: var(--muted); margin-left: auto; }
+.hs-panel-head { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: clamp(12px, calc(1.9 * var(--vhu)), 15px); }
+.hs-panel-head svg { width: clamp(15px, calc(2.4 * var(--vhu)), 19px); height: clamp(15px, calc(2.4 * var(--vhu)), 19px); color: var(--accent); flex: 0 0 auto; }
+.hs-panel-head i { font-style: normal; font-weight: 500; font-size: clamp(9px, calc(1.4 * var(--vhu)), 11.5px); color: var(--muted); margin-left: auto; }
 .hs-row { display: flex; align-items: center; gap: 8px; }
 .hs-row .diffrow { flex: 1; display: flex; gap: 6px; }
 .hs-row .diff { flex: 1; }
 .hs-go {
   border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
-  font-weight: 800; font-size: clamp(12px, 1.8vh, 14px);
-  border-radius: 11px; padding: clamp(6px, 1.3vh, 10px) 16px; cursor: pointer;
+  font-weight: 800; font-size: clamp(12px, calc(1.8 * var(--vhu)), 14px);
+  border-radius: 11px; padding: clamp(6px, calc(1.3 * var(--vhu)), 10px) 16px; cursor: pointer;
 }
 .hs-go.primary { background: var(--accent); border-color: var(--accent); color: #0a1020; }
 .hs-go:active { transform: translateY(1px); }
 .hs-create { flex: 1; }
 .modegrid {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(5px, 1vh, 8px);
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(5px, calc(1 * var(--vhu)), 8px);
   min-height: 0;
 }
 .modegrid .mode {
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: clamp(2px, 0.7vh, 6px);
-  padding: clamp(5px, 1.3vh, 11px) 4px; border-radius: 12px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: clamp(2px, calc(0.7 * var(--vhu)), 6px);
+  padding: clamp(5px, calc(1.3 * var(--vhu)), 11px) 4px; border-radius: 12px;
   border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
-  font-weight: 700; font-size: clamp(9.5px, 1.5vh, 12.5px); cursor: pointer;
+  font-weight: 700; font-size: clamp(9.5px, calc(1.5 * var(--vhu)), 12.5px); cursor: pointer;
 }
-.modegrid .mode svg { width: clamp(16px, 3vh, 24px); height: clamp(16px, 3vh, 24px); }
+.modegrid .mode svg { width: clamp(16px, calc(3 * var(--vhu)), 24px); height: clamp(16px, calc(3 * var(--vhu)), 24px); }
 .modegrid .mode.active { color: #0a1020; background: var(--accent); border-color: var(--accent); }
 #countRow { display: flex; gap: 6px; }
 #countRow.hidden { display: none; }
@@ -660,45 +685,44 @@ body.golf .fuel { display: none; }
 #codeInput.code-input { flex: 1; min-width: 0; text-align: center; letter-spacing: .4em; font-weight: 800; }
 
 /* Band 3: kit strip */
-.hs-foot { display: flex; align-items: center; gap: clamp(6px, 1vw, 12px); flex-wrap: wrap; }
+.hs-foot { display: flex; align-items: center; gap: clamp(6px, calc(1 * var(--vwu)), 12px); flex-wrap: wrap; }
 .hs-chip {
   display: flex; align-items: center; gap: 8px;
   background: rgba(20, 27, 51, .78); border: 1px solid var(--line); border-radius: 999px;
-  padding: clamp(4px, 0.9vh, 7px) 12px; color: var(--text);
-  font-size: clamp(10px, 1.5vh, 12px); min-height: clamp(28px, 4.6vh, 38px);
+  padding: clamp(4px, calc(0.9 * var(--vhu)), 7px) 12px; color: var(--text);
+  font-size: clamp(10px, calc(1.5 * var(--vhu)), 12px); min-height: clamp(28px, calc(4.6 * var(--vhu)), 38px);
 }
-.hs-chip > span { color: var(--muted); text-transform: uppercase; letter-spacing: .14em; font-size: clamp(8.5px, 1.3vh, 10px); }
+.hs-chip > span { color: var(--muted); text-transform: uppercase; letter-spacing: .14em; font-size: clamp(8.5px, calc(1.3 * var(--vhu)), 10px); }
 .hs-armoury { cursor: pointer; font-weight: 800; }
 .hs-armoury svg { width: 17px; height: 17px; color: var(--primary); }
 .hs-armoury b { color: var(--accent); font-weight: 800; }
 .hs-error { margin: 0 0 0 auto; }
 .hs-foot .skinrow { display: flex; gap: 5px; }
-.hs-foot .skinrow .skin { width: clamp(18px, 3.4vh, 26px); height: clamp(18px, 3.4vh, 26px); }
+.hs-foot .skinrow .skin { width: clamp(18px, calc(3.4 * var(--vhu)), 26px); height: clamp(18px, calc(3.4 * var(--vhu)), 26px); }
 
 /* Narrow / portrait: stack the columns; everything stays inside the viewport
    because the bands share the height budget and panels compress via clamps. */
-@media (max-width: 640px), (orientation: portrait) and (max-width: 900px) {
+@media (orientation: landscape) and (max-width: 640px), (orientation: portrait) and (max-height: 640px) {
   .hs-main { grid-template-columns: 1fr; overflow: hidden; }
-  .hs-title { font-size: clamp(19px, 3.4vh, 30px); }
+  .hs-title { font-size: clamp(19px, calc(3.4 * var(--vhu)), 30px); }
   .hs-quick-txt i { display: none; }
   .modegrid .mode { flex-direction: row; justify-content: flex-start; padding-left: 9px; gap: 7px; }
   .hs-foot { gap: 5px; }
 }
 /* Very short landscape phones: tighten the brand row so the panels get room. */
-@media (max-height: 430px) {
-  .hs-title { font-size: clamp(17px, 4.6vh, 24px); }
+@media (orientation: landscape) and (max-height: 430px), (orientation: portrait) and (max-width: 430px) {
+  .hs-title { font-size: clamp(17px, calc(4.6 * var(--vhu)), 24px); }
   .hs-by { display: none; }
   .hs-quick-txt i { display: none; }
   .hs-panel-head i { display: none; }
 }
 
 /* ---- Armoury modal ---- */
-.arm-sub { text-align: left; margin: 3px 0 7px; font-size: clamp(10.5px, 1.7vh, 12.5px); line-height: 1.4; }
+.arm-sub { text-align: left; margin: 3px 0 7px; font-size: clamp(10.5px, calc(1.7 * var(--vhu)), 12.5px); line-height: 1.4; }
 .arm-grid {
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: clamp(4px, 1vh, 7px);
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: clamp(4px, calc(1 * var(--vhu)), 7px);
   margin-bottom: 10px;
 }
-@media (orientation: portrait) { .arm-grid { grid-template-columns: repeat(2, 1fr); } }
 .arm-cell {
   display: flex; align-items: center; gap: 8px; text-align: left;
   border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
@@ -727,11 +751,11 @@ body.golf .fuel { display: none; }
 /* tee-set chips share the countrow look */
 #teeRow { display: flex; gap: 6px; }
 #teeRow.hidden { display: none; }
-#teeRow .cnt { flex: 1; font-size: clamp(10px, 1.5vh, 12px); padding: 6px 0; }
+#teeRow .cnt { flex: 1; font-size: clamp(10px, calc(1.5 * var(--vhu)), 12px); padding: 6px 0; }
 
 /* ---- Dashboard menu screens: whole screen, no scrolling, ever ------------- */
 .menu-card {
-  max-width: 640px; width: min(94vw, 640px); max-height: 92dvh;
+  max-width: 640px; width: min(calc(94 * var(--vwu)), 640px); max-height: calc(92 * var(--dvhu));
   display: flex; flex-direction: column; overflow: hidden;
 }
 .menu-card .result { flex: 0 0 auto; }
@@ -742,59 +766,55 @@ body.golf .fuel { display: none; }
 .tabrow { display: flex; gap: 6px; margin: 8px 0 10px; }
 .tab {
   flex: 1; border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
-  border-radius: 10px; padding: clamp(5px, 1.2vh, 9px) 0; font-weight: 800;
-  font-size: clamp(11px, 1.7vh, 13px); cursor: pointer;
+  border-radius: 10px; padding: clamp(5px, calc(1.2 * var(--vhu)), 9px) 0; font-weight: 800;
+  font-size: clamp(11px, calc(1.7 * var(--vhu)), 13px); cursor: pointer;
 }
 .tab.active { color: #0a1020; background: var(--accent); border-color: var(--accent); }
 .tabpane { display: none; min-height: 0; }
 .tabpane.active { display: block; }
 
 /* Basics: three teaching diagrams */
-.hd-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(5px, 1vw, 10px); margin-bottom: clamp(6px, 1.4vh, 12px); }
-.hd-fig { margin: 0; background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: clamp(4px, 1vh, 8px); }
+.hd-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(5px, calc(1 * var(--vwu)), 10px); margin-bottom: clamp(6px, calc(1.4 * var(--vhu)), 12px); }
+.hd-fig { margin: 0; background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: clamp(4px, calc(1 * var(--vhu)), 8px); }
 .hd-fig svg { width: 100%; height: auto; display: block; }
-.hd-fig figcaption { font-size: clamp(8.5px, 1.4vh, 11px); line-height: 1.35; color: var(--muted); margin-top: 4px; text-align: left; }
+.hd-fig figcaption { font-size: clamp(8.5px, calc(1.4 * var(--vhu)), 11px); line-height: 1.35; color: var(--muted); margin-top: 4px; text-align: left; }
 .hd-fig figcaption b { color: var(--text); }
 .hd-list { margin: 0; padding-left: 17px; text-align: left; }
-.hd-list li { font-size: clamp(10px, 1.6vh, 12.5px); line-height: 1.45; color: var(--ink-dim, #c5cde0); margin-bottom: clamp(3px, 0.8vh, 6px); }
-@media (orientation: portrait) { .hd-fig figcaption { font-size: 10px; } }
+.hd-list li { font-size: clamp(10px, calc(1.6 * var(--vhu)), 12.5px); line-height: 1.45; color: var(--ink-dim, #c5cde0); margin-bottom: clamp(3px, calc(0.8 * var(--vhu)), 6px); }
 
 /* Arsenal: compact cells + one live detail line */
-.hw-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: clamp(3px, 0.8vh, 6px); }
-@media (orientation: portrait) { .hw-grid { grid-template-columns: repeat(3, 1fr); } }
+.hw-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: clamp(3px, calc(0.8 * var(--vhu)), 6px); }
 .hw-cell {
   display: flex; flex-direction: column; align-items: center; gap: 2px;
   border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
-  border-radius: 9px; padding: clamp(3px, 0.9vh, 7px) 2px; cursor: pointer;
+  border-radius: 9px; padding: clamp(3px, calc(0.9 * var(--vhu)), 7px) 2px; cursor: pointer;
 }
-.hw-cell svg:first-of-type { width: clamp(12px, 2.1vh, 17px); height: clamp(12px, 2.1vh, 17px); }
-.hw-cell svg:last-of-type { width: clamp(16px, 2.7vh, 22px); height: clamp(10px, 1.6vh, 13px); }
-.hw-nm { font-size: clamp(7.5px, 1.25vh, 10px); font-weight: 700; }
+.hw-cell svg:first-of-type { width: clamp(12px, calc(2.1 * var(--vhu)), 17px); height: clamp(12px, calc(2.1 * var(--vhu)), 17px); }
+.hw-cell svg:last-of-type { width: clamp(16px, calc(2.7 * var(--vhu)), 22px); height: clamp(10px, calc(1.6 * var(--vhu)), 13px); }
+.hw-nm { font-size: clamp(7.5px, calc(1.25 * var(--vhu)), 10px); font-weight: 700; }
 .hw-cell.sel { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
-.hw-detail { margin: clamp(5px, 1.2vh, 10px) 0 0; font-size: clamp(10px, 1.6vh, 12.5px); color: var(--ink-dim, #c5cde0); text-align: left; min-height: 2.6em; }
-.hd-modes li { margin-bottom: clamp(4px, 1vh, 8px); }
+.hw-detail { margin: clamp(5px, calc(1.2 * var(--vhu)), 10px) 0 0; font-size: clamp(10px, calc(1.6 * var(--vhu)), 12.5px); color: var(--ink-dim, #c5cde0); text-align: left; min-height: 2.6em; }
+.hd-modes li { margin-bottom: clamp(4px, calc(1 * var(--vhu)), 8px); }
 
 /* Career */
 .career-wrap { margin: 6px 0 12px; min-height: 0; }
 #careerModal .tabpane { margin-bottom: 10px; }
 #careerModal .car-stats { column-count: 2; column-gap: 18px; }
-@media (orientation: portrait) { #careerModal .car-stats { column-count: 1; } }
-.cs-row { display: flex; justify-content: space-between; gap: 10px; padding: clamp(2px, 0.55vh, 4.5px) 0; border-bottom: 1px solid rgba(255,255,255,.05); font-size: clamp(9.5px, 1.5vh, 12px); }
+.cs-row { display: flex; justify-content: space-between; gap: 10px; padding: clamp(2px, calc(0.55 * var(--vhu)), 4.5px) 0; border-bottom: 1px solid rgba(255,255,255,.05); font-size: clamp(9.5px, calc(1.5 * var(--vhu)), 12px); }
 .cs-row span { color: var(--muted); }
 .cs-row b { color: var(--text); }
 .cs-sep { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 7px; }
-.car-achs { display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(3px, 0.7vh, 6px); align-content: start; }
-@media (max-width: 700px) { .car-achs { grid-template-columns: repeat(2, 1fr); } }
-@media (orientation: portrait) { .car-achs { grid-template-columns: 1fr; } }
-.ach { display: flex; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 8px; padding: clamp(2px, 0.6vh, 5px) 8px; opacity: .45; }
+.car-achs { display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(3px, calc(0.7 * var(--vhu)), 6px); align-content: start; }
+@media (orientation: landscape) and (max-width: 700px), (orientation: portrait) and (max-height: 700px) { .car-achs { grid-template-columns: repeat(2, 1fr); } }
+.ach { display: flex; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 8px; padding: clamp(2px, calc(0.6 * var(--vhu)), 5px) 8px; opacity: .45; }
 .ach-txt { min-width: 0; text-align: left; }
-.ach-txt b { display: block; font-size: clamp(8.5px, 1.4vh, 11px); }
-.ach-txt i { display: block; font-style: normal; font-size: clamp(7.5px, 1.2vh, 9.5px); line-height: 1.25; color: var(--muted); }
+.ach-txt b { display: block; font-size: clamp(8.5px, calc(1.4 * var(--vhu)), 11px); }
+.ach-txt i { display: block; font-style: normal; font-size: clamp(7.5px, calc(1.2 * var(--vhu)), 9.5px); line-height: 1.25; color: var(--muted); }
 .ach.got { opacity: 1; border-color: rgba(255, 210, 63, .5); background: rgba(255, 210, 63, .08); }
-.ach-ic svg { width: clamp(10px, 1.8vh, 14px); height: clamp(10px, 1.8vh, 14px); display: block; color: #ffd23f; }
+.ach-ic svg { width: clamp(10px, calc(1.8 * var(--vhu)), 14px); height: clamp(10px, calc(1.8 * var(--vhu)), 14px); display: block; color: #ffd23f; }
 .ach .ach-ic svg { color: #6b7488; }
 .ach.got .ach-ic svg { color: #ffd23f; }
-.ach-nm { font-size: clamp(8px, 1.35vh, 10.5px); font-weight: 700; }
+.ach-nm { font-size: clamp(8px, calc(1.35 * var(--vhu)), 10.5px); font-weight: 700; }
 
 /* Share row on the game-over card */
 .share-row { display: flex; gap: 8px; justify-content: center; margin: 2px 0 10px; flex-wrap: wrap; }
@@ -805,12 +825,12 @@ body.golf .fuel { display: none; }
 /* Native selects, dashboard-styled */
 .hs-selwrap { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; }
 .hs-selwrap.hidden { display: none; }
-.hs-selwrap > span { font-size: clamp(8.5px, 1.3vh, 10px); text-transform: uppercase; letter-spacing: .14em; color: var(--muted); flex: 0 0 auto; }
+.hs-selwrap > span { font-size: clamp(8.5px, calc(1.3 * var(--vhu)), 10px); text-transform: uppercase; letter-spacing: .14em; color: var(--muted); flex: 0 0 auto; }
 .hs-select {
   flex: 1; min-width: 0; appearance: none; -webkit-appearance: none;
   border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
-  font: inherit; font-weight: 700; font-size: clamp(11px, 1.7vh, 13.5px);
-  border-radius: 10px; padding: clamp(5px, 1.1vh, 9px) 30px clamp(5px, 1.1vh, 9px) 11px;
+  font: inherit; font-weight: 700; font-size: clamp(11px, calc(1.7 * var(--vhu)), 13.5px);
+  border-radius: 10px; padding: clamp(5px, calc(1.1 * var(--vhu)), 9px) 30px clamp(5px, calc(1.1 * var(--vhu)), 9px) 11px;
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2354c8ff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");
   background-repeat: no-repeat; background-position: right 9px center; background-size: 13px;
   cursor: pointer;
@@ -832,9 +852,9 @@ body.golf .fuel { display: none; }
   font-size: 10.5px; font-weight: 600; color: var(--muted); pointer-events: auto;
 }
 .drum .dc.cur {
-  flex: 0 0 48px; width: 48px; font-size: clamp(15px, 2.6vh, 18px); font-weight: 900; color: var(--text);
+  flex: 0 0 48px; width: 48px; font-size: clamp(15px, calc(2.6 * var(--vhu)), 18px); font-weight: 900; color: var(--text);
 }
-@media (max-width: 700px) {
+@media (orientation: landscape) and (max-width: 700px), (orientation: portrait) and (max-height: 700px) {
   .drum { width: 128px; min-width: 128px; max-width: 128px; }
   .drum .dc { flex: 0 0 13px; width: 13px; font-size: 8.5px; }
   .drum .dc.cur { flex: 0 0 36px; width: 36px; }
@@ -847,8 +867,8 @@ body.golf .fuel { display: none; }
      makes the button claim the panel's full height and ride over its
      neighbours. Prominent, but strictly its own row. */
   flex: 0 0 auto; width: 100%;
-  padding: clamp(9px, 1.9vh, 14px) 16px;
-  font-size: clamp(13px, 2.2vh, 17px); font-weight: 900; letter-spacing: .03em;
+  padding: clamp(9px, calc(1.9 * var(--vhu)), 14px) 16px;
+  font-size: clamp(13px, calc(2.2 * var(--vhu)), 17px); font-weight: 900; letter-spacing: .03em;
   color: #06180e; border: 0; border-radius: 13px;
   background: linear-gradient(160deg, #52f0a2 0%, #3ce88f 45%, #1fae66 100%);
   box-shadow: 0 4px 14px rgba(60, 232, 143, .28);
@@ -857,21 +877,18 @@ body.golf .fuel { display: none; }
 
 /* ---- Draft screen: 12 weapons in two short rows on landscape so the SAVE
    button always has room; portrait stacks 3-wide. ---- */
-.arm-card { max-width: 720px; width: min(96vw, 720px); }
+.arm-card { max-width: 720px; width: min(calc(96 * var(--vwu)), 720px); }
 .arm-card .arm-grid { grid-template-columns: repeat(6, 1fr); }
-.arm-card .arm-cell { flex-direction: column; text-align: center; gap: 3px; padding: clamp(4px, 1vh, 8px) 4px; font-size: clamp(8.5px, 1.5vh, 11px); }
-.arm-card .arm-cell svg { width: clamp(15px, 3vh, 22px); height: clamp(15px, 3vh, 22px); }
-.arm-card .result { font-size: clamp(19px, 3.6vh, 30px); }
-@media (orientation: portrait) {
-  .arm-card .arm-grid { grid-template-columns: repeat(3, 1fr); }
-}
+.arm-card .arm-cell { flex-direction: column; text-align: center; gap: 3px; padding: clamp(4px, calc(1 * var(--vhu)), 8px) 4px; font-size: clamp(8.5px, calc(1.5 * var(--vhu)), 11px); }
+.arm-card .arm-cell svg { width: clamp(15px, calc(3 * var(--vhu)), 22px); height: clamp(15px, calc(3 * var(--vhu)), 22px); }
+.arm-card .result { font-size: clamp(19px, calc(3.6 * var(--vhu)), 30px); }
 
 /* ---- Aim controls: proper touch targets — taller drums, taller buttons ---- */
 .stepper { padding: 5px; }
 .mini { width: 46px; height: 48px; font-size: 21px; }
 .drum { min-height: 46px; align-items: center; }
-.drum .dc.cur { font-size: clamp(17px, 3vh, 21px); }
-@media (orientation: landscape) and (max-height: 600px) {
+.drum .dc.cur { font-size: clamp(17px, calc(3 * var(--vhu)), 21px); }
+@media (orientation: landscape) and (max-height: 600px), (orientation: portrait) and (max-width: 600px) {
   .mini { width: 38px; height: 42px; font-size: 17px; }
   .drum { min-height: 40px; }
 }

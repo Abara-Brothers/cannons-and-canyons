@@ -110,23 +110,6 @@
 
           <div class="hs-panel">
             <div class="hs-panel-head">
-              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="3.6" y="8" width="16.8" height="11.4" rx="3.6"/><rect x="10.8" y="2.4" width="2.4" height="4.4" rx="1.2"/><rect x="0.8" y="11" width="2.2" height="5.2" rx="1.1"/><rect x="21" y="11" width="2.2" height="5.2" rx="1.1"/><rect x="7.4" y="11.6" width="3.1" height="3.6" rx="1.2" fill="#0b1020"/><rect x="13.5" y="11.6" width="3.1" height="3.6" rx="1.2" fill="#0b1020"/></svg>
-              <span>Play the computer</span>
-            </div>
-            <div class="hs-row">
-              <label class="hs-selwrap"><span>Difficulty</span>
-                <select id="diffSel" class="hs-select" aria-label="CPU difficulty">
-                  <option value="easy">Easy</option>
-                  <option value="medium" selected>Medium</option>
-                  <option value="hard">Hard</option>
-                </select>
-              </label>
-              <button id="cpuBtn" type="button" class="hs-go">Start</button>
-            </div>
-          </div>
-
-          <div class="hs-panel">
-            <div class="hs-panel-head">
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12.2 12h9.2M17.6 12v3.6M21 12v2.6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" fill="none"/></svg>
               <span>Join a code</span>
             </div>
@@ -170,6 +153,19 @@
               </button>
             </div>
             <div class="hs-row">
+              <label class="hs-selwrap" id="oppWrap"><span>Opponent</span>
+                <select id="oppSel" class="hs-select" aria-label="Opponent">
+                  <option value="friend" selected>Friend / online (code)</option>
+                  <option value="cpu">Computer</option>
+                </select>
+              </label>
+              <label class="hs-selwrap hidden" id="diffWrap"><span>Difficulty</span>
+                <select id="diffSel" class="hs-select" aria-label="CPU difficulty">
+                  <option value="easy">Easy</option>
+                  <option value="medium" selected>Medium</option>
+                  <option value="hard">Hard</option>
+                </select>
+              </label>
               <label class="hs-selwrap hidden" id="countWrap"><span>Players</span>
                 <select id="countSel" class="hs-select" aria-label="Players">
                   <option value="3">3 players</option>
@@ -446,24 +442,6 @@
       <p class="muted">You'll forfeit this match and return to the menu.</p>
       <button id="stayBtn" class="btn big primary">Keep playing</button>
       <button id="leaveYesBtn" class="btn ghost danger">Leave game</button>
-    </div>
-  </div>
-
-  <!-- ============ ROTATE PROMPT ============ -->
-  <!-- Visibility is 100% CSS: shown only when body.in-game is set (showScreen),
-       the viewport is portrait, the screen is phone-sized, and the player has
-       NOT opted into portrait. Never covers the game-over / leave overlays
-       (z-index 18 vs their 20) and is always dismissible — an OS rotation lock
-       would otherwise make the game unplayable. -->
-  <div id="rotateHint" class="rotate-hint">
-    <div class="rh-card">
-      <svg class="rh-phone" viewBox="0 0 120 120" aria-hidden="true">
-        <rect class="rh-body" x="42" y="12" width="36" height="96" rx="7"/>
-        <rect class="rh-screen" x="46.5" y="21" width="27" height="78" rx="3"/>
-      </svg>
-      <div class="rh-title">Turn your phone sideways</div>
-      <p class="rh-sub">Canyons &amp; Cannons is built for landscape — you'll see far more of the canyon, and the controls shrink out of the way.</p>
-      <button id="rhLeaveBtn" type="button" class="btn ghost">Leave match</button>
     </div>
   </div>
 

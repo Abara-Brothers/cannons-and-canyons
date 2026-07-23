@@ -865,17 +865,17 @@ $('armouryCloseBtn').onclick = () => {
 };
 
 let ccMode = 'duel', ccMax = 4;
+let ccOpp = 'friend';        // duel opponent: 'friend' (code/link) or 'cpu'
 (function initMode() {
   const mr = $('modeRow');
   mr.addEventListener('click', (e) => {
     const b = e.target.closest('.mode'); if (!b) return;
     ccMode = b.dataset.mode;
     for (const el of mr.querySelectorAll('.mode')) el.classList.toggle('active', el === b);
-    // Only the option that matters for the chosen mode is visible — the panel
-    // stays calm instead of stacking every control at once.
-    $('countWrap').classList.toggle('hidden', ccMode !== 'ffa');
-    $('teeWrap').classList.toggle('hidden', ccMode !== 'golf');
+    // Only the options that matter for the chosen mode are visible.
+    syncCreateRow();
   });
+  syncCreateRow();
 })();
 $('countSel').onchange = () => { ccMax = +$('countSel').value; };
 let ccTees = localStorage.getItem('cc_tees') || 'mens';
@@ -883,6 +883,10 @@ $('teeSel').value = ccTees;
 $('teeSel').onchange = () => { ccTees = $('teeSel').value; try { localStorage.setItem('cc_tees', ccTees); } catch {} };
 $('createBtn').onclick = () => {
   Audio.ensure(); $('homeError').textContent = '';
+  if (ccMode === 'duel' && ccOpp === 'cpu') {
+    intent({ type: 'ai', difficulty: cpuDifficulty, name: myName(), skin: mySkin() });
+    return;
+  }
   intent({ type: 'create', name: myName(), skin: mySkin(), mode: ccMode, max: ccMode === 'ffa' ? ccMax : 2, tees: ccTees });
 };
 $('quickBtn').onclick = () => { Audio.ensure(); S.quick = true; $('homeError').textContent = ''; intent({ type: 'quick', name: myName(), skin: mySkin() }); };
@@ -891,14 +895,23 @@ $('quickBtn').onclick = () => { Audio.ensure(); S.quick = true; $('homeError').t
 let cpuDifficulty = localStorage.getItem('pt_diff') || 'medium';
 $('diffSel').value = cpuDifficulty;
 $('diffSel').onchange = () => { cpuDifficulty = $('diffSel').value; localStorage.setItem('pt_diff', cpuDifficulty); };
-$('cpuBtn').onclick = () => { Audio.ensure(); $('homeError').textContent = ''; intent({ type: 'ai', difficulty: cpuDifficulty, name: myName(), skin: mySkin() }); };
+// Duel's opponent choice: a friend via code/link, or the CPU right here.
+function syncCreateRow() {
+  const duel = ccMode === 'duel';
+  $('oppWrap').classList.toggle('hidden', !duel);
+  $('diffWrap').classList.toggle('hidden', !(duel && ccOpp === 'cpu'));
+  $('countWrap').classList.toggle('hidden', ccMode !== 'ffa');
+  $('teeWrap').classList.toggle('hidden', ccMode !== 'golf');
+  $('createBtn').textContent = duel && ccOpp === 'cpu' ? 'START VS COMPUTER' : 'CREATE GAME';
+}
+$('oppSel').onchange = () => { ccOpp = $('oppSel').value; syncCreateRow(); };
 
 // Landscape is the ONLY supported orientation. There is no preference and no
 // opt-out: body never gets .portrait-ok, so the CSS rotate prompt covers the
 // game screen whenever a phone is held upright.
-// Landscape is ENFORCED in-match: the prompt has no dismiss and no opt-out —
-// it offers only a (confirmed) exit for anyone whose OS rotation-lock is on.
-$('rhLeaveBtn').onclick = () => { $('confirmLeave').classList.remove('hidden'); };
+// Landscape is ABSOLUTE: in portrait the whole app renders rotated 90° (CSS
+// shim in styles.css), so there is no rotate prompt any more — the game simply
+// cannot be viewed in portrait.
 $('joinBtn').onclick = () => {
   Audio.ensure();
   const code = ($('codeInput').value || '').toUpperCase().trim();
@@ -1281,12 +1294,14 @@ for (const kind of ['angle', 'power']) {
     if (!canAim()) return;
     e.preventDefault();
     const a = myAim();
-    drag = { x0: e.clientX, v0: Math.round(kind === 'angle' ? a.angle : a.power), moved: false };
+    drag = { x0: e.clientX, y0: e.clientY, v0: Math.round(kind === 'angle' ? a.angle : a.power), moved: false };
     el.setPointerCapture(e.pointerId);
   });
   el.addEventListener('pointermove', (e) => {
     if (!drag) return;
-    const dx = e.clientX - drag.x0;
+    // Under the portrait rotation shim, "left/right" for the player runs along
+    // the device's vertical axis — read the drag on the effective axis.
+    const dx = matchMedia('(orientation: portrait)').matches ? (e.clientY - drag.y0) : (e.clientX - drag.x0);
     if (Math.abs(dx) > 4) drag.moved = true;
     const [lo, hi] = drumRange(kind);
     const v = Math.max(lo, Math.min(hi, drag.v0 - Math.round(dx / 13)));   // reel: strip follows the finger
