@@ -4007,7 +4007,7 @@ function drawTeeBox() {
     const sx = wx2s(tx);
     if (sx < -140 || sx > view.cssW + 140) continue;
     const gy = wy2s(surfaceAt(tx));
-    const u = Math.max(8, Math.min(18, 250 * cam.zoom));
+    const u = 12;                     // constant screen size at every zoom
     const active = set === (g.teeSet || 'mens');
     ctx.fillStyle = active ? 'rgba(60,232,143,0.5)' : 'rgba(20,30,18,0.55)';   // tee mat
     ctx.fillRect(sx - u * 2.6, gy - Math.max(1, u * 0.14), u * 5.2, Math.max(2, u * 0.22));
@@ -4446,12 +4446,15 @@ function drawAim() {
   const moy = (t.y - 274) - Math.sin(rad) * 410;
   const danger = moy >= surfaceAt(mox) - 8;
 
+  // The preview arrow leaves from the BARREL TIP — the same point the shell
+  // actually spawns from — not from the hull.
+  const msx = wx2s(mox), msy = wy2s(moy);
   const len = 30 + pct * 130;
-  const ex = sx + Math.cos(rad) * dir * len, ey = sy - Math.sin(rad) * len;
+  const ex = msx + Math.cos(rad) * dir * len, ey = msy - Math.sin(rad) * len;
   ctx.save();
   ctx.setLineDash([5, 6]); ctx.lineWidth = 2;
   ctx.strokeStyle = danger ? 'rgba(255,90,82,.95)' : 'rgba(255,210,63,.9)';
-  ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(msx, msy); ctx.lineTo(ex, ey); ctx.stroke();
   ctx.setLineDash([]);
   ctx.fillStyle = danger ? 'rgba(255,90,82,.95)' : 'rgba(255,210,63,.95)';
   const ah = 7, aa = Math.atan2(-(ey - sy), (ex - sx));

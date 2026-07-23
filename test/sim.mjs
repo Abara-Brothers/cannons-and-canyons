@@ -29,7 +29,18 @@ const ROT_A = rotOf(LOADOUT_A), ROT_B = rotOf(LOADOUT_B);
 function fire(c, shotIndex) {
   const power = 68 + (shotIndex % 7) * 4;
   const rot = c.seat === 0 ? ROT_A : ROT_B;
-  const weapon = shotIndex < rot.length ? rot[shotIndex] : 'cannon';
+  let weapon = shotIndex < rot.length ? rot[shotIndex] : 'cannon';
+  // Past the kit: fire whatever the wire says we actually hold. A shot that
+  // cracked a supply crate open may have gifted us ammo — in that case the
+  // server (correctly) does NOT grant the emergency cannon, and blindly
+  // firing cannon at 0 rounds would stall the match. (This was the flaky
+  // 22-shot suite failure.)
+  if (shotIndex >= rot.length && c.ammo) {
+    if (!(c.ammo.cannon > 0)) {
+      const armed = Object.keys(c.ammo).find(id => c.ammo[id] > 0);
+      if (armed) weapon = armed;
+    }
+  }
   c.ws.send(JSON.stringify({ type: 'fire', weapon, angle: 45, power }));
 }
 
@@ -45,6 +56,7 @@ function attach(c) {
         if (!Array.isArray(m.trees) || m.trees.length < 30) summary.errors.push('missing trees');
         break;
       case 'turn':
+        if (m.ammoSeat === c.seat && m.ammo) c.ammo = m.ammo;
         if (m.turn === c.seat && summary.shots < MAX_SHOTS && !summary.gameover) {
           setTimeout(() => fire(c, myShotCount++), 15);
         } else if (summary.shots >= MAX_SHOTS && c.seat === 0) {

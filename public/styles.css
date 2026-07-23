@@ -759,10 +759,18 @@ body.golf .fuel { display: none; }
   display: flex; flex-direction: column; overflow: hidden;
 }
 .menu-card .result { flex: 0 0 auto; }
-/* The action button ALWAYS survives a tight landscape screen: panes give way
-   (they clip inside themselves), the button never does. */
+/* The action button ALWAYS survives a tight landscape screen: panes SCROLL
+   inside themselves (stats, challenges, how-to-play are all browsable), the
+   button never moves. */
 .menu-card > .btn { flex: 0 0 auto; }
-.menu-card .tabpane, .menu-card .career-wrap { min-height: 0; overflow: hidden; }
+.menu-card .tabpane, .menu-card .career-wrap { min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+/* Landscape: the help/career cards use the width a sideways phone actually has,
+   so diagrams and rows breathe instead of cramping. */
+@media (orientation: landscape) and (max-height: 600px), (orientation: portrait) and (max-width: 600px) {
+  .menu-card { max-width: 780px; width: min(calc(96 * var(--vwu)), 780px); }
+  .hd-fig figcaption { font-size: clamp(10px, calc(1.7 * var(--vhu)), 12px); }
+  .hd-list li { font-size: clamp(11px, calc(1.8 * var(--vhu)), 13px); }
+}
 .tabrow { display: flex; gap: 6px; margin: 8px 0 10px; }
 .tab {
   flex: 1; border: 1px solid var(--line); background: var(--panel-2); color: var(--text);

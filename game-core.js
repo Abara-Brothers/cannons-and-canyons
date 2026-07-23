@@ -1112,13 +1112,21 @@ export function prepareGolfHole(terrain, teeX, cupX, allTees) {
       terrain[x] = terrain[x] * 0.35 + avg * 0.65;
     }
   }
-  // Every tee box — championship back through junior forward — gets its own
-  // dead-flat pad, levelled to ITS OWN height (not averaged on a slope).
-  for (const tx of (allTees && allTees.length ? allTees : [teeX])) {
-    const tLevel = surfaceAt(terrain, tx);
-    for (let px = Math.max(0, Math.round(tx - 460)); px <= Math.min(nL - 1, Math.round(tx + 460)); px++) {
-      const t = Math.min(1, Math.max(0, (460 - Math.abs(px - tx)) / 160));
-      terrain[px] = terrain[px] * (1 - t) + tLevel * t;
+  // The TEEING GROUND: every box — championship back through junior forward —
+  // sits on ONE continuous dead-flat platform at a single shared level, fully
+  // attached to the terrain (feathered ramps outside its ends only).
+  {
+    const teeXs = allTees && allTees.length ? allTees : [teeX];
+    const lo = Math.max(0, Math.round(Math.min(...teeXs) - 500));
+    const hi = Math.min(nL - 1, Math.round(Math.max(...teeXs) + 500));
+    let sum = 0;
+    for (let px = lo; px <= hi; px++) sum += terrain[px];
+    const level = sum / Math.max(1, hi - lo + 1);
+    for (let px = lo; px <= hi; px++) terrain[px] = level;
+    for (let f = 1; f <= 380; f++) {                     // ramps into the fairway
+      const t = 1 - f / 380;
+      if (lo - f >= 0) terrain[lo - f] = terrain[lo - f] * (1 - t) + level * t;
+      if (hi + f <= nL - 1) terrain[hi + f] = terrain[hi + f] * (1 - t) + level * t;
     }
   }
   // The GREEN: the ENTIRE putting surface is one dead-flat plane — every
@@ -1137,10 +1145,10 @@ export function prepareGolfHole(terrain, teeX, cupX, allTees) {
   for (let gx = Math.max(0, Math.round(cupX - gHalf)); gx <= Math.min(nL - 1, Math.round(cupX + gHalf)); gx++) {
     terrain[gx] = gLevel;
   }
-  for (let dx = -120; dx <= 120; dx++) {
+  for (let dx = -200; dx <= 200; dx++) {
     const x = Math.round(cupX + dx);
     if (x < 0 || x >= nL) continue;
-    terrain[x] = terrain[x] + (1 - Math.pow(Math.abs(dx) / 120, 2)) * 95;
+    terrain[x] = terrain[x] + (1 - Math.pow(Math.abs(dx) / 200, 2)) * 120;
   }
   return round1(surfaceAt(terrain, cupX));
 }

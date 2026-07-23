@@ -441,12 +441,14 @@ function nextHole(room, first) {
   g.par = H.par;
   room.worldW = Math.max(36000, H.d + 12000);       // the world fits the hole
   room.biome = H.biome;
-  room.lavaY = biomeLavaY(H.biome);
+  room.lavaY = WORLD_H + 4000;        // NO lava on any golf course — dry land only
   const seed = (room.seed + g.hole * 7919) >>> 0;
   room.terrain = generateTerrain(seed, 2, H.biome, room.worldW);
   // The cup sits at full championship distance; friendlier tee sets move the
   // TEE forward along the fairway.
-  g.cup = { x: Math.min(room.worldW - 2000, 2200 + H.d), r: 650 };    // a proper bucket
+  // r is the CATCH radius: the ball must come to rest inside the carved cup
+  // itself (the notch spans ±200) — near misses stay out.
+  g.cup = { x: Math.min(room.worldW - 2000, 2200 + H.d), r: 190 };
   // Every tee box exists on the course — championship at the back, junior at
   // the front — and each player spawns on the set the host chose.
   g.tees = {};
@@ -508,7 +510,10 @@ function golfShot(room, seat, msg) {
     },
   });
   clearTimeout(room.clock);
-  room.clock = setTimeout(() => { room.clock = null; golfAdvance(room, seat); }, 600);
+  // The turn does NOT end while the ball is moving: hold the handover for the
+  // replay's full flight+roll (path plays ~9ms a point on the clients).
+  const ptsMs = ((result.projectiles[0] && result.projectiles[0].path.length) || 0) * 9;
+  room.clock = setTimeout(() => { room.clock = null; golfAdvance(room, seat); }, 600 + Math.min(9500, Math.round(ptsMs)));
 }
 
 function golfAdvance(room, by) {
