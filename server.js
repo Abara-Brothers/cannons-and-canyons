@@ -60,7 +60,7 @@ function sanitizeName(raw, seat = 0) {
 
 // ---- Teams ----------------------------------------------------------------------
 // Boss Fight is strictly co-op: the humans are one side, the WARLORD the other,
-// and NOTHING a player fires — blast, splash, fire, gas, fallout, nanobots —
+// and NOTHING a player fires — blast, splash, fire, gas, fallout —
 // may hurt their own side (their own tank included).
 function sameSide(room, a, b) {
   if (room.mode !== 'boss') return false;
@@ -223,7 +223,6 @@ function killDead(room) {
 //       'boss'    -> 1..2 humans vs the WARLORD (host may start solo)
 //       'golf'    -> 1..2 humans, 9 holes, no damage
 //       'aliens'  -> 1..2 humans vs waves of xeno saucers
-//       'zombies' -> 1..2 humans vs waves of rotting hulks
 // A loadout arrives as an array of weapon ids; anything malformed becomes null
 // and the seat falls back to the default kit at start.
 const sanitizeLoadout = (picks, n = 5) => (validLoadout(picks, n) ? picks.slice() : null);
@@ -260,7 +259,7 @@ function finishPicking(room) {
 
 function createRoom(hostWs, name, skin, opts = {}) {
   const code = makeCode();
-  const MODES = ['duel', 'ffa', 'boss', 'golf', 'aliens', 'zombies'];
+  const MODES = ['duel', 'ffa', 'boss', 'golf', 'aliens'];
   const mode = MODES.includes(opts.mode) ? opts.mode : 'duel';
   const max = mode === 'ffa' ? Math.max(2, Math.min(4, (opts.max | 0) || 4)) : 2;
   const room = {
@@ -280,7 +279,6 @@ function createRoom(hostWs, name, skin, opts = {}) {
     props: [],                         // barrels / bunkers
     crates: [], crateSeq: 1,           // supply drops waiting on the field
     shield: [], hpMax: [],             // crate shield charges; per-seat HP ceiling
-    nanoBots: [], nanoTimer: null,     // Nano Swarm infestations (bots left per seat)
     stat: null,                        // damage dealt/received tallies for the report
     turnCount: 0,
     scorch: [],                        // permanent burn scars: merged world-x ranges [{a,b}]
@@ -323,7 +321,6 @@ function snapshot(room, seat) {
     loadouts: room.loadouts || undefined,
     pick: room.picking ? { n: room.pickN } : undefined,
     horde: room.horde ? { kills: room.horde.kills, target: room.horde.target, wave: room.horde.wave } : undefined,
-    nano: room.nanoBots && room.nanoBots.some(b => b > 0) ? room.nanoBots : undefined,
     scales: room.tanks.map(t => t.scale || 1),
     props: room.props, crates: room.crates, shield: room.shield,
     hazards: room.hazards,
@@ -349,11 +346,8 @@ const HORDE = {
   aliens:  { kind: 'alien',  baseHp: 90,  waveHp: 18, target: 8,
              names: ['XENO-SCOUT', 'XENO-REAVER', 'XENO-HARROW'],
              kit: ['a_plasma', 'a_pods', 'a_lance'] },
-  zombies: { kind: 'zombie', baseHp: 110, waveHp: 20, target: 8,
-             names: ['ROTBOX', 'GRAVEDIGGER', 'PUTRID-9'],
-             kit: ['z_spit', 'z_grubs', 'z_lob'] },
 };
-const isHordeMode = (m) => m === 'aliens' || m === 'zombies';
+const isHordeMode = (m) => m === 'aliens';
 const hordeSeats = (room) => room.players.map((p, i) => (p && p.horde ? i : -1)).filter(i => i >= 0);
 
 function hordeAccounting(room, aliveBefore) {
@@ -601,7 +595,7 @@ function startGame(room) {
   // Horde: the pack must START in reach too. Reseat every enemy 6k..19k from
   // the nearest human lane (alternating sides where the map allows) — the 48k
   // spawn spread otherwise opens 96% of matches with somebody beyond max range.
-  if (room.mode === 'aliens' || room.mode === 'zombies') {
+  if (room.mode === 'aliens') {
     const humanXs = room.players.map((p, j) => (!p.horde ? room.tanks[j].x : null)).filter((v) => v != null);
     room.players.forEach((p, j) => {
       if (!p.horde) return;
@@ -622,8 +616,6 @@ function startGame(room) {
   room.crates = []; room.crateSeq = 1; room.crateDrops = 0;
   room.shield = new Array(n).fill(0);
   room.turnCount = 0; room.bossShots = 0;
-  room.nanoBots = new Array(n).fill(0);
-  clearInterval(room.nanoTimer); room.nanoTimer = null; clearTimeout(room.nanoSeek);
   room.stat = { dealt: new Array(n).fill(0), received: new Array(n).fill(0) };
   const bSeat = bossSeatOf(room);
   if (bSeat >= 0) {                       // the mecha is a bigger, tougher target
@@ -971,7 +963,6 @@ function endGame(room) {
   clearInterval(room.botWalker);
   clearInterval(room.dotTimer); room.dotTimer = null;
   clearInterval(room.fireTimer); room.fireTimer = null;
-  clearInterval(room.nanoTimer); room.nanoTimer = null; clearTimeout(room.nanoSeek);
   killDead(room);
   const live = aliveSeats(room);
   let winner = live.length === 1 ? live[0] : -1;   // 0 left = mutual destruction
@@ -1055,7 +1046,6 @@ function resolveFire(room, seat, weaponId, angle, power) {
   for (let i = 0; i < result.damage.length; i++) {
     if (sameSide(room, seat, i)) result.damage[i] = 0;
   }
-  if (result.nano && sameSide(room, seat, result.nano.seat)) result.nano = null;
   // A supply-crate shield soaks 65% of the next blast that actually hurts you,
   // then breaks. Applied BEFORE the hp loop so the wire damage, the floaters and
   // the hp all agree; fire bites and lava bypass it deliberately.
@@ -1122,7 +1112,6 @@ function resolveFire(room, seat, weaponId, angle, power) {
   // onto whatever the shot left of the ground beneath them.
   cratesAfterShot(room, seat, result);
   if (room.crates.length) broadcast(room, { type: 'crates', crates: room.crates });
-  if (result.nano) startNano(room, result.nano);
   // How long the clients will spend REPLAYING this salvo (paths play ~9ms a
   // point; the Air Strike's slow-motion bomb run stretches it). A bot's next
   // action is held until this window closes, so an NPC never visibly walks or
@@ -1219,54 +1208,6 @@ function fireBite(room) {
   if (cur && cur.alive === false && !room.clock && !room.dotTimer) advance(room, room.turn);
 }
 
-// ---- Nano Swarm: bots gnaw on their host once a second -------------------------
-// 10 bots, 3 health each. Runs on its own clock like fire; a re-infection tops
-// the count back up to 10 rather than stacking.
-// Seekers take a beat to crawl onto their victim (the client animates the
-// chase), then the swarm detonates in rapid pulses of three bots at a time.
-const NANO_SEEK_MS = Number(process.env.NANO_SEEK_MS || 1600);
-function startNano(room, hit) {
-  room.nanoBots[hit.seat] = Math.max(room.nanoBots[hit.seat] || 0, hit.bots);
-  room.nanoDmg = hit.dmg || 3;
-  clearTimeout(room.nanoSeek);
-  room.nanoSeek = setTimeout(() => {
-    if (room.nanoTimer) return;
-    room.nanoTimer = setInterval(() => nanoTick(room), 500);
-  }, NANO_SEEK_MS);
-}
-
-function nanoTick(room) {
-  if (room.state !== 'playing') { clearInterval(room.nanoTimer); room.nanoTimer = null; return; }
-  const aliveBefore = aliveFlags(room);
-  const dmg = new Array(room.hp.length).fill(0);
-  let any = false;
-  for (let i = 0; i < room.hp.length; i++) {
-    if ((room.nanoBots[i] || 0) <= 0) continue;
-    if (room.tanks[i].alive === false) { room.nanoBots[i] = 0; continue; }
-    const burst = Math.min(3, room.nanoBots[i]);   // three bots pop per pulse
-    room.nanoBots[i] -= burst;
-    dmg[i] = burst * (room.nanoDmg || 3);
-    room.hp[i] = Math.max(0, Math.round((room.hp[i] - dmg[i]) * 10) / 10);
-    if (room.stat) room.stat.received[i] += dmg[i];
-    any = true;
-  }
-  killDead(room);
-  hordeAccounting(room, aliveBefore);
-  if (any) {
-    broadcast(room, {
-      type: 'dot', tick: 0, src: 'nano',
-      hp: room.hp.map(h => Math.max(0, Math.round(h))),
-      alive: aliveFlags(room),
-      damage: dmg.map(d => Math.round(d)),
-      nano: room.nanoBots.slice(),
-    });
-  }
-  if (!room.nanoBots.some(b => b > 0)) { clearInterval(room.nanoTimer); room.nanoTimer = null; }
-  if (matchOver(room)) { clearInterval(room.nanoTimer); room.nanoTimer = null; return endGame(room); }
-  const cur = room.tanks[room.turn];
-  if (cur && cur.alive === false && !room.clock && !room.dotTimer) advance(room, room.turn);
-}
-
 function handleMove(room, seat, dir) {
   if (room.state !== 'playing' || room.turn !== seat || room.picking) return;
   if (room.mode === 'golf') return;    // you walk to your BALL, not wherever you like
@@ -1298,7 +1239,7 @@ function teardown(room, notify) {
   clearInterval(room.botWalker);
   clearInterval(room.dotTimer);
   clearInterval(room.fireTimer);
-  clearInterval(room.nanoTimer); clearTimeout(room.nanoSeek); clearTimeout(room.pickTimer);
+  clearTimeout(room.pickTimer);
   for (const p of room.players) if (p) clearTimeout(p.dropTimer);
   if (notify) broadcast(room, { type: 'opponentLeft' });
   rooms.delete(room.code);
@@ -1482,7 +1423,7 @@ wss.on('connection', (ws) => {
         const r = rooms.get(ws.roomCode);
         if (!r || r.state !== 'waiting') break;
         if (ws.seat !== r.hostSeat) break;                  // only the host starts early
-        const minSeats = (r.mode === 'boss' || r.mode === 'golf' || r.mode === 'aliens' || r.mode === 'zombies') ? 1 : 2;
+        const minSeats = (r.mode === 'boss' || r.mode === 'golf' || r.mode === 'aliens') ? 1 : 2;
         if (seatCount(r) < minSeats) { send(ws, { type: 'joinError', reason: 'Need at least 2 commanders.' }); break; }
         compactRoster(r);
         startGame(r);

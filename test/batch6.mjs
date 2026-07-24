@@ -35,7 +35,7 @@ function profanityPass() {
 
 // ---- Pass 2: loadouts (vs CPU so the match starts instantly) ------------------
 function loadoutPass() {
-  const picks = ['gas', 'wall', 'teleport', 'nano', 'minigun'];
+  const picks = ['gas', 'wall', 'teleport', 'mortar', 'minigun'];
   const ws = new WebSocket(URL);
   ws.on('open', () => ws.send(JSON.stringify({ type: 'ai', difficulty: 'easy', name: 'Loadout Tester', skin: 'olive', loadout: picks })));
   ws.on('message', (raw) => {
@@ -45,7 +45,7 @@ function loadoutPass() {
     if (!lo || lo.join() !== picks.join()) fail(`snapshot loadout is ${JSON.stringify(lo)}, expected ${JSON.stringify(picks)}`);
     for (const id of picks) if (m.ammo[id] !== 2) fail(`picked ${id} has ammo ${m.ammo[id]}, expected 2`);
     if (m.ammo.nuke !== 1) fail(`nuke ammo ${m.ammo.nuke}, expected 1 (everyone gets it)`);
-    for (const id of ['mortar', 'cluster', 'napalm', 'airstrike', 'volley', 'buster']) {
+    for (const id of ['cluster', 'napalm', 'airstrike', 'volley', 'buster']) {
       if (m.ammo[id] !== 0) fail(`unpicked ${id} has ammo ${m.ammo[id]}, expected 0`);
     }
     if (m.ammo.cannon !== 99) fail(`cannon ammo ${m.ammo.cannon}, expected 99 (standard issue)`);
@@ -86,7 +86,7 @@ function draftPass() {
   const A = new WebSocket(URL), B = new WebSocket(URL);
   const sendA = (m) => A.send(JSON.stringify(m));
   const sendB = (m) => B.send(JSON.stringify(m));
-  const picksA = ['gas', 'wall', 'teleport', 'nano', 'minigun'];
+  const picksA = ['gas', 'wall', 'teleport', 'mortar', 'minigun'];
   const picksB = ['volley', 'napalm', 'buster', 'mortar', 'cluster'];
   let code = null, sawPick = false, sawDone = false, sawTurn = false;
   A.on('message', (raw) => {

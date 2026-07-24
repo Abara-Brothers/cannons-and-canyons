@@ -15,12 +15,11 @@ const fire = (weapon, angle, power) => simulateShot(fresh(), { by: 0, weapon, an
 const FLOOR = {
   cannon: 20, mortar: 40, volley: 30, railgun: 55, cluster: 40, napalm: 25,
   gas: 4, airstrike: 45, buster: 25, nuke: 65,
-  nano: 3,       // the payload is the bot infestation (30 over time), not the dart
   minigun: 25,   // fourteen 3-damage rounds — the stream lands a good chunk
   wall: 0,       // Earthworks deals no damage by design
   teleport: 0,   // Teleport deals no damage by design — it repositions the firer
   // Horde kits (aiOnly) — the enemies must be able to actually hurt a player.
-  a_plasma: 10, a_pods: 5, a_lance: 12, z_spit: 8, z_grubs: 4, z_lob: 14,
+  a_plasma: 10, a_pods: 5, a_lance: 12,
 };
 
 let failures = 0;
@@ -146,20 +145,6 @@ const terrain = generateTerrain(2024);
 const tanks = spawnTanks(terrain, 2024);
 const shot = aiShot(terrain, tanks, 1, 'hard');
 if (shot.angle === 45 && shot.power === 60) fail('aiShot returned the fallback 45/60 — self-clip latch missing');
-
-// 8 — nano seekers hunt ENEMIES only: a dart dropped at the firer's own feet
-//     must tag nobody, and a dart landing beside the enemy must tag the enemy.
-{
-  const selfDrop = fire('nano', 88, 8);            // lands basically at our feet
-  const selfTag = selfDrop.projectiles[0].det && selfDrop.projectiles[0].det.nano;
-  if (selfTag === 0) fail('nano tagged the FIRER — seekers must only hunt enemies');
-  let enemyTagged = false;
-  for (let pwr = 30; pwr <= 75 && !enemyTagged; pwr += 1.25) {
-    const r = fire('nano', 45, pwr);
-    if (r.nano && r.nano.seat === 1) enemyTagged = true;
-  }
-  if (!enemyTagged) fail('nano never tagged the enemy across the power sweep');
-}
 
 // 9 — crates and fuel barrels are SOLID: a shell that visually touches their
 //     outline stops on the box (mid-air, before the ground), a struck barrel

@@ -25,7 +25,6 @@ const S = {
   scorch: [],                          // permanent burn scars from fire: [{a,b}] world-x ranges
   biome: 'alpine', ruins: [],          // battlefield flavour (server-picked)
   boss: -1, scales: [],                // boss seat + per-tank scale (mech is 1.8x)
-  nanoBots: [],                        // Nano Swarm infestation per seat
   kinds: [], horde: null,              // per-seat renderer + wave progress
   golf: null,                          // Artillery Golf scorecard state
   props: [], crates: [], shield: [],   // barrels/bunkers, supply drops, crate shields
@@ -46,7 +45,6 @@ const S = {
   mush: null,                          // active Tactical Nuke mushroom cloud (see startMushroom)
   particles: [], floaters: [], rings: [], quakes: [], flash: 0, shake: 0,
   bossCharge: null,                    // WARLORD wind-up between its aim and its shot
-  nanoSwarmFx: null,                   // seeker swarm in transit (impact point -> victim)
   muzzle: [],                          // directional HD muzzle blasts (own render pass)
   plane: null,                         // Air Strike delivery aircraft (cosmetic, own render pass)
   charging: false, pullPointer: null,
@@ -131,7 +129,6 @@ const ICONS = {
   airstrike: `<svg viewBox="0 0 24 24"><path d="M1.4 6.9l7.6 1.2 3.1-3.4 1.9.5-1.2 3.4 6.4 1-.4-2.1 1.7.3.9 3.2-19.2 1.1z" fill="#54c8ff"/><g fill="#9fdcff"><path d="M6.6 14.2l-1.2 3.9-1.2-3.9z"/><path d="M12 15.6l-1.3 4.3-1.3-4.3z"/><path d="M17.4 14.2l-1.2 3.9-1.2-3.9z"/></g><path d="M2.6 21.8h18.8" stroke="#54c8ff" stroke-width="1.4" stroke-linecap="round" opacity=".55" fill="none"/></svg>`,
   buster: `<svg viewBox="0 0 24 24"><path d="M10.4 1.6h3.2v3.2h-3.2z" fill="#c98a4b"/><path d="M8.9 1.6h1.5v3.6L8 6.6zM15.1 1.6h-1.5v3.6L16 6.6z" fill="#7a5a30"/><rect x="10.2" y="4.6" width="3.6" height="6.2" fill="#c98a4b"/><rect x="10.2" y="4.6" width="1.3" height="6.2" fill="#e0a668"/><path d="M10.2 10.6h3.6L12 15.4z" fill="#8e969f"/><path d="M2.6 12.4h6.5l2.4 4.6-1.6 4.9H2.6z" fill="#6b5a34"/><path d="M21.4 12.4h-6.5l-2.4 4.6 1.6 4.9h7.3z" fill="#6b5a34"/><path d="M2.6 12.4h6.5l1 1.9H2.6zM21.4 12.4h-6.5l-1 1.9h7.5z" fill="#a6d878"/></svg>`,
   wall: `<svg viewBox="0 0 24 24"><path d="M1.4 20.4c1.9 0 3.1-2.6 4.6-5.6C7.9 10.9 9.6 6.6 12 6.6s4.1 4.3 6 8.2c1.5 3 2.7 5.6 4.6 5.6z" fill="#8a5a2b"/><path d="M1.4 20.4c1.9 0 3.1-2.6 4.6-5.6C7.9 10.9 9.6 6.6 12 6.6v13.8z" fill="#a06b35"/><path d="M12 6.6c-1.2 0-2.2 1.1-3.1 2.6h6.2C14.2 7.7 13.2 6.6 12 6.6z" fill="#6fb04a"/><g stroke="#6b451f" stroke-width=".9" stroke-linecap="round" fill="none" opacity=".65"><path d="M6.9 16.4h3.4"/><path d="M13.7 16.4h3.4"/><path d="M9.6 12.6h4.8"/></g><path d="M1.4 20.4h21.2v1.9H1.4z" fill="#5d3c1c"/></svg>`,
-  nano: `<svg viewBox="0 0 24 24"><path d="M3 12l6-3.4v6.8z" fill="#39424e"/><rect x="8" y="10.6" width="10.4" height="2.8" rx="1.2" fill="#5b6572"/><rect x="8.6" y="11.4" width="9.2" height="1.2" fill="#6be7ff"/><path d="M18.4 9.2l3 2.8-3 2.8" fill="none" stroke="#6be7ff" stroke-width="1.4" stroke-linejoin="round"/><g fill="#6be7ff"><rect x="4.6" y="4.4" width="2" height="2" rx=".4"/><rect x="9.2" y="3.2" width="2" height="2" rx=".4"/><rect x="6.8" y="6.9" width="1.6" height="1.6" rx=".4"/><rect x="13.4" y="4.6" width="1.6" height="1.6" rx=".4"/></g></svg>`,
   minigun: `<svg viewBox="0 0 24 24"><g fill="#aeb9c9"><rect x="6" y="8.2" width="13" height="1.9" rx=".9"/><rect x="6" y="11" width="15" height="1.9" rx=".9"/><rect x="6" y="13.8" width="13" height="1.9" rx=".9"/></g><rect x="3.4" y="7.4" width="4.4" height="9.2" rx="1.6" fill="#5b6572"/><rect x="1.6" y="10.4" width="2.4" height="3.2" rx=".8" fill="#39424e"/><g fill="#ffd9a0"><rect x="20" y="8.4" width="2.4" height="1.4" rx=".7"/><rect x="21.4" y="11.2" width="2.4" height="1.4" rx=".7"/><rect x="20" y="14" width="2.4" height="1.4" rx=".7"/></g></svg>`,
   golfball: `<svg viewBox="0 0 24 24"><circle cx="11" cy="10" r="6.2" fill="#f4f6f2"/><circle cx="11" cy="10" r="6.2" fill="none" stroke="#c9cfd8" stroke-width=".8"/><g fill="#c9cfd8"><circle cx="9" cy="8" r=".7"/><circle cx="12.4" cy="7.4" r=".7"/><circle cx="10.6" cy="11" r=".7"/><circle cx="13.6" cy="10.4" r=".7"/><circle cx="8.4" cy="10.8" r=".7"/></g><path d="M5 21h11" stroke="#3a7d2f" stroke-width="2.4" stroke-linecap="round"/><path d="M17.6 20.9V9.4l3.6 1.5-3.6 1.6" fill="#ff3b30" stroke="#e8ecf2" stroke-width=".9"/></svg>`,
   driver: `<svg viewBox="0 0 24 24"><path d="M16.5 3.2 8.2 15.4" stroke="#c9cfd8" stroke-width="1.7" stroke-linecap="round"/><path d="M4.6 15.2c0-2.2 2-3.6 4.3-3.6 2.5 0 4 1.7 4 3.6 0 2.1-1.9 3.6-4.2 3.6-2.4 0-4.1-1.5-4.1-3.6z" fill="#ffd23f" stroke="#b8912a" stroke-width=".9"/><path d="M6.4 14.2c.5-.9 1.5-1.4 2.6-1.4" stroke="#fff3c8" stroke-width=".9" fill="none" stroke-linecap="round"/><circle cx="18.6" cy="5.6" r="2.4" fill="#f4f6f2" stroke="#c9cfd8" stroke-width=".8"/></svg>`,
@@ -150,7 +147,6 @@ const TRAJ = {
   airstrike: `<svg viewBox="0 0 24 14"><path d="M2 11 Q6 3 10 5" stroke="#aeb9d6" stroke-width="1.3" fill="none"/><g stroke="#54c8ff" stroke-width="1.3" fill="none"><path d="M14 1v6"/><path d="M18 0v6"/><path d="M22 1v6"/></g><g fill="#54c8ff"><path d="M14 11l-2-3.4h4z"/><path d="M18 10l-2-3.4h4z"/><path d="M22 11l-2-3.4h4z"/></g></svg>`,
   buster: `<svg viewBox="0 0 24 14"><path d="M2 9 Q9 0 16 6" stroke="#aeb9d6" stroke-width="1.6" fill="none"/><path d="M14 9h8" stroke="#7a5a30" stroke-width="1.3"/><path d="M18 6v4" stroke="#c98a4b" stroke-width="1.8"/><path d="M18 14l-2.4-3.4h4.8z" fill="#c98a4b"/></svg>`,
   wall: `<svg viewBox="0 0 24 14"><path d="M2 12 Q9 2 15 8" stroke="#aeb9d6" stroke-width="1.6" fill="none"/><rect x="16.5" y="3.5" width="5" height="9.5" rx="1" fill="#8a5a2b"/></svg>`,
-  nano: `<svg viewBox="0 0 24 14"><path d="M2 12 Q10 2 19 9" stroke="#aeb9d6" stroke-width="1.5" fill="none"/><g fill="#6be7ff"><rect x="17.5" y="7" width="1.7" height="1.7" rx=".3"/><rect x="20" y="8.4" width="1.7" height="1.7" rx=".3"/><rect x="18.6" y="10.4" width="1.7" height="1.7" rx=".3"/></g></svg>`,
   minigun: `<svg viewBox="0 0 24 14"><g stroke="#ffd9a0" stroke-width="1.3" fill="none"><path d="M2 11 Q9 4 16 7.5"/><path d="M2 12.5 Q10 6.5 17.5 9.5"/><path d="M3 13.5 Q11 9 19 11.5"/></g></svg>`,
   golfball: `<svg viewBox="0 0 24 14"><path d="M2 12 Q7 3 11 8 Q13 10.5 15 9.5 Q18 8 21 11.5" stroke="#aeb9d6" stroke-width="1.5" fill="none"/><circle cx="21.2" cy="11.6" r="1.6" fill="#f4f6f2"/></svg>`,
   driver: `<svg viewBox="0 0 24 14"><path d="M2 12 Q8 1 14 6 Q18 9.4 22 11.6" stroke="#aeb9d6" stroke-width="1.5" fill="none"/><circle cx="22" cy="11.6" r="1.6" fill="#f4f6f2"/></svg>`,
@@ -512,12 +508,10 @@ const ACHS = [
   ['horizon', 'Over the Horizon', 'Damage an enemy from 20,000+ range'],
   ['tunnel', 'Tunnel Rat', 'Take a kill with the Railgun — straight through the mountain'],
   ['nuclear', 'Nuclear Option', 'Finish an enemy with the Tactical Nuke'],
-  ['swarm', 'Swarm Lord', 'Finish an enemy with the Nano Swarm'],
   ['melt', 'Into the Melt', 'See an enemy die in the lava on a volcanic map'],
   ['robber', 'Crate Robber', 'Shoot a supply crate open from range'],
   ['warlord', 'Warlord Slayer', 'Win a Boss Fight'],
   ['exterminator', 'Exterminator', 'Repel the Alien Invasion'],
-  ['gravekeeper', 'Gravekeeper', 'Clear the Zombie Uprising'],
   ['ace', 'Hole in One', 'Sink the ball in a single stroke'],
   ['underpar', 'Under Par', 'Finish the 9 holes under par'],
 ];
@@ -527,7 +521,7 @@ const PROF = (() => {
     if (p && p.v === 1) return p;
   } catch {}
   return { v: 1, modes: {}, weapons: {}, shots: 0, hits: 0, maxDmg: 0, longest: 0,
-           kills: 0, aces: 0, golfBest: null, hordeBest: { aliens: 0, zombies: 0 }, ach: {} };
+           kills: 0, aces: 0, golfBest: null, hordeBest: { aliens: 0 }, ach: {} };
 })();
 function saveProf() { try { localStorage.setItem('cc_career', JSON.stringify(PROF)); } catch {} }
 function modeStat(mode) { return PROF.modes[mode] || (PROF.modes[mode] = { w: 0, l: 0 }); }
@@ -582,7 +576,6 @@ function trackGameOver(m) {
     won = m.team === 'players';
     if (won && mode === 'boss') award('warlord');
     if (won && mode === 'aliens') award('exterminator');
-    if (won && mode === 'zombies') award('gravekeeper');
     if (S.horde) PROF.hordeBest[mode] = Math.max(PROF.hordeBest[mode] || 0, S.horde.kills || 0);
   } else {
     won = m.winner === S.you;
@@ -830,7 +823,7 @@ function myName() {
 // The weapon draft happens AT MATCH START, not on the dashboard: when the
 // snapshot arrives with `pick`, this screen opens over the battlefield and the
 // first turn only begins once everyone has locked five (or seven) in.
-const ARM_POOL = ['mortar', 'volley', 'cluster', 'napalm', 'gas', 'airstrike', 'buster', 'wall', 'teleport', 'nano', 'minigun'];
+const ARM_POOL = ['mortar', 'volley', 'cluster', 'napalm', 'gas', 'airstrike', 'buster', 'wall', 'teleport', 'minigun'];
 const ARM_DEFAULT = ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'];
 let armNeed = 5;
 let armPicks = [];
@@ -1037,7 +1030,6 @@ function renderLobby(m) {
     m.mode === 'boss' ? `Boss Fight — ${filled}/${m.max} vs WARLORD-7` :
     m.mode === 'golf' ? `Artillery Golf — ${filled}/${m.max} on the tee` :
     m.mode === 'aliens' ? `Alien Invasion — ${filled}/${m.max} defenders` :
-    m.mode === 'zombies' ? `Zombie Uprising — ${filled}/${m.max} survivors` :
     'Waiting for your opponent…';
   $('lobbyHint').textContent = m.mode === 'ffa'
     ? (isHost ? "Send the link. Start whenever you have enough players — you don't have to wait for a full lobby."
@@ -1102,7 +1094,6 @@ function applySnapshot(m) {
   if (S.loadout && !S.loadout.includes(S.selected) && S.selected !== 'railgun') S.selected = null;
   S.horde = m.horde || null;
   S.golf = m.golf || null;
-  S.nanoBots = (m.nano || new Array(S.n).fill(0)).slice();
   document.body.classList.toggle('golf', S.mode === 'golf');
   if (S.mode === 'golf' && !(S.weapons || []).some((w) => w.id === S.selected)) S.selected = 'golfball';
   S.ruins = m.ruins || [];
@@ -1125,7 +1116,7 @@ function applySnapshot(m) {
   clearKillcam();
   S.deferred = [];                     // start/restore hp+alive win outright — discard held work
   S.particles = []; S.floaters = []; S.rings = []; S.quakes = []; S.muzzle = []; S.flash = 0; S.shake = 0;
-  S.bossCharge = null; S.nanoSwarmFx = null;
+  S.bossCharge = null;
   S.plane = null;
   S.mush = null;                       // a nuke cloud must never survive into the next match
   S.chainQueue = [];
@@ -1898,23 +1889,6 @@ function detonate(det, beacon) {
     Audio.boom(det.r);
     return;
   }
-  // Nano dart: a burst of cyan machine-chips instead of fire, and a warning on
-  // the victim. The actual per-second bites arrive as 'dot' src:'nano' ticks.
-  if (det.nano != null) {
-    for (let k = 0; k < 22; k++) {
-      const a = Math.random() * Math.PI * 2, sp = 180 + Math.random() * 480;
-      S.particles.push({ x: det.x, y: det.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 140,
-        life: 0.4 + Math.random() * 0.4, age: 0, r: 1.6 + Math.random() * 1.6, g: 0.3,
-        shape: 'spark', color: k % 3 ? '#6be7ff' : '#ffffff' });
-    }
-    // The swarm doesn't teleport onto its prey — it CHASES. drawNanoBots lerps
-    // the bots from this impact point to the victim over the seek window.
-    S.nanoSwarmFx = { x: det.x, y: det.y, seat: det.nano, t0: performance.now(), seekMs: 1600, mine: !!(S.anim && S.anim.m && S.anim.m.by === S.you) };
-    const vt = S.tanks[det.nano];
-    if (vt) S.floaters.push({ x: det.x, y: det.y - 260, text: 'SEEKERS DEPLOYED', age: 0, life: 1.5, color: '#6be7ff' });
-    Audio.boom(200);
-    return;
-  }
   if (det.kind === 'none' && det.r < 30 && !det.hz) { // burst puff / beacon flare
     for (let i = 0; i < 10; i++) {
       const ang = Math.random() * Math.PI * 2, sp = 120 + Math.random() * 200;
@@ -2072,31 +2046,12 @@ function applyDotNow(m) {
   // Fire ticks carry the live hazard list so a blaze that has burned out (6s)
   // vanishes here instead of lingering until the next shot lands.
   if (m.hazards) S.hazards = m.hazards;
-  if (m.nano) {
-    // A nano pulse = bots that just detonated on their victim: pop them with a
-    // cyan spark burst sized to how many went off.
-    if (m.src === 'nano' && S.nanoBots) {
-      for (let i = 0; i < m.nano.length; i++) {
-        const popped = (S.nanoBots[i] || 0) - (m.nano[i] || 0);
-        if (popped <= 0 || !S.tanks[i]) continue;
-        for (let k = 0; k < popped * 7; k++) {
-          const a = Math.random() * Math.PI * 2, sp = 200 + Math.random() * 420;
-          S.particles.push({ x: S.tanks[i].x + (Math.random() - 0.5) * 240, y: S.tanks[i].y - 180 - Math.random() * 240,
-            vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 0.35 + Math.random() * 0.3, age: 0,
-            r: 1.6 + Math.random() * 1.8, g: 0.4, shape: 'spark', color: k % 3 ? '#6be7ff' : '#ffffff' });
-        }
-        if ((m.nano[i] || 0) <= 0 && S.nanoSwarmFx && S.nanoSwarmFx.seat === i) S.nanoSwarmFx = null;
-      }
-    }
-    S.nanoBots = m.nano.slice();
-  }
   if (m.hp) S.hp = m.hp.map((h, i) => Math.min(S.hp[i], h));
   if (m.alive) {
     for (let i = 0; i < m.alive.length; i++) {
       if (m.alive[i] === false && S.alive[i] !== false) {
         S.alive[i] = false;
         showToast(`${S.names[i]} destroyed!`);
-        if (i !== S.you && m.src === 'nano' && S.nanoSwarmFx && S.nanoSwarmFx.mine) award('swarm');
         if (i !== S.you && S.biome === 'volcanic' && S.tanks[i] && S.lavaY && S.tanks[i].y >= S.lavaY - 320) award('melt');
       }
     }
@@ -2207,7 +2162,7 @@ function sliceTank(i, worldX, shred, fade, sign) {
 function drawWarp() {
   const W = S.warp; if (!W || W.t >= W.dur) return;
   const t = W.t;
-  const r = Math.max(8, Math.min(18, 240 * cam.zoom));  // same rule as tankScreen
+  const r = 240 * cam.zoom;                             // world-scale: sprite == hitbox at every zoom
   const ax = wx2s(W.fx), ayG = wy2s(surfaceAt(W.fx)), ay = ayG - r * 1.1;
   const bx = wx2s(W.tx), byG = wy2s(surfaceAt(W.tx)), by = byG - r * 1.1;
 
@@ -2621,8 +2576,6 @@ function onGameOver(m) {
   if (m.team) {                                  // team-mode verdicts (boss / horde)
     if (S.mode === 'aliens' && m.team === 'players') { title = 'INVASION REPELLED!'; cls = 'win'; win = true; }
     else if (S.mode === 'aliens' && m.team === 'horde') { title = 'The invasion overruns you'; cls = 'lose'; }
-    else if (S.mode === 'zombies' && m.team === 'players') { title = 'HORDE CLEARED!'; cls = 'win'; win = true; }
-    else if (S.mode === 'zombies' && m.team === 'horde') { title = 'Consumed by the horde…'; cls = 'lose'; }
     else if (m.team === 'players') { title = 'WARLORD-7 DESTROYED!'; cls = 'win'; win = true; }
     else if (m.team === 'boss') { title = 'Your squad was wiped out'; cls = 'lose'; }
     else { title = 'Mutual destruction!'; cls = 'draw'; }
@@ -2672,7 +2625,7 @@ function showOverlay(title, hp, cls, hideRematch) {
   S.lastResult = {
     title: (title || '').replace(/[a-z].*$/s, (m0) => m0),      // keep as-is; card truncates visually
     win: cls === 'win',
-    subtitle: `${({ duel: 'Duel', ffa: 'Free-for-all', boss: 'Boss Fight', golf: 'Artillery Golf', aliens: 'Alien Invasion', zombies: 'Zombie Uprising' })[S.mode] || 'Battle'} · ${S.biome || ''} canyon`,
+    subtitle: `${({ duel: 'Duel', ffa: 'Free-for-all', boss: 'Boss Fight', golf: 'Artillery Golf', aliens: 'Alien Invasion' })[S.mode] || 'Battle'} · ${S.biome || ''} canyon`,
     lines: (hp || []).map((h, i) => ({ me: i === S.you, text: `${S.names[i] || 'Player'} — ${Math.max(0, h)} Health` })),
     statLine: PROF.maxDmg ? `Career: ${PROF.kills} kills · biggest hit ${PROF.maxDmg} · longest ${PROF.longest}` : '',
   };
@@ -2718,7 +2671,6 @@ const HELP_WEAPONS = [
   { id: 'gas',      name: 'Toxic Gas',     note: '2 rounds',         desc: 'No blast — a wide lingering cloud that poisons anyone inside it every couple of seconds.' },
   { id: 'airstrike', name: 'Air Strike',   note: '2 beacons',        desc: 'Fire a beacon; a bomber flattens wherever it lands.' },
   { id: 'buster',   name: 'Bunker Buster', note: '2 rounds',         desc: 'Burrows deep before detonating — digs a brutal pit under whatever it hits.' },
-  { id: 'nano',     name: 'Nano Swarm',    note: '2 darts',          desc: 'A dart that releases 10 seeker bots. They hunt the nearest enemy in range, latch on, and detonate for 3 damage each.' },
   { id: 'minigun',  name: 'Minigun',       note: '2 belts',          desc: 'Fourteen rounds in one long ripping burst. Death by a thousand cuts.' },
   { id: 'wall',     name: 'Earthworks',    note: '3 charges',        desc: 'Heaps up a huge mound of dirt where it lands. Deals no damage — pure cover.' },
   { id: 'teleport', name: 'Teleport',      note: '2 charges',        desc: 'Warp your tank to wherever the shell lands. No blast — pick your ground.' },
@@ -2808,7 +2760,7 @@ function buildCareer() {
   const fav = Object.entries(PROF.weapons).sort((a, b) => b[1] - a[1])[0];
   const favName = fav ? ((HELP_WEAPONS.find(w => w.id === fav[0]) || {}).name || fav[0]) : null;
   const acc = PROF.shots ? Math.round((PROF.hits / PROF.shots) * 100) : 0;
-  const MODES = [['duel', 'Duel'], ['ffa', 'Free-for-all'], ['boss', 'Boss Fight'], ['aliens', 'Aliens'], ['zombies', 'Zombies'], ['golf', 'Golf']];
+  const MODES = [['duel', 'Duel'], ['ffa', 'Free-for-all'], ['boss', 'Boss Fight'], ['aliens', 'Aliens'], ['golf', 'Golf']];
   $('careerStats').innerHTML =
     MODES.map(([id, nm]) => {
       const s = PROF.modes[id] || { w: 0, l: 0 };
@@ -2821,7 +2773,7 @@ function buildCareer() {
     `<div class="cs-row"><span>Longest hit</span><b>${PROF.longest ? PROF.longest.toLocaleString() + ' u' : '—'}</b></div>` +
     `<div class="cs-row"><span>Best golf round</span><b>${PROF.golfBest != null ? PROF.golfBest + ' strokes' : '—'}</b></div>` +
     `<div class="cs-row"><span>Holes in one</span><b>${PROF.aces || 0}</b></div>` +
-    `<div class="cs-row"><span>Alien / zombie kills, best run</span><b>${PROF.hordeBest.aliens || 0} / ${PROF.hordeBest.zombies || 0}</b></div>`;
+    `<div class="cs-row"><span>Alien invasion kills, best run</span><b>${PROF.hordeBest.aliens || 0}</b></div>`;
   // Every challenge SHOWS what it actually asks for — no hidden tooltips.
   $('careerAchs').innerHTML = ACHS.map(([id, nm, desc]) => {
     const got = !!PROF.ach[id];
@@ -2996,10 +2948,8 @@ function draw() {
         const kind = (S.kinds && S.kinds[i]) || (i === S.boss ? 'mech' : 'tank');
         if (kind === 'mech') drawMech(i);
         else if (kind === 'alien') drawAlien(i);
-        else if (kind === 'zombie') drawZombie(i);
         else drawTankWarped(i);
         if (S.shield && S.shield[i] > 0) drawShieldAura(i);
-        if (S.nanoBots && S.nanoBots[i] > 0) drawNanoBots(i);
       }
     }
     drawWarp();
@@ -3268,9 +3218,12 @@ function tankScreen(i) {
   const t = S.tanks[i];
   // Render on the LOCAL surface so tanks visibly ride collapsing ground down
   // (matches the server's final y once the crumble settles).
-  // Tank scales with the world zoom, clamped: never a speck when zoomed in,
-  // and a slightly bigger floor so it stays readable when zoomed all the way out.
-  const r = Math.max(8, Math.min(18, 240 * cam.zoom));
+  // Tank is drawn at its TRUE world size (TANK_R 240 world units x zoom, NO
+  // clamp): the sprite outline then matches the server's world-space hitbox
+  // pixel-for-pixel at every zoom, and the tank stays locked to the world (it
+  // never changes size relative to the battlefield). A clamp here would draw
+  // the tank off its hitbox at zoom extremes — the old "hitbox is wrong" bug.
+  const r = 240 * cam.zoom;
   return { sx: wx2s(t.x), sy: wy2s(surfaceAt(t.x)), r };
 }
 
@@ -3613,98 +3566,6 @@ function drawAlien(i) {
   ctx.lineTo(px + cosA * bLen, py + sinA * bLen);
   ctx.stroke();
   ctx.globalAlpha = 1;
-  ctx.restore();
-}
-
-// Zombie hulk-tank: a rusted, rotting wreck that shambles — slow lurch tilt,
-// torn plating over exposed ribs, dripping ooze, flickering green eye slits and
-// a bent, taped-together barrel.
-const ZOMB = { hull: '#3c4030', dk: '#262a1e', rust: '#5c4630', ooze: '#9dde4b', bone: '#c9c2a8' };
-function drawZombie(i) {
-  if (!S.tanks[i]) return;
-  const { sx, sy, r } = tankScreen(i);
-  const dir = facingOf(i);
-  const t = performance.now() / 1000;
-  const lurch = Math.sin(t * 0.9 + i * 1.7) * 0.045;   // slow drunken shamble
-
-  ctx.save();
-  ctx.translate(sx, sy); ctx.rotate(lurch); ctx.translate(-sx, -sy);
-
-  // ground shadow
-  ctx.fillStyle = 'rgba(8,10,6,0.35)';
-  ctx.fillRect(sx - r * 1.35, sy - r * 0.04, r * 2.7, r * 0.11);
-
-  // broken tracks — sagging run, two wheels missing, one hanging link
-  ctx.fillStyle = ZOMB.dk;
-  ctx.fillRect(sx - r * 1.3, sy - r * 0.42, r * 2.6, r * 0.42);
-  ctx.fillStyle = '#101208';
-  for (let k = -2; k <= 2; k++) {
-    if (k === -1) continue;                            // torn-out road wheel
-    ctx.fillRect(sx + k * r * 0.5 - r * 0.11, sy - r * 0.30, r * 0.22, r * 0.22);
-  }
-  ctx.fillStyle = ZOMB.rust;                           // snapped track link flapping
-  ctx.fillRect(sx - r * 0.5 - r * 0.05, sy - r * 0.06 + Math.sin(t * 3) * r * 0.03, r * 0.34, r * 0.08);
-
-  // hull — sagging slab with a bitten-out notch and a rust wash
-  ctx.fillStyle = ZOMB.hull;
-  ctx.beginPath();
-  ctx.moveTo(sx - r * 1.15, sy - r * 0.42);
-  ctx.lineTo(sx - r * 0.95, sy - r * 1.02);
-  ctx.lineTo(sx - r * 0.15, sy - r * 1.06);
-  ctx.lineTo(sx + r * 0.05, sy - r * 0.86);            // the bite
-  ctx.lineTo(sx + r * 0.30, sy - r * 1.04);
-  ctx.lineTo(sx + r * 0.95, sy - r * 0.98);
-  ctx.lineTo(sx + r * 1.15, sy - r * 0.42);
-  ctx.closePath(); ctx.fill();
-  ctx.fillStyle = ZOMB.rust;
-  ctx.fillRect(sx - r * 0.9, sy - r * 0.62, r * 0.55, r * 0.16);
-  ctx.fillRect(sx + r * 0.35, sy - r * 0.55, r * 0.4, r * 0.1);
-  // exposed ribs where a plate tore off
-  ctx.strokeStyle = ZOMB.bone; ctx.lineWidth = Math.max(1, r * 0.05);
-  ctx.beginPath();
-  for (let k = 0; k < 3; k++) {
-    ctx.moveTo(sx - r * 0.05 + k * r * 0.12, sy - r * 0.84);
-    ctx.lineTo(sx - r * 0.02 + k * r * 0.12, sy - r * 0.5);
-  }
-  ctx.stroke();
-
-  // turret stump — cracked box, eye slits flickering green
-  ctx.fillStyle = ZOMB.dk;
-  ctx.fillRect(sx - r * 0.52, sy - r * 1.52, r * 1.04, r * 0.5);
-  const flick = Math.sin(t * 13 + i * 3) > -0.6 ? 1 : 0.25;
-  ctx.fillStyle = `rgba(157,222,75,${0.85 * flick})`;
-  ctx.fillRect(sx + dir * r * 0.10 - r * 0.16, sy - r * 1.38, r * 0.14, r * 0.08);
-  ctx.fillRect(sx + dir * r * 0.10 + r * 0.06, sy - r * 1.38, r * 0.14, r * 0.08);
-  ctx.fillStyle = `rgba(157,222,75,${0.18 * flick})`;  // eye bloom
-  ctx.fillRect(sx + dir * r * 0.10 - r * 0.24, sy - r * 1.44, r * 0.52, r * 0.2);
-
-  // ooze drips crawling down the hull face (animated, capped drop length)
-  ctx.fillStyle = ZOMB.ooze;
-  for (let k = 0; k < 3; k++) {
-    const dx = sx - r * 0.7 + k * r * 0.62;
-    const fall = ((t * (0.5 + k * 0.23) + k * 0.37) % 1);
-    ctx.globalAlpha = 0.75 * (1 - fall * 0.6);
-    ctx.fillRect(dx - r * 0.035, sy - r * 0.98 + fall * r * 0.7, r * 0.07, r * 0.16);
-  }
-  ctx.globalAlpha = 1;
-
-  // bent barrel: two segments with a kink, patched with a weld band
-  const aim = S.aim[i] || { angle: 45, power: 60 };
-  const rad = aim.angle * Math.PI / 180;
-  const cosA = Math.cos(rad) * dir, sinA = -Math.sin(rad);
-  const px = sx + dir * r * 0.42, py = sy - r * 1.30;
-  const rc = Math.pow(S.recoil[i] || 0, 1.8);
-  const L1 = r * (0.75 - 0.25 * rc), L2 = r * (0.62 - 0.2 * rc);
-  const kinkA = rad + 0.16;                            // droops a touch past the kink
-  const cosK = Math.cos(kinkA) * dir, sinK = -Math.sin(kinkA);
-  const mx = px + cosA * L1, my = py + sinA * L1;
-  ctx.strokeStyle = ZOMB.hull; ctx.lineWidth = Math.max(2.5, r * 0.17);
-  ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(mx, my); ctx.stroke();
-  ctx.strokeStyle = ZOMB.rust;
-  ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(mx + cosK * L2, my + sinK * L2); ctx.stroke();
-  ctx.fillStyle = ZOMB.bone;                           // weld/tape band on the kink
-  ctx.fillRect(mx - r * 0.09, my - r * 0.09, r * 0.18, r * 0.18);
-
   ctx.restore();
 }
 
@@ -4358,38 +4219,6 @@ function drawCrates() {
   }
 }
 
-// ---- Nano Swarm infestation ---------------------------------------------------
-// Tiny cyan machines skittering over the hull, one square per bot left. Pure
-// cosmetics — positions are a hash of time+index, no state, no arcs.
-function drawNanoBots(i) {
-  const t = S.tanks[i]; if (!t) return;
-  const { sx, sy, r } = tankScreen(i);
-  const n = Math.min(10, S.nanoBots[i] || 0);
-  const tms = performance.now() / 1000;
-  // Seek phase: the swarm streams from the dart's impact point to its victim,
-  // each bot staggered so the pack reads as a crawling line, not a blob.
-  const fx = S.nanoSwarmFx;
-  const seeking = fx && fx.seat === i ? Math.min(1, (performance.now() - fx.t0) / fx.seekMs) : 1;
-  const ox = fx && fx.seat === i ? wx2s(fx.x) : sx;
-  const oy = fx && fx.seat === i ? wy2s(fx.y) : sy;
-  ctx.fillStyle = '#6be7ff';
-  for (let k = 0; k < n; k++) {
-    const ph = tms * (1.3 + (k % 3) * 0.45) + k * 2.4;
-    const hx = sx + Math.sin(ph) * r * 1.1;
-    const hy = sy - r * 0.55 - Math.abs(Math.sin(ph * 1.7 + k)) * r * 1.1;
-    // per-bot progress: front-runners arrive first, stragglers scuttle behind
-    const lag = clamp01(seeking * 1.35 - (k / n) * 0.35);
-    const bx = ox + (hx - ox) * lag + Math.sin(ph * 3.1) * (1 - lag) * r * 0.5;
-    const by = oy + (hy - oy) * lag - Math.abs(Math.sin(ph * 2.3)) * (1 - lag) * r * 0.4;
-    const s2 = Math.max(1.5, r * 0.12);
-    ctx.fillRect(bx - s2 / 2, by - s2 / 2, s2, s2);
-  }
-  if (seeking >= 1) {
-    ctx.fillStyle = 'rgba(107,231,255,0.16)';                  // interference haze once latched
-    ctx.fillRect(sx - r * 1.4, sy - r * 1.9, r * 2.8, r * 1.9);
-  }
-}
-
 // ---- Crate shield -----------------------------------------------------------
 // An angular hex cocoon — polygons only, pulsing gently so it reads as active.
 function drawShieldAura(i) {
@@ -4746,20 +4575,6 @@ function oLance(x0, len, h, stops) {
 // One drawer per kind. `ph` is pr.pos (playback points) — a monotonic, RNG-free
 // phase for the few sprites that pulse.
 const ORD = {
-  // Nano Swarm dart: a sleek machined needle with a pulsing cyan core line and
-  // fin-chips at the tail. Reads unmistakably high-tech at 10px.
-  nano(R) {
-    ctx.fillStyle = '#39424e';
-    oPoly('#39424e', -1.1 * R, -0.22 * R, 1.15 * R, 0, -1.1 * R, 0.22 * R);
-    ctx.fillStyle = '#5b6572';
-    ctx.fillRect(-1.1 * R, -0.1 * R, 1.7 * R, 0.2 * R);
-    const pulse = 0.55 + 0.45 * Math.sin(performance.now() / 90);
-    ctx.fillStyle = `rgba(107,231,255,${pulse})`;
-    ctx.fillRect(-0.95 * R, -0.05 * R, 1.85 * R, 0.1 * R);
-    ctx.fillStyle = '#6be7ff';
-    ctx.fillRect(-1.25 * R, -0.3 * R, 0.16 * R, 0.6 * R);       // tail chip
-    ctx.fillRect(0.5 * R, -0.26 * R, 0.1 * R, 0.52 * R);        // collar
-  },
   // Minigun round: a stubby tracer slug — mostly its own streak.
   minigun(R) {
     ctx.fillStyle = '#ffd9a0';
@@ -5003,43 +4818,6 @@ const ORD = {
     oPoly('#ff6bf0', -1.8 * R, -0.2 * R, 1.6 * R, 0, -1.8 * R, 0.2 * R);
     oPoly('#ffe2fb', -0.9 * R, -0.09 * R, 1.35 * R, 0, -0.9 * R, 0.09 * R);
   },
-  // Bile Spit: a lumpy glob shedding a droplet off its tail.
-  bile(R) {
-    oPoly('#6f9c2e', -1.1 * R, -0.2 * R, -0.5 * R, -0.75 * R, 0.5 * R, -0.65 * R, 1.05 * R, 0.1 * R, 0.4 * R, 0.7 * R, -0.6 * R, 0.6 * R);
-    oPoly('#9dde4b', -0.5 * R, -0.35 * R, 0.3 * R, -0.3 * R, 0.5 * R, 0.2 * R, -0.3 * R, 0.3 * R);
-    oPoly('#9dde4b', -1.5 * R, 0.1 * R, -1.25 * R, -0.12 * R, -1.15 * R, 0.3 * R);
-  },
-  // Grave Grubs: the sack, and the biting larva — segmented, wriggling via pos.
-  grubsack(R, pos) {
-    oPoly('#8a7b4a', -1.15 * R, 0, -0.4 * R, -0.8 * R, 0.8 * R, -0.55 * R, 1.15 * R, 0.15 * R, 0.3 * R, 0.8 * R, -0.7 * R, 0.55 * R);
-    ctx.strokeStyle = '#5c5232'; ctx.lineWidth = Math.max(1, R * 0.1);   // stitching
-    ctx.beginPath(); ctx.moveTo(-0.8 * R, -0.25 * R); ctx.lineTo(0.75 * R, -0.1 * R); ctx.stroke();
-    const b = Math.sin((pos || 0) * 0.8) * 0.14 * R;                     // something inside is moving
-    oPoly('#c4b36a', 0.1 * R + b, -0.35 * R, 0.35 * R + b, -0.5 * R, 0.45 * R + b, -0.25 * R);
-  },
-  grub(R, pos) {
-    const wig = Math.sin((pos || 0) * 1.1);
-    for (let s = 0; s < 3; s++) {
-      const gx = -0.7 * R + s * 0.62 * R, gy = wig * (s - 1) * 0.22 * R;
-      oPoly(s === 2 ? '#e0d3a0' : '#c4b36a', gx - 0.34 * R, gy, gx, gy - 0.3 * R, gx + 0.34 * R, gy, gx, gy + 0.3 * R);
-    }
-    ctx.fillStyle = '#3a3320';                                           // bite end
-    ctx.fillRect(0.72 * R, -0.1 * R, 0.22 * R, 0.2 * R);
-  },
-  // Corpse Lob: a shrouded bundle with a bone jutting out. Best not examined.
-  corpse(R) {
-    oPoly('#565e3c', -1.2 * R, -0.25 * R, -0.3 * R, -0.8 * R, 0.85 * R, -0.6 * R, 1.2 * R, 0.15 * R, 0.35 * R, 0.75 * R, -0.75 * R, 0.6 * R);
-    ctx.strokeStyle = '#31371f'; ctx.lineWidth = Math.max(1, R * 0.11);  // shroud ropes
-    ctx.beginPath();
-    ctx.moveTo(-0.6 * R, -0.7 * R); ctx.lineTo(-0.4 * R, 0.7 * R);
-    ctx.moveTo(0.35 * R, -0.75 * R); ctx.lineTo(0.5 * R, 0.65 * R);
-    ctx.stroke();
-    ctx.strokeStyle = '#c9c2a8'; ctx.lineWidth = Math.max(1.5, R * 0.16);  // the bone
-    ctx.beginPath(); ctx.moveTo(0.9 * R, -0.5 * R); ctx.lineTo(1.45 * R, -0.85 * R); ctx.stroke();
-    ctx.fillStyle = '#c9c2a8';
-    ctx.fillRect(1.32 * R, -1.02 * R, 0.3 * R, 0.18 * R);
-    ctx.fillRect(1.44 * R, -0.88 * R, 0.3 * R, 0.18 * R);
-  },
 };
 
 // Sub-munitions and the airstrike stick are a DIFFERENT object from the round
@@ -5057,32 +4835,27 @@ function ordnanceKind(A, pr) {
   if (w === 'b_magma')     return pr.delay > 0 ? 'magmagob' : 'magmashell';
   if (w === 'b_spear')     return 'phasespear';
   if (w === 'b_quake')     return 'quakehammer';
-  // Horde kits get their own silhouettes so alien/zombie fire reads on-theme.
+  // Horde kit gets its own silhouettes so alien fire reads on-theme.
   if (w === 'a_plasma')  return 'plasma';
   if (w === 'a_pods')    return pr.delay > 0 ? 'spore' : 'podshell';
   if (w === 'a_lance')   return 'lance';
-  if (w === 'z_spit')    return 'bile';
-  if (w === 'z_grubs')   return pr.delay > 0 ? 'grub' : 'grubsack';
-  if (w === 'z_lob')     return 'corpse';
   if (w === 'driver' || w === 'putter') return 'golfball';   // every club strikes the same ball
   return ORD[w] ? w : 'cannon';          // cannon is the sensible default round
 }
 const ORD_SCALE = { nuke: 1.30, mortar: 1.12, buster: 1.10, bomb: 0.92, firebomb: 0.85, bomblet: 0.72,
-                    spore: 0.70, grub: 0.62, corpse: 1.18, podshell: 1.05, grubsack: 1.05,
+                    spore: 0.70, podshell: 1.05,
                     bossslug: 0.85, bossmissile: 1.15, magmashell: 1.05, magmagob: 0.8, phasespear: 1.25, quakehammer: 1.35 };
 const ORD_SPIN  = { bomblet: 0.16, firebomb: 0.10, wall: 0.07,
-                    spore: 0.12, grub: 0.22, corpse: 0.09, grubsack: 0.08,
+                    spore: 0.12,
                     magmagob: 0.15 };   // radians per path point
 const ORD_TRAIL = {
   golfball: 'rgba(244,246,242,.5)', driver: 'rgba(244,246,242,.5)', putter: 'rgba(244,246,242,.5)',
-  nano: 'rgba(107,231,255,.65)',
   minigun: 'rgba(255,217,160,.55)',
   cannon: 'rgba(255,220,150,.5)', mortar: 'rgba(255,190,110,.5)', volley: 'rgba(180,170,255,.55)',
   railgun: 'rgba(60,232,143,.75)', cluster: 'rgba(255,210,63,.45)', napalm: 'rgba(255,120,70,.55)',
   gas: 'rgba(157,222,75,.45)', airstrike: 'rgba(84,200,255,.5)', buster: 'rgba(201,138,75,.5)',
   wall: 'rgba(160,120,70,.45)', teleport: 'rgba(200,107,255,.55)', nuke: 'rgba(182,255,90,.5)',
   a_plasma: 'rgba(125,255,106,.65)', a_pods: 'rgba(176,107,255,.5)', a_lance: 'rgba(255,107,240,.7)',
-  z_spit: 'rgba(157,222,75,.55)', z_grubs: 'rgba(196,179,106,.45)', z_lob: 'rgba(122,138,74,.5)',
   b_gatling: 'rgba(255,184,77,.75)', b_hellstorm: 'rgba(255,157,61,.6)', b_magma: 'rgba(255,106,61,.6)',
   b_spear: 'rgba(138,255,222,.85)', b_quake: 'rgba(201,138,75,.55)',
 };

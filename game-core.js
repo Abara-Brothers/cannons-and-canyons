@@ -236,10 +236,6 @@ export const WEAPONS = [
     shots: 1, spread: 0,  speedMul: 1.0, damage: 75, radius: 1950, terrain: 'crater',
     hazard: { type: 'gas', ms: 8000, bites: 4, dmg: 5, r: 1000 },
     desc: 'One warhead. Leaves fallout that keeps hurting.' },
-  { id: 'nano',     name: 'Nano Swarm',    color: '#6be7ff', ammo: 2,
-    shots: 1, spread: 0,  speedMul: 1.0, damage: 4, radius: 260, terrain: 'none',
-    nano: { bots: 10, dmg: 3, r: 1000 },   // seek radius — bots crawl to their prey
-    desc: 'A dart that releases 10 seeker bots — they hunt the nearest enemy, latch on and detonate for 3 damage each.' },
   { id: 'minigun',  name: 'Minigun',       color: '#aeb9c9', ammo: 2,
     shots: 14, spread: 7, speedMul: 1.0, damage: 3, radius: 170, terrain: 'crater', burst: true,
     desc: 'Fourteen rounds in one long ripping burst. Death by a thousand cuts.' },
@@ -262,7 +258,7 @@ export const WEAPONS = [
   { id: 'b_quake',     name: 'Seismic Slam',    color: '#c98a4b', ammo: 99, bossOnly: true,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 26, radius: 1400, terrain: 'crater', dig: 0.5,
     desc: 'A piledriver round that cracks the earth open.' },
-  // ---- Horde kits (aiOnly: alien saucers / zombie hulks only) ----------------
+  // ---- Horde kit (aiOnly: alien saucers only) --------------------------------
   { id: 'a_plasma', name: 'Plasma Bolt',    color: '#7dff6a', ammo: 99, aiOnly: true,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 14, radius: 620, terrain: 'crater',
     desc: 'Superheated xeno-plasma. Splashes green.' },
@@ -274,17 +270,6 @@ export const WEAPONS = [
     shots: 1, spread: 0,  speedMul: 1.6, gravityMul: 0.3, damage: 18, radius: 300, terrain: 'crater',
     pierce: true, proximity: 130, drill: true,
     desc: 'A beam that scours a burning trench through the land.' },
-  { id: 'z_spit',   name: 'Bile Spit',      color: '#9dde4b', ammo: 99, aiOnly: true,
-    shots: 1, spread: 0,  speedMul: 1.0, damage: 12, radius: 560, terrain: 'none',
-    hazard: { type: 'gas', ms: 6000, bites: 3, dmg: 4, r: 520 },
-    desc: 'A gob of something best not examined.' },
-  { id: 'z_grubs',  name: 'Grave Grubs',    color: '#c4b36a', ammo: 99, aiOnly: true,
-    shots: 1, spread: 0,  speedMul: 1.0, damage: 0, radius: 0, terrain: 'none',
-    split: { count: 5, spreadSpeed: 500, radius: 380, damage: 5, terrain: 'crater' },
-    desc: 'A sack of biting things that scatters on impact.' },
-  { id: 'z_lob',    name: 'Corpse Lob',     color: '#7a8a4a', ammo: 99, aiOnly: true,
-    shots: 1, spread: 0,  speedMul: 1.0, damage: 18, radius: 820, terrain: 'crater',
-    desc: 'They throw... something heavy. Do not ask.' },
   // ---- Artillery Golf (golfOnly: the mode's single weapon) -------------------
   // Golf clubs. Each carries bounce physics: rest = restitution, fric = impact
   // friction, rr = ROLLING-RESISTANCE coefficient (the real-physics roll: the
@@ -342,7 +327,7 @@ export const LOADOUT_POOL = WEAPONS
 // none — the ball is the whole kit.
 export function loadoutSizeFor(mode) {
   if (mode === 'golf') return 0;
-  return (mode === 'aliens' || mode === 'zombies') ? 7 : 5;
+  return mode === 'aliens' ? 7 : 5;
 }
 export function validLoadout(picks, n = LOADOUT_SIZE) {
   return Array.isArray(picks) && picks.length === n &&
@@ -800,7 +785,7 @@ export function simulateShot(state, shot) {
     kind, color: w.color, hz: hazardType || null,
   });
 
-  let golfOut, nanoOut;
+  let golfOut;
   const nSub = w.shots;
   for (let i = 0; i < nSub; i++) {
     const off = nSub === 1 ? 0 : (-w.spread / 2 + (w.spread * i) / (nSub - 1));
@@ -922,18 +907,6 @@ export function simulateShot(state, shot) {
           }
         }
       }
-      // A nano dart that lands releases seekers: they hunt the nearest living
-      // ENEMY tank inside the seek radius (never the firer), crawl onto it and
-      // detonate — the server runs that clock; the flag here just says who.
-      if (w.nano && fp.hit) {
-        let ns = -1, nd = Infinity;
-        for (let ti = 0; ti < state.tanks.length; ti++) {
-          if (ti === by || state.tanks[ti].alive === false) continue;
-          const dd = Math.hypot(state.tanks[ti].x - fp.x, state.tanks[ti].y - fp.y);
-          if (dd <= w.nano.r && dd < nd) { nd = dd; ns = ti; }
-        }
-        if (ns >= 0) { nanoOut = { seat: ns, bots: w.nano.bots, dmg: w.nano.dmg, x: fp.x, y: fp.y }; if (d) d.nano = ns; }
-      }
       projectiles.push({ path: fp.path, det: d, delay: w.burst ? i * 6 : 0 });
     }
   }
@@ -960,7 +933,6 @@ export function simulateShot(state, shot) {
     newScorches,
     propEvents,
     golf: golfOut,
-    nano: nanoOut,
     ruins: state.ruins ? state.ruins.map(s => ({ a: s.a, b: s.b, top: s.top, hp: Math.max(0, Math.round(s.hp)), alive: s.alive !== false })) : undefined,
     props: state.props ? state.props.map(p => ({ id: p.id, kind: p.kind, x: round1(p.x), y: round1(p.y), w: p.w || 0, deck: p.deck != null ? round1(p.deck) : undefined, hp: Math.max(0, Math.round(p.hp ?? 0)), alive: p.alive !== false })) : undefined,
     tanks: state.tanks.map(t => ({ x: round1(t.x), y: round1(t.y) })),

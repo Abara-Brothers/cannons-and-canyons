@@ -675,9 +675,15 @@ body.golf .fuel { display: none; }
 .hs-go:active { transform: translateY(1px); }
 .hs-create { flex: 1; }
 .modegrid {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(5px, calc(1 * var(--vhu)), 8px);
+  /* Flex-wrap (not a fixed grid) so the final row of modes CENTRES under the
+     first — with 5 modes that keeps the layout balanced instead of leaving an
+     empty grid cell. Three per row via a 1/3 basis; grow disabled so the last
+     row stays the same tile size, just centred. */
+  display: flex; flex-wrap: wrap; justify-content: center; align-content: start;
+  gap: clamp(5px, calc(1 * var(--vhu)), 8px);
   min-height: 0;
 }
+.modegrid .mode { flex: 0 0 calc(33.333% - 8px); }
 .modegrid .mode {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: clamp(2px, calc(0.7 * var(--vhu)), 6px);
   padding: clamp(5px, calc(1.3 * var(--vhu)), 11px) 4px; border-radius: 12px;
