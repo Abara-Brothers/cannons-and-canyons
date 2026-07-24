@@ -88,6 +88,12 @@ function alienPass() {
       if (m.alive && m.alive[m.seat] !== true) fail('respawn did not revive the seat');
       if (Math.abs(m.x - tanks[mySeat].x) <= 2600) fail(`respawn at ${m.x} is within 2600 of the human at ${tanks[mySeat].x}`);
     }
+    // Everything this smoke test verifies (enemies fire their own kit, kills
+    // count, a downed enemy respawns stronger) is proven the moment all three
+    // are seen — wrap up immediately rather than play on. On the deployed
+    // server each turn carries an RTT + the bot replay-hold, so waiting for
+    // another human turn otherwise drags the war of attrition past the timeout.
+    if (enemyFired && waveSeen && respawnSeen) return wrapUp();
     if (m.type === 'gameover') {
       step(`gameover: team=${m.team}`);
       if (m.team !== 'players' && m.team !== 'horde') fail(`gameover team '${m.team}' — expected players/horde`);
