@@ -313,6 +313,23 @@ html { background: var(--bg); }
 /* Keep every game element (scoreboard, battlefield, dock) clear of the iPhone
    notch/speaker in landscape. env(safe-area-inset-*) is 0 on devices without one. */
 #game.active { display: flex; padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
+/* ...and in PORTRAIT the rotation shim has turned the app 90°, so its edges no
+   longer line up with the device's: the app's left edge is the phone's TOP, its
+   right edge the phone's BOTTOM, its top the phone's RIGHT and its bottom the
+   phone's LEFT. Each edge needs the inset that physically applies to IT. With the
+   device-space values (all of which are 0 on the sides in portrait) the FIRE
+   button — the app's right-most control — sat under the home indicator / gesture
+   bar along the phone's bottom edge, which reads as FIRE being cut off on the
+   right, while the dock spent that allowance at the app's bottom where the phone
+   has no inset at all. `body` prefixes keep these winning over the tier
+   overrides further down the file. */
+@media (orientation: portrait) {
+  body #game.active {
+    padding-left: env(safe-area-inset-top);
+    padding-right: env(safe-area-inset-bottom);
+  }
+  body #dock { padding-bottom: calc(3px + env(safe-area-inset-left)); }
+}
 #hud-top {
   display: flex; flex-direction: column; gap: 3px;
   padding: max(8px, env(safe-area-inset-top)) 12px 8px; background: rgba(10,14,30,.6);
