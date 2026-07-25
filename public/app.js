@@ -4480,8 +4480,9 @@ function drawAim() {
       prevVy = vy;
       if (px < 0 || px > WW() || py > WH()) break;
       if (!selW.pierce && py >= surfaceAt(px)) { landed = [px, surfaceAt(px)]; break; }
-      if (i % 7 === 3) dots.push([px, py]);          // a dot every ~1/17 s of flight
+      if (i % 4 === 3) dots.push([px, py]);          // fine path; thinned out below
     }
+    if (!dots.length) dots.push([px, py]);           // a dribbler that lands at once
     // The arc warns in RED when this shot would hurt YOU: muzzle buried, or
     // the landing sits inside your own weapon's blast radius. (No landing
     // marker — reading the fall is part of the craft.)
@@ -4494,7 +4495,15 @@ function drawAim() {
     // integrated regardless, for the red self-damage warning.) NEVER more
     // dots than exist: a steep shot may land within a handful of steps.
     const shown = Math.min(dots.length, Math.max(4, Math.ceil(dots.length * 0.45)));
-    for (let i = 0; i < shown; i++) {
+    // The line is DOTTED, not chained: measure how long the drawn arc really is
+    // on screen and thin it to at most 16 squares, never closer than ~18 css px.
+    // (A fixed step interval put ~80 squares 5px apart at battle zoom — a solid
+    // streak — and a different density again at every other zoom and power.)
+    let arcLen = 0;
+    for (let i = 1; i < shown; i++) arcLen += Math.hypot(dots[i][0] - dots[i - 1][0], dots[i][1] - dots[i - 1][1]);
+    const want = Math.max(2, Math.min(16, Math.round(arcLen * cam.zoom / 18)));
+    const stride = Math.max(1, Math.floor((shown - 1) / want) || 1);
+    for (let i = 0; i < shown; i += stride) {
       const dsx = wx2s(dots[i][0]), dsy = wy2s(dots[i][1]);
       if (dsx < -20 || dsx > view.cssW + 20 || dsy < -20 || dsy > view.cssH + 20) continue;
       const f = i / shown;
