@@ -481,7 +481,10 @@ body.golf .golf-only { display: flex; }
 @media (orientation: landscape) and (min-width: 620px), (orientation: portrait) and (min-height: 620px) {
   .aim-readout { grid-template-columns: 1fr 1fr; max-width: 640px; margin: 0 auto; width: 100%; }
   .control-rows { max-width: 640px; margin: 0 auto; width: 100%; }
-  .weapon-strip { justify-content: center; }
+  /* `safe center` degrades to start-alignment once the chips outgrow the strip:
+     plain `center` overflows BOTH ends and the first chips cannot be scrolled to.
+     Browsers without it drop the second declaration and keep the old behaviour. */
+  .weapon-strip { justify-content: center; justify-content: safe center; }
 }
 
 /* Landscape phones: ultra-compact dock — icon-only weapons + one control row
@@ -519,19 +522,38 @@ body.golf .golf-only { display: flex; }
     position: absolute; right: 3px; bottom: 0; font-size: 8.5px; line-height: 1;
     text-shadow: 0 1px 2px rgba(10,14,30,.95);
   }
-  .control-rows { display: grid; grid-template-columns: 1fr 1fr auto 1fr auto auto; gap: 6px; align-items: center; max-width: none; }
+  /* One row: angle · power · drive · fuel · drive · FIRE. Every flexible track is
+     minmax(0, …fr) so the row is sized BY the dock instead of forcing the dock
+     wider than the screen — with fixed-width tracks the FIRE button hung off the
+     right edge on phones whose safe-area insets are wider than a width media
+     query can see. The fuel gauge takes a smaller share than the aim readouts. */
+  .control-rows {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto minmax(40px, .34fr) auto auto;
+    gap: 6px; align-items: center; max-width: none; min-width: 0;
+  }
   .aim-readout { display: contents; }
+  .stepper, .drive, .fuel { min-width: 0; }
   .stepper { padding: 2px; }
   .mini { width: 30px; height: 30px; font-size: 15px; }
   .readout label { font-size: 8px; }
   .readout b { font-size: 13px; }
   .drive-row { display: contents; }
   .drive { width: 54px; height: 40px; font-size: 18px; }
-  .fuel { height: 22px; min-width: 48px; }
+  .fuel { height: 22px; }
   .fuel span { font-size: 9px; }
-  .btn.fire { font-size: 16px; padding: 8px 20px; width: auto; min-width: 128px; }
+  /* Sits in an `auto` track, so it is as wide as its own label plus a floor that
+     scales with the screen — never a fixed 128px that the aim controls then have
+     to overflow the dock to accommodate. */
+  .btn.fire {
+    font-size: 16px; padding: 8px clamp(10px, calc(2.2 * var(--vwu)), 20px); width: auto;
+    min-width: clamp(84px, calc(14 * var(--vwu)), 128px);
+    display: flex; align-items: center; justify-content: center; gap: 2px; white-space: nowrap;
+  }
   .mute, .zbtn { width: 32px; height: 32px; font-size: 15px; border-radius: 9px; }
-  .zoomctl { top: 48px; }
+  /* Six buttons in one column ran past the bottom of a short landscape stage and
+     disappeared under the dock. Two columns (zoom pair · tilt pair · pan pair)
+     keep the whole set on the battlefield. */
+  .zoomctl { top: 44px; display: grid; grid-template-columns: repeat(2, auto); gap: 5px; }
   /* .wchip .wn is hidden up here, so this popup is the ONLY place the weapon
      name is readable in landscape — keep it legible but compact. */
   .wpop { font-size: 11px; padding: 3px 8px; }
@@ -552,6 +574,17 @@ body.golf .golf-only { display: flex; }
 /* No driving in golf — your tank walks to your ball. */
 body.golf .drive-row { display: none; }
 body.golf .fuel { display: none; }
+/* With the drive row gone the compact dock is angle · power · FIRE, and the
+   six-track template left the drive/fuel tracks behind as dead space — the panel
+   sat well left of centre. Size the three surviving controls to their content and
+   CENTRE the group. max-content tracks still shrink when the screen is tight, so
+   this cannot reintroduce an overflow. */
+@media (orientation: landscape) and (max-height: 600px), (orientation: portrait) and (max-width: 600px) {
+  body.golf .control-rows {
+    grid-template-columns: repeat(3, minmax(0, max-content));
+    justify-content: center;
+  }
+}
 
 /* ---------- Boss health bar ---------- */
 #bossbar { display: flex; align-items: center; gap: 10px; padding: 2px 2px 0; }
@@ -901,15 +934,20 @@ body.golf .fuel { display: none; }
 body.dd-open .hs-main { overflow: visible; }
 
 /* ---- Drum sliders (angle / power) ----------------------------------------- */
-.drum-wrap { min-width: 0; }
-/* Fixed geometry: every cell has a SET width (tabular digits included), so the
-   control never breathes or shifts while you roll through values. */
+.drum-wrap { min-width: 0; flex: 1 1 auto; }
+/* Fixed CELL geometry: every cell has a SET width (tabular digits included), so
+   the value never breathes or shifts while you roll through it. The drum ITSELF
+   is FLUID — it takes whatever the stepper can spare up to 170px and clips ghost
+   neighbours symmetrically (centred + overflow:hidden). A fixed drum width made
+   the one-row dock wider than the screen on any phone whose safe-area insets ate
+   more than the width tiers below assumed, and the FIRE button fell off the edge. */
 .drum {
   display: flex; align-items: center; justify-content: center; gap: 2px;
-  width: 170px; min-width: 170px; max-width: 170px;
+  width: 100%; min-width: 58px; max-width: 170px;
   touch-action: none; cursor: ew-resize; user-select: none;
   overflow: hidden; white-space: nowrap; font-variant-numeric: tabular-nums;
 }
+.stepper .mini { flex: 0 0 auto; }      /* squeeze the drum, never the tap targets */
 .drum .dc {
   flex: 0 0 18px; width: 18px; overflow: hidden; text-align: center;
   font-size: 10.5px; font-weight: 600; color: var(--muted); pointer-events: auto;
@@ -918,7 +956,7 @@ body.dd-open .hs-main { overflow: visible; }
   flex: 0 0 48px; width: 48px; font-size: clamp(15px, calc(2.6 * var(--vhu)), 18px); font-weight: 900; color: var(--text);
 }
 @media (orientation: landscape) and (max-width: 700px), (orientation: portrait) and (max-height: 700px) {
-  .drum { width: 128px; min-width: 128px; max-width: 128px; }
+  .drum { max-width: 128px; }
   .drum .dc { flex: 0 0 13px; width: 13px; font-size: 8.5px; }
   .drum .dc.cur { flex: 0 0 36px; width: 36px; }
 }
@@ -975,12 +1013,11 @@ body.dd-open .hs-main { overflow: visible; }
   #dock { gap: 4px; padding-left: 8px; padding-right: 8px; }
   .control-rows { gap: 4px; }
   .mini { width: 28px; height: 36px; font-size: 14px; }
-  .drum { width: 112px; min-width: 112px; max-width: 112px; }
+  .drum { max-width: 112px; }
   .drum .dc { flex: 0 0 11px; width: 11px; font-size: 8px; }
   .drum .dc.cur { flex: 0 0 32px; width: 32px; }
   .drive { width: 46px; height: 38px; font-size: 16px; }
-  .fuel { min-width: 40px; }
-  .btn.fire { min-width: 104px; padding-left: 14px; padding-right: 14px; font-size: 15px; }
+  .btn.fire { padding-left: 14px; padding-right: 14px; font-size: 15px; }
 }
 
 /* ---- Golf scorecard (on-screen button + end-of-round summary) ------------- */
