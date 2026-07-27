@@ -1,0 +1,480 @@
+<title>FIRE — 10 arcade button variants</title>
+
+<style>
+  /* ── Cabinet palette ───────────────────────────────────────────────────────
+     Committed single theme: this is the inside of an arcade cabinet. The page
+     accent is marquee AMBER, deliberately not red — every red on this page
+     belongs to a product, so the chrome never competes with the ten buttons. */
+  :root {
+    --cab:    #0e0d10;   /* cabinet black, cool-neutral not pure */
+    --panel:  #17161b;   /* mounting plate */
+    --edge:   #232128;   /* bezel / hairline */
+    --edge2:  #2e2b36;
+    --label:  #e8e4ee;   /* screen-print white */
+    --spec:   #8b8798;   /* spec grey */
+    --amber:  #ffb400;   /* marquee amber — page accent only */
+
+    --font-d: ui-sans-serif, system-ui, "Helvetica Neue", Arial, sans-serif;
+    --font-m: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+
+    /* showcase size; the toggle swaps these to the true dock footprint */
+    --bw: 210px; --bh: 86px; --fs: 30px;
+  }
+  .real { --bw: 128px; --bh: 57px; --fs: 19px; }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0; background: var(--cab); color: var(--label);
+    font-family: var(--font-d); -webkit-font-smoothing: antialiased;
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(255,180,0,.05), transparent 70%);
+  }
+
+  .wrap { max-width: 1240px; margin: 0 auto; padding: clamp(26px,5vw,60px) clamp(16px,4vw,40px) 90px; }
+
+  /* ── Masthead ── */
+  .kicker {
+    font-family: var(--font-m); font-size: 11px; letter-spacing: .3em;
+    text-transform: uppercase; color: var(--amber); margin: 0 0 16px;
+  }
+  h1 {
+    font-size: clamp(34px,7vw,74px); line-height: .94; letter-spacing: -.04em;
+    font-weight: 900; text-transform: uppercase; margin: 0 0 18px; text-wrap: balance;
+  }
+  .lede { color: var(--spec); max-width: 60ch; font-size: clamp(14px,1.8vw,17px); margin: 0 0 30px; }
+  .lede b { color: var(--label); font-weight: 600; }
+
+  .bar {
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+    padding: 14px 0 0; border-top: 1px solid var(--edge); margin-bottom: 46px;
+  }
+  .ctl {
+    font: 700 12px var(--font-d); letter-spacing: .04em; cursor: pointer;
+    padding: 9px 16px; border-radius: 3px; color: var(--cab);
+    background: var(--amber); border: 0;
+  }
+  .ctl.ghost { background: transparent; color: var(--amber); border: 1px solid rgba(255,180,0,.4); }
+  .ctl:focus-visible { outline: 2px solid var(--label); outline-offset: 2px; }
+  .note { font-family: var(--font-m); font-size: 10.5px; letter-spacing: .1em; color: var(--spec); margin-left: auto; }
+
+  /* ── Catalogue grid ── */
+  .cat { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px,1fr)); gap: 20px; }
+
+  .part {
+    background: var(--panel); border: 1px solid var(--edge); border-radius: 4px;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .phead {
+    display: flex; align-items: baseline; gap: 9px; padding: 13px 15px 0;
+  }
+  .pno {
+    font-family: var(--font-m); font-size: 10px; letter-spacing: .13em;
+    color: var(--amber); flex: 0 0 auto;
+  }
+  .pname { font-size: 15px; font-weight: 800; letter-spacing: -.01em; margin: 0; text-transform: uppercase; }
+
+  /* the mounting plate the button sits on */
+  .plate {
+    margin: 13px 0 0; padding: 26px 14px; display: grid; place-items: center;
+    background:
+      linear-gradient(180deg, #121116, #0c0b0f),
+      repeating-linear-gradient(90deg, rgba(255,255,255,.012) 0 2px, transparent 2px 4px);
+    border-top: 1px solid var(--edge); border-bottom: 1px solid var(--edge);
+    min-height: 148px;
+  }
+  .pbody { padding: 13px 15px 15px; display: flex; flex-direction: column; gap: 9px; }
+  .press {
+    font-size: 12.5px; color: var(--spec); line-height: 1.5; margin: 0;
+  }
+  .press b { color: var(--label); font-weight: 600; }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .chip {
+    font-family: var(--font-m); font-size: 9px; letter-spacing: .1em; text-transform: uppercase;
+    padding: 3px 7px; border: 1px solid var(--edge2); color: var(--spec); border-radius: 2px;
+  }
+
+  /* ── shared button shell — every variant fits the same hole ── */
+  .fb {
+    position: relative; width: var(--bw); height: var(--bh);
+    border: 0; padding: 0; background: none; cursor: pointer;
+    font-family: var(--font-d); font-weight: 900; font-size: var(--fs);
+    letter-spacing: .06em; color: #fff;
+    -webkit-tap-highlight-color: transparent;
+    transition: width .25s ease, height .25s ease, font-size .25s ease;
+  }
+  .fb:focus-visible { outline: 2px solid var(--amber); outline-offset: 5px; }
+  .fb span { position: relative; z-index: 3; }
+
+  /* ═══ 01 · SANWA PUSHBUTTON — translucent plunger in a chrome bezel ═══ */
+  .v1 { border-radius: 999px; }
+  .v1 .bez {
+    position: absolute; inset: 0; border-radius: 999px;
+    background: conic-gradient(from 210deg, #6b6b72, #cfcfd6 18%, #55555c 38%, #b9b9c2 58%, #4c4c53 78%, #9a9aa3 100%);
+    box-shadow: 0 5px 12px rgba(0,0,0,.6);
+  }
+  .v1 .well { position: absolute; inset: 5px; border-radius: 999px; background: #17161b; box-shadow: inset 0 3px 7px rgba(0,0,0,.9); }
+  .v1 .cap {
+    position: absolute; inset: 8px; border-radius: 999px; z-index: 2;
+    background:
+      radial-gradient(ellipse 70% 55% at 50% 22%, rgba(255,255,255,.62), rgba(255,255,255,0) 60%),
+      radial-gradient(ellipse at 50% 120%, #7d0a12, #d61f26 55%, #ef3b3b);
+    box-shadow: inset 0 -4px 9px rgba(90,0,6,.75), 0 4px 0 #6d0a11;
+    display: grid; place-items: center;
+    transition: transform .07s ease, box-shadow .07s ease;
+  }
+  .v1 span { text-shadow: 0 2px 4px rgba(80,0,4,.9); }
+  .v1.hit .cap { animation: v1p .15s ease; }
+  @keyframes v1p {
+    40% { transform: translateY(4px); box-shadow: inset 0 -2px 6px rgba(90,0,6,.8), 0 0 0 #6d0a11; }
+  }
+
+  /* ═══ 02 · MUSHROOM STOP — ridged industrial dome ═══ */
+  .v2 { border-radius: 999px; }
+  .v2 .collar {
+    position: absolute; inset: 0; border-radius: 999px;
+    background: linear-gradient(180deg, #303036, #131317);
+    box-shadow: inset 0 0 0 2px #0a0a0d, 0 6px 14px rgba(0,0,0,.65);
+  }
+  .v2 .dome {
+    position: absolute; inset: 6px; border-radius: 999px; z-index: 2; display: grid; place-items: center;
+    background:
+      repeating-radial-gradient(circle at 50% 45%, rgba(0,0,0,.16) 0 3px, transparent 3px 7px),
+      radial-gradient(circle at 50% 26%, #ff5a52, #c1121f 62%, #7a0a13);
+    box-shadow: inset 0 -6px 12px rgba(70,0,6,.72), 0 5px 0 #5f0a10;
+  }
+  .v2 .ring {
+    position: absolute; inset: -3px; border-radius: 999px; z-index: 1;
+    border: 2px solid rgba(255,90,82,0);
+  }
+  .v2 span { text-shadow: 0 2px 3px rgba(70,0,6,.95); }
+  .v2.hit .dome { animation: v2d .19s cubic-bezier(.3,0,.2,1); }
+  .v2.hit .ring { animation: v2r .38s ease-out; }
+  @keyframes v2d { 45% { transform: translateY(5px) scaleY(.9); box-shadow: inset 0 -3px 8px rgba(70,0,6,.8), 0 0 0 #5f0a10; } }
+  @keyframes v2r { 0% { border-color: rgba(255,90,82,.85); transform: scale(1); } 100% { border-color: rgba(255,90,82,0); transform: scale(1.22); } }
+
+  /* ═══ 03 · 8-BIT SPRITE — dithered, hard shadow, stepped press ═══ */
+  .v3 { image-rendering: pixelated; }
+  .v3 .px {
+    position: absolute; inset: 0; display: grid; place-items: center;
+    background:
+      repeating-conic-gradient(#a80f0f 0 25%, #ff2d2d 0 50%) 0 0 / 6px 6px;
+    box-shadow:
+      0 0 0 4px #12060a,
+      6px 6px 0 0 #12060a,
+      inset 0 5px 0 rgba(255,255,255,.28),
+      inset 0 -5px 0 rgba(90,0,6,.5);
+  }
+  .v3 span { font-family: var(--font-m); font-weight: 700; letter-spacing: .14em; text-shadow: 3px 3px 0 #12060a; }
+  .v3.hit .px { animation: v3p .14s steps(2) ; }
+  @keyframes v3p {
+    0%,49% { transform: translate(6px,6px); box-shadow: 0 0 0 4px #12060a, 0 0 0 0 #12060a, inset 0 0 0 40px #fff2c0; }
+    50%,100% { transform: translate(0,0); }
+  }
+
+  /* ═══ 04 · MARQUEE — lightbox ringed with chase bulbs ═══ */
+  .v4 .box {
+    position: absolute; inset: 0; border-radius: 3px; display: grid; place-items: center;
+    background: linear-gradient(180deg, #1d0508, #360a0e);
+    border: 3px solid #0b0407; box-shadow: 0 5px 14px rgba(0,0,0,.6);
+  }
+  .v4 span { color: #ff6b5e; text-shadow: 0 0 10px rgba(255,60,50,.9), 0 0 26px rgba(255,60,50,.5); }
+  .v4 i {
+    position: absolute; width: 7px; height: 7px; border-radius: 50%; z-index: 4;
+    background: #6b2a16; box-shadow: 0 0 0 1px #0b0407;
+  }
+  .v4.hit i { animation: v4b .34s ease-out; }
+  @keyframes v4b {
+    0%,100% { background: #6b2a16; box-shadow: 0 0 0 1px #0b0407; }
+    45% { background: #ffd9a0; box-shadow: 0 0 9px 3px rgba(255,150,60,.95), 0 0 0 1px #0b0407; }
+  }
+
+  /* ═══ 05 · NEON — glass tube on a backing plate ═══ */
+  .v5 .plateN {
+    position: absolute; inset: 0; border-radius: 4px;
+    background: linear-gradient(180deg, #131318, #0b0b0f);
+    border: 1px solid #26242c; box-shadow: inset 0 1px 0 rgba(255,255,255,.05);
+  }
+  .v5 .scr { position: absolute; width: 4px; height: 4px; border-radius: 50%; background: #3a3843; box-shadow: inset 0 1px 0 rgba(255,255,255,.25); z-index: 4; }
+  .v5 span {
+    color: #ffd9dd; z-index: 3;
+    text-shadow:
+      0 0 4px #fff, 0 0 9px #ff1f4b, 0 0 18px #ff1f4b,
+      0 0 36px rgba(255,31,75,.75), 0 0 62px rgba(255,31,75,.45);
+  }
+  .v5.hit span { animation: v5f .26s steps(1); }
+  @keyframes v5f {
+    0%,100% { opacity: 1; }
+    10%,30% { opacity: .25; }
+    20% { opacity: 1; }
+    55% { opacity: 1; text-shadow: 0 0 6px #fff, 0 0 16px #ff1f4b, 0 0 34px #ff1f4b, 0 0 70px rgba(255,31,75,.95), 0 0 110px rgba(255,31,75,.7); }
+  }
+
+  /* ═══ 06 · ENGRAVED PLATE — brushed steel, enamel-filled letters ═══ */
+  .v6 .steel {
+    position: absolute; inset: 0; border-radius: 3px; display: grid; place-items: center;
+    background:
+      repeating-linear-gradient(92deg, rgba(255,255,255,.055) 0 1px, transparent 1px 3px),
+      linear-gradient(180deg, #6e6d76, #3f3e46 55%, #55545d);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.35), inset 0 -2px 5px rgba(0,0,0,.55), 0 4px 10px rgba(0,0,0,.6);
+    transition: transform .08s ease;
+  }
+  .v6 .riv { position: absolute; width: 5px; height: 5px; border-radius: 50%; z-index: 4;
+             background: radial-gradient(circle at 35% 30%, #b9b8c2, #4a4952); }
+  .v6 span {
+    color: #c9202a;
+    text-shadow: 0 1px 0 rgba(255,255,255,.42), 0 -1px 1px rgba(0,0,0,.75);
+  }
+  .v6.hit .steel { animation: v6p .17s ease; }
+  @keyframes v6p { 45% { transform: translateY(3px); box-shadow: inset 0 3px 7px rgba(0,0,0,.7), 0 0 0 rgba(0,0,0,.6); } }
+
+  /* ═══ 07 · VECTOR PHOSPHOR — Asteroids-era stroke + burst ═══ */
+  .v7 .scope {
+    position: absolute; inset: 0; border-radius: 2px; display: grid; place-items: center;
+    background: #050507;
+    border: 1px solid rgba(255,43,43,.4);
+    box-shadow: inset 0 0 22px rgba(255,43,43,.14);
+    overflow: hidden;
+  }
+  .v7 .scan { position: absolute; inset: 0; z-index: 4; pointer-events: none;
+              background: repeating-linear-gradient(180deg, rgba(0,0,0,.42) 0 1px, transparent 1px 3px); }
+  .v7 span {
+    color: transparent; -webkit-text-stroke: 1.6px #ff2b2b;
+    filter: drop-shadow(0 0 5px rgba(255,43,43,.95)) drop-shadow(0 0 16px rgba(255,43,43,.55));
+  }
+  .v7 .burst {
+    position: absolute; inset: 12%; z-index: 2; border-radius: 2px;
+    border: 1.5px solid rgba(255,43,43,0);
+  }
+  .v7.hit .burst { animation: v7b .3s ease-out; }
+  .v7.hit span { animation: v7s .3s ease-out; }
+  @keyframes v7b { 0% { border-color: rgba(255,43,43,.95); transform: scale(.8); } 100% { border-color: rgba(255,43,43,0); transform: scale(1.5); } }
+  @keyframes v7s { 30% { filter: drop-shadow(0 0 10px #ff2b2b) drop-shadow(0 0 32px rgba(255,43,43,.9)); } }
+
+  /* ═══ 08 · LAUNCH SWITCH — hazard housing, throw-down toggle ═══ */
+  .v8 .hous {
+    position: absolute; inset: 0; border-radius: 3px; overflow: hidden;
+    background: repeating-linear-gradient(45deg, #1a1a1e 0 9px, #d21e1e 9px 18px);
+    border: 2px solid #0b0b0e; box-shadow: 0 4px 11px rgba(0,0,0,.6);
+  }
+  .v8 .sw {
+    position: absolute; left: 8%; right: 8%; top: 20%; bottom: 20%; z-index: 3;
+    border-radius: 2px; display: grid; place-items: center;
+    background: linear-gradient(180deg, #ff4d3d, #9e0f14);
+    box-shadow: inset 0 2px 0 rgba(255,255,255,.3), 0 4px 0 #5c0a0d;
+    transition: transform .07s ease;
+  }
+  .v8 .arm {
+    position: absolute; top: 3px; left: 0; right: 0; z-index: 5; text-align: center;
+    font-family: var(--font-m); font-size: 7px; letter-spacing: .28em; color: #ffd9a0; opacity: .85;
+  }
+  .v8 span { text-shadow: 0 2px 3px rgba(60,0,4,.9); }
+  .v8.hit .sw { animation: v8p .17s ease; }
+  .v8.hit .hous { animation: v8h .17s ease; }
+  @keyframes v8p { 45% { transform: translateY(4px); box-shadow: inset 0 2px 0 rgba(255,255,255,.2), 0 0 0 #5c0a0d; } }
+  @keyframes v8h { 40% { filter: brightness(1.9); } }
+
+  /* ═══ 09 · DOT-MATRIX LED — dim lens, scan-sweep on press ═══ */
+  .v9 .lens {
+    position: absolute; inset: 0; border-radius: 3px; display: grid; place-items: center;
+    background: linear-gradient(180deg, #1b0607, #100405);
+    border: 2px solid #070203; box-shadow: inset 0 0 16px rgba(255,34,0,.14);
+    overflow: hidden;
+  }
+  .v9 .grid {
+    position: absolute; inset: 0; z-index: 4; pointer-events: none;
+    background:
+      repeating-linear-gradient(90deg, rgba(0,0,0,.62) 0 1.5px, transparent 1.5px 4px),
+      repeating-linear-gradient(180deg, rgba(0,0,0,.62) 0 1.5px, transparent 1.5px 4px);
+  }
+  .v9 span { color: #ff2200; text-shadow: 0 0 7px rgba(255,34,0,.95), 0 0 20px rgba(255,34,0,.55); }
+  .v9 .sweep {
+    position: absolute; top: 0; bottom: 0; width: 45%; z-index: 3; left: -50%;
+    background: linear-gradient(90deg, transparent, rgba(255,120,60,.5), transparent);
+  }
+  .v9.hit .sweep { animation: v9s .32s linear; }
+  .v9.hit span { animation: v9t .32s ease; }
+  @keyframes v9s { 0% { left: -50%; } 100% { left: 105%; } }
+  @keyframes v9t { 40% { color: #ffd0a0; text-shadow: 0 0 12px #ff5a2b, 0 0 34px rgba(255,90,43,.9); } }
+
+  /* ═══ 10 · KEYCAP — tall plastic cap with real travel ═══ */
+  .v10 .hole {
+    position: absolute; inset: 0; border-radius: 5px;
+    background: #0a0a0d; box-shadow: inset 0 2px 6px rgba(0,0,0,.9);
+  }
+  .v10 .cap2 {
+    position: absolute; left: 4px; right: 4px; top: 0; bottom: 8px; z-index: 3;
+    border-radius: 5px; display: grid; place-items: center;
+    background: linear-gradient(180deg, #f2545b 0%, #cf2233 42%, #a3162a 100%);
+    box-shadow:
+      inset 0 2px 0 rgba(255,255,255,.45),
+      inset 0 -3px 4px rgba(90,0,14,.5),
+      0 8px 0 #6d0d1c, 0 10px 14px rgba(0,0,0,.6);
+    transition: transform .06s ease;
+  }
+  .v10 span { text-shadow: 0 2px 2px rgba(90,0,14,.7); }
+  .v10.hit .cap2 { animation: v10p .14s cubic-bezier(.35,0,.2,1); }
+  @keyframes v10p { 45% { transform: translateY(8px); box-shadow: inset 0 2px 0 rgba(255,255,255,.35), inset 0 -2px 3px rgba(90,0,14,.5), 0 0 0 #6d0d1c, 0 2px 5px rgba(0,0,0,.6); } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .fb *, .fb { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<div class="wrap">
+
+  <p class="kicker">Canyons &amp; Cannons · control panel · parts catalogue</p>
+  <h1>Ten fire buttons.<br>One 128×57 hole.</h1>
+  <p class="lede">
+    Every one is <b>red</b>, built to <b>arcade hardware</b> vocabulary, and gives a
+    <b>brief press animation</b> — nothing over 340ms. All ten drop into the exact footprint
+    the dock already reserves, so swapping is a CSS change, not a layout change.
+    <b>Press them.</b>
+  </p>
+
+  <div class="bar">
+    <button class="ctl" id="all" type="button">Press all ten</button>
+    <button class="ctl ghost" id="size" type="button">View at true dock size</button>
+    <span class="note" id="sizeNote">Showcase size · 210 × 86</span>
+  </div>
+
+  <div class="cat" id="cat"></div>
+
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  const PARTS = [
+    { id:'v1', no:'CP-01', name:'Sanwa pushbutton',
+      inner:`<i class="bez"></i><i class="well"></i><i class="cap"><span>FIRE</span></i>`,
+      press:'The plunger <b>travels down into the bezel</b> and the specular highlight compresses with it — the exact feel of a real cabinet button.',
+      chips:['Translucent cap','Chrome bezel','150ms'] },
+
+    { id:'v2', no:'CP-02', name:'Mushroom stop',
+      inner:`<i class="collar"></i><i class="ring"></i><i class="dome"><span>FIRE</span></i>`,
+      press:'The dome <b>squashes as it depresses</b> and a shock ring snaps outward past the collar.',
+      chips:['Ridged dome','Shock ring','190ms'] },
+
+    { id:'v3', no:'CP-03', name:'8-bit sprite',
+      inner:`<i class="px"><span>FIRE</span></i>`,
+      press:'No easing anywhere — it <b>snaps onto its own drop shadow</b> in hard steps and blows out to white for a single frame.',
+      chips:['Dithered fill','steps(2)','140ms'] },
+
+    { id:'v4', no:'CP-04', name:'Marquee lightbox',
+      inner:`<i class="box"><span>FIRE</span></i>`, bulbs:true,
+      press:'Fourteen bulbs around the rim <b>flash hot amber in a chase</b>, the way a cabinet marquee announces a credit.',
+      chips:['14 bulbs','Chase flash','340ms'] },
+
+    { id:'v5', no:'CP-05', name:'Neon tube',
+      inner:`<i class="plateN"></i><span>FIRE</span>`, screws:true,
+      press:'The tube <b>stutters like a failing starter</b>, then blooms brighter than its resting state.',
+      chips:['Glass glow','Flicker','260ms'] },
+
+    { id:'v6', no:'CP-06', name:'Engraved plate',
+      inner:`<i class="steel"><span>FIRE</span></i>`, rivets:true,
+      press:'The whole plate <b>sinks into the panel</b> and the engraving flips from cut to raised as the light moves.',
+      chips:['Brushed steel','Enamel fill','170ms'] },
+
+    { id:'v7', no:'CP-07', name:'Vector phosphor',
+      inner:`<i class="scope"><span>FIRE</span><i class="burst"></i><i class="scan"></i></i>`,
+      press:'A <b>vector ring bursts outward</b> and the stroke blooms — Asteroids-era, drawn in light rather than filled.',
+      chips:['Stroke only','Scanlines','300ms'] },
+
+    { id:'v8', no:'CP-08', name:'Launch switch',
+      inner:`<i class="hous"></i><i class="arm">ARMED</i><i class="sw"><span>FIRE</span></i>`,
+      press:'The toggle <b>throws down hard</b> and the hazard housing flashes behind it.',
+      chips:['Hazard stripes','Throw + flash','170ms'] },
+
+    { id:'v9', no:'CP-09', name:'Dot-matrix LED',
+      inner:`<i class="lens"><span>FIRE</span><i class="sweep"></i><i class="grid"></i></i>`,
+      press:'A <b>scan sweeps left to right</b> across the lens and the segments flare from deep red to white-hot.',
+      chips:['LED lens','Scan sweep','320ms'] },
+
+    { id:'v10', no:'CP-10', name:'Keycap',
+      inner:`<i class="hole"></i><i class="cap2"><span>FIRE</span></i>`,
+      press:'It <b>travels the full height of its own side wall</b> and bottoms out — the most physical press of the ten.',
+      chips:['8px travel','Side wall','140ms'] }
+  ];
+
+  const cat = document.getElementById('cat');
+
+  PARTS.forEach(p => {
+    const el = document.createElement('article');
+    el.className = 'part';
+    el.innerHTML = `
+      <div class="phead"><span class="pno">${p.no}</span><h2 class="pname">${p.name}</h2></div>
+      <div class="plate">
+        <button class="fb ${p.id}" type="button" aria-label="Fire — ${p.name} variant">${p.inner}</button>
+      </div>
+      <div class="pbody">
+        <p class="press">${p.press}</p>
+        <div class="chips">${p.chips.map(c => `<span class="chip">${c}</span>`).join('')}</div>
+      </div>`;
+    cat.appendChild(el);
+
+    const btn = el.querySelector('.fb');
+
+    /* decorative hardware that has to be positioned, not hand-listed in CSS */
+    if (p.bulbs) {
+      const N = 14;
+      for (let i = 0; i < N; i++) {
+        const b = document.createElement('i');
+        const t = i / N, per = t * 4;              // walk the perimeter
+        let x, y;
+        if (per < 1)      { x = per * 100; y = 0; }
+        else if (per < 2) { x = 100; y = (per - 1) * 100; }
+        else if (per < 3) { x = 100 - (per - 2) * 100; y = 100; }
+        else              { x = 0; y = 100 - (per - 3) * 100; }
+        b.style.left = `calc(${x}% - 3.5px)`;
+        b.style.top  = `calc(${y}% - 3.5px)`;
+        b.style.animationDelay = (i * 14) + 'ms';
+        btn.appendChild(b);
+      }
+    }
+    if (p.screws) {
+      [[7,7],[93,7],[7,93],[93,93]].forEach(([x,y]) => {
+        const s = document.createElement('i');
+        s.className = 'scr';
+        s.style.left = `calc(${x}% - 2px)`; s.style.top = `calc(${y}% - 2px)`;
+        btn.appendChild(s);
+      });
+    }
+    if (p.rivets) {
+      [[8,20],[92,20],[8,80],[92,80]].forEach(([x,y]) => {
+        const r = document.createElement('i');
+        r.className = 'riv';
+        r.style.left = `calc(${x}% - 2.5px)`; r.style.top = `calc(${y}% - 2.5px)`;
+        btn.appendChild(r);
+      });
+    }
+
+    btn.addEventListener('click', () => hit(btn));
+  });
+
+  /* replay-safe: strip the class, force reflow, re-add — so rapid presses retrigger */
+  function hit(btn) {
+    btn.classList.remove('hit');
+    void btn.offsetWidth;
+    btn.classList.add('hit');
+    clearTimeout(btn._t);
+    btn._t = setTimeout(() => btn.classList.remove('hit'), 420);
+  }
+
+  document.getElementById('all').addEventListener('click', () => {
+    document.querySelectorAll('.fb').forEach((b, i) => setTimeout(() => hit(b), i * 55));
+  });
+
+  const sizeBtn = document.getElementById('size');
+  const note = document.getElementById('sizeNote');
+  let real = false;
+  sizeBtn.addEventListener('click', () => {
+    real = !real;
+    document.documentElement.classList.toggle('real', real);
+    sizeBtn.textContent = real ? 'View at showcase size' : 'View at true dock size';
+    note.textContent = real ? 'True dock size · 128 × 57 — as it sits in the game'
+                            : 'Showcase size · 210 × 86';
+  });
+})();
+</script>

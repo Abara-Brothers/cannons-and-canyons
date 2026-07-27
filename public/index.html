@@ -242,8 +242,13 @@
 
     <div id="stage">
       <canvas id="canvas"></canvas>
-      <button id="muteBtn" class="mute" title="Sound on/off" aria-label="Sound on/off"></button>
-      <div class="zoomctl">
+      <!-- CAMERA: one button at rest. Tapping it fans out the six zoom/pan
+           controls; they are the FALLBACK — pinch-zoom and two-finger pan are
+           the primary camera. Always starts collapsed. -->
+      <button id="camBtn" class="mute" title="Camera controls" aria-label="Camera controls" aria-expanded="false" aria-controls="zoomctl">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.6h3.2l1.6-2.4h8.4l1.6 2.4H21v10H3z"/><circle cx="12" cy="13.4" r="3.4"/></svg>
+      </button>
+      <div class="zoomctl" id="zoomctl">
         <button id="zoomIn" class="zbtn" title="Zoom in" aria-label="Zoom in">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21M7.5 10.5h6M10.5 7.5v6"/></svg>
         </button>
@@ -263,19 +268,40 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 6l6 6-6 6"/></svg>
         </button>
       </div>
-      <button id="leaveBtn" class="leave" title="Leave game" aria-label="Leave game">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M14 21H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8"/><path d="M17 16l4-4-4-4M21 12H9"/></svg>
+      <!-- META: sound, scorecard, help and leave live behind one "..." button.
+           Volume is a once-a-session setting and does not deserve permanent
+           screen space. Always starts collapsed. -->
+      <button id="metaBtn" class="leave" title="More" aria-label="More options" aria-expanded="false" aria-controls="metaMenu">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5.4" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="18.6" cy="12" r="1.9"/></svg>
       </button>
-      <button id="helpBtn" class="leave" title="How to play" aria-label="How to play">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M8.6 9a3.4 3.4 0 1 1 4.6 3.2c-1 .4-1.2 1-1.2 2.1"/><path d="M12 17.6v.2"/></svg>
-      </button>
-      <button id="golfCardBtn" class="leave golf-only" title="Scorecard" aria-label="Scorecard">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
-      </button>
+      <div class="metamenu" id="metaMenu">
+        <button id="muteBtn" class="leave" title="Sound on/off" aria-label="Sound on/off"></button>
+        <button id="golfCardBtn" class="leave golf-only" title="Scorecard" aria-label="Scorecard">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+        </button>
+        <button id="helpBtn" class="leave" title="How to play" aria-label="How to play">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M8.6 9a3.4 3.4 0 1 1 4.6 3.2c-1 .4-1.2 1-1.2 2.1"/><path d="M12 17.6v.2"/></svg>
+        </button>
+        <button id="leaveBtn" class="leave" title="Leave game" aria-label="Leave game">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M14 21H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8"/><path d="M17 16l4-4-4-4M21 12H9"/></svg>
+        </button>
+      </div>
       <div id="toast"></div>
     </div>
 
     <footer id="dock">
+      <!-- Collapse tab: rides the dock's top edge so it is always grabbable,
+           and its chevron flips to match the state. Collapsed, the dock slides
+           down to a sliver that keeps only FIRE + a live aim readout. -->
+      <button id="dockTab" class="dock-tab" aria-label="Collapse controls" aria-expanded="true" aria-controls="dock">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg>
+      </button>
+      <!-- Only visible while collapsed: what you must still be able to read. -->
+      <div id="dockMini" class="dock-mini" aria-hidden="true">
+        <span class="dm-wep" id="dmWeapon">Cannon</span>
+        <span class="dm-aim"><b id="dmAngle">45</b><i>ANG</i></span>
+        <span class="dm-aim"><b id="dmPower">60</b><i>PWR</i></span>
+      </div>
       <div id="weaponStrip" class="weapon-strip"></div>
 
       <div class="control-rows">

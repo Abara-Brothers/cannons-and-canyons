@@ -374,14 +374,43 @@ html { background: var(--bg); }
 .leave { position: absolute; top: 10px; right: 10px; width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--line); background: rgba(10,14,30,.6); color: var(--text); cursor: pointer; backdrop-filter: blur(4px); z-index: 4; display: flex; align-items: center; justify-content: center; padding: 0; }
 .leave svg { width: 21px; height: 21px; }
 .leave:active { transform: scale(.95); }
-/* The top-right buttons STACK instead of overlapping (leave, help, and the
-   golf scorecard all shared top:10px/right:10px before). */
-#helpBtn { top: 58px; }
-#golfCardBtn { top: 106px; }
+/* Leave/help/scorecard live inside the "..." meta stack now, so they flow in
+   its column instead of being individually pinned to the corner. */
 .golf-only { display: none; }
 body.golf .golf-only { display: flex; }
 .btn.danger { color: var(--p1); }
-.zoomctl { position: absolute; top: 58px; left: 10px; display: flex; flex-direction: column; gap: 6px; z-index: 4; }
+.zoomctl {
+  position: absolute; top: 58px; left: 10px; display: flex; flex-direction: column; gap: 6px; z-index: 4;
+  /* Collapsed by default: the six camera buttons slide in from the rail and
+     fade, and are fully inert until the camera button expands them. Pinch and
+     two-finger pan remain the primary camera — these are the fallback. */
+  transform: translateX(-14px) scale(.9); transform-origin: top left;
+  opacity: 0; pointer-events: none; visibility: hidden;
+  transition: opacity .18s ease, transform .18s ease, visibility 0s linear .18s;
+}
+#stage.cam-open .zoomctl {
+  transform: none; opacity: 1; pointer-events: auto; visibility: visible;
+  transition: opacity .18s ease, transform .18s ease, visibility 0s;
+}
+#camBtn.on, #metaBtn.on { border-color: var(--accent); color: var(--accent); }
+/* The meta stack ("...") holds sound, scorecard, help and leave. */
+.metamenu {
+  position: absolute; top: 58px; right: 10px; display: flex; flex-direction: column; gap: 6px; z-index: 4;
+  transform: translateX(14px) scale(.9); transform-origin: top right;
+  opacity: 0; pointer-events: none; visibility: hidden;
+  transition: opacity .18s ease, transform .18s ease, visibility 0s linear .18s;
+}
+#stage.meta-open .metamenu {
+  transform: none; opacity: 1; pointer-events: auto; visibility: visible;
+  transition: opacity .18s ease, transform .18s ease, visibility 0s;
+}
+/* Inside the stack the buttons flow in the column, not pinned to the corner. */
+.metamenu .leave { position: static; top: auto; right: auto; }
+/* Keyboard users must always see where they are. */
+#camBtn:focus-visible, #metaBtn:focus-visible, .zbtn:focus-visible,
+.metamenu .leave:focus-visible, .dock-tab:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
 .zbtn { width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--line); background: rgba(10,14,30,.6); color: var(--text); cursor: pointer; backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; padding: 0; }
 .zbtn svg { width: 22px; height: 22px; }
 .zbtn:active { transform: scale(.95); }
@@ -491,9 +520,10 @@ body.golf .golf-only { display: flex; }
 /* ---------- Killcam ---------- */
 /* Transitions live on the BASE selectors so the chrome fades back in too. */
 #hud-top, #dock { transition: opacity .25s ease, filter .25s ease; }
-.mute, .leave, .zoomctl { transition: opacity .2s ease; }
+.mute, .leave { transition: opacity .2s ease; }   /* .zoomctl/.metamenu own theirs (transform+visibility) */
 #game.killcam #hud-top, #game.killcam #dock { opacity: .26; filter: saturate(.35); pointer-events: none; }
-#game.killcam .mute, #game.killcam .leave, #game.killcam .zoomctl { opacity: 0; pointer-events: none; }
+#game.killcam .mute, #game.killcam .leave, #game.killcam .zoomctl,
+#game.killcam .metamenu, #game.killcam .dock-tab { opacity: 0; pointer-events: none; }
 
 @media (orientation: landscape) and (min-width: 620px), (orientation: portrait) and (min-height: 620px) {
   .aim-readout { grid-template-columns: 1fr 1fr; max-width: 640px; margin: 0 auto; width: 100%; }
@@ -1059,3 +1089,67 @@ body.dd-open .hs-main { overflow: visible; }
 .gc-table td.gc-over { color: #ffb45a; }
 .gc-vs.up { color: #ffb45a; }
 .gc-vs.down { color: #3ce88f; }
+
+/* ---- Dock collapse ---------------------------------------------------------
+   The dock slides down to a sliver that keeps only FIRE and a live aim
+   readout. The SLIDE is a transform (cheap); once it lands, the same offset is
+   handed to a negative margin so the layout actually reclaims the space and
+   the battlefield grows into it (the draw loop re-sizes the canvas on its own
+   when the box changes). Both states put the dock in the identical place, so
+   the swap is invisible. */
+#dock { --dock-sliver: 28px; }
+#dock.dock-anim { transition: transform .18s ease; will-change: transform; }
+#dock.collapsed { margin-bottom: calc(-1 * var(--dock-slide, 0px)); }
+/* The tab rides the dock's top edge, so it is grabbable in either state. */
+.dock-tab {
+  position: absolute; top: -17px; left: 50%; transform: translateX(-50%);
+  width: 62px; height: 20px; padding: 0; z-index: 6; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line); border-bottom: 0;
+  border-radius: 10px 10px 0 0; background: rgba(10,14,30,.86);
+  color: var(--muted); backdrop-filter: blur(6px);
+}
+.dock-tab svg { width: 17px; height: 17px; transition: transform .18s ease; }
+#dock.collapsed .dock-tab svg { transform: rotate(180deg); }   /* chevron follows the state */
+.dock-tab:active { color: var(--text); }
+/* Sliver contents: hidden while open, and the ONLY things on show when shut. */
+.dock-mini { display: none; }
+#dock.collapsed .dock-mini {
+  display: flex; align-items: center; gap: clamp(8px, calc(1.6 * var(--vwu)), 16px);
+  position: absolute; left: 12px; top: 0; height: var(--dock-sliver);
+  color: var(--text); pointer-events: none;
+}
+.dock-mini .dm-wep {
+  font-weight: 800; font-size: clamp(10px, calc(1.6 * var(--vhu)), 12.5px);
+  max-width: calc(34 * var(--vwu)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dock-mini .dm-aim { display: flex; align-items: baseline; gap: 3px; font-variant-numeric: tabular-nums; }
+.dock-mini .dm-aim b { font-size: clamp(11px, calc(1.8 * var(--vhu)), 14px); font-weight: 900; }
+.dock-mini .dm-aim i {
+  font-style: normal; font-size: clamp(7.5px, calc(1.2 * var(--vhu)), 9.5px);
+  letter-spacing: .1em; color: var(--muted);
+}
+/* Everything except FIRE leaves with the dock. visibility (not display) so no
+   reflow, and so the compact grid keeps its shape for the ride back up. */
+#dock.collapsed .weapon-strip,
+#dock.collapsed .stepper,
+#dock.collapsed .drive-row,
+#dock.collapsed .drive,
+#dock.collapsed .fuel { visibility: hidden; }
+#dock.collapsed .control-rows .fire {
+  visibility: visible; position: absolute; top: 2px; right: 10px; z-index: 6;
+  height: calc(var(--dock-sliver) - 5px); min-height: 0; padding: 0 18px;
+  font-size: clamp(11px, calc(1.8 * var(--vhu)), 14px); align-self: auto;
+  display: flex; align-items: center; justify-content: center; gap: 4px;
+}
+
+/* ---- Watching: fade the HUD down while the shot flies / on the other turn ---
+   Purely visual — the controls KEEP pointer-events so you can still zoom and
+   pan to follow the shell, and any touch or hover brings them straight back.
+   The killcam rule above is stronger and still wins. */
+#game.watching #hud-top, #game.watching #dock { opacity: .16; }
+#game.watching .mute, #game.watching .leave,
+#game.watching .zoomctl, #game.watching .metamenu { opacity: .16; }
+#game.watching.hud-wake #hud-top, #game.watching.hud-wake #dock,
+#game.watching.hud-wake .mute, #game.watching.hud-wake .leave,
+#game.watching.hud-wake .zoomctl, #game.watching.hud-wake .metamenu { opacity: 1; }

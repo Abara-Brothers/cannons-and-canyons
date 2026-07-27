@@ -478,6 +478,125 @@ function holdPanX(btn, dir) {
 }
 holdPanX($('panLeft'), -1);
 holdPanX($('panRight'), 1);
+
+// ---- Stage chrome: two collapsed groups instead of a 7-button rail ----------
+// The camera button fans out the six zoom/pan controls; the "..." button opens
+// sound / scorecard / help / leave. Both start collapsed EVERY match (nothing
+// is persisted) and both shut on an outside tap or Escape. Pinch-zoom and
+// two-finger pan are untouched — these buttons are only the fallback.
+function setStageMenu(which, open) {
+  const stage = $('stage');
+  stage.classList.toggle('cam-open', which === 'cam' ? open : false);
+  stage.classList.toggle('meta-open', which === 'meta' ? open : false);
+  const camOn = stage.classList.contains('cam-open');
+  const metaOn = stage.classList.contains('meta-open');
+  $('camBtn').classList.toggle('on', camOn);
+  $('camBtn').setAttribute('aria-expanded', String(camOn));
+  $('metaBtn').classList.toggle('on', metaOn);
+  $('metaBtn').setAttribute('aria-expanded', String(metaOn));
+}
+const closeStageMenus = () => setStageMenu(null, false);
+$('camBtn').onclick = (e) => {
+  e.stopPropagation();
+  setStageMenu('cam', !$('stage').classList.contains('cam-open'));
+};
+$('metaBtn').onclick = (e) => {
+  e.stopPropagation();
+  setStageMenu('meta', !$('stage').classList.contains('meta-open'));
+};
+// Outside tap closes. Capture phase so it still fires when the target stops
+// propagation, and the canvas (aiming) counts as outside.
+document.addEventListener('pointerdown', (e) => {
+  if (e.target.closest && e.target.closest('.zoomctl, .metamenu, #camBtn, #metaBtn')) return;
+  closeStageMenus();
+}, true);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeStageMenus(); });
+
+// ---- Dock collapse ---------------------------------------------------------
+// Shut, the dock is a 28px sliver holding only FIRE and a live aim readout.
+// The SLIDE animates on transform (cheap); the moment it lands the same offset
+// moves to a negative margin so the layout genuinely gives the space back and
+// the battlefield grows into it (the draw loop notices the canvas box and
+// re-sizes itself). Both states leave the dock in the same place on screen, so
+// the hand-off is invisible.
+const DOCK_SLIVER = 28;
+let dockFullH = 0, dockTimer = null, dockSeq = 0;
+function dockSlidePx() {
+  const d = $('dock');
+  // Measure only while open — collapsed, the negative margin would lie.
+  if (!d.classList.contains('collapsed')) {
+    const h = d.getBoundingClientRect().height;
+    if (h > DOCK_SLIVER) dockFullH = h;
+  }
+  return Math.max(0, Math.round(dockFullH - DOCK_SLIVER));
+}
+function setDockCollapsed(on, animate) {
+  const d = $('dock');
+  if (d.classList.contains('collapsed') === !!on) { paintDockTab(); return; }
+  const slide = dockSlidePx();
+  d.style.setProperty('--dock-slide', slide + 'px');
+  clearTimeout(dockTimer);
+  // A token so a timeout left over from an earlier toggle can never land the
+  // wrong state on top of a newer one.
+  const seq = ++dockSeq;
+  const land = () => {
+    if (seq !== dockSeq) return;
+    d.classList.remove('dock-anim');
+    d.style.transform = '';                     // margin alone holds the position
+    d.classList.toggle('collapsed', !!on);
+    paintDockTab();
+  };
+  if (!animate || !slide) { d.classList.remove('dock-anim'); d.style.transform = ''; land(); return; }
+  // NO rAF here: a late callback could re-apply the transform after landing and
+  // double the offset. Force the start value, then set the target synchronously.
+  if (on) {
+    d.classList.add('dock-anim');
+    void d.offsetHeight;                        // commit transform:none as the start
+    d.style.transform = `translateY(${slide}px)`;
+  } else {
+    // Give the margin back first, then hold the dock where it looks with a
+    // transform and let it slide up from there.
+    d.classList.remove('collapsed');
+    d.style.transform = `translateY(${slide}px)`;
+    void d.offsetHeight;
+    d.classList.add('dock-anim');
+    d.style.transform = '';
+  }
+  d.addEventListener('transitionend', function once(e) {
+    if (e.propertyName !== 'transform') return;
+    d.removeEventListener('transitionend', once);
+    land();
+  });
+  dockTimer = setTimeout(land, 260);            // fallback: never stick mid-slide
+}
+function paintDockTab() {
+  const shut = $('dock').classList.contains('collapsed');
+  const tab = $('dockTab');
+  tab.setAttribute('aria-expanded', String(!shut));
+  tab.setAttribute('aria-label', shut ? 'Show controls' : 'Collapse controls');
+  $('dockMini').setAttribute('aria-hidden', String(!shut));
+  updateDockMini();          // populate the sliver the moment it appears
+}
+$('dockTab').onclick = () => {
+  const shut = $('dock').classList.contains('collapsed');
+  setDockCollapsed(!shut, true);
+  try { localStorage.setItem('cc_dock', shut ? 'open' : 'shut'); } catch {}
+};
+// Restore the player's choice: it survives turns, matches and reloads.
+function applySavedDock() {
+  let want = 'open';
+  try { want = localStorage.getItem('cc_dock') || 'open'; } catch {}
+  const shut = want === 'shut';
+  // The slide is measured off the OPEN dock, so wait for a laid-out one.
+  if (shut && !dockSlidePx()) { requestAnimationFrame(applySavedDock); return; }
+  setDockCollapsed(shut, false);
+}
+// A re-measure while open keeps the slide honest after any layout change.
+window.addEventListener('resize', () => {
+  const d = $('dock');
+  if (d.classList.contains('collapsed')) return;
+  dockSlidePx();
+});
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
   S.userZoom = clampUserZoom(S.userZoom * (e.deltaY > 0 ? 0.9 : 1.111));
@@ -1130,6 +1249,8 @@ function applySnapshot(m) {
   buildWeaponStrip();
   buildScoreboard();
   updateHud(); updateAimUI(); updateFuel(); updateDock();
+  closeStageMenus();      // camera + meta always start collapsed
+  applySavedDock();       // ...but the dock remembers how you left it
 }
 
 // The server hands the turn over on ITS clock — usually while this client is
@@ -1272,7 +1393,45 @@ function updateDock() {
   $('fireBtn').disabled = !active || !!S.picking;
   $('moveLeft').disabled = !active || S.fuel < MOVE_MIN;
   $('moveRight').disabled = !active || S.fuel < MOVE_MIN;
+  updateDockMini();
+  updateWatching();
 }
+
+// The collapsed sliver still has to answer "what am I firing, and how?".
+function updateDockMini() {
+  if (!$('dock').classList.contains('collapsed')) return;
+  const aim = myAim() || { angle: 45, power: 60 };
+  const w = (S.weapons || []).find(x => x.id === S.selected);
+  $('dmWeapon').textContent = w ? w.name : '';
+  $('dmAngle').textContent = Math.round(aim.angle);
+  $('dmPower').textContent = Math.round(aim.power);
+}
+
+// ---- Watching: dim the HUD while the shell flies or it is someone else's
+// turn. Visual ONLY — every control keeps its pointer-events so you can still
+// zoom and pan to follow the shot, and any touch or hover wakes it instantly.
+const HUD_OVERLAYS = ['armouryModal', 'overlay', 'helpModal', 'golfCard', 'confirmLeave'];
+let hudWakeUntil = 0;
+function updateWatching() {
+  const g = $('game');
+  const overlayOpen = HUD_OVERLAYS.some(id => {
+    const el = $(id); return el && !el.classList.contains('hidden');
+  });
+  // The killcam has its own, stronger rule — never fight it.
+  const watching = S.playing && !overlayOpen && !S.killcam && (!!S.anim || S.turn !== S.you);
+  g.classList.toggle('watching', !!watching);
+  g.classList.toggle('hud-wake', performance.now() < hudWakeUntil);
+}
+function wakeHud() { hudWakeUntil = performance.now() + 2200; updateWatching(); }
+for (const ev of ['pointerdown', 'pointermove', 'focusin']) {
+  for (const id of ['hud-top', 'dock']) {
+    const el = $(id);
+    if (el) el.addEventListener(ev, wakeHud, { passive: true });
+  }
+}
+$('stage').addEventListener('pointerdown', (e) => {
+  if (e.target.closest && e.target.closest('#camBtn, #metaBtn, .zoomctl, .metamenu')) wakeHud();
+}, { passive: true, capture: true });
 
 function buildWeaponStrip() {
   const strip = $('weaponStrip'); strip.innerHTML = '';
@@ -1364,6 +1523,7 @@ function renderDrum(kind) {
 function updateAimUI() {
   renderDrum('angle');
   renderDrum('power');
+  updateDockMini();          // the collapsed sliver mirrors the same numbers
 }
 // drag-to-roll + tap-to-jump
 for (const kind of ['angle', 'power']) {
@@ -2653,7 +2813,7 @@ $('rematchBtn').onclick = () => sendMsg({ type: 'rematch' });
 $('exitBtn').onclick = () => { clearResume(); sendMsg({ type: 'leave' }); location.href = location.origin; };
 
 // Leave mid-game — always behind an "are you sure?" so a stray tap can't quit.
-$('leaveBtn').onclick = () => $('confirmLeave').classList.remove('hidden');
+$('leaveBtn').onclick = () => { closeStageMenus(); $('confirmLeave').classList.remove('hidden'); };
 $('stayBtn').onclick = () => $('confirmLeave').classList.add('hidden');
 $('confirmLeave').onclick = (e) => { if (e.target.id === 'confirmLeave') $('confirmLeave').classList.add('hidden'); };
 $('leaveYesBtn').onclick = () => { clearResume(); sendMsg({ type: 'leave' }); location.href = location.origin; };
@@ -2749,7 +2909,7 @@ function openGolfCard() {
   $('golfCardTable').innerHTML = golfCardHTML(S.golf);
   $('golfCard').classList.remove('hidden');
 }
-$('golfCardBtn').onclick = () => openGolfCard();
+$('golfCardBtn').onclick = () => { closeStageMenus(); openGolfCard(); };
 $('golfCardClose').onclick = () => $('golfCard').classList.add('hidden');
 $('golfCard').addEventListener('click', (e) => { if (e.target.id === 'golfCard') $('golfCard').classList.add('hidden'); });
 
@@ -2792,7 +2952,7 @@ $('careerTabs').addEventListener('click', (e) => {
 $('careerCloseBtn').onclick = () => $('careerModal').classList.add('hidden');
 $('careerModal').onclick = (e) => { if (e.target.id === 'careerModal') $('careerModal').classList.add('hidden'); };
 refreshCareerChip();
-$('helpBtn').onclick = openHelp;
+$('helpBtn').onclick = () => { closeStageMenus(); openHelp(); };
 $('helpHomeBtn').onclick = openHelp;
 $('helpCloseBtn').onclick = () => $('helpModal').classList.add('hidden');
 $('helpModal').onclick = (e) => { if (e.target.id === 'helpModal') $('helpModal').classList.add('hidden'); };
@@ -2810,6 +2970,7 @@ function frame(now) {
     updateCamera(dt);                    // camera eases in REAL time, so it never crawls
   }
   draw();
+  if (S.playing) updateWatching();   // rides the existing loop; no new timer
   requestAnimationFrame(frame);
 }
 
