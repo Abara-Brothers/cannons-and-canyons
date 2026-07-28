@@ -4264,11 +4264,13 @@ function drawProps() {
       ctx.beginPath(); ctx.moveTo(sx, cy2 - d); ctx.lineTo(sx + d, cy2); ctx.lineTo(sx, cy2 + d); ctx.lineTo(sx - d, cy2); ctx.closePath(); ctx.fill();
     } else if (p.kind === 'bunker') {
       const deckY = wy2s(p.deck);
-      const x0 = wx2s(p.x - p.w), x1 = wx2s(p.x + p.w);
       const u = 10;                                              // constant screen size
-      // Parapet lip along the deck edge + a casemate block with a firing slit.
+      // Parapet lip + casemate block with a firing slit. The lip is sized off
+      // `u` like the rest of the structure — it used to span the bunker's WORLD
+      // width (wx2s(p.x±p.w)), which is the one thing on the battlefield that
+      // still grew and shrank as you zoomed.
       ctx.fillStyle = '#9aa4ac';
-      ctx.fillRect(x0, deckY - u * 0.5, x1 - x0, u * 0.5);
+      ctx.fillRect(sx - u * 3.1, deckY - u * 0.5, u * 6.2, u * 0.5);
       ctx.fillStyle = '#7b858d';
       ctx.fillRect(sx - u * 2.4, deckY - u * 2.2, u * 4.8, u * 1.8);
       ctx.fillStyle = '#20262b';

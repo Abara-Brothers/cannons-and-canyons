@@ -1301,7 +1301,7 @@ export function generateProps(seed, terrain, n = 2, biome = 'alpine') {
   const clearOf = (x, gap) => spawns.every(sx => Math.abs(x - sx) > gap) &&
                               props.every(p => Math.abs(x - p.x) > gap);
   let id = 1;
-  const barrels = 6 + Math.floor(rng() * 4);         // 6..9 — density kept as the map doubled
+  const barrels = 3 + Math.floor(rng() * 3);         // 3..5 — deliberately sparse; they read as hazards, not scenery
   for (let i = 0; i < barrels * 8 && props.filter(p => p.kind === 'barrel').length < barrels; i++) {
     const x = Math.round(2200 + rng() * (WORLD_W - 4400));
     if (!clearOf(x, 1100)) continue;
