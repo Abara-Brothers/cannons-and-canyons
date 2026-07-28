@@ -1137,11 +1137,16 @@ body.dd-open .hs-main { overflow: visible; }
 #dock.collapsed .drive,
 #dock.collapsed .fuel { visibility: hidden; }
 #dock.collapsed .control-rows .fire {
-  visibility: visible; position: absolute; top: 2px; right: 10px; z-index: 6;
-  height: calc(var(--dock-sliver) - 5px); min-height: 0; padding: 0 18px;
-  font-size: clamp(11px, calc(1.8 * var(--vhu)), 14px); align-self: auto;
+  /* Overhangs the sliver upward (like the collapse tab) instead of making the
+     dock taller — a proper 44px touch target without giving battlefield back. */
+  visibility: visible; position: absolute; top: -18px; right: 10px; z-index: 6;
+  height: 44px; min-height: 0; padding: 0 clamp(16px, calc(3 * var(--vwu)), 26px);
+  min-width: clamp(112px, calc(17 * var(--vwu)), 150px);
+  font-size: clamp(13px, calc(2.3 * var(--vhu)), 17px); align-self: auto;
+  border-radius: 13px; box-shadow: 0 6px 18px rgba(255, 90, 60, .4);
   display: flex; align-items: center; justify-content: center; gap: 4px;
 }
+#dock.collapsed .control-rows .fire .fire-ic { width: 1.15em; height: 1.15em; }
 
 /* ---- Watching: fade the HUD down while the shot flies / on the other turn ---
    Purely visual — the controls KEEP pointer-events so you can still zoom and
