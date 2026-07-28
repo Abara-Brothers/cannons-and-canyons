@@ -281,16 +281,21 @@ export const WEAPONS = [
     // speedMul rides the combat power trims in the OPPOSITE direction so golf
     // ballistics never move: 52 × 1.0038 ≈ the original 58 × 0.9 launch speed.
     shots: 1, spread: 0,  speedMul: 1.0038, damage: 0, radius: 0, terrain: 'none',
-    bounce: { rest: 0.45, fric: 0.72, rr: 0.25 },    // bites on the pitch mark, rolls a touch longer
+    // Flat-ground roll-out retuned 2026-07-29 (Jordan: 'doesn't roll for long
+    // enough on flat ground'): each bounce keeps more tangential speed (fric)
+    // and the roll itself bleeds slower (rr). Measured on dead-flat turf the
+    // release is 1.4-1.7x the old distance (Iron 1.45x, Driver 1.7x, Putter
+    // 1.55x); a full-send Driver rests in ~49s sim, inside the 60s golf maxT.
+    bounce: { rest: 0.45, fric: 0.80, rr: 0.16 },    // bites on the pitch mark, then releases
     desc: 'The honest mid-game club. Flies true, bites on landing.' },
   { id: 'driver',    name: 'Driver',          color: '#ffd23f', ammo: 99, golfOnly: true,
     shots: 1, spread: 0,  speedMul: 1.25, damage: 0, radius: 0, terrain: 'none',
-    bounce: { rest: 0.50, fric: 0.80, rr: 0.135 },   // longest carry AND the longest roll-out
+    bounce: { rest: 0.50, fric: 0.86, rr: 0.085 },   // longest carry AND the longest roll-out
     desc: 'Off the tee: maximum carry, and it runs forever on the fairway.' },
   { id: 'putter',    name: 'Putter',          color: '#8affde', ammo: 99, golfOnly: true,
     shots: 1, spread: 0,  speedMul: 0.20, damage: 0, radius: 0, terrain: 'none',
     ground: true,                                     // struck along the turf — the ball NEVER lofts
-    bounce: { rest: 0.2, fric: 0.9, rr: 0.10 },      // true roll: full power ≈ a 6,000u lag putt
+    bounce: { rest: 0.2, fric: 0.9, rr: 0.065 },     // true roll: full power ≈ a 9,000u lag putt
     desc: 'No loft, no drama. Rolls exactly as far as you dare.' },
 ];
 

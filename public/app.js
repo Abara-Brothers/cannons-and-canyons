@@ -47,7 +47,7 @@ const S = {
   bossCharge: null,                    // WARLORD wind-up between its aim and its shot
   muzzle: [],                          // directional HD muzzle blasts (own render pass)
   plane: null,                         // Air Strike delivery aircraft (cosmetic, own render pass)
-  charging: false, pullPointer: null,
+  charging: false, pullPointer: null, pullAnchor: null,
   userZoom: 1, panY: 0, panX: 0,
   recoil: [0, 0],                      // barrel kick when firing (1 → 0)
   lean: [0, 0], leanV: [0, 0], leanTarget: [0, 0], moveAt: [0, 0],  // drive lean + settle rock
@@ -346,6 +346,9 @@ function fullZoom() { return view.cssW / WW(); }
 // no top/bottom edge either. Both tanks (near x=900 / WW-900) stay on screen.
 function minMapZoom() { return view.cssW / WW(); }
 const clampUserZoom = (z) => Math.max(0.25, Math.min(6, Number.isFinite(z) ? z : 1));
+// A fresh match opens WIDER than the fit-all baseline (userZoom 1) — you read
+// the whole battlefield first and pinch in when you want the detail.
+const START_ZOOM = 0.62;
 const finite = (v, fb) => (Number.isFinite(v) ? v : fb);
 
 // Aim zoom baseline. COMBAT: fit every tank still fighting (plus margin) — on
@@ -597,18 +600,16 @@ function paintDockTab() {
   updateDockMini();          // populate the sliver the moment it appears
 }
 $('dockTab').onclick = () => {
-  const shut = $('dock').classList.contains('collapsed');
-  setDockCollapsed(!shut, true);
-  try { localStorage.setItem('cc_dock', shut ? 'open' : 'shut'); } catch {}
+  setDockCollapsed(!$('dock').classList.contains('collapsed'), true);
 };
-// Restore the player's choice: it survives turns, matches and reloads.
-function applySavedDock() {
-  let want = 'open';
-  try { want = localStorage.getItem('cc_dock') || 'open'; } catch {}
-  const shut = want === 'shut';
-  // The slide is measured off the OPEN dock, so wait for a laid-out one.
-  if (shut && !dockSlidePx()) { requestAnimationFrame(applySavedDock); return; }
-  setDockCollapsed(shut, false);
+// Every match opens with the controls tucked away (Jordan: 'appear hidden
+// first, then allow the player to toggle them back up') — the battlefield gets
+// the whole screen, the sliver keeps FIRE + the live aim readout, and the
+// labelled tab invites the rest up. The slide is measured off the OPEN dock,
+// so wait for a laid-out one before shutting it.
+function startDockCollapsed() {
+  if (!dockSlidePx()) { requestAnimationFrame(startDockCollapsed); return; }
+  setDockCollapsed(true, false);
 }
 // A re-measure while open keeps the slide honest after any layout change.
 window.addEventListener('resize', () => {
@@ -1259,7 +1260,7 @@ function applySnapshot(m) {
   S.mush = null;                       // a nuke cloud must never survive into the next match
   S.chainQueue = [];
   S.recoil = [0, 0];
-  S.charging = false; S.pullPointer = null; S.userZoom = 1; S.panY = 0; S.panX = 0;
+  S.charging = false; S.pullPointer = null; S.pullAnchor = null; S.userZoom = START_ZOOM; S.panY = 0; S.panX = 0;
   computeMinY();
   $('overlay').classList.add('hidden');
   showScreen('game');
@@ -1269,7 +1270,7 @@ function applySnapshot(m) {
   buildScoreboard();
   updateHud(); updateAimUI(); updateFuel(); updateDock();
   closeStageMenus();      // camera + meta always start collapsed
-  applySavedDock();       // ...but the dock remembers how you left it
+  startDockCollapsed();   // ...and so does the dock — the tab brings it up
 }
 
 // The server hands the turn over on ITS clock — usually while this client is
@@ -1624,15 +1625,19 @@ document.querySelectorAll('.mini').forEach(btn => {
 });
 
 // Drag-to-charge aiming (single pointer). Two pointers = pinch zoom.
-function maxPull() { return Math.min(view.cssW, view.cssH) * 0.55; }
-function aimFromPointer(sx, sy) {
-  const tank = S.tanks[S.you];
-  const ax = wx2s(tank.x), ay = wy2s(surfaceAt(tank.x) - 24);
-  const dx = sx - ax, dy = sy - ay;
+// The drag is RELATIVE: wherever the finger lands is the anchor, and the pull
+// away from it sets angle + power — your hand never has to cover your own tank
+// (Jordan: 'when aiming my finger is in the way... power/angle anywhere on the
+// screen'). maxPull was 0.55 of the short side; 0.85 asks ~55% more finger
+// travel for the same power ('the power on the finger control is too
+// sensitive'), and the anchor-anywhere gesture is what makes the longer pull
+// practical — you pick a corner with room.
+function maxPull() { return Math.min(view.cssW, view.cssH) * 0.85; }
+const AIM_DEADZONE = 6;              // px of travel before a touch counts as a drag
+function aimFromVector(dx, dy) {
   const dir = facingOf(S.you);
   const raw = Math.atan2(-dy, dx * dir) * 180 / Math.PI;
   const power = (Math.hypot(dx, dy) / maxPull()) * 100;
-  S.pullPointer = { sx, sy };
   setAim(raw, power);
 }
 // Pointer offset → draw-space coords. Draw space is CSS pixels (view.cssW ==
@@ -1643,14 +1648,17 @@ canvas.addEventListener('pointerdown', (e) => {
   pointers.set(e.pointerId, { x: evX(e), y: evY(e) });
   canvas.setPointerCapture(e.pointerId);
   if (pointers.size === 2) {
-    S.charging = false; S.pullPointer = null;
+    S.charging = false; S.pullPointer = null; S.pullAnchor = null;
     const [a, b] = [...pointers.values()];
     pinchStart = { d: Math.hypot(a.x - b.x, a.y - b.y), zoom: S.userZoom, cy: (a.y + b.y) / 2, panY: S.panY || 0, cx: (a.x + b.x) / 2, panX: S.panX || 0 };
     return;
   }
   if (!canAim()) return;
+  // Anchor only — the aim does not move until the finger does, so a plain tap
+  // can never wipe a dialled-in angle/power.
   S.charging = true;
-  aimFromPointer(evX(e), evY(e));
+  S.pullAnchor = { x: evX(e), y: evY(e) };
+  S.pullPointer = { sx: evX(e), sy: evY(e) };
 });
 canvas.addEventListener('pointermove', (e) => {
   if (!pointers.has(e.pointerId)) return;
@@ -1666,12 +1674,17 @@ canvas.addEventListener('pointermove', (e) => {
     if (cam.zoom > 0) S.panX = Math.max(-WW(), Math.min(WW(), pinchStart.panX - dcx / cam.zoom));
     return;
   }
-  if (S.charging && canAim()) aimFromPointer(evX(e), evY(e));
+  if (S.charging && S.pullAnchor && canAim()) {
+    const x = evX(e), y = evY(e);
+    S.pullPointer = { sx: x, sy: y };
+    const dx = x - S.pullAnchor.x, dy = y - S.pullAnchor.y;
+    if (Math.hypot(dx, dy) > AIM_DEADZONE) aimFromVector(dx, dy);
+  }
 });
 const endPointer = (e) => {
   pointers.delete(e.pointerId);
   if (pointers.size < 2) pinchStart = null;
-  if (pointers.size === 0) { S.charging = false; S.pullPointer = null; }
+  if (pointers.size === 0) { S.charging = false; S.pullPointer = null; S.pullAnchor = null; }
 };
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
@@ -1700,7 +1713,7 @@ $('fireBtn').onclick = () => {
   const a = myAim();
   sendMsg({ type: 'fire', weapon: S.selected, angle: a.angle, power: a.power });
   if (navigator.vibrate) navigator.vibrate(30);
-  S.charging = false; S.pullPointer = null;
+  S.charging = false; S.pullPointer = null; S.pullAnchor = null;
   updateDock();
 };
 // The cap's drop-and-settle has to outlive the pointer, so it cannot ride
@@ -2906,15 +2919,13 @@ const HELP_WEAPONS = [
 let helpBuilt = false;
 function buildHelp() {
   if (helpBuilt) return; helpBuilt = true;
+  // One self-contained row per round: icon, name, ammo note, what it does, and
+  // its flight-shape badge. Nothing is hidden behind a tap (the old grid made
+  // you press every cell to read a one-line detail below it).
   $('helpWeapons').innerHTML = HELP_WEAPONS.map(w =>
-    `<button type="button" class="hw-cell" data-wid="${w.id}" title="${w.desc}">` +
-    `${ICONS[w.id] || ''}<span class="hw-nm">${w.name}</span>${TRAJ[w.id] || ''}</button>`).join('');
-  $('helpWeapons').addEventListener('click', (e) => {
-    const cell = e.target.closest('.hw-cell'); if (!cell) return;
-    const w = HELP_WEAPONS.find(x => x.id === cell.dataset.wid);
-    if (w) $('hwDetail').textContent = `${w.name} (${w.note}) — ${w.desc}`;
-    for (const el of $('helpWeapons').children) el.classList.toggle('sel', el === cell);
-  });
+    `<div class="hw-row">${ICONS[w.id] || ''}` +
+    `<div class="hw-txt"><div class="hw-top"><b class="hw-nm">${w.name}</b><i class="hw-note">${w.note}</i></div>` +
+    `<p class="hw-desc">${w.desc}</p></div>${TRAJ[w.id] || ''}</div>`).join('');
   $('helpTabs').addEventListener('click', (e) => {
     const t = e.target.closest('.tab'); if (!t) return;
     for (const el of $('helpTabs').children) el.classList.toggle('active', el === t);
@@ -4687,9 +4698,9 @@ function drawAim() {
     if (selW.ground) {
       // PUTTER: the ball never lofts, so an arc would be a lie. Show a dotted
       // pace line hugging the turf — its length is the true flat-ground roll
-      // (v^2 / 2·rr·g, rr 0.10 mirrors game-core), first 60% shown.
+      // (v^2 / 2·rr·g, rr 0.065 mirrors game-core's putter), first 60% shown.
       const v = aim.power * 52 * (selW.speedMul || 1);
-      const roll = (v * v) / (2 * 0.10 * 900);
+      const roll = (v * v) / (2 * 0.065 * 900);
       const pdir = dir * (Math.cos(rad) < 0 ? -1 : 1);   // aim past 90° = putt backwards
       for (let i = 1; i <= 22; i++) {
         const f = (i / 22) * 0.6;
@@ -4770,6 +4781,21 @@ function drawAim() {
     ctx.textAlign = 'center';
     ctx.fillText(`${Math.round(aim.power)}%`, sx, sy - 26);
     ctx.textAlign = 'left';
+  }
+  // The relative drag, made visible: a faint tether from where the finger
+  // landed (cross) to where it is now. Reads which way you are pulling and how
+  // far while your hand stays clear of the tank and the arc.
+  if (S.charging && S.pullAnchor && S.pullPointer) {
+    const ax2 = S.pullAnchor.x, ay2 = S.pullAnchor.y;
+    ctx.strokeStyle = 'rgba(159,216,255,.38)'; ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 6]);
+    ctx.beginPath(); ctx.moveTo(ax2, ay2); ctx.lineTo(S.pullPointer.sx, S.pullPointer.sy); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.strokeStyle = 'rgba(159,216,255,.75)'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(ax2 - 7, ay2); ctx.lineTo(ax2 + 7, ay2);
+    ctx.moveTo(ax2, ay2 - 7); ctx.lineTo(ax2, ay2 + 7);
+    ctx.stroke();
   }
   ctx.restore();
 }
@@ -5087,9 +5113,17 @@ function ordnanceKind(A, pr) {
   if (w === 'driver' || w === 'putter') return 'golfball';   // every club strikes the same ball
   return ORD[w] ? w : 'cannon';          // cannon is the sensible default round
 }
-const ORD_SCALE = { nuke: 1.30, mortar: 1.12, buster: 1.10, bomb: 0.92, firebomb: 0.85, bomblet: 0.72,
-                    spore: 0.70, podshell: 1.05,
-                    bossslug: 0.85, bossmissile: 1.15, magmashell: 1.05, magmagob: 0.8, phasespear: 1.25, quakehammer: 1.35 };
+// R0 above took the full 50% cut for every fat payload round (mortar, nuke,
+// buster, the airstrike stick...). The entries below re-inflate ONLY what must
+// stay readable at the smaller base: fragments that would go sub-pixel
+// (bomblet/spore/firebomb/magmagob), thin streaks whose identity is their
+// length (railgun/minigun/lance/plasma/bossslug), the strike beacon you have
+// to be able to track, and the golf ball — which nets out UNCHANGED (x2 on the
+// halved base) because in golf the ball IS the game.
+const ORD_SCALE = { nuke: 1.30, mortar: 1.12, buster: 1.10, bomb: 0.92, firebomb: 1.2, bomblet: 1.0,
+                    spore: 1.0, podshell: 1.05,
+                    golfball: 2.0, minigun: 1.6, railgun: 1.4, beacon: 1.3, plasma: 1.2, lance: 1.3,
+                    bossslug: 1.2, bossmissile: 1.15, magmashell: 1.05, magmagob: 1.1, phasespear: 1.25, quakehammer: 1.35 };
 const ORD_SPIN  = { bomblet: 0.16, firebomb: 0.10, wall: 0.07,
                     spore: 0.12,
                     magmagob: 0.15 };   // radians per path point
@@ -5128,7 +5162,10 @@ function drawProjectiles() {
   const trail = ORD_TRAIL[wid] || 'rgba(255,220,150,.5)';
   // Fixed screen size (the camera spans a 12x zoom range — a world-scaled round
   // would vanish when zoomed out). Same clamping idea as tankScreen's radius.
-  const R0 = 9;                                                  // shells: one size at every zoom
+  // HALVED 2026-07-29 (Jordan: 'payloads are too big... at least 50% smaller'):
+  // at the fit-all battle frame the tank draws ~14px wide, and a 9px-R mortar
+  // read nearly tank-sized in flight.
+  const R0 = 4.5;                                                // shells: one size at every zoom
   for (const pr of A.projectiles) {
     if (A.elapsed - pr.delay < pr.from) continue;
     if (pr.done && pr.exploded) continue;

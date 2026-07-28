@@ -127,6 +127,20 @@ input:focus { outline: 2px solid var(--accent); border-color: transparent; }
 }
 .spinner { width: 30px; height: 30px; border: 3px solid var(--line); border-top-color: var(--primary); border-radius: 50%; margin: 8px auto 0; animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+/* Lobby composition: slim brand/status head, then invite | roster+actions.
+   Tall screens stack the two; the landscape block further down puts them side
+   by side so the whole waiting room fits a phone with ZERO scrolling. */
+.lobby-card { gap: 10px; }
+.lb-head { display: flex; flex-direction: column; gap: 8px; align-items: center; }
+.lb-status { display: flex; align-items: center; justify-content: center; gap: 10px; min-width: 0; }
+.lb-status .spinner { margin: 0; flex: 0 0 auto; width: 20px; height: 20px; border-width: 3px; }
+.lb-status h2 { margin: 0; font-size: 18px; }
+.lb-grid { display: flex; flex-direction: column; gap: 12px; }
+.lb-invite { display: flex; flex-direction: column; gap: 10px; }
+.lb-invite .muted { margin: 0; }
+.lb-btnrow { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.lb-side { display: flex; flex-direction: column; gap: 8px; }
+.lb-side .roster:empty { display: none; }
 
 /* ==========================================================================
    TITLE SCREEN
@@ -600,12 +614,37 @@ body.golf .golf-only { display: flex; }
 /* ==========================================================================
    TITLE SCREEN — LANDSCAPE (lobby only; the home dashboard sizes itself with
    vh-clamps further down and never scrolls)
+   The lobby goes two-column here — invite beside roster/actions — and every
+   size rides --vhu so the card NEVER outgrows a 375px-tall phone. Budgeted at
+   375: head ~26 + grid ~230 (worst case: 4-seat FFA roster + 3 buttons) +
+   paddings ≈ 300px. #lobby keeps overflow-y:auto purely as a safety net.
    ========================================================================== */
 @media (orientation: landscape) and (max-height: 600px), (orientation: portrait) and (max-width: 600px) {
   #lobby {
-    padding-top: max(10px, env(safe-area-inset-top));
-    padding-bottom: max(10px, env(safe-area-inset-bottom));
+    padding: max(8px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right))
+             max(8px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
   }
+  .home-card.lobby-card {
+    max-width: min(calc(94 * var(--vwu)), 720px);
+    padding: calc(2.2 * var(--vhu)) calc(2.4 * var(--vwu));
+    gap: calc(1.8 * var(--vhu));
+  }
+  .lb-head { flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; }
+  .lb-brand { text-align: left; }
+  .lb-brand .logo.small { font-size: clamp(13px, calc(4 * var(--vhu)), 17px); }
+  .lb-brand .byline { font-size: clamp(7.5px, calc(2.2 * var(--vhu)), 10px); }
+  .lb-status h2 { font-size: clamp(13px, calc(3.8 * var(--vhu)), 17px); white-space: nowrap; }
+  .lb-status .spinner { width: 17px; height: 17px; }
+  .lb-grid { display: grid; grid-template-columns: 1.1fr 1fr; gap: calc(2.6 * var(--vwu)); align-items: start; }
+  .lb-invite { gap: calc(1.6 * var(--vhu)); }
+  #lobbyHint { font-size: clamp(10px, calc(2.6 * var(--vhu)), 12.5px); }
+  #lobby .code-display {
+    font-size: clamp(24px, calc(9 * var(--vhu)), 40px);
+    padding: calc(1.6 * var(--vhu)) 10px; padding-left: calc(10px + .3em);
+  }
+  .lobby-card .btn { padding: calc(1.8 * var(--vhu)) 10px; font-size: clamp(11px, calc(2.8 * var(--vhu)), 13.5px); }
+  .lobby-card .btn.big { padding: calc(2.1 * var(--vhu)) 12px; font-size: clamp(12px, calc(3 * var(--vhu)), 15px); }
+  .lobby-card .rp { padding: calc(1.3 * var(--vhu)) 10px; font-size: clamp(11px, calc(2.7 * var(--vhu)), 13px); }
 }
 
 /* ---------- Artillery Golf ---------- */
@@ -863,27 +902,63 @@ body.golf .fuel { display: none; }
 .tabpane.active { display: block; }
 
 /* Basics: three teaching diagrams */
-.hd-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(5px, calc(1 * var(--vwu)), 10px); margin-bottom: clamp(6px, calc(1.4 * var(--vhu)), 12px); }
-.hd-fig { margin: 0; background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: clamp(4px, calc(1 * var(--vhu)), 8px); }
-.hd-fig svg { width: 100%; max-width: 160px; height: auto; margin: 0 auto; display: block; }
-.hd-fig figcaption { font-size: clamp(9px, calc(1.45 * var(--vhu)), 11px); line-height: 1.35; color: var(--muted); margin-top: 4px; text-align: left; }
-.hd-fig figcaption b { color: var(--text); }
-.hd-list { margin: 0; padding-left: 17px; text-align: left; }
-.hd-list li { font-size: clamp(11px, calc(1.7 * var(--vhu)), 13px); line-height: 1.45; color: var(--ink-dim, #c5cde0); margin-bottom: clamp(3px, calc(0.8 * var(--vhu)), 6px); }
+/* Basics: the three taught gestures as roomy cards, then glyph'd quick facts.
+   Every figure is hand-drawn inline SVG (house rule — no emojis, ever). */
+.hb-figs { display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(6px, calc(1.2 * var(--vwu)), 12px); margin-bottom: clamp(7px, calc(1.6 * var(--vhu)), 14px); }
+.hb-fig { margin: 0; background: var(--panel-2); border: 1px solid var(--line); border-radius: 13px; padding: clamp(6px, calc(1.3 * var(--vhu)), 10px); }
+.hb-fig svg { width: 100%; max-width: 190px; height: auto; margin: 0 auto; display: block; }
+.hb-fig figcaption { margin-top: clamp(4px, calc(1 * var(--vhu)), 8px); text-align: left; }
+.hb-fig figcaption b { display: block; color: var(--text); font-size: clamp(11px, calc(1.8 * var(--vhu)), 13.5px); margin-bottom: 2px; }
+.hb-fig figcaption span { display: block; font-size: clamp(9.5px, calc(1.5 * var(--vhu)), 11.5px); line-height: 1.4; color: var(--muted); }
+.hb-facts { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(5px, calc(1 * var(--vwu)), 9px); }
+.hb-fact {
+  display: flex; gap: 9px; align-items: flex-start; text-align: left;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 11px;
+  padding: clamp(6px, calc(1.3 * var(--vhu)), 9px) clamp(8px, calc(1.6 * var(--vwu)), 11px);
+}
+.hb-fact > svg { width: clamp(18px, calc(3 * var(--vhu)), 22px); height: clamp(18px, calc(3 * var(--vhu)), 22px); flex: 0 0 auto; color: var(--accent); margin-top: 1px; }
+.hb-fact b { display: block; font-size: clamp(10.5px, calc(1.7 * var(--vhu)), 12.5px); margin-bottom: 1px; }
+.hb-fact span { display: block; font-size: clamp(9.5px, calc(1.5 * var(--vhu)), 11px); line-height: 1.4; color: var(--muted); }
 
 /* Arsenal: compact cells + one live detail line */
-.hw-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: clamp(3px, calc(0.8 * var(--vhu)), 6px); }
-.hw-cell {
-  display: flex; flex-direction: column; align-items: center; gap: 2px;
-  border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
-  border-radius: 9px; padding: clamp(3px, calc(0.9 * var(--vhu)), 7px) 2px; cursor: pointer;
+/* Arsenal: one self-explaining row per round — icon | name + ammo + what it
+   does | flight-shape badge. The pane scrolls; nothing hides behind a tap. */
+.hw-lead { margin: 0 0 clamp(5px, calc(1.2 * var(--vhu)), 9px); font-size: clamp(10px, calc(1.6 * var(--vhu)), 12px); color: var(--muted); text-align: left; }
+.hw-list { display: flex; flex-direction: column; gap: clamp(4px, calc(0.9 * var(--vhu)), 6px); }
+.hw-row {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: clamp(8px, calc(1.6 * var(--vwu)), 12px);
+  align-items: center; text-align: left;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 11px;
+  padding: clamp(5px, calc(1.2 * var(--vhu)), 8px) clamp(8px, calc(1.6 * var(--vwu)), 12px);
 }
-.hw-cell svg:first-of-type { width: clamp(16px, calc(2.6 * var(--vhu)), 20px); height: clamp(16px, calc(2.6 * var(--vhu)), 20px); }
-.hw-cell svg:last-of-type { width: clamp(20px, calc(3.2 * var(--vhu)), 26px); height: clamp(12px, calc(1.9 * var(--vhu)), 15px); }
-.hw-nm { font-size: clamp(9px, calc(1.45 * var(--vhu)), 11px); font-weight: 700; }
-.hw-cell.sel { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
-.hw-detail { margin: clamp(5px, calc(1.2 * var(--vhu)), 10px) 0 0; font-size: clamp(11px, calc(1.7 * var(--vhu)), 13px); color: var(--ink-dim, #c5cde0); text-align: left; min-height: 2.6em; }
-.hd-modes li { margin-bottom: clamp(4px, calc(1 * var(--vhu)), 8px); }
+.hw-row > svg:first-child { width: clamp(22px, calc(3.6 * var(--vhu)), 27px); height: clamp(22px, calc(3.6 * var(--vhu)), 27px); }
+.hw-row > svg:last-child { width: clamp(26px, calc(4.2 * var(--vhu)), 32px); height: clamp(15px, calc(2.5 * var(--vhu)), 19px); opacity: .9; }
+.hw-top { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.hw-nm { font-size: clamp(11px, calc(1.8 * var(--vhu)), 13.5px); font-weight: 800; white-space: nowrap; }
+.hw-note {
+  font-style: normal; font-size: clamp(8.5px, calc(1.35 * var(--vhu)), 10px); font-weight: 800;
+  letter-spacing: .06em; text-transform: uppercase; color: var(--accent); white-space: nowrap;
+}
+.hw-desc { margin: 1px 0 0; font-size: clamp(9.5px, calc(1.5 * var(--vhu)), 11.5px); line-height: 1.35; color: var(--muted); }
+/* Modes: a card per mode — the home screen's own icon, a player-count chip,
+   and the goal in one line you can actually skim. */
+.hm-cards { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(5px, calc(1 * var(--vwu)), 9px); }
+.hm-cards .hm-card:first-child { grid-column: 1 / -1; }
+.hm-card {
+  display: flex; gap: 10px; align-items: flex-start; text-align: left;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px;
+  padding: clamp(7px, calc(1.4 * var(--vhu)), 10px) clamp(9px, calc(1.8 * var(--vwu)), 12px);
+}
+.hm-card > svg { width: clamp(20px, calc(3.3 * var(--vhu)), 24px); height: clamp(20px, calc(3.3 * var(--vhu)), 24px); flex: 0 0 auto; color: var(--accent); margin-top: 1px; }
+.hm-top { display: flex; align-items: baseline; gap: 8px; }
+.hm-top b { font-size: clamp(11.5px, calc(1.9 * var(--vhu)), 14px); }
+.hm-top i {
+  font-style: normal; font-size: clamp(8.5px, calc(1.35 * var(--vhu)), 10px); font-weight: 800;
+  letter-spacing: .07em; text-transform: uppercase; color: var(--accent);
+  background: rgba(84,200,255,.1); border: 1px solid rgba(84,200,255,.35); border-radius: 999px;
+  padding: 1px 7px; white-space: nowrap;
+}
+.hm-txt span { display: block; margin-top: 2px; font-size: clamp(9.5px, calc(1.5 * var(--vhu)), 11.5px); line-height: 1.4; color: var(--muted); }
 
 /* Career */
 .career-wrap { margin: 6px 0 12px; min-height: 0; }
@@ -1089,18 +1164,35 @@ body.dd-open .hs-main { overflow: visible; }
 #dock { --dock-sliver: 28px; }
 #dock.dock-anim { transition: transform .18s ease; will-change: transform; }
 #dock.collapsed { margin-bottom: calc(-1 * var(--dock-slide, 0px)); }
-/* The tab rides the dock's top edge, so it is grabbable in either state. */
+/* The tab rides the dock's top edge, so it is grabbable in either state.
+   OPEN it is a quiet chevron pill; COLLAPSED it grows a CONTROLS label, takes
+   the accent colour and beckons twice — the controls start hidden every match,
+   so this tab is how a new player discovers them (Jordan: 'make the toggle
+   more obvious'). */
 .dock-tab {
-  position: absolute; top: -17px; left: 50%; transform: translateX(-50%);
-  width: 62px; height: 20px; padding: 0; z-index: 6; cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
+  position: absolute; top: -19px; left: 50%; transform: translateX(-50%);
+  min-width: 62px; height: 22px; padding: 0 10px; z-index: 6; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
   border: 1px solid var(--line); border-bottom: 0;
-  border-radius: 10px 10px 0 0; background: rgba(10,14,30,.86);
+  border-radius: 11px 11px 0 0; background: rgba(10,14,30,.86);
   color: var(--muted); backdrop-filter: blur(6px);
+  font: 800 10px/1 system-ui, -apple-system, sans-serif; letter-spacing: .14em;
 }
-.dock-tab svg { width: 17px; height: 17px; transition: transform .18s ease; }
+.dock-tab svg { width: 17px; height: 17px; flex: 0 0 auto; transition: transform .18s ease; }
 #dock.collapsed .dock-tab svg { transform: rotate(180deg); }   /* chevron follows the state */
+.dock-tab .dt-label { display: none; }
+#dock.collapsed .dock-tab {
+  height: 26px; top: -25px; padding: 0 14px;
+  color: #0a1020; background: var(--accent); border-color: var(--accent);
+  animation: dtBeckon 2s ease-in-out 2;
+}
+#dock.collapsed .dock-tab .dt-label { display: inline; }
+@keyframes dtBeckon {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(84,200,255,0); }
+  50%      { box-shadow: 0 0 16px 3px rgba(84,200,255,.6); }
+}
 .dock-tab:active { color: var(--text); }
+#dock.collapsed .dock-tab:active { color: #0a1020; filter: brightness(1.12); }
 /* Sliver contents: hidden while open, and the ONLY things on show when shut. */
 .dock-mini { display: none; }
 #dock.collapsed .dock-mini {
