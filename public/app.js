@@ -62,22 +62,34 @@ const SEAT_SKIN = ['olive', 'desert', 'jungle', 'midnight'];
 const facingOf = (i) => (S.facing && S.facing[i] === -1 ? -1 : 1);
 
 // ---------------------------------------------------------------------------
-// Tank paints (cosmetics). Locked ones are part of the Supporter Pack.
+// Tank paints (cosmetics). Every locked paint is EARNED IN THE GAME — nothing
+// here is for sale and there is no shop. Midnight drops from the WARLORD; the
+// other two ride on achievements (see ACHS), so `how` doubles as the tooltip
+// and the toast: a player should never see a lock without being told the job.
 // ---------------------------------------------------------------------------
 const SKINS = {
   olive:    { name: 'Olive',    lite: '#8a9a6d', mid: '#5d7050', dark: '#38452f' },
   desert:   { name: 'Desert',   lite: '#c2ad85', mid: '#94805d', dark: '#5c4f39' },
   jungle:   { name: 'Jungle',   lite: '#7fae62', mid: '#4e7a40', dark: '#2f4d28' },
-  midnight: { name: 'Midnight', lite: '#7d8bb0', mid: '#4a5a86', dark: '#2c3a5e', locked: true },
-  arctic:   { name: 'Arctic',   lite: '#dfe8ee', mid: '#a9bcc9', dark: '#7c93a3', locked: true },
-  gold:     { name: 'Gold',     lite: '#e8cf7a', mid: '#c0a23f', dark: '#8a7020', locked: true },
+  midnight: { name: 'Midnight', lite: '#7d8bb0', mid: '#4a5a86', dark: '#2c3a5e', locked: true,
+              how: 'Defeat the WARLORD in a Boss Fight' },
+  arctic:   { name: 'Arctic',   lite: '#dfe8ee', mid: '#a9bcc9', dark: '#7c93a3', locked: true,
+              ach: 'untouchable', how: 'Win a battle without taking any damage' },
+  gold:     { name: 'Gold',     lite: '#e8cf7a', mid: '#c0a23f', dark: '#8a7020', locked: true,
+              ach: 'underpar', how: 'Finish the 9 golf holes under par' },
 };
-// Locked paints can be EARNED: Midnight drops from the WARLORD.
+// Reverse index: which paint (if any) an achievement hands over. The Career
+// screen reads this so the reward is visible BEFORE you earn it.
+const SKIN_FOR_ACH = Object.fromEntries(
+  Object.entries(SKINS).filter(([, sk]) => sk.ach).map(([id, sk]) => [sk.ach, sk.name]));
 function skinUnlocked(id) {
   const sk = SKINS[id];
   if (!sk) return false;
   if (!sk.locked) return true;
-  try { if (id === 'midnight' && localStorage.getItem('cc_loot_midnight') === '1') return true; } catch {}
+  try {
+    if (id === 'midnight') return localStorage.getItem('cc_loot_midnight') === '1';
+    if (sk.ach) return !!PROF.ach[sk.ach];
+  } catch {}
   return false;
 }
 function mySkin() {
@@ -92,10 +104,10 @@ function buildSkinRow() {
     b.className = 'swatch' + (mySkin() === id ? ' sel' : '');
     b.style.background = `linear-gradient(180deg, ${sk.lite}, ${sk.dark})`;
     const open = skinUnlocked(id);
-    b.title = sk.name + (open ? '' : (id === 'midnight' ? ' — defeat the WARLORD to unlock' : ' — Supporter Pack'));
+    b.title = sk.name + (open ? '' : ` — ${sk.how} to unlock`);
     if (!open) b.innerHTML = `<span class="lock">${UI_IC.lock}</span>`;
     b.onclick = () => {
-      if (!open) { showToast(id === 'midnight' ? 'Defeat the WARLORD in a Boss Fight to unlock this.' : 'Supporter Pack paint — see the shop soon!'); return; }
+      if (!open) { showToast(`LOCKED — ${sk.how} to unlock this paint.`); return; }
       localStorage.setItem('cc_skin', id);
       buildSkinRow();
     };
@@ -2985,12 +2997,15 @@ function buildCareer() {
     `<div class="cs-row"><span>Best golf round</span><b>${PROF.golfBest != null ? PROF.golfBest + ' strokes' : '—'}</b></div>` +
     `<div class="cs-row"><span>Holes in one</span><b>${PROF.aces || 0}</b></div>` +
     `<div class="cs-row"><span>Alien invasion kills, best run</span><b>${PROF.hordeBest.aliens || 0}</b></div>`;
-  // Every challenge SHOWS what it actually asks for — no hidden tooltips.
+  // Every challenge SHOWS what it actually asks for — no hidden tooltips. The
+  // two that hand over a tank paint say so up front, so the reward is a reason
+  // to go after them rather than a surprise afterwards.
   $('careerAchs').innerHTML = ACHS.map(([id, nm, desc]) => {
     const got = !!PROF.ach[id];
+    const paint = SKIN_FOR_ACH[id];
     return `<div class="ach${got ? ' got' : ''}">` +
       `<span class="ach-ic">${got ? UI_IC.crown : UI_IC.lock}</span>` +
-      `<span class="ach-txt"><b>${nm}</b><i>${desc}</i></span></div>`;
+      `<span class="ach-txt"><b>${nm}</b><i>${desc}${paint ? ` — unlocks the ${paint} paint` : ''}</i></span></div>`;
   }).join('');
 }
 $('careerBtn').onclick = () => { buildCareer(); $('careerModal').classList.remove('hidden'); };
