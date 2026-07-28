@@ -214,7 +214,9 @@ export const WEAPONS = [
     desc: 'Splashes burning fuel over a wide area — burns the ground black, never moves it.' },
   { id: 'gas',      name: 'Toxic Gas',     color: '#9dde4b', ammo: 2,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 5, radius: 660, terrain: 'none',
-    hazard: { type: 'gas', ms: 10000, bites: 5, dmg: 6, r: 900 },   // 6 every 2s for 10s, WIDE
+    hazard: { type: 'gas', ms: 10000, bites: 5, dmg: 6, r: 1400 },  // 6 every 2s for 10s, and it BLANKETS
+    // r drives both the damage test (burnTick) and the drawn cloud, so the
+    // area you can see is the area that poisons you.
     desc: 'No blast — a lingering cloud that poisons over time.' },
   { id: 'airstrike', name: 'Air Strike',   color: '#54c8ff', ammo: 2,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 0, radius: 0, terrain: 'none',

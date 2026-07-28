@@ -1129,7 +1129,7 @@ body.dd-open .hs-main { overflow: visible; }
    tab) so it costs no layout height. Only --fs and placement here — every
    dimension inside the object follows --fs on its own. */
 #dock.collapsed .control-rows .fire {
-  --fs: 72px;
+  --fs: 96px;
   visibility: visible; position: absolute; right: 6px; z-index: 6; align-self: auto;
   top: calc(var(--dock-sliver) - (0.708 * var(--fs)) - ((var(--fs) - (0.708 * var(--fs))) / 2) - 2px);
 }
@@ -1159,7 +1159,7 @@ body.dd-open .hs-main { overflow: visible; }
    here — an absolute travel punches through the cap wall once the button
    is smaller than the reference size. */
 .fire-btn {
-  --fs: min(clamp(88px, calc(15 * var(--vwu)), 120px), calc(17 * var(--vhu)));
+  --fs: min(clamp(104px, calc(18 * var(--vwu)), 132px), calc(21 * var(--vhu)));
   --u: calc(var(--fs) / 210);        /* 1u = 1px at the reference size    */
   --tr: calc(8 * var(--u));          /* cap travel — about half the wall  */
   --dur: .34s;
@@ -1291,9 +1291,9 @@ body.dd-open .hs-main { overflow: visible; }
    the 0.62 foreshortening is the whole illusion. Portrait twins phrased on the
    effective axes, per the rotation shim. --- */
 @media (orientation: landscape) and (max-height: 600px), (orientation: portrait) and (max-width: 600px) {
-  .fire-btn { --fs: 86px; }
+  .fire-btn { --fs: 104px; }
 }
 @media (orientation: landscape) and (max-width: 830px), (orientation: portrait) and (max-height: 830px) {
-  .fire-btn { --fs: 76px; }
+  .fire-btn { --fs: 92px; }
 }
 /* ===== end FIRE BUTTON ============================================== */

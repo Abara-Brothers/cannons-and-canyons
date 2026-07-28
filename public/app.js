@@ -2046,15 +2046,18 @@ function advanceAnim(dt) {
 }
 
 function detonate(det, beacon) {
-  // FIRST: this blast frees its own patch of the queued terrain change — the
-  // ground breaks where and WHEN each bomb lands.
+  // The Air Strike's target beacon is a SMOKE SIGNAL, not a warhead: it marks
+  // the spot for the plane and does nothing else. It must return BEFORE the
+  // terrain release below — the bombs land within ~560 units of it and the
+  // release radius is 700, so freeing terrain here collapsed the whole target
+  // area the moment the marker landed, long before a single bomb arrived.
+  if (beacon) { if (det && Number.isFinite(det.x)) markerSmoke(det); return; }
+  // This blast frees its own patch of the queued terrain change — the ground
+  // breaks where and WHEN each bomb lands.
   if (det && Number.isFinite(det.x)) {
     const relR = Math.max(700, (det.r || 0) * 1.3 + 200);
     releaseTerrainCols(det.x - relR, det.x + relR);
   }
-  // The Air Strike's target beacon lands with NO impact of its own — no puff,
-  // no ring, no sound. The stick of bombs that follows makes every impact.
-  if (beacon) return;
   // Teleport: no blast at all — the whole event IS the warp. Handled first so a
   // teleport det never falls into the round-particle burst-puff branch below.
   if (det.tp) { startWarp(det.tp); return; }
@@ -2152,6 +2155,29 @@ function detonate(det, beacon) {
   for (let i = 0; i < 6; i++) { // rising smoke
     S.particles.push({ x: det.x + (Math.random() - 0.5) * det.r, y: det.y, vx: (Math.random() - 0.5) * 120, vy: -160 - Math.random() * 200, life: 1.0 + Math.random() * 0.7, age: 0, r: 16 + Math.random() * (det.r / 9), g: 0.1, color: 'rgba(60,60,70,0.6)' });
   }
+}
+
+// The Air Strike marker: coloured smoke boiling off the ground where the
+// beacon struck, so the target reads for the whole run-in. Deliberately no
+// flash, no ring, no debris — nothing here is an impact.
+function markerSmoke(det) {
+  const gy = surfaceAt(det.x);
+  for (let i = 0; i < 16; i++) {
+    const t = i / 16;
+    S.particles.push({
+      x: det.x + (Math.random() - 0.5) * 180, y: gy - Math.random() * 60,
+      vx: (Math.random() - 0.5) * 90, vy: -150 - Math.random() * 190,
+      life: 1.5 + Math.random() * 1.1, age: 0, r: 12 + Math.random() * 16, g: 0.06,
+      color: t < 0.45 ? 'rgba(235,238,245,0.5)' : 'rgba(120,132,150,0.45)',
+    });
+  }
+  // a few bright motes so the marker catches the eye without reading as a blast
+  for (let i = 0; i < 7; i++) {
+    const a = -Math.PI / 2 + (Math.random() - 0.5) * 1.5, sp = 90 + Math.random() * 190;
+    S.particles.push({ x: det.x, y: gy - 12, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+      life: 0.5 + Math.random() * 0.4, age: 0, r: 1.9, g: 0.5, shape: 'spark', color: '#9fd8ff' });
+  }
+  Audio.boom(90);                       // a soft thud, not a detonation
 }
 
 function applyResolve(m) {
