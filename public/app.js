@@ -4249,8 +4249,12 @@ function drawProps() {
     if (sx < -80 || sx > view.cssW + 80) continue;
     if (p.kind === 'barrel') {
       const gy = wy2s(surfaceAt(p.x));
-      const u = 11;                                              // constant screen size
-      const hgt = u * 2.5;
+      // WORLD object: drawn at the exact footprint the physics uses
+      // (game-core SOLID_BOXES.barrel — half-width 230, height 580), so it holds
+      // its proportion against the terrain and tanks at every zoom AND the
+      // sprite you aim at is the box the shell actually hits.
+      const u = 230 * cam.zoom;                                  // half-width, screen px
+      const hgt = 580 * cam.zoom;
       ctx.fillStyle = '#b8352c';
       ctx.fillRect(sx - u, gy - hgt, u * 2, hgt);
       ctx.fillStyle = '#8f2019';                                  // shadow side
@@ -4264,13 +4268,14 @@ function drawProps() {
       ctx.beginPath(); ctx.moveTo(sx, cy2 - d); ctx.lineTo(sx + d, cy2); ctx.lineTo(sx, cy2 + d); ctx.lineTo(sx - d, cy2); ctx.closePath(); ctx.fill();
     } else if (p.kind === 'bunker') {
       const deckY = wy2s(p.deck);
-      const u = 10;                                              // constant screen size
-      // Parapet lip + casemate block with a firing slit. The lip is sized off
-      // `u` like the rest of the structure — it used to span the bunker's WORLD
-      // width (wx2s(p.x±p.w)), which is the one thing on the battlefield that
-      // still grew and shrank as you zoomed.
+      const x0 = wx2s(p.x - p.w), x1 = wx2s(p.x + p.w);
+      // WORLD object: the deck is CARVED into the terrain across ±p.w, so the
+      // whole structure is sized off that same world width. Everything then
+      // holds its proportion against the platform it stands on at every zoom.
+      const u = 0.25 * p.w * cam.zoom;
+      // Parapet lip along the deck edge + a casemate block with a firing slit.
       ctx.fillStyle = '#9aa4ac';
-      ctx.fillRect(sx - u * 3.1, deckY - u * 0.5, u * 6.2, u * 0.5);
+      ctx.fillRect(x0, deckY - u * 0.5, x1 - x0, u * 0.5);
       ctx.fillStyle = '#7b858d';
       ctx.fillRect(sx - u * 2.4, deckY - u * 2.2, u * 4.8, u * 1.8);
       ctx.fillStyle = '#20262b';
@@ -4301,7 +4306,9 @@ function drawCrates() {
     const wy = t >= 1 ? grounded : 300 + ease * (grounded - 300);
     const sx = wx2s(c.x), sy = wy2s(wy);
     if (sx < -90 || sx > view.cssW + 90) continue;
-    const u = 13;                                                // constant screen size
+    // WORLD object, like the barrels and bunkers: u*2.3 wide x u*2.1 tall works
+    // out to the 600x548 footprint game-core collides against.
+    const u = 261 * cam.zoom;
     if (t < 1) {                                                 // parachute canopy + lines
       const cw = u * 3.1, ch = u * 2.0, cy2 = sy - u * 2.1 - ch;
       ctx.fillStyle = '#e8e2d2';
