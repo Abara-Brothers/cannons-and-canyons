@@ -324,7 +324,22 @@
           <button class="drive" id="moveRight" aria-label="Drive right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></button>
         </div>
 
-        <button id="fireBtn" class="btn big fire">FIRE <svg class="fire-ic" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 22c-4 0-7-2.6-7-6.5C5 10 9 8.5 9 4c2.5 1.5 3.6 4 3.2 6.2C14 9 15 7.5 15 5.5c3 2.3 4 5.5 4 8 0 5-3 8.5-7 8.5z"/><path d="M12 22c-2 0-3.5-1.6-3.5-3.7 0-2.4 2-3.5 3.2-5.8 1.6 1.8 3.8 3.2 3.8 5.7S14 22 12 22z" fill="#ffd9a0"/></svg></button>
+        <!-- FIRE — H05 "Lit ring": a red cap sunk in a machined bezel behind a
+             backlit hazard band. Every layer is a positioned ellipse; the whole
+             object is driven by --fs (see styles.css). The label is part of the
+             object, so there is no icon here. -->
+        <button id="fireBtn" class="fire fire-btn" type="button" aria-label="Fire">
+          <i class="fb-floor"></i>
+          <i class="fb-bez-bot"></i><i class="fb-bez-wall"></i><i class="fb-bez-top"></i>
+          <i class="fb-band"><i></i></i>
+          <i class="fb-lip"></i>
+          <i class="fb-bore"></i><i class="fb-occ"></i><i class="fb-contact"></i>
+          <i class="fb-skirt"><i class="fb-disc"></i><i class="fb-wall"></i></i>
+          <i class="fb-cap">
+            <i class="fb-face"></i><i class="fb-sheen"></i><i class="fb-spec"></i><i class="fb-rim"></i>
+            <b class="fb-label">FIRE</b>
+          </i>
+        </button>
       </div>
     </footer>
 

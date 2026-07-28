@@ -544,6 +544,13 @@ function setDockCollapsed(on, animate) {
     d.classList.remove('dock-anim');
     d.style.transform = '';                     // margin alone holds the position
     d.classList.toggle('collapsed', !!on);
+    // Collapsing lifts FIRE out of the flow, so the dock's own height is not
+    // quite what it was when the slide was measured. Re-measure and correct, or
+    // the visible band drifts off the sliver by that difference.
+    if (on) {
+      const h = d.getBoundingClientRect().height;
+      if (h > DOCK_SLIVER) d.style.setProperty('--dock-slide', Math.round(h - DOCK_SLIVER) + 'px');
+    }
     paintDockTab();
   };
   if (!animate || !slide) { d.classList.remove('dock-anim'); d.style.transform = ''; land(); return; }
@@ -1684,6 +1691,24 @@ $('fireBtn').onclick = () => {
   S.charging = false; S.pullPointer = null;
   updateDock();
 };
+// The cap's drop-and-settle has to outlive the pointer, so it cannot ride
+// :active. Driven from pointerdown so it bites the instant you touch, and
+// cleared on animationend so a rapid second tap restarts it.
+{
+  const fireBtn = $('fireBtn');
+  const firePress = () => {
+    fireBtn.classList.remove('is-pressed');
+    void fireBtn.offsetWidth;                   // reflow, or a re-tap won't restart
+    fireBtn.classList.add('is-pressed');
+  };
+  fireBtn.addEventListener('pointerdown', () => { if (!fireBtn.disabled) firePress(); });
+  fireBtn.addEventListener('keydown', (e) => {
+    if ((e.key === ' ' || e.key === 'Enter') && !fireBtn.disabled) firePress();
+  });
+  fireBtn.addEventListener('animationend', (e) => {
+    if (e.animationName === 'fbDrop') fireBtn.classList.remove('is-pressed');
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Terrain collapse — destroyed ground crumbles instead of popping to its new

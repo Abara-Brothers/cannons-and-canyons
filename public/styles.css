@@ -50,7 +50,6 @@ body {
 .btn.big { width: 100%; padding: 15px; font-size: 17px; }
 .btn.primary { background: linear-gradient(180deg, var(--primary), var(--primary-2)); border-color: transparent; color: #240a00; }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
-.btn.fire { background: linear-gradient(180deg, #ff9a3d, #ff4d3d); border-color: transparent; color: #2a0800; font-size: 22px; letter-spacing: .04em; box-shadow: 0 8px 22px rgba(255,90,60,.35); }
 .btn:disabled { opacity: .4; cursor: not-allowed; filter: grayscale(.4); }
 
 .field { display: flex; flex-direction: column; gap: 6px; text-align: left; margin: 8px 0 4px; }
@@ -588,14 +587,6 @@ body.golf .golf-only { display: flex; }
   .drive { width: 54px; height: 40px; font-size: 18px; }
   .fuel { height: 22px; }
   .fuel span { font-size: 9px; }
-  /* Sits in an `auto` track, so it is as wide as its own label plus a floor that
-     scales with the screen — never a fixed 128px that the aim controls then have
-     to overflow the dock to accommodate. */
-  .btn.fire {
-    font-size: 16px; padding: 8px clamp(10px, calc(2.2 * var(--vwu)), 20px); width: auto;
-    min-width: clamp(84px, calc(14 * var(--vwu)), 128px);
-    display: flex; align-items: center; justify-content: center; gap: 2px; white-space: nowrap;
-  }
   .mute, .zbtn { width: 32px; height: 32px; font-size: 15px; border-radius: 9px; }
   /* Six buttons in one column ran past the bottom of a short landscape stage and
      disappeared under the dock. Two columns (zoom pair · tilt pair · pan pair)
@@ -829,7 +820,6 @@ body.golf .fuel { display: none; }
 .arm-status.ready { color: #3ce88f; }
 
 /* FIRE button flame */
-.fire .fire-ic { width: 1.05em; height: 1.05em; vertical-align: -0.16em; margin-left: 2px; }
 
 /* mute button icon */
 .mute svg { width: 20px; height: 20px; display: block; margin: auto; }
@@ -1048,7 +1038,7 @@ body.dd-open .hs-main { overflow: visible; }
 /* Compact dock: the FIRE button and fuel bar fill their row's full height —
    no dead strip under the controls. */
 @media (orientation: landscape) and (max-height: 600px), (orientation: portrait) and (max-width: 600px) {
-  .control-rows .fire { align-self: stretch; padding-top: 0; padding-bottom: 0; }
+  .control-rows .fire { align-self: center; }   /* a fixed square must never stretch */
   .control-rows .stepper { align-self: stretch; }
 }
 
@@ -1064,7 +1054,6 @@ body.dd-open .hs-main { overflow: visible; }
   .drum .dc { flex: 0 0 11px; width: 11px; font-size: 8px; }
   .drum .dc.cur { flex: 0 0 32px; width: 32px; }
   .drive { width: 46px; height: 38px; font-size: 16px; }
-  .btn.fire { padding-left: 14px; padding-right: 14px; font-size: 15px; }
 }
 
 /* ---- Golf scorecard (on-screen button + end-of-round summary) ------------- */
@@ -1136,17 +1125,14 @@ body.dd-open .hs-main { overflow: visible; }
 #dock.collapsed .drive-row,
 #dock.collapsed .drive,
 #dock.collapsed .fuel { visibility: hidden; }
+/* Collapsed: the button overhangs the 28px sliver upward (like the collapse
+   tab) so it costs no layout height. Only --fs and placement here — every
+   dimension inside the object follows --fs on its own. */
 #dock.collapsed .control-rows .fire {
-  /* Overhangs the sliver upward (like the collapse tab) instead of making the
-     dock taller — a proper 44px touch target without giving battlefield back. */
-  visibility: visible; position: absolute; top: -18px; right: 10px; z-index: 6;
-  height: 44px; min-height: 0; padding: 0 clamp(16px, calc(3 * var(--vwu)), 26px);
-  min-width: clamp(112px, calc(17 * var(--vwu)), 150px);
-  font-size: clamp(13px, calc(2.3 * var(--vhu)), 17px); align-self: auto;
-  border-radius: 13px; box-shadow: 0 6px 18px rgba(255, 90, 60, .4);
-  display: flex; align-items: center; justify-content: center; gap: 4px;
+  --fs: 72px;
+  visibility: visible; position: absolute; right: 6px; z-index: 6; align-self: auto;
+  top: calc(var(--dock-sliver) - (0.708 * var(--fs)) - ((var(--fs) - (0.708 * var(--fs))) / 2) - 2px);
 }
-#dock.collapsed .control-rows .fire .fire-ic { width: 1.15em; height: 1.15em; }
 
 /* ---- Watching: fade the HUD down while the shot flies / on the other turn ---
    Purely visual — the controls KEEP pointer-events so you can still zoom and
@@ -1158,3 +1144,156 @@ body.dd-open .hs-main { overflow: visible; }
 #game.watching.hud-wake #hud-top, #game.watching.hud-wake #dock,
 #game.watching.hud-wake .mute, #game.watching.hud-wake .leave,
 #game.watching.hud-wake .zoomctl, #game.watching.hud-wake .metamenu { opacity: 1; }
+
+/* ===== FIRE BUTTON — H05 "Lit ring" ==================================
+   Camera above and in front: every horizontal circle is an ellipse
+   foreshortened to 0.62 of its width. One key light from the upper left
+   drives the face gradient, the specular, the sheen, the rim light and
+   both shadows. Footprint --fs x --fs; the VISIBLE object is --fs wide by
+   0.708--fs tall, centred vertically, and the cast shadow reaches a little
+   past the bottom and right — so no ancestor may set overflow:hidden.
+
+   TWO SCALES: percentages are of the button's own square box (so the
+   geometry follows --fs by itself), and every hand-tuned pixel value is a
+   multiple of --u (1px at the 210px reference). Never hard-code a px in
+   here — an absolute travel punches through the cap wall once the button
+   is smaller than the reference size. */
+.fire-btn {
+  --fs: min(clamp(88px, calc(15 * var(--vwu)), 120px), calc(17 * var(--vhu)));
+  --u: calc(var(--fs) / 210);        /* 1u = 1px at the reference size    */
+  --tr: calc(8 * var(--u));          /* cap travel — about half the wall  */
+  --dur: .34s;
+  --rest: .68;                       /* band brightness at rest           */
+  position: relative; width: var(--fs); height: var(--fs); flex: 0 0 auto;
+  border: 0; padding: 0; background: none; cursor: pointer; border-radius: 50%;
+  -webkit-tap-highlight-color: transparent; font-family: inherit;
+  /* The footprint is square but the OBJECT is only 0.708--fs tall and centred
+     in it, so the transparent band above and below would inflate the dock row
+     by a quarter of --fs. Pull the LAYOUT box in to the object; the box still
+     paints outside it, cast shadow included. */
+  margin-block: calc((calc(0.708 * var(--fs)) - var(--fs)) / 2);
+}
+.fire-btn i, .fire-btn b { position: absolute; display: block; }
+.fire-btn i { border-radius: 50%; }          /* every horizontal circle */
+.fire-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+
+/* cast shadow on the dock, thrown down and right, away from the key light */
+.fb-floor { left: 3%; right: -5%; top: 56.08%; height: 43.75%; z-index: 0;
+  background: radial-gradient(ellipse at 50% 50%, rgba(0,0,0,.72), rgba(0,0,0,0) 70%);
+  filter: blur(calc(6 * var(--u))); }
+
+/* bezel: bottom ellipse, side wall, top face. The wall spans between two
+   ellipse centre-lines, where a cylinder is at full width, so the silhouette
+   between them is a clean rectangle. */
+.fb-bez-bot  { left: 1%; right: 1%; top: 29.62%; height: 60.76%; background: #0d0f12; z-index: 1; }
+.fb-bez-wall { left: 1%; right: 1%; top: 50%; height: 10%; border-radius: 0; z-index: 1;
+  background: linear-gradient(180deg,#2e343c,#101215); }
+.fb-bez-top  { left: 1%; right: 1%; top: 19.62%; height: 60.76%; z-index: 2;
+  background: radial-gradient(ellipse at 42% 30%, #2c323a, #131619);
+  box-shadow: inset 0 calc(1 * var(--u)) 0 rgba(255,255,255,.18); }
+
+/* The warning band is struck in a SQUARE and then scaled to the camera, so the
+   wedges bunch toward the left and right the way radial divisions on a tilted
+   ring do. Painting the conic straight onto an ellipse spaces them by screen
+   angle instead — the wrong mapping, and it reads as a sunburst. Starting the
+   repeat a quarter-period early (-11.25deg on a 45deg period) puts a wedge
+   centre on both axes, so the ring is symmetric across both. */
+.fb-band { left: 2%; right: 2%; top: 2%; height: 96%; transform: scaleY(.62);
+  opacity: var(--rest); z-index: 3;
+  background: repeating-conic-gradient(from -11.25deg,
+              #ffcf4a 0deg 22.5deg, #241d07 22.5deg 45deg);
+  box-shadow: inset 0 0 0 calc(2 * var(--u)) #0d0f12,
+              0 0 calc(16 * var(--u)) rgba(255,180,50,.5); }
+.fb-band > i { left: 0; right: 0; top: 0; bottom: 0;
+  background: radial-gradient(ellipse at 50% 50%, rgba(255,214,120,.3), rgba(255,150,40,0) 72%); }
+
+/* machined lip, so the dark wedges cannot bleed into the dark of the bore */
+.fb-lip { left: 7%; right: 7%; top: 23.34%; height: 53.32%; z-index: 3;
+  background: linear-gradient(180deg,#6a7079 0%,#3d434a 50%,#22262b 100%);
+  box-shadow: inset 0 0 0 calc(1 * var(--u)) rgba(0,0,0,.55); }
+
+/* the bore the cap runs in, its occlusion, and the cap's contact shadow */
+.fb-bore    { left: 11%; right: 11%; top: 25.82%; height: 48.36%; z-index: 4;
+  background: radial-gradient(ellipse at 50% 38%, #1e2229, #0c0e11);
+  box-shadow: inset 0 calc(7 * var(--u)) calc(15 * var(--u)) rgba(0,0,0,.95),
+              0 0 0 calc(2 * var(--u)) #131519; }
+.fb-occ     { left: 11%; right: 11%; top: 25.82%; height: 48.36%; z-index: 5; opacity: .85;
+  background: radial-gradient(ellipse at 50% 28%, rgba(0,0,0,.55), rgba(0,0,0,0) 62%); }
+.fb-contact { left: 11%; right: 11%; top: 25.82%; height: 48.36%; z-index: 6; pointer-events: none;
+  box-shadow: inset 0 calc(3 * var(--u)) calc(10 * var(--u)) rgba(0,0,0,.6); }
+
+/* The cap's side wall STAYS PUT and the face slides down over it, so the visible
+   wall shortens by exactly the travel — the cap really is sliding into its bore
+   rather than being scaled. The lower disc is what you read as the wall, so it is
+   shaded like the cylinder it is rather than filled flat. */
+.fb-skirt { left: 16%; right: 16%; top: 45.4%; height: 28.58%; border-radius: 0; z-index: 7; }
+.fb-skirt > .fb-disc { left: 0; right: 0; bottom: 0; height: 147.52%;
+  background: radial-gradient(ellipse at 50% 28%, #d33528 0%, #a01b13 60%, #520805 100%); }
+.fb-skirt > .fb-wall { left: 0; right: 0; top: 0; bottom: 73.76%; border-radius: 0;
+  background: linear-gradient(180deg,#bb271b,#700e09); }
+
+/* the moving group: face, sheen, hotspot, rim light, label */
+.fb-cap   { left: 0; right: 0; top: 0; bottom: 0; border-radius: 0; z-index: 8; }
+.fb-face  { left: 16%; right: 16%; top: 24.32%; height: 42.16%; z-index: 7;
+  background: radial-gradient(ellipse at 33% 21%, #ff8a78 0%, #ee4032 28%, #b81c14 64%, #7c0f0a 100%);
+  box-shadow: inset 0 calc(2 * var(--u)) calc(3 * var(--u)) rgba(255,255,255,.42),
+              inset 0 calc(-8 * var(--u)) calc(15 * var(--u)) rgba(70,4,2,.6); }
+.fb-sheen { left: 22.8%; right: 22.8%; top: 27.271%; height: 21.08%; z-index: 8; pointer-events: none;
+  background: radial-gradient(ellipse at 50% 0%, rgba(255,255,255,.28), rgba(255,255,255,0) 72%); }
+.fb-spec  { left: 27.56%; width: 21.76%; top: 30.644%; height: 11.805%; z-index: 9; pointer-events: none;
+  background: radial-gradient(ellipse at 50% 50%, rgba(255,255,255,.95), rgba(255,255,255,0) 68%);
+  filter: blur(calc(1 * var(--u))); }
+/* rim light along the far edge. This MUST be a length — a percentage here is
+   invalid CSS and silently drops the whole declaration. */
+.fb-rim   { left: 16%; right: 16%; top: 24.32%; height: 42.16%; z-index: 9; pointer-events: none;
+  box-shadow: inset 0 calc(4.43 * var(--u)) 0 rgba(255,255,255,.3); }
+.fb-label { left: 0; top: 38.088%; width: 100%; text-align: center; z-index: 10; pointer-events: none;
+  font-weight: 900; letter-spacing: .11em; font-size: calc(var(--fs) * .125);
+  color: #fff3f1; text-shadow: 0 calc(1 * var(--u)) calc(3 * var(--u)) rgba(50,3,2,.95);
+  transform: scaleY(.62); }
+
+/* --- the press: bite down, hold, damped overshoot, settle. Only the cap group
+   moves; the band, lip and bezel are outside it and hold dead still. --- */
+.fire-btn.is-pressed .fb-cap   { animation: fbDrop  var(--dur) cubic-bezier(.34,.06,.2,1); }
+.fire-btn.is-pressed .fb-floor { animation: fbFloor var(--dur) cubic-bezier(.34,.06,.2,1); }
+.fire-btn.is-pressed .fb-spec  { animation: fbSpec  var(--dur) cubic-bezier(.34,.06,.2,1); }
+.fire-btn.is-pressed .fb-sheen { animation: fbSheen var(--dur) cubic-bezier(.34,.06,.2,1); }
+.fire-btn.is-pressed .fb-occ   { animation: fbOcc   var(--dur) cubic-bezier(.34,.06,.2,1); }
+.fire-btn.is-pressed .fb-band  { animation: fbFlare var(--dur) cubic-bezier(.34,.06,.2,1); }
+
+@keyframes fbDrop {
+  0%   { transform: translateY(0); }
+  26%  { transform: translateY(var(--tr)); }
+  46%  { transform: translateY(var(--tr)); }
+  72%  { transform: translateY(calc(var(--tr) * -.13)); }
+  88%  { transform: translateY(calc(var(--tr) * .05)); }
+  100% { transform: translateY(0); }
+}
+@keyframes fbFloor { 0%,100% { transform: scale(1); opacity: 1; }
+                     26%,46% { transform: scale(.9,.78); opacity: .78; } }
+/* the hotspot slides toward the key light and tightens as the face falls away */
+@keyframes fbSpec  { 0%,100% { transform: translate(0,0) scale(1); opacity: 1; }
+                     26%,46% { transform: translate(calc(-2 * var(--u)), calc(-2.5 * var(--u))) scale(.8);
+                               opacity: .85; } }
+@keyframes fbSheen { 0%,100% { opacity: 1; } 26%,46% { opacity: .7; } }
+@keyframes fbOcc   { 0%,100% { opacity: .85; } 26%,46% { opacity: 1; } }
+/* the band is the feedback: it idles at --rest and surges as the cap bottoms out */
+@keyframes fbFlare { 0%,100% { opacity: var(--rest); } 24%,52% { opacity: 1; } }
+
+/* not your turn */
+.fire-btn:disabled { cursor: not-allowed; filter: grayscale(.55) brightness(.62); }
+.fire-btn:disabled .fb-band { opacity: .26; box-shadow: inset 0 0 0 calc(2 * var(--u)) #0d0f12; }
+
+@media (prefers-reduced-motion: reduce) { .fire-btn * { animation: none !important; } }
+
+/* --- size per dock tier. --fs is sized from the HEIGHT the row can give the
+   object (it is 0.708--fs tall), never from the width, and never squashed:
+   the 0.62 foreshortening is the whole illusion. Portrait twins phrased on the
+   effective axes, per the rotation shim. --- */
+@media (orientation: landscape) and (max-height: 600px), (orientation: portrait) and (max-width: 600px) {
+  .fire-btn { --fs: 86px; }
+}
+@media (orientation: landscape) and (max-width: 830px), (orientation: portrait) and (max-height: 830px) {
+  .fire-btn { --fs: 76px; }
+}
+/* ===== end FIRE BUTTON ============================================== */
