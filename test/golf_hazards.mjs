@@ -6,7 +6,7 @@
 //     point at the approach bank; and
 //   - a full-send Driver still comes to REST inside the golf maxT after the
 //     roll retune (a truncated roll reads as a phantom OOB).
-import { prepareGolfHole, simulateShot } from '../game-core.js';
+import { prepareGolfHole, simulateShot, generateTerrain } from '../game-core.js';
 
 let failures = 0;
 const fail = (m) => { console.error('FAIL ' + m); failures++; };
@@ -54,6 +54,32 @@ const ok = (m) => console.log('  ok — ' + m);
   if (waters === 0) fail('40 seeds produced zero ponds — water probability broken');
   if (waters === 40) fail('40 seeds produced 40 ponds — the 0-per-hole case never happens');
   if (!failures) ok(`placement: 40 seeds deterministic, 1-3 sand + ${waters}/40 ponds, all in-bounds`);
+}
+
+// ---- 1b. Real terrain: every hazard is a DIP in level ground, not a slope ---
+// (Jordan, 2026-07-29: 'the bunker should be a dip in the terrain and not on
+// the side of a slope'; the pond likewise sits in a hollow with banks.)
+{
+  const D = 15180, worldW = 36000;
+  let checked = 0;
+  for (let seed = 101; seed <= 112; seed++) {
+    const terrain = generateTerrain(seed, 2, 'alpine', worldW);
+    const cupX = 2200 + D;
+    const allTees = [cupX - D, Math.round(cupX - D * 0.92), Math.round(cupX - D * 0.84), Math.round(cupX - D * 0.72)];
+    const r = prepareGolfHole(terrain, allTees[1], cupX, allTees, seed);
+    for (const h of r.hazards) {
+      checked++;
+      const bankL = terrain[h.a - 40], bankR = terrain[h.b + 40];
+      const mid = terrain[Math.round((h.a + h.b) / 2)];
+      if (Math.abs(bankL - bankR) > 40) fail(`seed ${seed}: ${h.kind} banks tilt ${Math.round(Math.abs(bankL - bankR))}u — sitting on a slope`);
+      if (!(mid > bankL + 50 && mid > bankR + 50)) fail(`seed ${seed}: ${h.kind} does not dip below its banks (mid ${Math.round(mid)} vs ${Math.round(bankL)}/${Math.round(bankR)})`);
+      if (h.kind === 'water') {
+        if (!(h.y > bankL && h.y > bankR)) fail(`seed ${seed}: waterline ${h.y} sits above a bank (${Math.round(bankL)}/${Math.round(bankR)})`);
+        if (!(mid - h.y <= 220)) fail(`seed ${seed}: pond is ${Math.round(mid - h.y)}u deep — should be shallow (<=220)`);
+      }
+    }
+  }
+  if (!failures) ok(`real terrain: ${checked} hazards across 12 seeded holes all dip into level banks`);
 }
 
 // ---- 2. Sand physics: the ball plugs instead of releasing -------------------

@@ -1333,9 +1333,16 @@ export function prepareGolfHole(terrain, teeX, cupX, allTees, seed) {
     terrain[x] = terrain[x] + (1 - Math.pow(Math.abs(dx) / 200, 2)) * 120;
   }
   // ---- HAZARDS -------------------------------------------------------------
-  // Placed LAST so the bowls they dish survive every smoothing pass above.
+  // Placed LAST so the ground they shape survives every smoothing pass above.
   // Keep-out zones: the tee platform plus its 380-column ramps, and the green
   // plus its fringe. Everything between is fairway and fair game.
+  //
+  // Real-course rule (Jordan, 2026-07-29): a hazard is a DIP in the ground,
+  // never a smear across a slope face. So every hazard (1) prefers the
+  // FLATTEST candidate site on the fairway, then (2) LEVELS its span to the
+  // local grade with feathered aprons, and only then (3) dishes down INTO
+  // that levelled ground. Water gets a level bank on BOTH sides and a
+  // deliberately shallow basin — a pond in a hollow, not a pit.
   const hazards = [];
   {
     const rng = mulberry32(((seed || 1) ^ 0x5bf03635) >>> 0);   // own stream — never
@@ -1345,19 +1352,50 @@ export function prepareGolfHole(terrain, teeX, cupX, allTees, seed) {
     const placed = [];                                          // [a,b] ranges, all kinds
     const fits = (a, b) => a > keepLo && b < keepHi &&
       placed.every(([pa, pb]) => b < pa - 800 || a > pb + 800);
-    // Try to seat a hazard of width w; a few random throws, then a sweep so a
-    // legal spot is never missed. Returns [a,b] or null.
+    // How un-flat is this span? Max deviation from its mean plus half the
+    // end-to-end tilt — the score the seat() picker minimises.
+    const unflat = (a, b) => {
+      let sum = 0, n2 = 0;
+      for (let x = a; x <= b; x += 25) { sum += terrain[Math.round(x)]; n2++; }
+      const mean = sum / n2;
+      let dev = 0;
+      for (let x = a; x <= b; x += 25) dev = Math.max(dev, Math.abs(terrain[Math.round(x)] - mean));
+      return dev + Math.abs(terrain[Math.round(a)] - terrain[Math.round(b)]) * 0.5;
+    };
+    // Seat a hazard of width w on the FLATTEST of many random legal throws
+    // (a sweep backstop guarantees a legal spot is never missed).
     const seat = (w) => {
       const span = keepHi - keepLo - w;
       if (span <= 0) return null;
-      for (let t = 0; t < 14; t++) {
+      let best = null, bestScore = Infinity;
+      for (let t = 0; t < 26; t++) {
         const a = keepLo + rng() * span, b = a + w;
-        if (fits(a, b)) return [Math.round(a), Math.round(b)];
+        if (!fits(a, b)) continue;
+        const sc = unflat(a, b);
+        if (sc < bestScore) { bestScore = sc; best = [Math.round(a), Math.round(b)]; }
       }
-      for (let a = keepLo + 1; a + w < keepHi; a += 400) {
-        if (fits(a, a + w)) return [Math.round(a), Math.round(a + w)];
+      if (!best) {
+        for (let a = keepLo + 1; a + w < keepHi; a += 400) {
+          if (fits(a, a + w)) { best = [Math.round(a), Math.round(a + w)]; break; }
+        }
       }
-      return null;
+      return best;
+    };
+    // Level [a-pad, b+pad] to its own mean grade (feathered 300-column ramps
+    // outside), so the dip that follows is cut into LEVEL ground and the
+    // hazard reads as a hollow with banks — never a tilt-following smear.
+    const levelSpan = (a, b, pad) => {
+      const lo = Math.max(1, a - pad), hi = Math.min(nL - 2, b + pad);
+      let sum = 0;
+      for (let x = lo; x <= hi; x++) sum += terrain[x];
+      const grade = sum / (hi - lo + 1);
+      for (let x = lo; x <= hi; x++) terrain[x] = grade;
+      for (let f = 1; f <= 300; f++) {
+        const t2 = 1 - f / 300;
+        if (lo - f >= 0) terrain[lo - f] = terrain[lo - f] * (1 - t2) + grade * t2;
+        if (hi + f <= nL - 1) terrain[hi + f] = terrain[hi + f] * (1 - t2) + grade * t2;
+      }
+      return grade;
     };
     // WATER first (it is the widest and the rarest): 0 or 1 per hole.
     if (rng() < 0.55) {
@@ -1365,17 +1403,18 @@ export function prepareGolfHole(terrain, teeX, cupX, allTees, seed) {
       for (let w = 1400 + Math.round(rng() * 800); !got && w >= 900; w -= 250) got = seat(w);
       if (got) {
         const [a, b] = got;
-        // Dig the basin, then set the waterline just under the LOWER rim so
-        // the pond never visually spills over its own banks. The Math.max
+        // Level banks either side, then a SHALLOW basin (was a 420u pit) with
+        // the waterline just under the bank grade — terrain surrounds the
+        // water on every side but the top, like a real pond. The Math.max
         // guard is load-bearing: (PI*n)/n can round to JUST past PI, sin then
         // returns a tiny NEGATIVE, and pow(negative, 1.4) is NaN — one NaN
         // column poisons surfaceAt and every ball that rolls over it.
+        const grade = levelSpan(a, b, 380);
         for (let x = a; x <= b; x++) {
           const k = Math.max(0, Math.sin(Math.PI * (x - a) / (b - a)));
-          terrain[x] += Math.pow(k, 1.4) * 420;
+          terrain[x] = grade + Math.pow(k, 1.3) * 240;
         }
-        const rim = Math.min(terrain[Math.max(0, a - 1)], terrain[Math.min(nL - 1, b + 1)]);
-        hazards.push({ kind: 'water', a, b, y: round1(rim + 55) });
+        hazards.push({ kind: 'water', a, b, y: round1(grade + 45) });
         placed.push([a, b]);                              // sand must keep clear of the pond
       }
     }
@@ -1386,9 +1425,11 @@ export function prepareGolfHole(terrain, teeX, cupX, allTees, seed) {
       for (let w = 900 + Math.round(rng() * 700); !got && w >= 500; w -= 200) got = seat(w);
       if (!got) break;
       const [a, b] = got;
-      for (let x = a; x <= b; x++) {                      // a shallow lipped bowl
+      // Level first, then a gentle bowl sunk into the flat — an actual bunker.
+      const grade = levelSpan(a, b, 260);
+      for (let x = a; x <= b; x++) {
         const k = Math.max(0, Math.sin(Math.PI * (x - a) / (b - a)));   // see the water dig
-        terrain[x] += Math.pow(k, 1.2) * 140;
+        terrain[x] = grade + Math.pow(k, 1.2) * 130;
       }
       hazards.push({ kind: 'sand', a, b });
       placed.push([a, b]);
