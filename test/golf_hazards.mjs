@@ -45,6 +45,11 @@ const ok = (m) => console.log('  ok — ' + m);
       if (!(t1[mid] > w.y)) fail(`seed ${seed}: pond bed (${t1[mid]}) not below waterline ${w.y}`);
       if (!(t1[w.a - 2] < w.y && t1[w.b + 2] < w.y)) fail(`seed ${seed}: waterline above a bank rim`);
     }
+    // The dig must never poison a column: (PI*n)/n can round past PI, sin goes
+    // negative, pow(neg, 1.2) is NaN — one NaN column breaks every roll over it.
+    for (let x = 0; x < t1.length; x++) {
+      if (Number.isNaN(t1[x])) { fail(`seed ${seed}: NaN terrain column at ${x}`); break; }
+    }
   }
   if (waters === 0) fail('40 seeds produced zero ponds — water probability broken');
   if (waters === 40) fail('40 seeds produced 40 ponds — the 0-per-hole case never happens');
@@ -94,6 +99,20 @@ const ok = (m) => console.log('  ok — ' + m);
   if (!rest) fail(`driver full-send never rested (${secs.toFixed(1)}s of sim) — maxT truncation reads as phantom OOB`);
   else if (secs > 97) fail(`driver full-send rests but at ${secs.toFixed(1)}s — no headroom under the 100s maxT`);
   else ok(`driver full-send rests at ${Math.round(rest[0] - 8000)}u total in ${secs.toFixed(1)}s sim`);
+}
+
+// ---- 5. Boundary: a wall bounce-back RESTS at the course edge ----------------
+// (Live failure: a cliff in front of the tee returned the ball past the tee
+// and off the world's left edge — 'oob' with the ball unmoved, every swing.)
+{
+  const terrain = new Array(36001).fill(9000);
+  for (let x = 3000; x < 36001; x++) terrain[x] = Math.max(2600, 9000 - (x - 3000) * 3);   // sheer wall ahead
+  const r = simulateShot({ terrain, tanks: [{ x: 1500, y: 9000 }] },
+    { by: 0, weapon: 'golfball', angle: 49, power: 58.8 });
+  const rest = r.golf && r.golf.rest;
+  if (!rest) fail('wall return: ball left the world instead of resting at the boundary');
+  else if (rest[0] < 200) fail(`wall return: rest at ${rest[0]} is outside the course`);
+  else ok(`wall return: ball rests on-course at ${Math.round(rest[0])} (never exits the left edge)`);
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL GOOD');

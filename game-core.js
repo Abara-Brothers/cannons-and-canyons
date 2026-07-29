@@ -1111,9 +1111,16 @@ function integrate(terrain, tanks, ox, oy, vx, vy, opts) {
       s = Math.abs(s) <= dec ? 0 : s - Math.sign(s) * dec;
       x += (s / L) * DT;
       t += DT;
-      if (x < 0 || x > terrain.length - 1) {             // rolled clean off the world
+      // A ROLLING ball stops at the course boundary instead of leaving the
+      // world. Without this, a wall shot that bounces back can roll past the
+      // tee and off the LEFT edge — scored OOB with the ball unmoved, which
+      // repeats identically every swing (observed live: stroke 2/4/6/8 all
+      // 'oob' from the tee). A FLOWN ball off the map stays a real penalty.
+      if (x < 200 || x > terrain.length - 200) {
+        x = Math.max(200, Math.min(terrain.length - 200, x));
+        y = surfaceAt(terrain, x);
         path.push([round1(x), round1(y)]);
-        return { path, hit: false, x, y, vx: s, vy: 0 };
+        return { path, hit: false, rest: { x: round1(x), y: round1(y) }, x, y, vx: 0, vy: 0 };
       }
       y = surfaceAt(terrain, x);
       // At rest only when stationary AND the grade can't restart the ball.
@@ -1359,9 +1366,12 @@ export function prepareGolfHole(terrain, teeX, cupX, allTees, seed) {
       if (got) {
         const [a, b] = got;
         // Dig the basin, then set the waterline just under the LOWER rim so
-        // the pond never visually spills over its own banks.
+        // the pond never visually spills over its own banks. The Math.max
+        // guard is load-bearing: (PI*n)/n can round to JUST past PI, sin then
+        // returns a tiny NEGATIVE, and pow(negative, 1.4) is NaN — one NaN
+        // column poisons surfaceAt and every ball that rolls over it.
         for (let x = a; x <= b; x++) {
-          const k = Math.sin(Math.PI * (x - a) / (b - a));
+          const k = Math.max(0, Math.sin(Math.PI * (x - a) / (b - a)));
           terrain[x] += Math.pow(k, 1.4) * 420;
         }
         const rim = Math.min(terrain[Math.max(0, a - 1)], terrain[Math.min(nL - 1, b + 1)]);
@@ -1377,7 +1387,7 @@ export function prepareGolfHole(terrain, teeX, cupX, allTees, seed) {
       if (!got) break;
       const [a, b] = got;
       for (let x = a; x <= b; x++) {                      // a shallow lipped bowl
-        const k = Math.sin(Math.PI * (x - a) / (b - a));
+        const k = Math.max(0, Math.sin(Math.PI * (x - a) / (b - a)));   // see the water dig
         terrain[x] += Math.pow(k, 1.2) * 140;
       }
       hazards.push({ kind: 'sand', a, b });
