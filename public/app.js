@@ -3243,6 +3243,7 @@ function draw() {
     drawTrees();
     drawProps();
     drawCrates();
+    drawGolfBunkers();
     drawGolfWater();
     drawTeeBox();
     drawGolfCup();
@@ -3399,7 +3400,7 @@ function drawTerrain(w, h) {
     if (surf >= h) continue;
     const sc = burnt ? Math.round(scorchAt(wxc) * SCORCH_STEPS) : 0;
     const golfC = S.golf ? golfTopColor(wxc, TLAYERS[0][1]) : null;
-    const golfDeep = golfC && golfSandAt(wxc) ? 'rgb(196,172,110)' : null;   // bunkers get real depth
+    const golfDeep = golfC && golfSandAt(wxc) ? 'rgb(216,196,150)' : null;   // bunkers get real depth
     let top = surf;
     // Indestructible concrete reads as concrete, not painted grass — but only
     // while the deck itself is the surface (dirt piled on top covers it).
@@ -3432,6 +3433,7 @@ function drawTerrain(w, h) {
 // Blocky pixel pines — spaced out, a bit taller.
 function drawTrees() {
   const { cssW } = view;
+  const palms = !!S.golf && S.biome === 'desert';   // oasis course: palms, not pines
   for (const t of S.trees) {
     const gy = surfaceAt(t.x);
     if (gy - t.y0 > 60) continue;                 // ground was blasted away — tree destroyed
@@ -3439,6 +3441,7 @@ function drawTrees() {
     if (sx < -60 || sx > cssW + 60) continue;
     const sy = Math.round(wy2s(gy));
     const hgt = Math.max(5, 340 * t.s * cam.zoom);   // Max Alpine — larger pines
+    if (palms) { drawPalm(sx, sy, hgt * 1.15, t.x); continue; }
     const u = hgt / 6;
     ctx.fillStyle = '#4a3320';
     ctx.fillRect(sx - u * 0.35, sy - u * 1.5, u * 0.7, u * 1.6);
@@ -3454,6 +3457,43 @@ function drawTrees() {
       y -= u * 1.1;
     }
   }
+}
+
+// A palm for the desert golf holes: a gently curving trunk of stacked,
+// narrowing segments with bark rings, a crown of six drooping fronds
+// (quadratic blades — leaf shapes, not fire-FX discs) and a pair of
+// coconuts. Lean alternates by position so a stand of palms sways both ways.
+function drawPalm(sx, sy, hgt, wx) {
+  const u = hgt / 6;
+  const lean = ((Math.round(wx / 97) % 2) ? 1 : -1) * u * 0.55;
+  ctx.fillStyle = '#9a7146';
+  let px = sx, py = sy;
+  for (let i = 0; i < 5; i++) {
+    const w2 = u * (0.62 - i * 0.06);
+    px = sx + lean * Math.pow(i / 4, 1.6);
+    ctx.fillRect(px - w2 / 2, py - u * 1.35, w2, u * 1.45);
+    if (i % 2) {                                   // bark ring
+      ctx.fillStyle = '#7c5a36';
+      ctx.fillRect(px - w2 / 2, py - u * 0.32, w2, u * 0.18);
+      ctx.fillStyle = '#9a7146';
+    }
+    py -= u * 1.3;
+  }
+  const cx2 = px, cy2 = py;
+  const F = [[-1.9, -0.4], [-1.5, -1.05], [-0.6, -1.5], [0.6, -1.5], [1.5, -1.05], [1.9, -0.4]];
+  for (let i = 0; i < F.length; i++) {
+    const [dx, dy] = F[i];
+    ctx.fillStyle = i % 2 ? '#2f7a3c' : '#3f8f4a';
+    const tipX = cx2 + dx * u * 1.55, tipY = cy2 + dy * u * 1.2 + Math.abs(dx) * u * 0.38;   // tips droop
+    ctx.beginPath();
+    ctx.moveTo(cx2, cy2 + u * 0.15);
+    ctx.quadraticCurveTo(cx2 + dx * u * 0.75, cy2 + dy * u * 0.9, tipX, tipY);
+    ctx.quadraticCurveTo(cx2 + dx * u * 0.7, cy2 + dy * u * 0.55 + u * 0.3, cx2, cy2 + u * 0.4);
+    ctx.closePath(); ctx.fill();
+  }
+  ctx.fillStyle = '#5c422a';                       // coconuts
+  ctx.fillRect(cx2 - u * 0.38, cy2 + u * 0.1, u * 0.3, u * 0.3);
+  ctx.fillRect(cx2 + u * 0.08, cy2 + u * 0.18, u * 0.3, u * 0.3);
 }
 
 // Lingering battlefield hazards: burning ground and toxic gas clouds.
@@ -4317,8 +4357,12 @@ function golfTopColor(wx, base) {
   // else the column would have been. (The basin shape itself comes dished
   // from the server, so the recolour lands exactly on the bowl.)
   if (golfSandAt(wx)) {
+    // Bright silica sand, deliberately PALER and less saturated than any
+    // biome's own ground (the desert top is rgb(238,207,138) — the original
+    // bunker tan was invisible on it). The rim + rake pass in
+    // drawGolfBunkers() carries the read; this is just the fill.
     const grain = Math.floor(wx / 90) % 3;
-    return grain === 0 ? 'rgb(214,192,134)' : grain === 1 ? 'rgb(206,183,124)' : 'rgb(219,198,142)';
+    return grain === 0 ? 'rgb(246,232,196)' : grain === 1 ? 'rgb(238,222,182)' : 'rgb(250,238,206)';
   }
   const inGreen = Math.abs(wx - g.cup.x) <= 2200;
   const inFringe = !inGreen && Math.abs(wx - g.cup.x) <= 2750;
@@ -4341,6 +4385,41 @@ function golfSandAt(wx) {
   const g = S.golf; if (!g || !g.hazards) return false;
   for (const h of g.hazards) if (h.kind === 'sand' && wx >= h.a && wx <= h.b) return true;
   return false;
+}
+
+// The bunker's READ comes from structure, not hue — a flat recolour cannot
+// contrast with the desert biome's own sand. A dark carved lip traces the
+// bowl (with a little overhang past each end), and raked grooves run through
+// the sand. Works on green turf, white ice and desert tan alike.
+function drawGolfBunkers() {
+  const g = S.golf; if (!g || !g.hazards) return;
+  for (const h of g.hazards) {
+    if (h.kind !== 'sand') continue;
+    const x0 = wx2s(h.a - 100), x1 = wx2s(h.b + 100);
+    if (x1 < -40 || x0 > view.cssW + 40) continue;
+    // The lip: follows the bowl's surface, drawn just above it.
+    ctx.strokeStyle = 'rgba(94,70,38,0.9)';
+    ctx.lineWidth = Math.max(1.5, 34 * cam.zoom);
+    ctx.beginPath();
+    const step = Math.max(2, (h.b - h.a + 200) / 64);
+    let started = false;
+    for (let wx = h.a - 100; wx <= h.b + 100; wx += step) {
+      const sxp = wx2s(wx), syp = wy2s(surfaceAt(wx)) - Math.max(0.5, 12 * cam.zoom);
+      if (!started) { ctx.moveTo(sxp, syp); started = true; } else ctx.lineTo(sxp, syp);
+    }
+    ctx.stroke();
+    // Rake grooves: short slanted strokes hugging the sand, world-spaced.
+    ctx.strokeStyle = 'rgba(168,138,88,0.7)';
+    ctx.lineWidth = Math.max(1, 14 * cam.zoom);
+    const gap = Math.max(180, (h.b - h.a) / 8);
+    for (let wx = h.a + gap * 0.6; wx < h.b - gap * 0.4; wx += gap) {
+      const sy0 = wy2s(surfaceAt(wx) + 55);
+      ctx.beginPath();
+      ctx.moveTo(wx2s(wx - 55), sy0 + Math.max(1, 40 * cam.zoom));
+      ctx.lineTo(wx2s(wx + 55), sy0);
+      ctx.stroke();
+    }
+  }
 }
 
 // A water hazard is a filled basin: a still surface at the stored waterline

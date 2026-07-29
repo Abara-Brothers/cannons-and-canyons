@@ -471,6 +471,10 @@ function nextHole(room, first) {
   g.cup.y = prepared.cupY;
   g.hazards = prepared.hazards;
   room.trees = generateTrees(room.terrain, seed, 2);
+  // A desert hole is an OASIS course: a few palms (the client draws palms for
+  // golf+desert), not a pine forest — keep roughly every fifth tree. (Every
+  // third still read as a treeline at the tee.)
+  if (H.biome === 'desert') room.trees = room.trees.filter((_, ti) => ti % 5 === 0);
   room.tanks = room.players.map(() => ({ x: g.tee, y: surfaceAt(room.terrain, g.tee), alive: true }));
   g.done.fill(false);
   room.hazards = []; room.scorch = [];
