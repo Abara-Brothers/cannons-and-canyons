@@ -550,9 +550,15 @@ function dockSlidePx() {
   }
   return Math.max(0, Math.round(dockFullH - DOCK_SLIVER));
 }
+// The REQUESTED dock state. The 'collapsed' class only lands at the end of an
+// animated slide, so anything that wants to toggle (the tab) must read the
+// request, not the DOM — or a tap during the first-shot tuck-away would try to
+// 're-collapse' the already-collapsing dock and get swallowed.
+let dockShutReq = false;
 function setDockCollapsed(on, animate) {
   const d = $('dock');
-  if (d.classList.contains('collapsed') === !!on) { paintDockTab(); return; }
+  if (dockShutReq === !!on && d.classList.contains('collapsed') === !!on) { paintDockTab(); return; }
+  dockShutReq = !!on;
   const slide = dockSlidePx();
   d.style.setProperty('--dock-slide', slide + 'px');
   clearTimeout(dockTimer);
@@ -604,14 +610,21 @@ function paintDockTab() {
   $('dockMini').setAttribute('aria-hidden', String(!shut));
   updateDockMini();          // populate the sliver the moment it appears
 }
+// Every NEW battle opens with the controls SHOWN, then the dock tucks itself
+// away after the player's first shot of that match (Jordan: 'at the very start
+// of every game (not every round), toggle the controls... then toggle them
+// down once the player has shot'). dockIntro arms on a 'start' snapshot only —
+// holes, turns and resyncs never re-run the intro.
+let dockIntro = false;
 $('dockTab').onclick = () => {
-  setDockCollapsed(!$('dock').classList.contains('collapsed'), true);
+  dockIntro = false;      // they've found the toggle themselves — stop stage-managing
+  setDockCollapsed(!dockShutReq, true);
 };
-// Every match opens with the controls tucked away (Jordan: 'appear hidden
-// first, then allow the player to toggle them back up') — the battlefield gets
-// the whole screen, the sliver keeps FIRE + the live aim readout, and the
-// labelled tab invites the rest up. The slide is measured off the OPEN dock,
-// so wait for a laid-out one before shutting it.
+// Cold-resume fallback (see applySnapshot): a mid-battle reload comes back
+// with the dock tucked away — the sliver keeps FIRE + the live aim readout,
+// and the labelled tab invites the rest up. New battles instead open RAISED
+// until the first shot (see dockIntro). The slide is measured off the OPEN
+// dock, so wait for a laid-out one before shutting it.
 function startDockCollapsed() {
   if (!dockSlidePx()) { requestAnimationFrame(startDockCollapsed); return; }
   setDockCollapsed(true, false);
@@ -1321,7 +1334,14 @@ function applySnapshot(m) {
   updateHud(); updateAimUI(); updateFuel(); updateDock();
   closeStageMenus();      // camera + meta always start collapsed
   if (keep) setDockCollapsed(keep.dockShut, false);   // resync: dock stays as you left it
-  else startDockCollapsed();   // fresh start: hidden — the tab brings it up
+  else if (m.type === 'start') {
+    // A new battle: show the player their controls first; the fire handler
+    // tucks the dock away after their first shot (see dockIntro above).
+    dockIntro = true;
+    setDockCollapsed(false, false);
+  } else if (m.type === 'hole') {
+    // Next golf hole: not a new game — leave the dock as the player has it.
+  } else startDockCollapsed();   // cold resume mid-battle: hidden — the tab brings it up
 }
 
 // The server hands the turn over on ITS clock — usually while this client is
@@ -1702,7 +1722,10 @@ const evX = (e) => e.offsetX * view.cssW / (view.dispW || 1);
 const evY = (e) => e.offsetY * view.cssH / (view.dispH || 1);
 canvas.addEventListener('pointerdown', (e) => {
   pointers.set(e.pointerId, { x: evX(e), y: evY(e) });
-  canvas.setPointerCapture(e.pointerId);
+  guideHoldOff = performance.now() + 2600;   // the aim guide yields to a real finger
+  // Capture is a nicety (keeps the drag alive off-canvas), never a dependency —
+  // if it throws (synthetic pointers, exotic browsers) aiming must still work.
+  try { canvas.setPointerCapture(e.pointerId); } catch {}
   if (pointers.size === 2) {
     S.charging = false; S.pullPointer = null; S.pullAnchor = null;
     const [a, b] = [...pointers.values()];
@@ -1734,7 +1757,9 @@ canvas.addEventListener('pointermove', (e) => {
     const x = evX(e), y = evY(e);
     S.pullPointer = { sx: x, sy: y };
     const dx = x - S.pullAnchor.x, dy = y - S.pullAnchor.y;
-    if (Math.hypot(dx, dy) > AIM_DEADZONE) aimFromVector(dx, dy);
+    const pull = Math.hypot(dx, dy);
+    if (pull > AIM_DEADZONE) aimFromVector(dx, dy);
+    if (pull > 48) markAimGuideDone();       // a real pull — the gesture is learned
   }
 });
 const endPointer = (e) => {
@@ -1744,6 +1769,229 @@ const endPointer = (e) => {
 };
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
+
+// ---------------------------------------------------------------------------
+// First-play aim guide — a translucent hand demonstrates the drag-anywhere
+// gesture on a player's first turns: press an empty spot, pull the way you
+// want to fire, longer pull = more power. Pure overlay — it never writes
+// S.aim and never sends a message (relayAim broadcasts REAL aim live, so a
+// demo that drove setAim would spray phantom aim at the opponent). It hides
+// the instant any finger is down and comes back after a short idle, until the
+// player performs one real pull (or fires) — then never again on this device
+// (cc_aim_guide, the same one-shot pattern as the other cc_ flags).
+// ---------------------------------------------------------------------------
+let aimGuideDone = false;
+try {
+  aimGuideDone = localStorage.getItem('cc_aim_guide') === '1'
+    || PROF.shots > 0;   // veterans are grandfathered out — this is for battle one
+} catch {}
+let guideHoldOff = 0;    // quiet spell after any touch before the demo returns
+let guideT0 = 0;         // wall-clock start of the current demo loop
+let guideWasOn = false;
+function markAimGuideDone() {
+  if (aimGuideDone) return;
+  aimGuideDone = true;
+  try { localStorage.setItem('cc_aim_guide', '1'); } catch {}
+}
+function aimGuideOn() {
+  if (aimGuideDone || !myTurn()) return false;    // my go, live, no replay, not holed
+  // S.picking: locked in early, waiting for the others — FIRE is disabled then
+  // (see updateDock) and a pull now would consume the one-shot demo pre-battle.
+  if (S.killcam || S.charging || S.picking || pointers.size > 0) return false;
+  if (performance.now() < guideHoldOff) return false;
+  return !HUD_OVERLAYS.some(id => { const el = $(id); return el && !el.classList.contains('hidden'); });
+}
+// Which way the demo pulls: toward the nearest living ENEMY (the cup in golf),
+// so the gesture always demonstrates a shot that makes sense on THIS field.
+// Enemy, not neighbour: in co-op Boss Fight the only target is the boss seat,
+// and in Alien Invasion only the horde seats — the nearest tank is usually a
+// TEAMMATE there, and a first-timer will copy the demo literally.
+function guideDir() {
+  const me = S.tanks[S.you]; if (!me) return 1;
+  if (S.golf && S.golf.cup) return S.golf.cup.x >= me.x ? 1 : -1;
+  const kindOf = (i) => (S.kinds && S.kinds[i]) || (i === S.boss ? 'mech' : 'tank');
+  const horde = Array.from({ length: S.n }, (_, i) => kindOf(i)).some(k => k !== 'tank' && k !== 'mech');
+  let dx = 1, bd = Infinity;
+  for (let i = 0; i < S.n; i++) {
+    if (i === S.you || S.alive[i] === false || !S.tanks[i]) continue;
+    if (S.boss >= 0 && i !== S.boss) continue;            // Boss Fight: humans are allies
+    if (horde && kindOf(i) === 'tank') continue;          // Alien Invasion: tanks are allies
+    const d = Math.abs(S.tanks[i].x - me.x);
+    if (d < bd) { bd = d; dx = S.tanks[i].x - me.x; }
+  }
+  return dx < 0 ? -1 : 1;
+}
+// The demo itself. Screen-space, drawn above the world (outside the shake
+// transform), under the flash/killcam chrome. Everything it shows is the SAME
+// visual the real gesture produces — the anchor cross, the dashed tether, the
+// power colour ramp — so what the player copies is exactly what they'll see,
+// and the % readout is computed through the real maxPull() so it never lies.
+function drawAimGuide() {
+  if (!aimGuideOn()) { guideWasOn = false; return; }
+  const now = performance.now();
+  if (!guideWasOn) { guideWasOn = true; guideT0 = now; }   // always open on the fade-in
+  const t = ((now - guideT0) / 1000) % 3.8;
+  const IN = 0.45, PRESS = 0.65, DRAG = 2.0, HOLD = 2.6, OUT = 3.0;
+  let env = 1;                                             // whole-demo envelope
+  if (t < IN) env = t / IN;
+  else if (t >= OUT) env = 0;
+  else if (t >= HOLD) env = 1 - (t - HOLD) / (OUT - HOLD);
+  if (env <= 0.01) return;
+
+  const { cssW, cssH } = view;
+  const msz = Math.min(cssW, cssH);
+  const dir = guideDir();
+  const ANG = 38 * Math.PI / 180;                          // a healthy opening lob
+  const L = msz * 0.42;
+  // ay sits high enough that the hand's wrist clears a RAISED dock (battles
+  // now open with the controls shown until the first shot — see dockIntro).
+  const ax = cssW * 0.5 - dir * msz * 0.16, ay = cssH * 0.55;
+  const ux = dir * Math.cos(ANG), uy = -Math.sin(ANG);     // pull = fire direction
+  const ss = (x) => x * x * (3 - 2 * x);
+
+  let k = 0;                                               // pull progress 0..1
+  if (t >= DRAG) k = 1;
+  else if (t >= PRESS) k = ss((t - PRESS) / (DRAG - PRESS));
+  let fx = ax + ux * L * k, fy = ay + uy * L * k;
+  if (t < IN) {                                            // drift in from below
+    const q = ss(t / IN);
+    fx = ax - ux * msz * 0.05 * (1 - q);
+    fy = ay + msz * 0.12 * (1 - q);
+  } else if (t >= DRAG && t < HOLD) {
+    fy += Math.sin((t - DRAG) * 9) * 1.5;                  // held finger breathes
+  }
+  const pressed = t >= IN && t < HOLD;
+  const pct = Math.min(100, (L * k / maxPull()) * 100);    // honest readout
+
+  ctx.save();
+  try {
+    ctx.globalAlpha = env;
+
+    // Touch ripples on press and on lift-off.
+    const ripple = (q, x, y) => {
+      ctx.globalAlpha = env * (1 - q) * 0.8;
+      ctx.strokeStyle = 'rgba(159,216,255,.9)'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, y, 6 + 26 * q, 0, Math.PI * 2); ctx.stroke();
+      ctx.globalAlpha = env;
+    };
+    if (t >= IN && t < IN + 0.4) ripple((t - IN) / 0.4, ax, ay);
+    if (t >= HOLD) ripple((t - HOLD) / (OUT - HOLD), fx, fy);
+
+    // Anchor cross + dashed tether — the real gesture's style (the S.charging
+    // block at the end of drawAim), printed a touch bolder here because the
+    // pull line IS the lesson and must not be missable over a bright sky.
+    if (pressed && k > 0.02) {
+      ctx.strokeStyle = 'rgba(159,216,255,.62)'; ctx.lineWidth = 2;
+      ctx.setLineDash([5, 6]);
+      ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(fx, fy); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    if (pressed) {
+      ctx.strokeStyle = 'rgba(159,216,255,.75)'; ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(ax - 7, ay); ctx.lineTo(ax + 7, ay);
+      ctx.moveTo(ax, ay - 7); ctx.lineTo(ax, ay + 7);
+      ctx.stroke();
+    }
+
+    // Direction chevrons past the fingertip once the pull is well under way —
+    // 'the shot goes THIS way'. Arc-dot colours: dark under, hot yellow over.
+    if (k > 0.55) {
+      const ca = Math.min(1, (k - 0.55) / 0.35) * env;
+      const px2 = -uy, py2 = ux;                           // perpendicular
+      for (let j = 0; j < 3; j++) {
+        const d0 = 26 + j * 17;
+        const cx2 = fx + ux * d0, cy2 = fy + uy * d0;
+        const pulse = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(now / 160 - j * 1.1));
+        ctx.globalAlpha = ca * pulse;
+        for (const [w2, st] of [[5, 'rgba(10,12,16,.6)'], [2.5, 'rgba(255,214,70,.95)']]) {
+          ctx.strokeStyle = st; ctx.lineWidth = w2; ctx.lineCap = 'round';
+          ctx.beginPath();
+          ctx.moveTo(cx2 - ux * 7 + px2 * 7, cy2 - uy * 7 + py2 * 7);
+          ctx.lineTo(cx2 + ux * 4, cy2 + uy * 4);
+          ctx.lineTo(cx2 - ux * 7 - px2 * 7, cy2 - uy * 7 - py2 * 7);
+          ctx.stroke();
+        }
+        ctx.lineCap = 'butt';
+      }
+      ctx.globalAlpha = env;
+    }
+
+    // Live % above the anchor cross, on the real gesture's colour ramp.
+    if (pressed && k > 0.05) {
+      const pr = pct / 100;
+      const col = pr < 0.5 ? lerpColor([76, 232, 143], [255, 210, 63], pr / 0.5)
+        : lerpColor([255, 210, 63], [255, 90, 82], (pr - 0.5) / 0.5);
+      ctx.font = '900 15px system-ui, sans-serif'; ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(10,14,18,.7)';
+      ctx.fillText(`${Math.round(pct)}%`, ax + 1, ay - 23);
+      ctx.fillStyle = col;
+      ctx.fillText(`${Math.round(pct)}%`, ax, ay - 24);
+    }
+
+    // The hand.
+    const hs = Math.max(52, Math.min(96, msz * 0.20));
+    const squash = pressed ? 0.94 : t >= HOLD ? 1.05 : 1.0;
+    drawGuideHand(fx, fy, hs * squash, 0.10 + 0.12 * k, dir, pressed);
+
+    // Caption — plain-text house voice, dark under-print for legibility.
+    const line = t < DRAG ? 'DRAG ANYWHERE TO AIM' : 'LONGER PULL = MORE POWER';
+    const cy3 = Math.max(cssH * 0.16, ay - msz * 0.42);   // proportional floor clears the scoreboard
+    ctx.font = '900 14px system-ui, sans-serif'; ctx.textAlign = 'center';
+    ctx.globalAlpha = env * 0.92;
+    ctx.fillStyle = 'rgba(10,14,18,.7)'; ctx.fillText(line, cssW / 2 + 1, cy3 + 1);
+    ctx.fillStyle = '#eaf4ff'; ctx.fillText(line, cssW / 2, cy3);
+  } catch {} finally {
+    ctx.restore();
+    ctx.globalAlpha = 1; ctx.textAlign = 'left';
+  }
+}
+// A translucent pointing hand, drawn from scratch (custom canvas art — house
+// rule, no emoji). Fingertip at (x, y), fist and wrist trailing below; dir
+// mirrors the whole hand so the wrist always trails away from the pull. lean
+// tilts it into the motion; the mirror flips the rotation sense on its own.
+function drawGuideHand(x, y, H, lean, dir, pressed) {
+  const w = H * 0.16;                                      // index-finger width
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(dir < 0 ? -1 : 1, 1);
+  ctx.rotate(lean);
+  if (pressed) {                                           // contact glow at the tip
+    ctx.fillStyle = 'rgba(159,216,255,.30)';
+    ctx.beginPath(); ctx.arc(0, 0, w * 0.85, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.beginPath();
+  // Index finger: rounded tip at the origin, edges running down to the fist.
+  ctx.moveTo(-w * 0.5, w * 0.7);
+  ctx.quadraticCurveTo(-w * 0.56, -w * 0.1, 0, -w * 0.12);
+  ctx.quadraticCurveTo(w * 0.56, -w * 0.1, w * 0.5, w * 0.7);
+  ctx.lineTo(w * 0.52, H * 0.34);
+  // Three curled knuckles marching to the outside of the fist.
+  ctx.quadraticCurveTo(w * 0.95, H * 0.27, w * 1.28, H * 0.33);
+  ctx.quadraticCurveTo(w * 1.65, H * 0.30, w * 1.94, H * 0.40);
+  ctx.quadraticCurveTo(w * 2.32, H * 0.38, w * 2.52, H * 0.52);
+  // Outside of the palm down to the wrist, then across the base.
+  ctx.quadraticCurveTo(w * 2.72, H * 0.68, w * 2.5, H * 0.86);
+  ctx.quadraticCurveTo(w * 2.2, H * 1.02, w * 1.5, H * 1.02);
+  ctx.lineTo(w * 0.1, H * 1.04);
+  // Heel of the hand and the thumb bulge back up to the index.
+  ctx.quadraticCurveTo(-w * 0.72, H * 1.02, -w * 0.86, H * 0.76);
+  ctx.quadraticCurveTo(-w * 1.12, H * 0.56, -w * 0.72, H * 0.46);
+  ctx.quadraticCurveTo(-w * 0.6, H * 0.42, -w * 0.52, H * 0.36);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(238,244,250,.42)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(15,22,30,.60)';
+  ctx.lineWidth = 2; ctx.lineJoin = 'round';
+  ctx.stroke();
+  // The thumb's crease, so the silhouette reads as a hand and not a mitten.
+  ctx.strokeStyle = 'rgba(15,22,30,.35)'; ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(-w * 0.62, H * 0.52);
+  ctx.quadraticCurveTo(-w * 0.2, H * 0.60, w * 0.05, H * 0.56);
+  ctx.stroke();
+  ctx.restore();
+}
 
 function holdMove(btn, dir) {
   let iv = null;
@@ -1769,6 +2017,8 @@ $('fireBtn').onclick = () => {
   const a = myAim();
   sendMsg({ type: 'fire', weapon: S.selected, angle: a.angle, power: a.power });
   if (navigator.vibrate) navigator.vibrate(30);
+  markAimGuideDone();                        // they can shoot — no more demo, ever
+  if (dockIntro) { dockIntro = false; setDockCollapsed(true, true); }   // intro over: tuck away
   S.charging = false; S.pullPointer = null; S.pullAnchor = null;
   updateDock();
 };
@@ -3278,6 +3528,7 @@ function draw() {
   }
   ctx.restore();
 
+  drawAimGuide();                 // first-play gesture demo — screen space, above the shake
   if (S.flash > 0.01) { ctx.fillStyle = `rgba(255,240,210,${S.flash})`; ctx.fillRect(0, 0, cssW, cssH); }
   drawKillcam(cssW, cssH);        // bars/vignette sit outside the shake transform
 }
