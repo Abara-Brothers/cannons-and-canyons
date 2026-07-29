@@ -403,10 +403,15 @@ function cameraTarget() {
   }
   const surveyX = Number.isFinite(xmin) ? (xmin + xmax) / 2 : focus.x;
   let tx = focus.x + (surveyX - focus.x) * surveyMix + (S.panX || 0);
-  const framedY = focus.y - vh * 0.18;
+  // BOSS FIGHT sits everything much lower in the frame: the WARLORD trades in
+  // huge lobbed arcs, and Jordan's read was 'too much ground/lava, can't see
+  // the sky to judge the trajectory'. The world clamp below caps the bias at
+  // the world's top edge, so a big value is safe. Golf ignores both knobs
+  // (surveyMix 0 + its own aimZoom branch); the killcam blends over them.
+  const framedY = focus.y - vh * (S.mode === 'boss' ? 0.30 : 0.18);
   // On landscape, sit the tanks lower in the frame by default so you see more sky
   // (and less of the terrain wall). Then apply the user's vertical pan (S.panY).
-  const skyBias = view.cssW > view.cssH ? vh * 0.13 : 0;
+  const skyBias = S.mode === 'boss' ? vh * 0.26 : (view.cssW > view.cssH ? vh * 0.13 : 0);
   const surveyY = (ycnt ? ysum / ycnt : focus.y) - skyBias;
   let ty = framedY + (surveyY - framedY) * surveyMix + (S.panY || 0);
   // KILLCAM is the ONE time the camera leaves your tank during a shot: blend the
@@ -752,7 +757,7 @@ function connect() {
   };
   ws.onclose = () => { S.connected = false; if (S.playing) $('connErr').classList.remove('hidden'); setTimeout(connect, 1500); };
   ws.onerror = () => {};
-  ws.onmessage = (e) => { let m; try { m = JSON.parse(e.data); } catch { return; } handle(m); };
+  ws.onmessage = (e) => { let m; try { m = JSON.parse(e.data); } catch { return; } S.msgCount = (S.msgCount || 0) + 1; handle(m); };
 }
 function sendMsg(m) { if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify(m)); }
 
@@ -762,11 +767,27 @@ function sendMsg(m) { if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringif
 // missed broadcasts. One rule un-sticks everything: on return, reconnect if the
 // socket is gone, otherwise ask the server for a fresh restore snapshot —
 // applySnapshot rebuilds turn/hp/ammo state and clears any stuck animation.
+let syncWatchdog = null;
 function resyncOnReturn() {
   if (!S.playing) return;
   const st = S.ws ? S.ws.readyState : 3;
-  if (st === 1) sendMsg({ type: 'sync' });
-  else if (st !== 0) connect();          // 0 = already reconnecting, leave it be
+  if (st === 1) {
+    sendMsg({ type: 'sync' });
+    // A mobile suspend can leave a ZOMBIE socket: readyState still says OPEN,
+    // but the connection under it is gone — the sync sails into the void and
+    // connect() refuses to act while the socket 'looks' alive. If nothing at
+    // all arrives shortly after the sync, stop believing the socket: close it
+    // and reconnect — the resume token then takes the seat over server-side.
+    clearTimeout(syncWatchdog);
+    const seen = S.msgCount || 0;
+    syncWatchdog = setTimeout(() => {
+      if (!S.playing || (S.msgCount || 0) !== seen) return;
+      try { S.ws.close(); } catch { /* already dying */ }
+      connect();                         // close() puts readyState past the guard
+    }, 3000);
+  } else if (st !== 0) {
+    connect();                           // 0 = already reconnecting, leave it be
+  }
 }
 window.addEventListener('visibilitychange', () => { if (!document.hidden) resyncOnReturn(); });
 window.addEventListener('pageshow', () => resyncOnReturn());
@@ -821,7 +842,16 @@ function handle(m) {
       applySnapshot(m); saveResume(m.code, m.token);
       showToast('Reconnected — battle on!');
       break;
-    case 'resumeError': clearResume(); break;
+    case 'resumeError':
+      clearResume();
+      // The room is gone (ended, or reclaimed after a very long absence).
+      // Leaving the player staring at a frozen battlefield with dead buttons
+      // was the worst outcome of all — say so and go home cleanly.
+      if (S.playing) {
+        showToast('That battle has ended.');
+        setTimeout(() => location.reload(), 1600);
+      }
+      break;
     case 'oppConn': {
       const who = S.names[m.seat] || 'Opponent';
       showToast(m.connected ? `${who} reconnected` : `${who} lost connection — holding their seat…`);
@@ -1207,6 +1237,18 @@ $('startMatchBtn').onclick = () => { Audio.ensure(); sendMsg({ type: 'startMatch
 // Game setup (also used to restore a resumed match)
 // ---------------------------------------------------------------------------
 function applySnapshot(m) {
+  // WARM restore = this same session was already in this battle and is just
+  // resyncing after a background/return. 'Resumes exactly as you left it'
+  // means exactly that: your dialled aim, chosen weapon, camera zoom/pan and
+  // dock state all survive the resync. A COLD path (fresh boot, new match,
+  // next golf hole) still resets everything.
+  const warm = S.playing && m.type === 'restore';
+  const keep = warm ? {
+    aim: S.aim && S.aim[S.you] ? { ...S.aim[S.you] } : null,
+    selected: S.selected,
+    zoom: S.userZoom, panX: S.panX, panY: S.panY,
+    dockShut: $('dock').classList.contains('collapsed'),
+  } : null;
   S.world = m.world || S.world;
   S.lavaY = m.lavaY ?? (S.world.h - 300);
   S.you = m.you; S.names = m.names; S.weapons = m.weapons;
@@ -1261,6 +1303,14 @@ function applySnapshot(m) {
   S.chainQueue = [];
   S.recoil = [0, 0];
   S.charging = false; S.pullPointer = null; S.pullAnchor = null; S.userZoom = START_ZOOM; S.panY = 0; S.panX = 0;
+  if (keep) {
+    // Same-session resync: put back what the player had in hand. The weapon
+    // only returns if the restored ammo still allows it (99 = unlimited).
+    if (keep.aim) S.aim[S.you] = keep.aim;
+    if (keep.selected && (S.ammo[keep.selected] ?? 0) > 0 &&
+        (S.weapons || []).some(w => w.id === keep.selected)) S.selected = keep.selected;
+    S.userZoom = clampUserZoom(keep.zoom); S.panX = keep.panX; S.panY = keep.panY;
+  }
   computeMinY();
   $('overlay').classList.add('hidden');
   showScreen('game');
@@ -1270,7 +1320,8 @@ function applySnapshot(m) {
   buildScoreboard();
   updateHud(); updateAimUI(); updateFuel(); updateDock();
   closeStageMenus();      // camera + meta always start collapsed
-  startDockCollapsed();   // ...and so does the dock — the tab brings it up
+  if (keep) setDockCollapsed(keep.dockShut, false);   // resync: dock stays as you left it
+  else startDockCollapsed();   // fresh start: hidden — the tab brings it up
 }
 
 // The server hands the turn over on ITS clock — usually while this client is
@@ -1395,10 +1446,15 @@ function updateFuel() {
   const pct = Math.max(0, Math.min(100, (S.fuel / S.moveBudget) * 100));
   $('fuelBar').style.width = pct + '%';
 }
-function myTurn() { return S.turn === S.you && S.playing && !S.anim; }
+// Holed out this hole? Your round is over until the next tee — no aiming, no
+// arc, no FIRE. (The server refuses the swing anyway; this kills the illusion
+// that one is available.) Resets itself: the next 'hole' snapshot arrives with
+// done[] refilled false.
+function golfHoledMe() { return !!(S.golf && S.golf.done && S.golf.done[S.you]); }
+function myTurn() { return S.turn === S.you && S.playing && !S.anim && !golfHoledMe(); }
 // You may line up your NEXT shot (aim + weapon) at any time — even while the
 // opponent is shooting. Only moving and firing wait for your turn.
-function canAim() { return S.playing; }
+function canAim() { return S.playing && !golfHoledMe(); }
 
 function updateDock() {
   const active = myTurn();
@@ -2249,8 +2305,26 @@ function applyResolve(m) {
   if (m.golf) {
     S.golf = { ...(S.golf || {}), ...m.golf };
     const t = S.tanks[m.golf.noteSeat];
-    const NOTES = { holed: 'SUNK IT!', hazard: 'HAZARD +1', oob: 'OUT OF BOUNDS +1', capped: 'PICKED UP' };
+    const NOTES = { holed: 'SUNK IT!', hazard: 'HAZARD +1', oob: 'OUT OF BOUNDS +1', capped: 'PICKED UP', water: 'IN THE WATER — DROP +1' };
     if (m.golf.note && t) S.floaters.push({ x: t.x, y: t.y - 420, text: NOTES[m.golf.note] || '', age: 0, life: 1.8, color: m.golf.note === 'holed' ? '#b6ff5a' : '#ffd23f' });
+    // A splash SELLS the ruling: white spray + blue droplets where the replay
+    // path ends (integrate parks the final point ON the waterline). Sparks and
+    // rects only — round particles are banned from the front layer.
+    if (m.golf.note === 'water') {
+      const pr = m.projectiles && m.projectiles[0];
+      const tip = pr && pr.path && pr.path.length ? pr.path[pr.path.length - 1] : null;
+      if (tip) {
+        for (let i = 0; i < 14; i++) {
+          S.particles.push({
+            x: tip[0] + (Math.random() - 0.5) * 260, y: tip[1] - Math.random() * 60,
+            vx: (Math.random() - 0.5) * 900, vy: -400 - Math.random() * 900,
+            life: 0.5 + Math.random() * 0.4, age: 0, r: 1.6 + Math.random() * 1.6,
+            g: 1.15, shape: i % 3 ? 'spark' : 'rect',
+            color: i % 2 ? '#bfe4ff' : '#e8f6ff',
+          });
+        }
+      }
+    }
     if (m.golf.note === 'holed' && m.golf.noteSeat === S.you && m.golf.strokes && m.golf.strokes[S.you] === 1) { PROF.aces++; award('ace'); saveProf(); }
   }
   updateHud(); buildWeaponStrip();
@@ -3169,6 +3243,7 @@ function draw() {
     drawTrees();
     drawProps();
     drawCrates();
+    drawGolfWater();
     drawTeeBox();
     drawGolfCup();
     drawHazards();
@@ -3324,6 +3399,7 @@ function drawTerrain(w, h) {
     if (surf >= h) continue;
     const sc = burnt ? Math.round(scorchAt(wxc) * SCORCH_STEPS) : 0;
     const golfC = S.golf ? golfTopColor(wxc, TLAYERS[0][1]) : null;
+    const golfDeep = golfC && golfSandAt(wxc) ? 'rgb(196,172,110)' : null;   // bunkers get real depth
     let top = surf;
     // Indestructible concrete reads as concrete, not painted grass — but only
     // while the deck itself is the surface (dirt piled on top covers it).
@@ -3341,7 +3417,7 @@ function drawTerrain(w, h) {
     for (let li = 0; li < TLAYERS.length; li++) {
       const bottom = TLAYERS[li][0] === Infinity ? h : surf + TLAYERS[li][0] * z;
       const y0 = Math.max(0, Math.round(top)), y1 = Math.min(h, Math.round(bottom));
-      if (y1 > y0) { ctx.fillStyle = (li === 0 && golfC) ? golfC : TCHAR[li][sc]; ctx.fillRect(sx, y0, 1, y1 - y0); }
+      if (y1 > y0) { ctx.fillStyle = (li === 0 && golfC) ? golfC : (li === 1 && golfDeep) ? golfDeep : TCHAR[li][sc]; ctx.fillRect(sx, y0, 1, y1 - y0); }
       top = bottom;
       if (top >= h) break;
     }
@@ -4237,15 +4313,78 @@ function drawPlane() {
 // links and an ice hole as frost — same course language, same biome.
 function golfTopColor(wx, base) {
   const g = S.golf; if (!g || !g.cup) return null;
+  // Bunkers own their ground: raked sand with a faint grain, over everything
+  // else the column would have been. (The basin shape itself comes dished
+  // from the server, so the recolour lands exactly on the bowl.)
+  if (golfSandAt(wx)) {
+    const grain = Math.floor(wx / 90) % 3;
+    return grain === 0 ? 'rgb(214,192,134)' : grain === 1 ? 'rgb(206,183,124)' : 'rgb(219,198,142)';
+  }
   const inGreen = Math.abs(wx - g.cup.x) <= 2200;
   const inFringe = !inGreen && Math.abs(wx - g.cup.x) <= 2750;
   const inFair = wx >= g.tee - 700 && wx <= g.cup.x + 700;
   // The green is REAL turf on every biome — mown lawn stripes, whether the
   // course runs through snow, sand or alpine meadow.
-  if (inGreen) return (Math.floor(wx / 300) % 2 === 0) ? [88, 166, 74] : [70, 146, 60];
-  if (inFringe) return [58, 118, 52];                          // collar of deeper turf
+  // (These once returned bare [r,g,b] arrays — an INVALID canvas fillStyle
+  // that is silently ignored, so the green was painting in whatever colour
+  // the previous column left behind. fillStyle wants strings. Found while
+  // adding the bunker recolour, 2026-07-29.)
+  if (inGreen) return (Math.floor(wx / 300) % 2 === 0) ? 'rgb(88,166,74)' : 'rgb(70,146,60)';
+  if (inFringe) return 'rgb(58,118,52)';                       // collar of deeper turf
   if (inFair)  return (Math.floor(wx / 800) % 2 === 0) ? mixToward(base, [110, 190, 96], 0.28) : mixToward(base, [90, 168, 80], 0.18);
   return mixToward(base, [20, 26, 18], 0.22);                  // the rough
+}
+// Is this column inside a bunker? Shared by the top-band recolour above and
+// drawTerrain's second-layer fill — one 55u band of sand is invisible at
+// survey zoom, so a bunker paints BOTH top layers (~285u of depth: a pocket).
+function golfSandAt(wx) {
+  const g = S.golf; if (!g || !g.hazards) return false;
+  for (const h of g.hazards) if (h.kind === 'sand' && wx >= h.a && wx <= h.b) return true;
+  return false;
+}
+
+// A water hazard is a filled basin: a still surface at the stored waterline
+// with a soft depth gradient down to the dug bed, plus a slow light shimmer
+// on the surface. Drawn after the terrain so the banks frame it, before the
+// tanks so a ball at the drop point stands on the bank in front of it.
+function drawGolfWater() {
+  const g = S.golf; if (!g || !g.hazards) return;
+  for (const h of g.hazards) {
+    if (h.kind !== 'water') continue;
+    const x0 = wx2s(h.a), x1 = wx2s(h.b);
+    if (x1 < -40 || x0 > view.cssW + 40) continue;
+    const yS = wy2s(h.y);
+    // Body: follow the bed contour so the fill never leaks past the banks.
+    let bot = yS;
+    ctx.beginPath();
+    ctx.moveTo(x0, yS);
+    ctx.lineTo(x1, yS);
+    const step = Math.max(2, (h.b - h.a) / 48);
+    for (let wx = h.b; wx >= h.a; wx -= step) {
+      const by = wy2s(Math.max(h.y, surfaceAt(wx)));
+      bot = Math.max(bot, by);
+      ctx.lineTo(wx2s(wx), by);
+    }
+    ctx.closePath();
+    const gr = ctx.createLinearGradient(0, yS, 0, Math.max(yS + 1, bot));
+    gr.addColorStop(0, 'rgba(64,150,210,0.62)');
+    gr.addColorStop(1, 'rgba(14,52,104,0.82)');
+    ctx.fillStyle = gr;
+    ctx.fill();
+    // Surface line + drifting shimmer dashes.
+    ctx.strokeStyle = 'rgba(190,228,255,0.65)';
+    ctx.lineWidth = Math.max(1, 26 * cam.zoom);
+    ctx.beginPath(); ctx.moveTo(x0, yS); ctx.lineTo(x1, yS); ctx.stroke();
+    const t = performance.now() / 1000;
+    ctx.strokeStyle = 'rgba(230,246,255,0.5)';
+    ctx.lineWidth = Math.max(1, 14 * cam.zoom);
+    for (let i2 = 0; i2 < 3; i2++) {
+      const k = ((t * 0.09 + i2 * 0.33) % 1);
+      const cxp = x0 + (x1 - x0) * k;
+      const w2 = Math.min(34, (x1 - x0) * 0.14);
+      ctx.beginPath(); ctx.moveTo(cxp - w2 / 2, yS + 2); ctx.lineTo(cxp + w2 / 2, yS + 2); ctx.stroke();
+    }
+  }
 }
 
 // Real-course tee colours: championship black at the back, then men's white,
@@ -4255,31 +4394,35 @@ const TEE_COLS = { champ: '#16181c', mens: '#f2f5f7', womens: '#ff5a52', junior:
 function drawTeeBox() {
   const g = S.golf; if (!g || !g.tee) return;
   let sets = g.tees ? Object.entries(g.tees) : [['mens', g.tee]];
-  // Fixed-size boxes overlap on screen when the camera is far out — in that
-  // case show only the set being PLAYED, so markers never pile up.
+  // Boxes that overlap on screen when the camera is far out collapse to only
+  // the set being PLAYED, so markers never pile up.
   if (sets.length > 1) {
     const xs = sets.map(([, tx]) => wx2s(tx)).sort((a, b) => a - b);
     let minGap = Infinity;
     for (let i = 1; i < xs.length; i++) minGap = Math.min(minGap, xs[i] - xs[i - 1]);
     if (minGap < 78) sets = sets.filter(([set]) => set === (g.teeSet || 'mens'));
   }
+  // WORLD-scaled (2026-07-29, Jordan: golf objects must not change size
+  // against the course when zooming — same contract as barrels/crates). The
+  // mat spans 1,560 world units with knee-high markers; the floor only stops
+  // it going sub-pixel at the widest survey zoom.
+  const u = Math.max(2.2, 300 * cam.zoom);
   for (const [set, tx] of sets) {
     const sx = wx2s(tx);
-    if (sx < -140 || sx > view.cssW + 140) continue;
+    if (sx < -u * 4 || sx > view.cssW + u * 4) continue;
     const gy = wy2s(surfaceAt(tx));
-    const u = 12;                     // constant screen size at every zoom
     const active = set === (g.teeSet || 'mens');
     ctx.fillStyle = active ? 'rgba(60,232,143,0.5)' : 'rgba(20,30,18,0.55)';   // tee mat
-    ctx.fillRect(sx - u * 2.6, gy - Math.max(1, u * 0.14), u * 5.2, Math.max(2, u * 0.22));
+    ctx.fillRect(sx - u * 2.6, gy - Math.max(1, u * 0.3), u * 5.2, Math.max(2, u * 0.42));
     ctx.fillStyle = TEE_COLS[set] || '#f2f5f7';                                // set-coloured markers
     for (const s of [-1, 1]) {
       ctx.beginPath();
-      ctx.moveTo(sx + s * u * 2.4, gy - u * 0.85);
-      ctx.lineTo(sx + s * u * 2.4 + u * 0.3, gy);
-      ctx.lineTo(sx + s * u * 2.4 - u * 0.3, gy);
+      ctx.moveTo(sx + s * u * 2.3, gy - u * 1.3);
+      ctx.lineTo(sx + s * u * 2.3 + u * 0.42, gy);
+      ctx.lineTo(sx + s * u * 2.3 - u * 0.42, gy);
       ctx.closePath(); ctx.fill();
       if ((TEE_COLS[set] || '') === '#16181c') {                 // black markers get a rim
-        ctx.strokeStyle = '#8a93a8'; ctx.lineWidth = 1;
+        ctx.strokeStyle = '#8a93a8'; ctx.lineWidth = Math.max(1, u * 0.09);
         ctx.stroke();
       }
     }
@@ -4289,11 +4432,14 @@ function drawTeeBox() {
 function drawGolfCup() {
   const g = S.golf; if (!g || !g.cup) return;
   const sx = wx2s(g.cup.x);
-  if (sx < -60 || sx > view.cssW + 60) return;
+  // WORLD-scaled (2026-07-29): the pin used to be a constant 13px 'yardstick',
+  // but a fixed-px sprite in a world-scaled scene visibly changes size against
+  // the course — the exact barrel complaint from batch 8.13. The stick is now
+  // ~1,200 world units (about two tank heights); the floor only stops it going
+  // sub-pixel when the whole 155k-unit hole is on screen.
+  const u = Math.max(2.6, 260 * cam.zoom);
+  if (sx < -u * 3 || sx > view.cssW + u * 3) return;
   const gy = wy2s(surfaceAt(g.cup.x));
-  // The flag is the course's yardstick: a CONSTANT screen size at every zoom,
-  // so how small the fairway looks against it tells you how far you are.
-  const u = 13;
   // cup shadow (the notch itself is carved into the terrain server-side)
   ctx.fillStyle = 'rgba(10,12,16,0.55)';
   ctx.fillRect(sx - u * 0.5, gy - u * 0.12, u, u * 0.3);
@@ -4308,10 +4454,10 @@ function drawGolfCup() {
   ctx.lineTo(sx + u * 1.7 + wob, gy - u * 4.05);
   ctx.lineTo(sx + u * 0.07, gy - u * 3.55);
   ctx.closePath(); ctx.fill();
-  // hole marker dash: FIXED width — nothing on the pin changes with zoom
-  ctx.strokeStyle = 'rgba(182,255,90,0.45)'; ctx.lineWidth = 1.4;
+  // hole marker dash — scales with the pin like everything else on it
+  ctx.strokeStyle = 'rgba(182,255,90,0.45)'; ctx.lineWidth = Math.max(1, u * 0.11);
   ctx.setLineDash([5, 6]);
-  ctx.beginPath(); ctx.moveTo(sx - 14, gy + u * 0.35); ctx.lineTo(sx + 14, gy + u * 0.35); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(sx - u * 1.1, gy + u * 0.35); ctx.lineTo(sx + u * 1.1, gy + u * 0.35); ctx.stroke();
   ctx.setLineDash([]);
 }
 
@@ -4667,6 +4813,7 @@ function roundedRect(x, y, w, h, r) {
 // line up your next shot while the opponent takes theirs.
 function drawAim() {
   if (!S.playing) return;
+  if (golfHoledMe()) return;                       // in the clubhouse — no reticle
   if (S.killcam && S.killcam.mix > 0.02) return;   // no reticle over the killcam
   // Your own tank is mid-warp — the reticle would snap to the new x the moment
   // applyResolve lands. Hide it until the tank has materialised.
@@ -4698,9 +4845,9 @@ function drawAim() {
     if (selW.ground) {
       // PUTTER: the ball never lofts, so an arc would be a lie. Show a dotted
       // pace line hugging the turf — its length is the true flat-ground roll
-      // (v^2 / 2·rr·g, rr 0.065 mirrors game-core's putter), first 60% shown.
+      // (v^2 / 2·rr·g, rr 0.05 mirrors game-core's putter), first 60% shown.
       const v = aim.power * 52 * (selW.speedMul || 1);
-      const roll = (v * v) / (2 * 0.065 * 900);
+      const roll = (v * v) / (2 * 0.05 * 900);
       const pdir = dir * (Math.cos(rad) < 0 ? -1 : 1);   // aim past 90° = putt backwards
       for (let i = 1; i <= 22; i++) {
         const f = (i / 22) * 0.6;

@@ -9,7 +9,7 @@ const out = { steps: [], errors: [] };
 const step = (m) => out.steps.push(m);
 const fail = (m) => { out.errors.push(m); console.error('FAIL ' + m); };
 const finish = () => { console.log(JSON.stringify(out, null, 2)); process.exit(out.errors.length ? 1 : 0); };
-setTimeout(() => { fail('timeout'); finish(); }, 100000);   // roll-out holds the turn now
+setTimeout(() => { fail('timeout'); finish(); }, 130000);   // roll-out holds the turn now (longer since the 8.17 roll retune)
 
 const ws = new WebSocket(URL);
 const send = (m) => ws.send(JSON.stringify(m));
@@ -42,7 +42,7 @@ ws.on('message', (raw) => {
   if (m.type === 'shot') {
     const g = m.golf;
     if (!g) return fail('golf shot payload missing golf block');
-    if (g.strokes[0] !== lastStrokes + 1 && g.note !== 'hazard' && g.note !== 'oob') {
+    if (g.strokes[0] !== lastStrokes + 1 && g.note !== 'hazard' && g.note !== 'oob' && g.note !== 'water') {
       fail(`strokes went ${lastStrokes} -> ${g.strokes[0]} without a penalty note`);
     }
     lastStrokes = g.strokes[0];

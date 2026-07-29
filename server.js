@@ -24,6 +24,13 @@ const RESUME_GRACE_MS = Number(process.env.RESUME_GRACE_MS) || 120000;
 // Async games: a private duel holds a disconnected seat for a DAY — take your
 // turn whenever, your opponent's push nudge brings them back.
 const ASYNC_GRACE_MS = Number(process.env.ASYNC_GRACE_MS) || 24 * 60 * 60 * 1000;
+// How long a room with NO connected human survives before it is reclaimed.
+// This is what lets a solo player (vs CPU, boss, aliens, golf) swap apps or
+// let the phone sleep and come back to the exact same battle — these rooms
+// used to be torn down the INSTANT the socket closed, so the resume grace
+// never applied to them at all. Room state is a few KB of memory; holding it
+// half an hour costs nothing and nobody else is waiting on it.
+const EMPTY_ROOM_GRACE_MS = Number(process.env.EMPTY_ROOM_GRACE_MS) || 30 * 60 * 1000;
 
 // Cosmetic tank paints (client renders them; validate ids here).
 const SKINS = ['olive', 'desert', 'jungle', 'midnight', 'arctic', 'gold'];
@@ -307,6 +314,7 @@ function snapshot(room, seat) {
       strokes: room.golf.strokes.map(r => r[room.golf.hole - 1] || 0),
       totals: room.golf.strokes.map(r => r.reduce((a, b) => a + b, 0)),
       done: room.golf.done.slice(),
+      hazards: room.golf.hazards || [],
     } : undefined,
     n: room.players.length, mode: room.mode,
     names: room.players.map(p => p.name),
@@ -457,7 +465,11 @@ function nextHole(room, first) {
   }
   g.teeSet = room.tees || 'mens';
   g.tee = g.tees[g.teeSet];
-  g.cup.y = prepareGolfHole(room.terrain, g.tee, g.cup.x, Object.values(g.tees));
+  // Shapes the course AND seats the hazards (1-3 sand, 0-1 water) off the same
+  // per-hole seed, so every client and every resume rebuilds the identical hole.
+  const prepared = prepareGolfHole(room.terrain, g.tee, g.cup.x, Object.values(g.tees), seed);
+  g.cup.y = prepared.cupY;
+  g.hazards = prepared.hazards;
   room.trees = generateTrees(room.terrain, seed, 2);
   room.tanks = room.players.map(() => ({ x: g.tee, y: surfaceAt(room.terrain, g.tee), alive: true }));
   g.done.fill(false);
@@ -478,14 +490,22 @@ function golfShot(room, seat, msg) {
   const club = clubW && clubW.golfOnly ? clubW.id : 'golfball';
   const result = simulateShot(
     { terrain: room.terrain, tanks: room.tanks, lavaY: room.lavaY, biome: room.biome,
-      cup: { x: g.cup.x, r: g.cup.r, capV: 2200 } },   // capV = drop-in speed; faster balls lip out
+      cup: { x: g.cup.x, r: g.cup.r, capV: 2200 },     // capV = drop-in speed; faster balls lip out
+      golfHazards: g.hazards || null },                // sand plugs, water splashes (see integrate)
     { by: seat, weapon: club, angle: msg.angle, power: msg.power, dir: room.facing[seat] }
   );
   const hi = g.hole - 1;
   g.strokes[seat][hi]++;
   const rest = result.golf && result.golf.rest;
   let note = '';
-  if (rest && rest[1] >= room.lavaY - 6) {
+  if (result.golf && result.golf.water) {
+    // WATER: stroke + penalty, and — unlike OOB — the ball is DROPPED at the
+    // bank the shot came in over, exactly like a real lateral hazard.
+    g.strokes[seat][hi]++;
+    note = 'water';
+    room.tanks[seat].x = result.golf.water.x;
+    room.tanks[seat].y = surfaceAt(room.terrain, result.golf.water.x);
+  } else if (rest && rest[1] >= room.lavaY - 6) {
     g.strokes[seat][hi]++;               // splash! stroke + penalty, play again from here
     note = 'hazard';
   } else if (!rest) {
@@ -514,6 +534,7 @@ function golfShot(room, seat, msg) {
       strokes: g.strokes.map(r => r[hi]),
       totals: g.strokes.map(r => r.reduce((a, b) => a + b, 0)),
       done: g.done.slice(), note, noteSeat: seat,
+      hazards: g.hazards || [],
     },
   });
   clearTimeout(room.clock);
@@ -522,7 +543,9 @@ function golfShot(room, seat, msg) {
   // Real rolling can run well past the old cap — the hold must cover the whole
   // replay (maxT 60s of sim = 1800 points ≈ 16.2s of playback, plus settle).
   const ptsMs = ((result.projectiles[0] && result.projectiles[0].path.length) || 0) * 9;
-  room.clock = setTimeout(() => { room.clock = null; golfAdvance(room, seat); }, 1100 + Math.min(22000, Math.round(ptsMs)));
+  // Cap raised with the roll retune + maxT 100: the longest legal replay is
+  // ~3000 points ≈ 26s of playback — the hold must outlast it.
+  room.clock = setTimeout(() => { room.clock = null; golfAdvance(room, seat); }, 1100 + Math.min(30000, Math.round(ptsMs)));
 }
 
 function golfAdvance(room, by) {
@@ -906,12 +929,21 @@ function botFire(room) {
   if (bot.boss) {
     room.bossShots = (room.bossShots || 0) + 1;
     const me = room.tanks[seat];
-    // Target selection: finish the WOUNDED. The gunnery brain aims at the
-    // nearest living tank, so every other human is masked off the field.
+    // Target selection: the WARLORD spreads its fire — a fresh RANDOM living
+    // human every turn, with a strong lean (75%) toward whoever it did NOT
+    // just shell, so a two-player squad sees the heat cycle between them
+    // instead of one player being tunnel-visioned to death (the old rule
+    // locked onto the lowest-HP human until they dropped). The gunnery brain
+    // aims at the nearest living tank, so every other human is masked off the
+    // field.
     const humans = room.players.map((p, i) => i)
       .filter(i => i !== seat && !room.players[i].bot && room.tanks[i].alive !== false && room.hp[i] > 0);
     let mark = -1;
-    for (const i of humans) if (mark < 0 || room.hp[i] < room.hp[mark]) mark = i;
+    if (humans.length) {
+      const fresh = humans.filter(i => i !== room.bossMark);
+      const pool = fresh.length && Math.random() < 0.75 ? fresh : humans;
+      mark = pool[Math.floor(Math.random() * pool.length)];
+    }
     if (mark >= 0) room.bossMark = mark;
     const d = mark >= 0 ? Math.abs(room.tanks[mark].x - me.x) : Infinity;
     // Cluster punish: two humans bunched together eat a Seismic Slam.
@@ -1240,6 +1272,7 @@ function teardown(room, notify) {
   clearInterval(room.dotTimer);
   clearInterval(room.fireTimer);
   clearTimeout(room.pickTimer);
+  clearTimeout(room.emptyTimer);
   for (const p of room.players) if (p) clearTimeout(p.dropTimer);
   if (notify) broadcast(room, { type: 'opponentLeft' });
   rooms.delete(room.code);
@@ -1267,21 +1300,35 @@ function handleClose(ws) {
   player.connected = false;
   broadcast(room, { type: 'oppConn', seat, connected: false });
   clearTimeout(player.dropTimer);
-  player.dropTimer = setTimeout(() => {
-    if (player.connected || room.state !== 'playing') return;
-    // Grace expired. Scuttle only THEIR tank — the free-for-all carries on.
-    room.hp[seat] = 0;
-    killDead(room);
-    broadcast(room, { type: 'forfeit', seat, hp: room.hp.map(h => Math.max(0, Math.round(h))), alive: aliveFlags(room) });
-    if (matchOver(room)) return endGame(room);
-    if (room.turn === seat) {          // they dropped mid-turn — move the game on
-      clearTimeout(room.clock);
-      clearInterval(room.dotTimer); room.dotTimer = null;
-      advance(room, seat);
-    }
-  }, room.asyncOk ? ASYNC_GRACE_MS : RESUME_GRACE_MS);
-  // If every human is gone, drop the room right away.
-  if (!room.players.some(p => p && !p.bot && p.connected)) teardown(room);
+  // The forfeit scuttle exists to protect a WAITING opponent. In a room with
+  // no other human there is nobody to protect — skip it entirely and let the
+  // empty-room hold below govern, so a solo player can be away far longer
+  // than the multiplayer grace without losing their tank.
+  const otherHumans = room.players.some((p, i) => p && !p.bot && i !== seat);
+  if (otherHumans) {
+    player.dropTimer = setTimeout(() => {
+      if (player.connected || room.state !== 'playing') return;
+      // Grace expired. Scuttle only THEIR tank — the free-for-all carries on.
+      room.hp[seat] = 0;
+      killDead(room);
+      broadcast(room, { type: 'forfeit', seat, hp: room.hp.map(h => Math.max(0, Math.round(h))), alive: aliveFlags(room) });
+      if (matchOver(room)) return endGame(room);
+      if (room.turn === seat) {          // they dropped mid-turn — move the game on
+        clearTimeout(room.clock);
+        clearInterval(room.dotTimer); room.dotTimer = null;
+        advance(room, seat);
+      }
+    }, room.asyncOk ? ASYNC_GRACE_MS : RESUME_GRACE_MS);
+  }
+  // Every human gone: HOLD the room instead of dropping it — a window swap or
+  // a phone sleep must never cost the match. Any resume cancels the hold. An
+  // async duel keeps its full day: both players being offline between turns
+  // is that mode's NORMAL state, and the push nudge is what brings them back.
+  if (!room.players.some(p => p && !p.bot && p.connected)) {
+    clearTimeout(room.emptyTimer);
+    room.emptyTimer = setTimeout(() => teardown(room),
+      room.asyncOk ? ASYNC_GRACE_MS : EMPTY_ROOM_GRACE_MS);
+  }
 }
 
 function handleResume(ws, msg) {
@@ -1299,6 +1346,7 @@ function handleResume(ws, msg) {
   // can't clobber this new connection.
   const stale = player.ws;
   clearTimeout(player.dropTimer);
+  clearTimeout(room.emptyTimer);       // somebody's home again — cancel the hold
   player.ws = ws; player.connected = true;
   ws.roomCode = room.code; ws.seat = seat;
   if (stale && stale !== ws) { try { stale.terminate(); } catch { /* already gone */ } }

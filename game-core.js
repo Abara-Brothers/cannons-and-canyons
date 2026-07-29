@@ -281,21 +281,22 @@ export const WEAPONS = [
     // speedMul rides the combat power trims in the OPPOSITE direction so golf
     // ballistics never move: 52 × 1.0038 ≈ the original 58 × 0.9 launch speed.
     shots: 1, spread: 0,  speedMul: 1.0038, damage: 0, radius: 0, terrain: 'none',
-    // Flat-ground roll-out retuned 2026-07-29 (Jordan: 'doesn't roll for long
-    // enough on flat ground'): each bounce keeps more tangential speed (fric)
-    // and the roll itself bleeds slower (rr). Measured on dead-flat turf the
-    // release is 1.4-1.7x the old distance (Iron 1.45x, Driver 1.7x, Putter
-    // 1.55x); a full-send Driver rests in ~49s sim, inside the 60s golf maxT.
-    bounce: { rest: 0.45, fric: 0.80, rr: 0.16 },    // bites on the pitch mark, then releases
+    // Roll-out retuned again 2026-07-29 pm (Jordan: 'more realistic... roll
+    // for longer, the same as a golf ball'). Third notch: fric up, rr down.
+    // If you touch rr AGAIN: (1) drawAim's putter pace-line hard-codes the
+    // putter rr and must move in lockstep; (2) re-measure the full-send
+    // Driver's total sim time against the golf maxT below (100s) — the 8.16
+    // tune already reached 49s at rr .085.
+    bounce: { rest: 0.45, fric: 0.82, rr: 0.12 },    // bites on the pitch mark, then releases
     desc: 'The honest mid-game club. Flies true, bites on landing.' },
   { id: 'driver',    name: 'Driver',          color: '#ffd23f', ammo: 99, golfOnly: true,
     shots: 1, spread: 0,  speedMul: 1.25, damage: 0, radius: 0, terrain: 'none',
-    bounce: { rest: 0.50, fric: 0.86, rr: 0.085 },   // longest carry AND the longest roll-out
+    bounce: { rest: 0.50, fric: 0.88, rr: 0.062 },   // longest carry AND the longest roll-out
     desc: 'Off the tee: maximum carry, and it runs forever on the fairway.' },
   { id: 'putter',    name: 'Putter',          color: '#8affde', ammo: 99, golfOnly: true,
     shots: 1, spread: 0,  speedMul: 0.20, damage: 0, radius: 0, terrain: 'none',
     ground: true,                                     // struck along the turf — the ball NEVER lofts
-    bounce: { rest: 0.2, fric: 0.9, rr: 0.065 },     // true roll: full power ≈ a 9,000u lag putt
+    bounce: { rest: 0.2, fric: 0.9, rr: 0.05 },      // true roll: full power ≈ a 12,000u lag putt
     desc: 'No loft, no drama. Rolls exactly as far as you dare.' },
 ];
 
@@ -877,13 +878,15 @@ export function simulateShot(state, shot) {
       }
       const fp = integrate(state.terrain, state.tanks, iox, ioy, ivx, ivy,
         w.pierce ? { pierce: true, pierceBy: by, proximity: w.proximity || 0, gravMul, by }
-        : w.bounce ? { bounce: w.bounce, gravMul, by, maxT: 60, ground: !!w.ground, cup: state.cup }
+        : w.bounce ? { bounce: w.bounce, gravMul, by, maxT: 100, ground: !!w.ground, cup: state.cup,
+                       hazards: state.golfHazards || null }
         : { gravMul, by });
       let d = null;
       if (w.bounce) {
         // Golf: no detonation — the ball either comes to rest (a soft dust puff)
         // or leaves the world (out of bounds; the server scores the penalty).
-        golfOut = { rest: fp.rest ? [fp.rest.x, fp.rest.y] : null };
+        golfOut = { rest: fp.rest ? [fp.rest.x, fp.rest.y] : null,
+                    water: fp.water || null };            // splash ruling: drop-x for the server
         if (fp.rest) d = det(fp.rest.x, fp.rest.y, 22, 'none');
       } else if (fp.hit) {
         d = det(fp.x, fp.y, w.wall ? 0 : w.radius, w.terrain, w.hazard ? w.hazard.type : null);
@@ -1068,6 +1071,21 @@ function integrate(terrain, tanks, ox, oy, vx, vy, opts) {
   let rolling = !!opts.ground;
   let s = rolling ? Math.hypot(vx, vy) * Math.sign(vx || 1) : 0;   // signed ground speed
   if (rolling) y = surfaceAt(terrain, x);
+  // GOLF HAZARDS (opts.hazards, golf only). Sand is physics: a plugged lie —
+  // the bounce dies (rest x0.22, fric x0.55) and the roll drags hard (rr
+  // x5.5). Water is a ruling: first ground contact inside the pond ends the
+  // shot at the SURFACE (not the basin floor) and reports the bank the ball
+  // came from as the drop point; the server takes the +1 from there.
+  const sands = opts.hazards ? opts.hazards.filter(h => h.kind === 'sand') : null;
+  const waters = opts.hazards ? opts.hazards.filter(h => h.kind === 'water') : null;
+  const inSand = (px) => { if (sands) for (const h of sands) { if (px >= h.a && px <= h.b) return true; } return false; };
+  const waterAt = (px) => { if (waters) for (const h of waters) { if (px >= h.a && px <= h.b) return h; } return null; };
+  const splash = (wz, fromLeft) => {
+    const dropX = Math.max(200, Math.min(terrain.length - 200,
+      fromLeft ? wz.a - 260 : wz.b + 260));
+    path.push([round1(Math.max(wz.a, Math.min(wz.b, x))), round1(wz.y)]);   // ball rests ON the water line
+    return { path, hit: false, water: { x: round1(dropX) }, x, y: wz.y, vx: 0, vy: 0 };
+  };
   const maxT = opts.maxT || MAX_T;
   // The muzzle now sits INSIDE the firer's own (much larger) hitbox, so the shell
   // must be allowed to leave its own tank before it can collide with it.
@@ -1083,10 +1101,13 @@ function integrate(terrain, tanks, ox, oy, vx, vy, opts) {
         path.push([round1(cx), round1(cy)]);
         return { path, hit: false, rest: { x: round1(cx), y: round1(cy) }, x: cx, y: cy, vx: 0, vy: 0 };
       }
+      const wz = waterAt(x);
+      if (wz && surfaceAt(terrain, x) > wz.y) return splash(wz, s >= 0);
       const k = (surfaceAt(terrain, x + 24) - surfaceAt(terrain, x - 24)) / 48;   // dy/dx, y-down
       const L = Math.hypot(k, 1);
       s += (GRAVITY * k / L) * DT;                       // slope pulls it downhill
-      const dec = (bz.rr * GRAVITY / L) * DT;            // rolling resistance
+      const rrEff = inSand(x) ? bz.rr * 5.5 : bz.rr;     // sand drags the roll hard
+      const dec = (rrEff * GRAVITY / L) * DT;            // rolling resistance
       s = Math.abs(s) <= dec ? 0 : s - Math.sign(s) * dec;
       x += (s / L) * DT;
       t += DT;
@@ -1096,7 +1117,7 @@ function integrate(terrain, tanks, ox, oy, vx, vy, opts) {
       }
       y = surfaceAt(terrain, x);
       // At rest only when stationary AND the grade can't restart the ball.
-      if (s === 0 && Math.abs(k) <= bz.rr * 1.05) {
+      if (s === 0 && Math.abs(k) <= rrEff * 1.05) {
         path.push([round1(x), round1(y)]);
         return { path, hit: false, rest: { x: round1(x), y: round1(y) }, x, y, vx: 0, vy: 0 };
       }
@@ -1151,22 +1172,27 @@ function integrate(terrain, tanks, ox, oy, vx, vy, opts) {
         // velocity about the local surface normal (heightmap slope over ±24u),
         // damp the normal component by restitution and the tangential one by
         // friction, and come to rest when it's too slow to matter.
+        const wz2 = waterAt(x);
+        if (wz2 && gy > wz2.y) return splash(wz2, vx >= 0);   // carried into the pond
         const bz = opts.bounce;
+        const plug = inSand(x);                          // a bunker kills the bounce
+        const rest2 = plug ? bz.rest * 0.22 : bz.rest;
+        const fric2 = plug ? bz.fric * 0.55 : bz.fric;
         bounces = (bounces || 0) + 1;
         const k = (surfaceAt(terrain, x + 24) - surfaceAt(terrain, x - 24)) / 48;   // dy/dx, y-down
         const L = Math.hypot(k, 1);
         const nx2 = k / L, ny2 = -1 / L;                 // outward (up) normal
         const vn = vx * nx2 + vy * ny2;
         const tx2 = vx - vn * nx2, ty2 = vy - vn * ny2;  // tangential part
-        vx = tx2 * bz.fric - vn * nx2 * bz.rest;
-        vy = ty2 * bz.fric - vn * ny2 * bz.rest;
+        vx = tx2 * fric2 - vn * nx2 * rest2;
+        vy = ty2 * fric2 - vn * ny2 * rest2;
         y = gy - 0.5;
         path.push([round1(x), round1(gy)]);
         // When the rebound has gone flat (barely leaves the turf any more) the
         // ball is no longer bouncing — it is ROLLING. Hand it to the roll model
         // with its tangential speed; from here on real friction decides where
         // it stops. (The old bz.stop / bounce-count / 6.5s caps are gone.)
-        if (Math.abs(vn) * bz.rest < 130) {
+        if (Math.abs(vn) * rest2 < 130) {
           rolling = true;
           s = (vx + vy * k) / L;                          // project onto the tangent
         }
@@ -1240,7 +1266,13 @@ export function terrainDiff(before, after) {
 // ---- Artillery Golf -----------------------------------------------------------
 // Dress a generated terrain as a golf hole: a flat tee box, a flat green, and a
 // crisp cup notch sunk into it. Returns the cup's surface y.
-export function prepareGolfHole(terrain, teeX, cupX, allTees) {
+// Returns { cupY, hazards }. Hazards are REAL course furniture, deterministic
+// per hole (seeded): 1-3 sand bunkers (dished bowls the ball plugs into) and
+// 0-1 water pond (a dug basin filled to a stored waterline — splash = drop at
+// the bank, +1). Placement respects the tee platform + ramps and the green +
+// fringe; the geometry rides the wire so the client draws exactly what the
+// sim penalises.
+export function prepareGolfHole(terrain, teeX, cupX, allTees, seed) {
   // A raw battlefield is a wall, not a course: a par-3 dead-ended by a 3000-unit
   // spire just bounces the ball back to the tee (observed). Two wide box-blurs
   // keep the macro elevation — ridges, valleys, doglegs — but knock spires and
@@ -1293,7 +1325,66 @@ export function prepareGolfHole(terrain, teeX, cupX, allTees) {
     if (x < 0 || x >= nL) continue;
     terrain[x] = terrain[x] + (1 - Math.pow(Math.abs(dx) / 200, 2)) * 120;
   }
-  return round1(surfaceAt(terrain, cupX));
+  // ---- HAZARDS -------------------------------------------------------------
+  // Placed LAST so the bowls they dish survive every smoothing pass above.
+  // Keep-out zones: the tee platform plus its 380-column ramps, and the green
+  // plus its fringe. Everything between is fairway and fair game.
+  const hazards = [];
+  {
+    const rng = mulberry32(((seed || 1) ^ 0x5bf03635) >>> 0);   // own stream — never
+    const teeXs = allTees && allTees.length ? allTees : [teeX]; // perturbs terrain gen
+    const keepLo = Math.max(...teeXs) + 500 + 380 + 320;        // platform + ramp + margin
+    const keepHi = cupX - gHalf - fringe - 320;                 // green + fringe + margin
+    const placed = [];                                          // [a,b] ranges, all kinds
+    const fits = (a, b) => a > keepLo && b < keepHi &&
+      placed.every(([pa, pb]) => b < pa - 800 || a > pb + 800);
+    // Try to seat a hazard of width w; a few random throws, then a sweep so a
+    // legal spot is never missed. Returns [a,b] or null.
+    const seat = (w) => {
+      const span = keepHi - keepLo - w;
+      if (span <= 0) return null;
+      for (let t = 0; t < 14; t++) {
+        const a = keepLo + rng() * span, b = a + w;
+        if (fits(a, b)) return [Math.round(a), Math.round(b)];
+      }
+      for (let a = keepLo + 1; a + w < keepHi; a += 400) {
+        if (fits(a, a + w)) return [Math.round(a), Math.round(a + w)];
+      }
+      return null;
+    };
+    // WATER first (it is the widest and the rarest): 0 or 1 per hole.
+    if (rng() < 0.55) {
+      let got = null;
+      for (let w = 1400 + Math.round(rng() * 800); !got && w >= 900; w -= 250) got = seat(w);
+      if (got) {
+        const [a, b] = got;
+        // Dig the basin, then set the waterline just under the LOWER rim so
+        // the pond never visually spills over its own banks.
+        for (let x = a; x <= b; x++) {
+          const k = Math.sin(Math.PI * (x - a) / (b - a));
+          terrain[x] += Math.pow(k, 1.4) * 420;
+        }
+        const rim = Math.min(terrain[Math.max(0, a - 1)], terrain[Math.min(nL - 1, b + 1)]);
+        hazards.push({ kind: 'water', a, b, y: round1(rim + 55) });
+        placed.push([a, b]);                              // sand must keep clear of the pond
+      }
+    }
+    // SAND: at least one bunker ALWAYS, up to three. Shrink until one seats.
+    const sandN = 1 + Math.floor(rng() * 3);
+    for (let s2 = 0; s2 < sandN; s2++) {
+      let got = null;
+      for (let w = 900 + Math.round(rng() * 700); !got && w >= 500; w -= 200) got = seat(w);
+      if (!got) break;
+      const [a, b] = got;
+      for (let x = a; x <= b; x++) {                      // a shallow lipped bowl
+        const k = Math.sin(Math.PI * (x - a) / (b - a));
+        terrain[x] += Math.pow(k, 1.2) * 140;
+      }
+      hazards.push({ kind: 'sand', a, b });
+      placed.push([a, b]);
+    }
+  }
+  return { cupY: round1(surfaceAt(terrain, cupX)), hazards };
 }
 
 // ---- Destructible props -------------------------------------------------------
