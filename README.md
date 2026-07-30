@@ -52,7 +52,7 @@ codebase implements or prepares for it.
 | **Free-for-all** | 3–4 | Host starts when ready; last tank standing wins. |
 | **Boss Fight** | 1–2 co-op | Bring down **WARLORD-7**, a mech that fights back. Beat it and the Midnight paint drops. |
 | **Alien Invasion** | 1–2 co-op | Hold out against escalating waves of xeno saucers. |
-| **Artillery Golf** | 1–2 | Nine holes, no damage. Three clubs — **Iron**, **Driver**, **Putter** — with real rolling physics, a scorecard and an end-of-round summary. |
+| **Artillery Golf** | 1–2 | Nine holes, no damage. Three clubs — **Driver**, **Iron**, **Putter** — with real rolling physics, a scorecard and an end-of-round summary. |
 
 ## Play locally
 

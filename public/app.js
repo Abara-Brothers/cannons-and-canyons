@@ -142,9 +142,13 @@ const ICONS = {
   buster: `<svg viewBox="0 0 24 24"><path d="M10.4 1.6h3.2v3.2h-3.2z" fill="#c98a4b"/><path d="M8.9 1.6h1.5v3.6L8 6.6zM15.1 1.6h-1.5v3.6L16 6.6z" fill="#7a5a30"/><rect x="10.2" y="4.6" width="3.6" height="6.2" fill="#c98a4b"/><rect x="10.2" y="4.6" width="1.3" height="6.2" fill="#e0a668"/><path d="M10.2 10.6h3.6L12 15.4z" fill="#8e969f"/><path d="M2.6 12.4h6.5l2.4 4.6-1.6 4.9H2.6z" fill="#6b5a34"/><path d="M21.4 12.4h-6.5l-2.4 4.6 1.6 4.9h7.3z" fill="#6b5a34"/><path d="M2.6 12.4h6.5l1 1.9H2.6zM21.4 12.4h-6.5l-1 1.9h7.5z" fill="#a6d878"/></svg>`,
   wall: `<svg viewBox="0 0 24 24"><path d="M1.4 20.4c1.9 0 3.1-2.6 4.6-5.6C7.9 10.9 9.6 6.6 12 6.6s4.1 4.3 6 8.2c1.5 3 2.7 5.6 4.6 5.6z" fill="#8a5a2b"/><path d="M1.4 20.4c1.9 0 3.1-2.6 4.6-5.6C7.9 10.9 9.6 6.6 12 6.6v13.8z" fill="#a06b35"/><path d="M12 6.6c-1.2 0-2.2 1.1-3.1 2.6h6.2C14.2 7.7 13.2 6.6 12 6.6z" fill="#6fb04a"/><g stroke="#6b451f" stroke-width=".9" stroke-linecap="round" fill="none" opacity=".65"><path d="M6.9 16.4h3.4"/><path d="M13.7 16.4h3.4"/><path d="M9.6 12.6h4.8"/></g><path d="M1.4 20.4h21.2v1.9H1.4z" fill="#5d3c1c"/></svg>`,
   minigun: `<svg viewBox="0 0 24 24"><g fill="#aeb9c9"><rect x="6" y="8.2" width="13" height="1.9" rx=".9"/><rect x="6" y="11" width="15" height="1.9" rx=".9"/><rect x="6" y="13.8" width="13" height="1.9" rx=".9"/></g><rect x="3.4" y="7.4" width="4.4" height="9.2" rx="1.6" fill="#5b6572"/><rect x="1.6" y="10.4" width="2.4" height="3.2" rx=".8" fill="#39424e"/><g fill="#ffd9a0"><rect x="20" y="8.4" width="2.4" height="1.4" rx=".7"/><rect x="21.4" y="11.2" width="2.4" height="1.4" rx=".7"/><rect x="20" y="14" width="2.4" height="1.4" rx=".7"/></g></svg>`,
-  golfball: `<svg viewBox="0 0 24 24"><circle cx="11" cy="10" r="6.2" fill="#f4f6f2"/><circle cx="11" cy="10" r="6.2" fill="none" stroke="#c9cfd8" stroke-width=".8"/><g fill="#c9cfd8"><circle cx="9" cy="8" r=".7"/><circle cx="12.4" cy="7.4" r=".7"/><circle cx="10.6" cy="11" r=".7"/><circle cx="13.6" cy="10.4" r=".7"/><circle cx="8.4" cy="10.8" r=".7"/></g><path d="M5 21h11" stroke="#3a7d2f" stroke-width="2.4" stroke-linecap="round"/><path d="M17.6 20.9V9.4l3.6 1.5-3.6 1.6" fill="#ff3b30" stroke="#e8ecf2" stroke-width=".9"/></svg>`,
-  driver: `<svg viewBox="0 0 24 24"><path d="M16.5 3.2 8.2 15.4" stroke="#c9cfd8" stroke-width="1.7" stroke-linecap="round"/><path d="M4.6 15.2c0-2.2 2-3.6 4.3-3.6 2.5 0 4 1.7 4 3.6 0 2.1-1.9 3.6-4.2 3.6-2.4 0-4.1-1.5-4.1-3.6z" fill="#ffd23f" stroke="#b8912a" stroke-width=".9"/><path d="M6.4 14.2c.5-.9 1.5-1.4 2.6-1.4" stroke="#fff3c8" stroke-width=".9" fill="none" stroke-linecap="round"/><circle cx="18.6" cy="5.6" r="2.4" fill="#f4f6f2" stroke="#c9cfd8" stroke-width=".8"/></svg>`,
-  putter: `<svg viewBox="0 0 24 24"><path d="M14.5 3.4 12.9 16" stroke="#c9cfd8" stroke-width="1.7" stroke-linecap="round"/><path d="M6.2 16.4h8.4c.8 0 1.4.5 1.4 1.3s-.6 1.3-1.4 1.3H6.2c-.8 0-1.4-.5-1.4-1.3s.6-1.3 1.4-1.3z" fill="#8affde" stroke="#3f9a7c" stroke-width=".9"/><circle cx="19.2" cy="17.7" r="2.1" fill="#f4f6f2" stroke="#c9cfd8" stroke-width=".8"/></svg>`,
+  // The three clubs read as the REAL club heads (Jordan, 8.22): iron = angled
+  // grooved blade on a hosel, driver = big round-crowned wood, putter = flat
+  // mallet with an alignment stripe. Shared anatomy: dark grip cap top-right,
+  // steel shaft running down-left into the head.
+  golfball: `<svg viewBox="0 0 24 24"><path d="M20.2 1.6 18.4 4" stroke="#7c8698" stroke-width="2.8" stroke-linecap="round"/><path d="M18.7 3.6 10.2 14.8" stroke="#c9cfd8" stroke-width="1.6" stroke-linecap="round"/><path d="M10.6 14.2c-.7 0-1.3.4-1.7 1l-2.6 3.9c2.2 1.6 5.6 1.9 8.2.7 1.5-.7 2.4-1.9 2.3-3.1-.1-1.3-1.3-2.2-3-2.4z" fill="#c9cfd8" stroke="#7c8698" stroke-width=".9"/><path d="M8.6 17.4l6.2.7M7.8 18.7l6.4.7" stroke="#7c8698" stroke-width=".8" stroke-linecap="round"/></svg>`,
+  driver: `<svg viewBox="0 0 24 24"><path d="M20.2 1.6 18.4 4" stroke="#7c8698" stroke-width="2.8" stroke-linecap="round"/><path d="M18.7 3.6 10.9 13.6" stroke="#c9cfd8" stroke-width="1.6" stroke-linecap="round"/><path d="M4.4 17.1c0-2.6 2.5-4.6 5.7-4.6 3.6 0 6.3 2.1 6.3 4.7 0 2.6-2.7 4.2-6 4.2-3.4 0-6-1.7-6-4.3z" fill="#3d4550" stroke="#20262e" stroke-width=".9"/><path d="M5.3 15.5c.8-1.2 2.6-2 4.8-2" stroke="#e8ecf2" stroke-width=".9" fill="none" stroke-linecap="round"/><path d="M4.5 16.4c-.3.5-.4 1.1-.3 1.7" stroke="#e8ecf2" stroke-width="1.1" fill="none" stroke-linecap="round"/></svg>`,
+  putter: `<svg viewBox="0 0 24 24"><path d="M18.6 1.6 17 4.1" stroke="#7c8698" stroke-width="2.8" stroke-linecap="round"/><path d="M17.4 3.7 12.4 15.6" stroke="#c9cfd8" stroke-width="1.6" stroke-linecap="round"/><rect x="5.4" y="15.8" width="12.4" height="4.2" rx="1.5" fill="#8affde" stroke="#3f9a7c" stroke-width=".9"/><path d="M5.6 16.6c-.2.3-.2 2.4 0 2.7" stroke="#e8fffa" stroke-width="1" stroke-linecap="round"/><path d="M11.6 15.9v1.8" stroke="#0a1020" stroke-width="1.3" stroke-linecap="round"/></svg>`,
   teleport: `<svg viewBox="0 0 24 24"><path d="M2.6 12l3.3-5.4L9.2 12l-3.3 5.4z" fill="none" stroke="#c86bff" stroke-width="1.7" stroke-linejoin="round" opacity=".8"/><path d="M14.8 12l3.3-5.4L21.4 12l-3.3 5.4z" fill="#c86bff"/><path d="M10.6 8.7L13.9 12l-3.3 3.3" fill="none" stroke="#6be7ff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 20.6h16" stroke="#8a93a8" stroke-width="1.5" stroke-linecap="round"/></svg>`,
   nuke: `<svg viewBox="0 0 24 24"><path d="M8.4 18.1L5.2 22.5h3.2zM15.6 18.1l3.2 4.4h-3.2z" fill="#2b323c"/><path d="M8.7 17.4h6.6l1.6 5.1H7.1z" fill="#3d4652"/><path d="M12 1.5c3.4 3.4 5.3 7.1 5.3 10.4 0 2.4-.8 4.4-1.9 5.9H8.6c-1.1-1.5-1.9-3.5-1.9-5.9C6.7 8.6 8.6 4.9 12 1.5z" fill="#aeb9c9"/><path d="M12 1.5C8.6 4.9 6.7 8.6 6.7 11.9c0 1.6.4 3.1 1 4.3V5.4z" fill="#d7e0ec"/><path d="M6.9 8.5h10.2v6.6H6.9z" fill="#26350f"/><g fill="#b6ff5a"><path d="M12 11.8l-1.6-3.1a3.6 3.6 0 013.2 0z"/><path d="M12 11.8l-1.6-3.1a3.6 3.6 0 013.2 0z" transform="rotate(120 12 11.8)"/><path d="M12 11.8l-1.6-3.1a3.6 3.6 0 013.2 0z" transform="rotate(240 12 11.8)"/><circle cx="12" cy="11.8" r=".9"/></g></svg>`,
 };
@@ -501,7 +505,8 @@ holdPanX($('panRight'), 1);
 
 // ---- Stage chrome: two collapsed groups instead of a 7-button rail ----------
 // The camera button fans out the six zoom/pan controls; the "..." button opens
-// sound / scorecard / help / leave. Both start collapsed EVERY match (nothing
+// sound / help / leave (golf's scorecard is its own button since 8.22). Both
+// start collapsed EVERY match (nothing
 // is persisted) and both shut on an outside tap or Escape. Pinch-zoom and
 // two-finger pan are untouched — these buttons are only the fallback.
 function setStageMenu(which, open) {
@@ -849,7 +854,9 @@ function handle(m) {
     case 'start': applySnapshot(m); saveResume(m.code, m.token); break;
     case 'hole':
       applySnapshot(m); saveResume(m.code, m.token);
-      showToast(`Hole ${m.golf ? m.golf.hole : '?'} of 9 — Par ${m.golf ? m.golf.par : '?'}`);
+      // The between-holes banner carries the finished hole's card AND the
+      // next hole's number/par — it replaces the old next-hole toast.
+      if (m.golf) showHoleScore(m.golf);
       break;
     case 'restore':
       applySnapshot(m); saveResume(m.code, m.token);
@@ -1049,10 +1056,23 @@ function paintArmoury() {
     const picked = armPicks.includes(cell.dataset.wid);
     cell.className = 'arm-cell' + (picked ? ' picked' : full ? ' dim' : '');
   }
+  // The slot row IS the instruction (Jordan, 8.22): one box per pick, filling
+  // left to right — an empty numbered box reads as 'this still needs a weapon'.
+  const slots = $('armSlots'); slots.innerHTML = '';
+  for (let i = 0; i < armNeed; i++) {
+    const id = armPicks[i];
+    const s = document.createElement('span');
+    s.className = 'arm-slot' + (id ? ' filled' : '');
+    s.innerHTML = id ? (ICONS[id] || '') : `<i>${i + 1}</i>`;
+    slots.appendChild(s);
+  }
   const st = $('armouryStatus');
   st.textContent = full ? `${armNeed} of ${armNeed} picked — locked and loaded` : `${armPicks.length} of ${armNeed} picked`;
   st.classList.toggle('ready', full);
-  $('armouryCloseBtn').disabled = !full;
+  const btn = $('armouryCloseBtn');
+  btn.disabled = !full;
+  const left = armNeed - armPicks.length;
+  btn.textContent = full ? 'Save loadout' : `Pick ${left} more weapon${left === 1 ? '' : 's'}`;
 }
 $('armouryCloseBtn').onclick = () => {
   try { localStorage.setItem('cc_loadout', JSON.stringify(armPicks)); } catch {}
@@ -1305,7 +1325,10 @@ function applySnapshot(m) {
   S.recoil = new Array(S.n).fill(0);
   S.lean = new Array(S.n).fill(0); S.leanV = new Array(S.n).fill(0);
   S.leanTarget = new Array(S.n).fill(0); S.moveAt = new Array(S.n).fill(0);
-  S.selected = firstAvailableWeapon();
+  // Golf pins the default to the Iron: the strip is bag-ordered with the
+  // Driver first (8.22), and a driver default off every tee is exactly the
+  // overshoot problem Jordan reported. Warm-restore keep{} still wins below.
+  S.selected = S.mode === 'golf' ? 'golfball' : firstAvailableWeapon();
   S.playing = true; S.quick = false; S.anim = null; S.queue = []; S.pendingOver = null; S.warp = null;
   clearKillcam();
   S.deferred = [];                     // start/restore hp+alive win outright — discard held work
@@ -1333,6 +1356,7 @@ function applySnapshot(m) {
   buildScoreboard();
   updateHud(); updateAimUI(); updateFuel(); updateDock();
   closeStageMenus();      // camera + meta always start collapsed
+  $('holeScore').classList.remove('show');   // a stale hole card never survives a snapshot
   if (keep) setDockCollapsed(keep.dockShut, false);   // resync: dock stays as you left it
   else if (m.type === 'start') {
     // A new battle: show the player their controls first; the fire handler
@@ -1366,6 +1390,12 @@ function applyTurn(m) {
   // in the air. Elimination belongs to the blast; hold it behind the same gate.
   if (m.alive) deferHp(() => { S.alive = m.alive.slice(); updateHud(); });
   if (m.turn === S.you && (!S.selected || (S.ammo[S.selected] ?? 99) <= 0)) S.selected = firstAvailableWeapon();
+  // GOLF: reaching the green hands you the putter (Jordan, 8.22). 2200 is the
+  // flat table around the cup — the same span the lawn stripes paint.
+  if (S.mode === 'golf' && m.turn === S.you && S.golf && S.golf.cup && !golfHoledMe()
+      && S.tanks[S.you] && Math.abs(S.tanks[S.you].x - S.golf.cup.x) <= 2200) {
+    S.selected = 'putter';
+  }
   updateFuel(); updateDock(); buildWeaponStrip();
 }
 
@@ -1498,7 +1528,12 @@ function updateDockMini() {
   if (!$('dock').classList.contains('collapsed')) return;
   const aim = myAim() || { angle: 45, power: 60 };
   const w = (S.weapons || []).find(x => x.id === S.selected);
+  // Icon + name + ammo pinned bottom-left: the tucked dock must never hide
+  // what's loaded (Jordan, 8.22).
+  $('dmIcon').innerHTML = (w && ICONS[w.id]) || '';
   $('dmWeapon').textContent = w ? w.name : '';
+  const left = w ? (S.ammo[w.id] ?? 99) : 99;
+  $('dmAmmo').textContent = left === 99 ? '' : `×${left}`;
   $('dmAngle').textContent = Math.round(aim.angle);
   $('dmPower').textContent = Math.round(aim.power);
 }
@@ -3103,6 +3138,35 @@ function drawMushroom() {
   ctx.restore();          // restores composite, fillStyle and globalAlpha
 }
 
+// Between golf holes: what everyone just carded (Jordan, 8.22 — strokes and
+// how many under/over par). The finished hole's strokes ride the fresh 'hole'
+// snapshot in g.grid; its 0-based index is g.hole - 2 (g.hole is the NEW one).
+let holeScoreTimer = 0;
+function showHoleScore(g) {
+  const hi = (g.hole || 1) - 2;
+  if (hi < 0 || !g.grid || !g.pars) return;
+  const par = g.pars[hi];
+  const term = (s, d) => s === 1 ? 'ACE' : d <= -3 ? 'ALBATROSS' : d === -2 ? 'EAGLE'
+    : d === -1 ? 'BIRDIE' : d === 0 ? 'PAR' : d === 1 ? 'BOGEY' : d === 2 ? 'DOUBLE BOGEY' : null;
+  const rel = (d) => d === 0 ? 'LEVEL PAR' : `${Math.abs(d)} ${d < 0 ? 'UNDER' : 'OVER'} PAR`;
+  const rows = [];
+  for (let i = 0; i < S.n; i++) {
+    const s = g.grid[i] && g.grid[i][hi];
+    if (!s) continue;                                   // never teed off (joined late)
+    const d = s - par, t = term(s, d);
+    const cls = d < 0 ? 'hs-under' : d > 0 ? 'hs-over' : '';
+    rows.push(`<div class="hs-row"><b>${S.names[i] || ''}</b>` +
+      `<span class="${cls}">${s} STROKE${s === 1 ? '' : 'S'} · ${rel(d)}${t ? ` (${t})` : ''}</span></div>`);
+  }
+  if (!rows.length) return;
+  const el = $('holeScore');
+  el.innerHTML = `<div class="hs-head">HOLE ${hi + 1} · PAR ${par}</div>${rows.join('')}` +
+    `<div class="hs-next">NEXT: HOLE ${g.hole} OF ${g.holes} · PAR ${g.par}</div>`;
+  el.classList.add('show');
+  clearTimeout(holeScoreTimer);
+  holeScoreTimer = setTimeout(() => el.classList.remove('show'), 4600);
+}
+
 function showToast(text) {
   const t = document.createElement('div');
   t.className = 'toast-item'; t.textContent = text;
@@ -3249,8 +3313,9 @@ const HELP_WEAPONS = [
   { id: 'teleport', name: 'Teleport',      note: '2 charges',        desc: 'Warp your tank to wherever the shell lands. No blast — pick your ground.' },
   { id: 'nuke',     name: 'Tactical Nuke', note: '1 warhead',        desc: 'The big one. Leaves a fallout cloud over the crater that keeps hurting.' },
   { id: 'railgun',  name: 'Railgun',       note: 'supply drops only', desc: 'A flat hypervelocity slug that punches straight through hills. Only found in supply crates.' },
-  { id: 'golfball', name: 'Iron',          note: 'Golf mode',        desc: 'The all-rounder: honest carry, bites on landing, modest release.' },
+  // Bag order — matches the in-game strip (8.22): Driver, Iron, Putter.
   { id: 'driver',   name: 'Driver',        note: 'Golf mode',        desc: 'Maximum carry and it keeps running after it lands. Off the tee, nothing else comes close.' },
+  { id: 'golfball', name: 'Iron',          note: 'Golf mode',        desc: 'The all-rounder: honest carry, bites on landing, modest release.' },
   { id: 'putter',   name: 'Putter',        note: 'Golf mode',        desc: 'Never leaves the turf — a pure roll whose pace you set. The closer, the deadlier.' },
 ];
 let helpBuilt = false;

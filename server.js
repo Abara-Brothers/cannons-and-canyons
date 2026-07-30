@@ -304,7 +304,9 @@ function snapshot(room, seat) {
     trees: room.trees,
     tanks: room.tanks.map(t => ({ x: Math.round(t.x * 10) / 10, y: Math.round(t.y * 10) / 10 })),
     weapons: room.mode === 'golf'
-      ? ['golfball', 'driver', 'putter'].map((id) => ({ ...menuEntry(WEAPON_BY_ID[id]), ammo: 99 }))
+      // Bag order: Driver, Iron, Putter (Jordan, 8.22). The client still
+      // defaults the selection to the Iron — order is presentation only.
+      ? ['driver', 'golfball', 'putter'].map((id) => ({ ...menuEntry(WEAPON_BY_ID[id]), ammo: 99 }))
       : weaponMenu(),
     golf: room.golf ? {
       hole: room.golf.hole, holes: GOLF_HOLES.length, par: room.golf.par, cup: room.golf.cup, tee: room.golf.tee,
@@ -447,7 +449,10 @@ function nextHole(room, first) {
   g.hole++;
   const H = GOLF_HOLES[g.hole - 1];
   g.par = H.par;
-  room.worldW = Math.max(36000, H.d + 12000);       // the world fits the hole
+  // The world fits the hole PLUS ~19.8k of runoff beyond the green — players
+  // overshoot the flag, and the right edge must not lurk behind it (an
+  // overshot ball should land on turf and roll, not sail out of the world).
+  room.worldW = Math.max(36000, H.d + 22000);
   room.biome = H.biome;
   room.lavaY = WORLD_H + 4000;        // NO lava on any golf course — dry land only
   const seed = (room.seed + g.hole * 7919) >>> 0;
@@ -686,6 +691,10 @@ function startGame(room) {
 function beginTurn(room) {
   room.fuel = MOVE_BUDGET;
   room.turnCount = (room.turnCount || 0) + 1;
+  // Every path that hands out a turn lands here — including the match opener,
+  // which never passes through advance(). The survival rotation needs to know
+  // which human went last so co-op partners keep alternating.
+  if (room.players[room.turn] && !room.players[room.turn].bot) room.lastHumanTurn = room.turn;
   hordeRespawn(room);
   maybeDropCrate(room);
   // A drafted player who is completely dry gets one emergency cannon shell —
@@ -986,8 +995,31 @@ function advance(room, by) {
   killDead(room);
   if (matchOver(room)) return endGame(room);
   const n = room.players.length;
-  let t = by;
-  do { t = (t + 1) % n; } while (room.tanks[t].alive === false);   // terminates: >=2 alive
+  let t = -1;
+  // SURVIVAL (Jordan, 8.22): the pack doesn't gang up between your turns —
+  // after a human acts, exactly ONE randomly chosen living alien replies,
+  // then it is a human's go again. With two defenders they alternate:
+  // H1 -> alien -> H2 -> alien. Falls through to the normal ring whenever a
+  // side has nobody left standing (endGame handles the human side anyway).
+  if (isHordeMode(room.mode)) {
+    const living = (pred) => room.players
+      .map((p, i) => ({ p, i }))
+      .filter(({ p, i }) => p && room.tanks[i].alive !== false && pred(p));
+    const aliens = living(p => p.bot), humans = living(p => !p.bot);
+    const wasBot = !!(room.players[by] && room.players[by].bot);
+    if (!wasBot && aliens.length) {
+      t = aliens[Math.floor(Math.random() * aliens.length)].i;
+    } else if (wasBot && humans.length) {
+      // Next human in ring order after the LAST human turn, so co-op partners
+      // keep alternating even though aliens interleave.
+      const after = room.lastHumanTurn ?? by;
+      t = humans.map(h => h.i).find(i => i > after) ?? humans[0].i;
+    }
+  }
+  if (t < 0) {
+    t = by;
+    do { t = (t + 1) % n; } while (room.tanks[t].alive === false);   // terminates: >=2 alive
+  }
   room.turn = t;
   beginTurn(room);
 }

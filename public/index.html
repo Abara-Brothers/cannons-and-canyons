@@ -202,6 +202,9 @@
       <div class="result">Armoury</div>
       <p class="muted arm-sub">Pick <b>5</b> weapons for Duel and Free-for-all — each carries <b>2 rounds</b>.
         Everyone gets the <b>Tactical Nuke</b>; the <b>Railgun</b> only drops in supply crates.</p>
+      <!-- One box per pick, filling left to right — the battle starts when
+           every slot is full, and the button below says what's left. -->
+      <div id="armSlots" class="arm-slots" aria-hidden="true"></div>
       <div id="armouryGrid" class="arm-grid"></div>
       <div class="arm-status" id="armouryStatus">5 of 5 picked</div>
       <button id="armouryCloseBtn" class="btn big primary">Save loadout</button>
@@ -283,17 +286,19 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 6l6 6-6 6"/></svg>
         </button>
       </div>
-      <!-- META: sound, scorecard, help and leave live behind one "..." button.
-           Volume is a once-a-session setting and does not deserve permanent
-           screen space. Always starts collapsed. -->
+      <!-- META: sound, help and leave live behind one "..." button. Volume is
+           a once-a-session setting and does not deserve permanent screen
+           space. Always starts collapsed. -->
+      <!-- Golf keeps its scorecard one tap away, OUTSIDE the "..." stack
+           (Jordan, 8.22) — a golfer checks the card constantly. -->
+      <button id="golfCardBtn" class="leave golf-only" title="Scorecard" aria-label="Scorecard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+      </button>
       <button id="metaBtn" class="leave" title="More" aria-label="More options" aria-expanded="false" aria-controls="metaMenu">
         <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5.4" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="18.6" cy="12" r="1.9"/></svg>
       </button>
       <div class="metamenu" id="metaMenu">
         <button id="muteBtn" class="leave" title="Sound on/off" aria-label="Sound on/off"></button>
-        <button id="golfCardBtn" class="leave golf-only" title="Scorecard" aria-label="Scorecard">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
-        </button>
         <button id="helpBtn" class="leave" title="How to play" aria-label="How to play">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M8.6 9a3.4 3.4 0 1 1 4.6 3.2c-1 .4-1.2 1-1.2 2.1"/><path d="M12 17.6v.2"/></svg>
         </button>
@@ -302,6 +307,8 @@
         </button>
       </div>
       <div id="toast"></div>
+      <!-- Between golf holes: what everyone just carded (strokes + to-par). -->
+      <div id="holeScore" aria-live="polite"></div>
     </div>
 
     <footer id="dock">
@@ -314,7 +321,9 @@
       </button>
       <!-- Only visible while collapsed: what you must still be able to read. -->
       <div id="dockMini" class="dock-mini" aria-hidden="true">
+        <span class="dm-ic" id="dmIcon" aria-hidden="true"></span>
         <span class="dm-wep" id="dmWeapon">Cannon</span>
+        <span class="dm-ammo" id="dmAmmo"></span>
         <span class="dm-aim"><b id="dmAngle">45</b><i>ANG</i></span>
         <span class="dm-aim"><b id="dmPower">60</b><i>PWR</i></span>
       </div>
@@ -470,7 +479,7 @@
           </div>
           <div class="hm-card">
             <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="10.9" y="2.6" width="1.9" height="15.4"/><path d="M12.8 3l7.2 2.7-7.2 2.7z"/><path d="M3.6 21.4c3.2-2.6 13.6-2.6 16.8 0z"/></svg>
-            <div class="hm-txt"><div class="hm-top"><b>Artillery Golf</b><i>1&ndash;2 players</i></div><span>Nine holes, three clubs &mdash; Iron, Driver, Putter &mdash; fewest strokes wins. Pick your tee set when you create the game.</span></div>
+            <div class="hm-txt"><div class="hm-top"><b>Artillery Golf</b><i>1&ndash;2 players</i></div><span>Nine holes, three clubs &mdash; Driver, Iron, Putter &mdash; fewest strokes wins. Pick your tee set when you create the game.</span></div>
           </div>
           <div class="hm-card">
             <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M1.8 13.4l10.2-3.6 10.2 3.6-10.2 3.6z"/><path d="M8.4 10.6C8.9 7.9 10.3 6 12 6s3.1 1.9 3.6 4.6L12 11.9z"/><rect x="3.8" y="18.8" width="2" height="2.6"/><rect x="11" y="19.8" width="2" height="2.6"/><rect x="18.2" y="18.8" width="2" height="2.6"/></svg>

@@ -388,10 +388,44 @@ html { background: var(--bg); }
 .leave { position: absolute; top: 10px; right: 10px; width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--line); background: rgba(10,14,30,.6); color: var(--text); cursor: pointer; backdrop-filter: blur(4px); z-index: 4; display: flex; align-items: center; justify-content: center; padding: 0; }
 .leave svg { width: 21px; height: 21px; }
 .leave:active { transform: scale(.95); }
-/* Leave/help/scorecard live inside the "..." meta stack now, so they flow in
-   its column instead of being individually pinned to the corner. */
+/* Leave/help live inside the "..." meta stack now, so they flow in its column
+   instead of being individually pinned to the corner. (The golf scorecard is
+   standalone again since 8.22 — see #golfCardBtn.) */
 .golf-only { display: none; }
 body.golf .golf-only { display: flex; }
+/* Draft slot row: one box per pick, filled boxes carry the weapon's icon,
+   empty ones the slot number — full row = ready to battle. */
+.arm-slots { display: flex; gap: 8px; justify-content: center; margin: 2px 0 8px; }
+.arm-slot {
+  width: 34px; height: 34px; border: 2px dashed var(--line); border-radius: 9px;
+  display: flex; align-items: center; justify-content: center; color: var(--muted);
+}
+.arm-slot i { font-style: normal; font-weight: 800; font-size: 12px; }
+.arm-slot.filled { border: 2px solid #54c8ff; background: rgba(84, 200, 255, .12); }
+.arm-slot.filled svg { width: 22px; height: 22px; }
+/* Short viewports: the GRID absorbs the squeeze (scrolls), never the lock
+   button — same pattern as .menu-card panes. */
+.arm-card .arm-grid { min-height: 0; overflow-y: auto; }
+
+/* The standalone scorecard button sits one slot left of the "..." button
+   (8.22 — out of the meta stack, one tap away). Plain 58px: #game.active
+   already pads the whole stage by the right safe-area inset — adding env()
+   here would count the notch twice and float the button away from "...". */
+#golfCardBtn { right: 58px; }
+/* Between-holes score banner: strokes + to-par per player, self-hiding. */
+#holeScore {
+  position: absolute; left: 50%; top: max(16%, 56px); transform: translateX(-50%) translateY(-6px);   /* clear of the toast band on short stages */
+  background: rgba(8, 12, 26, .88); border: 1px solid var(--line); border-radius: 14px;
+  padding: 12px 22px; z-index: 5; pointer-events: none; text-align: center;
+  min-width: 230px; opacity: 0; transition: opacity .3s ease, transform .3s ease;
+}
+#holeScore.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+#holeScore .hs-head { font-weight: 900; letter-spacing: .12em; font-size: 12px; color: var(--muted); }
+#holeScore .hs-row { display: flex; gap: 16px; justify-content: space-between; font-size: 15px; margin-top: 6px; }
+#holeScore .hs-row b { font-weight: 800; }
+#holeScore .hs-under { color: #4ce88f; }
+#holeScore .hs-over { color: #ff5a52; }
+#holeScore .hs-next { margin-top: 9px; font-size: 10.5px; letter-spacing: .14em; color: var(--muted); font-weight: 700; }
 .btn.danger { color: var(--p1); }
 .zoomctl {
   position: absolute; top: 58px; left: 10px; display: flex; flex-direction: column; gap: 6px; z-index: 4;
@@ -407,7 +441,7 @@ body.golf .golf-only { display: flex; }
   transition: opacity .18s ease, transform .18s ease, visibility 0s;
 }
 #camBtn.on, #metaBtn.on { border-color: var(--accent); color: var(--accent); }
-/* The meta stack ("...") holds sound, scorecard, help and leave. */
+/* The meta stack ("...") holds sound, help and leave. */
 .metamenu {
   position: absolute; top: 58px; right: 10px; display: flex; flex-direction: column; gap: 6px; z-index: 4;
   transform: translateX(14px) scale(.9); transform-origin: top right;
@@ -428,7 +462,7 @@ body.golf .golf-only { display: flex; }
 .zbtn { width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--line); background: rgba(10,14,30,.6); color: var(--text); cursor: pointer; backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; padding: 0; }
 .zbtn svg { width: 22px; height: 22px; }
 .zbtn:active { transform: scale(.95); }
-#toast { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 6px; align-items: center; pointer-events: none; }
+#toast { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 6px; align-items: center; pointer-events: none; z-index: 6; }   /* above the hole banner (z 5): a disconnect notice must never hide behind it */
 .toast-item { background: rgba(10,14,30,.85); border: 1px solid var(--line); padding: 8px 14px; border-radius: 999px; font-weight: 700; font-size: 14px; animation: toastIn .3s ease, toastOut .3s ease 1.4s forwards; }
 
 @keyframes toastIn { from { opacity: 0; transform: translateY(-8px); } }
@@ -1180,7 +1214,22 @@ body.dd-open .hs-main { overflow: visible; }
   font: 800 10px/1 system-ui, -apple-system, sans-serif; letter-spacing: .14em;
 }
 .dock-tab svg { width: 17px; height: 17px; flex: 0 0 auto; transition: transform .18s ease; }
-#dock.collapsed .dock-tab svg { transform: rotate(180deg); }   /* chevron follows the state */
+/* The chevron points where a tap takes you: dock OPEN = down (collapse),
+   dock TUCKED = up — and it gently beckons upward, a two-nudge 'come on up'
+   gesture inviting the tap (Jordan, 8.22). */
+#dock:not(.collapsed) .dock-tab svg { transform: rotate(180deg); }
+/* NB: dtBeckon (below) is the TAB's glow pulse from 8.16 — the chevron's
+   nudge needs its own name or the later keyframes definition swallows it. */
+#dock.collapsed .dock-tab svg { animation: dtNudgeUp 2.2s ease-in-out infinite; }
+@keyframes dtNudgeUp {
+  0%, 52%, 100% { transform: translateY(0); }
+  12% { transform: translateY(-2.5px); }
+  26% { transform: translateY(0); }
+  38% { transform: translateY(-2.5px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #dock.collapsed .dock-tab svg { animation: none; }
+}
 .dock-tab .dt-label { display: none; }
 #dock.collapsed .dock-tab {
   height: 26px; top: -25px; padding: 0 14px;
@@ -1201,10 +1250,15 @@ body.dd-open .hs-main { overflow: visible; }
   position: absolute; left: 12px; top: 0; height: var(--dock-sliver);
   color: var(--text); pointer-events: none;
 }
+/* The selected weapon anchors the LEFT end of the sliver — icon + name + ammo
+   — so a tucked dock never hides what's loaded (Jordan, 8.22). */
+.dock-mini .dm-ic { width: clamp(16px, calc(2.6 * var(--vhu)), 21px); height: clamp(16px, calc(2.6 * var(--vhu)), 21px); display: flex; flex: 0 0 auto; }
+.dock-mini .dm-ic svg { width: 100%; height: 100%; }
 .dock-mini .dm-wep {
-  font-weight: 800; font-size: clamp(10px, calc(1.6 * var(--vhu)), 12.5px);
+  font-weight: 800; font-size: clamp(10.5px, calc(1.7 * var(--vhu)), 13px);
   max-width: calc(34 * var(--vwu)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.dock-mini .dm-ammo { font-weight: 700; font-size: clamp(9px, calc(1.4 * var(--vhu)), 11px); color: var(--muted); font-variant-numeric: tabular-nums; }
 .dock-mini .dm-aim { display: flex; align-items: baseline; gap: 3px; font-variant-numeric: tabular-nums; }
 .dock-mini .dm-aim b { font-size: clamp(11px, calc(1.8 * var(--vhu)), 14px); font-weight: 900; }
 .dock-mini .dm-aim i {
