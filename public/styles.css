@@ -115,6 +115,7 @@ input:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .rp .tag { margin-left: auto; font-size: 11px; color: var(--muted); font-weight: 600; }
 .rp.empty { opacity: .38; font-style: italic; font-weight: 600; }
 #startMatchBtn.hidden { display: none; }
+#helpDemoBtn.hidden { display: none; }
 .code-input { text-transform: uppercase; letter-spacing: .35em; text-align: center; font-weight: 800; font-size: 22px; }
 .join-row .btn { flex: 0 0 auto; }
 .error { color: var(--p1); min-height: 18px; font-size: 14px; margin: 2px 0 0; }

@@ -18,9 +18,9 @@ codebase implements or prepares for it.
   like, turns advance when you fire.
 - **Join by 4-letter code** (no accounts), or take on the **computer** at three
   difficulties.
-- **Drag to aim + charge** — drag out from your tank in the direction you want to
-  fire; pull distance sets power as a percentage (pull halfway → 50%). Fine-tune
-  with the angle/power steppers.
+- **Slingshot aiming** — touch any empty spot and pull back, away from your
+  target: the shot flies opposite the pull, and pull distance sets power as a
+  percentage. Fine-tune with the angle/power steppers.
 - **Enormous map** — 48,000 × 13,500 world units of peaks you must lob over.
   **Gravity, no wind.** Drive left/right on your turn (limited fuel). The camera
   frames every tank rather than the whole map, and pinch/zoom is yours.

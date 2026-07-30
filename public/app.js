@@ -1711,8 +1711,11 @@ document.querySelectorAll('.mini').forEach(btn => {
 function maxPull() { return Math.min(view.cssW, view.cssH) * 0.85; }
 const AIM_DEADZONE = 6;              // px of travel before a touch counts as a drag
 function aimFromVector(dx, dy) {
+  // SLINGSHOT (2026-07-30, Jordan): the shot flies OPPOSITE the pull — drag
+  // back and down to lob up and forward, like drawing a catapult. Power is
+  // still pull distance. (The old scheme fired along the pull direction.)
   const dir = facingOf(S.you);
-  const raw = Math.atan2(-dy, dx * dir) * 180 / Math.PI;
+  const raw = Math.atan2(dy, -dx * dir) * 180 / Math.PI;
   const power = (Math.hypot(dx, dy) / maxPull()) * 100;
   setAim(raw, power);
 }
@@ -1772,8 +1775,9 @@ canvas.addEventListener('pointercancel', endPointer);
 
 // ---------------------------------------------------------------------------
 // First-play aim guide — a translucent hand demonstrates the drag-anywhere
-// gesture on a player's first turns: press an empty spot, pull the way you
-// want to fire, longer pull = more power. Pure overlay — it never writes
+// gesture on a player's first turns: press an empty spot, pull BACK like a
+// slingshot (the shot flies the other way), longer pull = more power. Pure
+// overlay — it never writes
 // S.aim and never sends a message (relayAim broadcasts REAL aim live, so a
 // demo that drove setAim would spray phantom aim at the opponent). It hides
 // the instant any finger is down and comes back after a short idle, until the
@@ -1788,13 +1792,15 @@ try {
 let guideHoldOff = 0;    // quiet spell after any touch before the demo returns
 let guideT0 = 0;         // wall-clock start of the current demo loop
 let guideWasOn = false;
+let guideForced = false; // replayed on demand from Help > Basics — ignores the done flag
 function markAimGuideDone() {
+  guideForced = false;   // a real pull or a shot always ends a forced replay
   if (aimGuideDone) return;
   aimGuideDone = true;
   try { localStorage.setItem('cc_aim_guide', '1'); } catch {}
 }
 function aimGuideOn() {
-  if (aimGuideDone || !myTurn()) return false;    // my go, live, no replay, not holed
+  if ((aimGuideDone && !guideForced) || !myTurn()) return false;   // my go, live, no replay, not holed
   // S.picking: locked in early, waiting for the others — FIRE is disabled then
   // (see updateDock) and a pull now would consume the one-shot demo pre-battle.
   if (S.killcam || S.charging || S.picking || pointers.size > 0) return false;
@@ -1841,12 +1847,15 @@ function drawAimGuide() {
   const { cssW, cssH } = view;
   const msz = Math.min(cssW, cssH);
   const dir = guideDir();
-  const ANG = 38 * Math.PI / 180;                          // a healthy opening lob
-  const L = msz * 0.42;
-  // ay sits high enough that the hand's wrist clears a RAISED dock (battles
-  // now open with the controls shown until the first shot — see dockIntro).
-  const ax = cssW * 0.5 - dir * msz * 0.16, ay = cssH * 0.55;
-  const ux = dir * Math.cos(ANG), uy = -Math.sin(ANG);     // pull = fire direction
+  const ANG = 30 * Math.PI / 180;                          // fire angle of the demo lob
+  const L = msz * 0.36;
+  // SLINGSHOT demo: the hand pulls DOWN AND BACK, the shot flies the other
+  // way. Anchor sits toward the target side and high enough that the hand,
+  // pulling down from it, still clears a RAISED dock (battles open with the
+  // controls shown until the first shot — see dockIntro).
+  const ax = cssW * 0.5 + dir * msz * 0.16, ay = cssH * 0.40;
+  const fxv = dir * Math.cos(ANG), fyv = -Math.sin(ANG);   // FIRE direction: toward the enemy, up
+  const ux = -fxv, uy = -fyv;                              // pull direction: opposite (slingshot)
   const ss = (x) => x * x * (3 - 2 * x);
 
   let k = 0;                                               // pull progress 0..1
@@ -1894,22 +1903,23 @@ function drawAimGuide() {
       ctx.stroke();
     }
 
-    // Direction chevrons past the fingertip once the pull is well under way —
-    // 'the shot goes THIS way'. Arc-dot colours: dark under, hot yellow over.
+    // Direction chevrons on the far side of the ANCHOR, along the FIRE
+    // direction — the pull draws back, the shot releases THAT way. Arc-dot
+    // colours: dark under, hot yellow over.
     if (k > 0.55) {
       const ca = Math.min(1, (k - 0.55) / 0.35) * env;
-      const px2 = -uy, py2 = ux;                           // perpendicular
+      const px2 = -fyv, py2 = fxv;                         // perpendicular
       for (let j = 0; j < 3; j++) {
         const d0 = 26 + j * 17;
-        const cx2 = fx + ux * d0, cy2 = fy + uy * d0;
+        const cx2 = ax + fxv * d0, cy2 = ay + fyv * d0;
         const pulse = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(now / 160 - j * 1.1));
         ctx.globalAlpha = ca * pulse;
         for (const [w2, st] of [[5, 'rgba(10,12,16,.6)'], [2.5, 'rgba(255,214,70,.95)']]) {
           ctx.strokeStyle = st; ctx.lineWidth = w2; ctx.lineCap = 'round';
           ctx.beginPath();
-          ctx.moveTo(cx2 - ux * 7 + px2 * 7, cy2 - uy * 7 + py2 * 7);
-          ctx.lineTo(cx2 + ux * 4, cy2 + uy * 4);
-          ctx.lineTo(cx2 - ux * 7 - px2 * 7, cy2 - uy * 7 - py2 * 7);
+          ctx.moveTo(cx2 - fxv * 7 + px2 * 7, cy2 - fyv * 7 + py2 * 7);
+          ctx.lineTo(cx2 + fxv * 4, cy2 + fyv * 4);
+          ctx.lineTo(cx2 - fxv * 7 - px2 * 7, cy2 - fyv * 7 - py2 * 7);
           ctx.stroke();
         }
         ctx.lineCap = 'butt';
@@ -1917,25 +1927,27 @@ function drawAimGuide() {
       ctx.globalAlpha = env;
     }
 
-    // Live % above the anchor cross, on the real gesture's colour ramp.
+    // Live % beside the anchor cross (offset off the chevron lane), on the
+    // real gesture's colour ramp.
     if (pressed && k > 0.05) {
       const pr = pct / 100;
       const col = pr < 0.5 ? lerpColor([76, 232, 143], [255, 210, 63], pr / 0.5)
         : lerpColor([255, 210, 63], [255, 90, 82], (pr - 0.5) / 0.5);
       ctx.font = '900 15px system-ui, sans-serif'; ctx.textAlign = 'center';
       ctx.fillStyle = 'rgba(10,14,18,.7)';
-      ctx.fillText(`${Math.round(pct)}%`, ax + 1, ay - 23);
+      ctx.fillText(`${Math.round(pct)}%`, ax - dir * 30 + 1, ay - 23);
       ctx.fillStyle = col;
-      ctx.fillText(`${Math.round(pct)}%`, ax, ay - 24);
+      ctx.fillText(`${Math.round(pct)}%`, ax - dir * 30, ay - 24);
     }
 
-    // The hand.
-    const hs = Math.max(52, Math.min(96, msz * 0.20));
+    // The hand — leaning INTO the pull, so the lean is negated vs the old
+    // forward-drag demo.
+    const hs = Math.max(52, Math.min(96, msz * 0.17));
     const squash = pressed ? 0.94 : t >= HOLD ? 1.05 : 1.0;
-    drawGuideHand(fx, fy, hs * squash, 0.10 + 0.12 * k, dir, pressed);
+    drawGuideHand(fx, fy, hs * squash, -(0.10 + 0.12 * k), dir, pressed);
 
     // Caption — plain-text house voice, dark under-print for legibility.
-    const line = t < DRAG ? 'DRAG ANYWHERE TO AIM' : 'LONGER PULL = MORE POWER';
+    const line = t < DRAG ? 'PULL BACK LIKE A SLINGSHOT' : 'LONGER PULL = MORE POWER';
     const cy3 = Math.max(cssH * 0.16, ay - msz * 0.42);   // proportional floor clears the scoreboard
     ctx.font = '900 14px system-ui, sans-serif'; ctx.textAlign = 'center';
     ctx.globalAlpha = env * 0.92;
@@ -2007,7 +2019,8 @@ holdMove($('moveLeft'), -1);
 holdMove($('moveRight'), 1);
 // No turret-flip control by design. Your hull facing is fixed for the match
 // (server state, room.facing); the 300° aim range covers backwards on its own —
-// drag past the far side of your tank, or step the ANGLE readout past 90°.
+// pull TOWARD the enemy (slingshot: the shot flies opposite the pull), or step
+// the ANGLE readout past 90°.
 
 $('fireBtn').onclick = () => {
   Audio.ensure();
@@ -3173,7 +3186,7 @@ function onGameOver(m) {
     return;
   }
   if (m.winner === -1) { title = 'Mutual destruction!'; cls = 'draw'; }
-  else if (m.winner === S.you) { title = S.n > 2 ? 'Last tank standing! \u{1F3C6}' : 'Enemy destroyed! \u{1F3C6}'; cls = 'win'; win = true; }
+  else if (m.winner === S.you) { title = S.n > 2 ? 'Last tank standing!' : 'Enemy destroyed!'; cls = 'win'; win = true; }
   else if (S.n > 2) { title = `${S.names[m.winner]} takes the canyon`; cls = 'lose'; }
   else { title = 'Your tank was destroyed'; cls = 'lose'; }
   Audio.chime(win);
@@ -3257,7 +3270,28 @@ function buildHelp() {
       pane.classList.toggle('active', pane.dataset.pane === t.dataset.tab);
   });
 }
-const openHelp = () => { buildHelp(); $('helpModal').classList.remove('hidden'); };
+const openHelp = () => {
+  buildHelp();
+  // The demo replay needs a live battlefield AND a player who still takes
+  // turns — the home screen and an eliminated spectator don't qualify.
+  const db = $('helpDemoBtn');
+  db.classList.toggle('hidden', !S.playing || S.alive[S.you] === false);
+  // The label mirrors the demo's REAL visibility predicate (aimGuideOn's flag
+  // term), not just the force switch: for a first-timer the natural guide is
+  // already running, and 'Hide' must genuinely end it.
+  db.textContent = (!aimGuideDone || guideForced) ? 'Hide the aim demo' : 'Replay the aim demo';
+  $('helpModal').classList.remove('hidden');
+};
+// Toggle the ghost-hand demo on demand (Jordan: 'view the visual demonstration
+// whenever they want'). Hiding consumes the one-shot (markAimGuideDone — also
+// clears the force); showing forces past the done flag. A real pull or a shot
+// still ends any replay on its own.
+$('helpDemoBtn').onclick = () => {
+  if (!S.playing || S.alive[S.you] === false) return;
+  if (!aimGuideDone || guideForced) markAimGuideDone();
+  else { guideForced = true; guideHoldOff = 0; guideWasOn = false; }
+  $('helpModal').classList.add('hidden');
+};
 
 // ---- Golf scorecard ------------------------------------------------------------
 // Built from the golf wire: per-hole par (g.pars) + the full per-seat stroke
@@ -5211,8 +5245,8 @@ function drawAim() {
     // the landing sits inside your own weapon's blast radius. (No landing
     // marker — reading the fall is part of the craft.)
     const selfBlast = landed && selW.radius
-      ? Math.hypot(landed[0] - t.x, landed[1] - (t.y - 150)) <= selW.radius
-      : false;
+      ? Math.hypot(landed[0] - t.x, landed[1] - (t.y - 150)) <= selW.radius * 1.3
+      : false;                                   // 1.3 mirrors game-core DMG_REACH
     const hot = danger || selfBlast;
     // The FIRST ~45% of the flight is drawn — a clear, confident curve that
     // still leaves the fall to the player's judgement. (The full path is
