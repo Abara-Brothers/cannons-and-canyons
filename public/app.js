@@ -1330,6 +1330,11 @@ function applySnapshot(m) {
   // overshoot problem Jordan reported. Warm-restore keep{} still wins below.
   S.selected = S.mode === 'golf' ? 'golfball' : firstAvailableWeapon();
   S.playing = true; S.quick = false; S.anim = null; S.queue = []; S.pendingOver = null; S.warp = null;
+  // A terrain-collapse animation from the PREVIOUS field must never survive a
+  // snapshot: its column indices/heights belong to the old terrain (a golf
+  // hole can even change the world's width), and killing S.anim above means
+  // applyResolve will never release its pending columns.
+  S.terrainAnim = null;
   clearKillcam();
   S.deferred = [];                     // start/restore hp+alive win outright — discard held work
   S.particles = []; S.floaters = []; S.rings = []; S.quakes = []; S.muzzle = []; S.flash = 0; S.shake = 0;
@@ -3253,6 +3258,10 @@ function onGameOver(m) {
   else if (m.winner === S.you) { title = S.n > 2 ? 'Last tank standing!' : 'Enemy destroyed!'; cls = 'win'; win = true; }
   else if (S.n > 2) { title = `${S.names[m.winner]} takes the canyon`; cls = 'lose'; }
   else { title = 'Your tank was destroyed'; cls = 'lose'; }
+  // A golf round that ends WITHOUT a scorecard payload was abandoned (the
+  // partner was scuttled after disconnecting) — 'Enemy destroyed!' and health
+  // bars read absurd on a course.
+  if (S.mode === 'golf' && !m.golf && win) title = 'Opponent left the course';
   Audio.chime(win);
   showOverlay(title, m.hp, cls, false);
 }
@@ -3461,16 +3470,34 @@ $('helpModal').onclick = (e) => { if (e.target.id === 'helpModal') $('helpModal'
 // Rendering
 // ---------------------------------------------------------------------------
 let lastT = performance.now();
+let frameFailAt = 0;
 function frame(now) {
   const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
-  if (S.terrain) {
-    stepKillcam(dt);                     // real time: bars, phases, audio cue
-    const sdt = dt * killcamScale();     // battlefield time (=== dt outside a killcam)
-    advanceAnim(sdt); stepTerrainAnim(sdt); stepEffects(sdt);
-    updateCamera(dt);                    // camera eases in REAL time, so it never crawls
+  try {
+    if (S.terrain) {
+      stepKillcam(dt);                     // real time: bars, phases, audio cue
+      const sdt = dt * killcamScale();     // battlefield time (=== dt outside a killcam)
+      advanceAnim(sdt); stepTerrainAnim(sdt); stepEffects(sdt);
+      updateCamera(dt);                    // camera eases in REAL time, so it never crawls
+    }
+    draw();
+    if (S.playing) updateWatching();   // rides the existing loop; no new timer
+  } catch (err) {
+    // ONE bad frame must never kill the loop. Before this guard, any throw in
+    // here skipped the rAF re-arm below and froze the canvas on whatever had
+    // painted — usually just the sky (drawn first, screen-space), with the
+    // DOM alive around it and only a full reload as the cure (Jordan's
+    // 'sky-only' report, 2026-07-31). Now: log it, launder the context (the
+    // canvas.width assignment in resize() resets the FULL ctx state including
+    // a leaked save-stack/transform/alpha from the aborted draw), re-seat the
+    // camera, and carry on.
+    if (now - frameFailAt > 2000) { frameFailAt = now; console.error('frame recovered from:', err); }
+    try {
+      resize();
+      ctx.globalAlpha = 1; ctx.setLineDash([]); ctx.textAlign = 'left'; ctx.lineCap = 'butt';
+      snapCamera();
+    } catch {}
   }
-  draw();
-  if (S.playing) updateWatching();   // rides the existing loop; no new timer
   requestAnimationFrame(frame);
 }
 
@@ -5310,8 +5337,8 @@ function drawAim() {
     // the landing sits inside your own weapon's blast radius. (No landing
     // marker — reading the fall is part of the craft.)
     const selfBlast = landed && selW.radius
-      ? Math.hypot(landed[0] - t.x, landed[1] - (t.y - 150)) <= selW.radius * 1.3
-      : false;                                   // 1.3 mirrors game-core DMG_REACH
+      ? Math.hypot(landed[0] - t.x, landed[1] - (t.y - 150)) <= selW.radius * 1.56
+      : false;                                   // 1.56 mirrors game-core DMG_REACH
     const hot = danger || selfBlast;
     // The FIRST ~45% of the flight is drawn — a clear, confident curve that
     // still leaves the fall to the player's judgement. (The full path is

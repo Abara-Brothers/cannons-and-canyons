@@ -44,8 +44,9 @@ export const LAVA_Y = WORLD_H - 300;   // top surface of the lava
 export const LAVA_DPS = 9;             // damage per second while a tank touches it
 const TERRAIN_FLOOR = LAVA_Y;          // craters bottom out ON the lava, never through it
 const CRATER_MUL = 0.8;       // crater/blast visual size; the DAMAGE radius now covers the whole explosion
-const DMG_REACH = 1.3;        // tank-damage zone stretch beyond w.radius (2026-07-30, Jordan: bigger
-                              // damage zone for every weapon, visuals/craters unchanged). Applied ONLY
+const DMG_REACH = 1.56;       // tank-damage zone stretch beyond w.radius (2026-07-30, Jordan: bigger
+                              // damage zone for every weapon, visuals/craters unchanged; raised
+                              // 1.3 -> 1.56 same day: '+20% on top of current'). Applied ONLY
                               // to blastDamage vs tanks — craters, scorch, prop ignition, ruins and
                               // hazard fields keep the visual radius. Mirrored in drawAim's selfBlast.
 const SCORCH_MUL = 0.8;       // scorch half-width vs damage radius — same footprint the crater used to have
