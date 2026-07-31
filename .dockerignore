@@ -5,3 +5,8 @@ npm-debug.log*
 .DS_Store
 test
 *.md
+# data/ holds vapid.json — the VAPID PRIVATE KEY. The Dockerfile does `COPY . .`,
+# so without this line the key is baked into the image layers. Keep it excluded;
+# supply keys via VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY env vars in production.
+data
+.env

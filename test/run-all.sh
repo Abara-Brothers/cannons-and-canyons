@@ -60,12 +60,12 @@ run golf_hazards node test/golf_hazards.mjs
 
 if [ "$REMOTE" = "1" ]; then
   echo "== against ${WS:-?} =="
-  for t in sim resume_test resume_takeover ffa boss golf horde batch6; do run "$t" node test/$t.mjs; done
+  for t in sim resume_test resume_takeover ffa boss golf horde batch6 security; do run "$t" node test/$t.mjs; done
   echo "  (ffa_elim needs RESUME_GRACE_MS on the server — local only)"
 else
   echo "== local server =="
   start_server BOT_FIRE_MS=250 PICK_MS=800
-  for t in sim resume_test resume_takeover ffa boss golf horde batch6; do run "$t" node test/$t.mjs; done
+  for t in sim resume_test resume_takeover ffa boss golf horde batch6 security; do run "$t" node test/$t.mjs; done
 
   echo "== local server, short resume grace =="
   start_server RESUME_GRACE_MS=1200 BOT_FIRE_MS=250 PICK_MS=800

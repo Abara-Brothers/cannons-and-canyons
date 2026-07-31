@@ -269,7 +269,33 @@ function finishPicking(room) {
   beginTurn(room);
 }
 
+// A socket may only own ONE room. Before this, `create` could be sent
+// repeatedly: each call did rooms.set() and overwrote ws.roomCode, while
+// handleClose only ever resolves the LATEST code — so every earlier room was
+// orphaned, unreachable by cleanup, and never swept. Repeated creates
+// exhausted the instance and OOM-killed the process, destroying every live
+// match. Releasing the previous room here closes that leak at its source.
+// Only a room still WAITING is torn down: a room already 'playing' belongs to
+// the resume system and its own empty-room timer, and may hold an opponent.
+function releasePriorRoom(ws) {
+  const prev = ws && ws.roomCode ? rooms.get(ws.roomCode) : null;
+  if (!prev) return;
+  const seat = ws.seat;
+  const mine = prev.players[seat] && prev.players[seat].ws === ws;
+  if (!mine) return;
+  if (prev.state !== 'waiting') return;
+  const others = prev.players.some((p, i) => p && i !== seat && !p.bot && p.connected);
+  teardown(prev, others);          // notify only if someone else is actually in there
+}
+
+// Backstop against room-count exhaustion from any source. Well above any
+// plausible real load for this game; refusing is always better than an OOM
+// that kills every match in progress.
+const MAX_ROOMS = Number(process.env.MAX_ROOMS) || 500;
+
 function createRoom(hostWs, name, skin, opts = {}) {
+  releasePriorRoom(hostWs);
+  if (rooms.size >= MAX_ROOMS) return null;
   const code = makeCode();
   const MODES = ['duel', 'ffa', 'boss', 'golf', 'aliens'];
   const mode = MODES.includes(opts.mode) ? opts.mode : 'duel';
@@ -1282,9 +1308,17 @@ function fireBite(room) {
 }
 
 function handleMove(room, seat, dir) {
+  // VALIDATE FIRST. `dir` is raw client input: a non-numeric value made
+  // Math.sign() return NaN, which flowed all the way into tank.x — and the
+  // `moved <= 0` guard below does NOT stop it, because NaN <= 0 is false. The
+  // result was a tank at x=NaN (every distance test in simulateShot resolves
+  // false, so it can never be hit) with fuel=NaN (so `fuel < MOVE_STEP` is
+  // also false, granting unlimited movement). Reject anything not -1/+1.
+  const d = Math.sign(Number(dir));
+  if (d !== 1 && d !== -1) return;
   if (room.state !== 'playing' || room.turn !== seat || room.picking) return;
   if (room.mode === 'golf') return;    // you walk to your BALL, not wherever you like
-  if (room.fuel < MOVE_STEP) return;
+  if (!Number.isFinite(room.fuel) || room.fuel < MOVE_STEP) return;
   const tank = room.tanks[seat];
   if (tank.alive === false) return;
   // Drive anywhere along the map. Tanks are not obstacles — you may drive clean
@@ -1292,9 +1326,11 @@ function handleMove(room, seat, dir) {
   // Shared with the Teleport weapon via laneBounds so the two can never disagree.
   const [lo, hi] = laneBounds(room.tanks, seat);
   if (hi < lo) return;                     // boxed in — nowhere legal to go
-  const nx = Math.max(lo, Math.min(hi, tank.x + Math.sign(dir) * MOVE_STEP));
+  const nx = Math.max(lo, Math.min(hi, tank.x + d * MOVE_STEP));
   const moved = Math.abs(nx - tank.x);
-  if (moved <= 0) return;
+  // `> 0` (not `!(moved <= 0)`) so a NaN slipping past any future edit still
+  // fails closed rather than writing NaN into the tank.
+  if (!(moved > 0)) return;
   tank.x = nx;
   tank.y = surfaceAt(room.terrain, nx);
   room.fuel -= moved;
@@ -1397,7 +1433,10 @@ function handleResume(ws, msg) {
 }
 
 // ---- WebSocket wiring -------------------------------------------------------
-const wss = new WebSocketServer({ server, path: '/ws' });
+// maxPayload caps a single frame. Game messages are tiny (the largest inbound
+// is a 7-id loadout); 64 KB is generous and stops a single socket buffering
+// megabytes into the process.
+const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 64 * 1024 });
 
 wss.on('connection', (ws) => {
   ws.isAlive = true;
@@ -1410,6 +1449,7 @@ wss.on('connection', (ws) => {
     switch (msg.type) {
       case 'create': {
         const r = createRoom(ws, msg.name, msg.skin, { mode: msg.mode, max: msg.max });
+        if (!r) { send(ws, { type: 'joinError', reason: 'The server is at capacity. Try again shortly.' }); break; }
         r.players[0].loadout = sanitizeLoadoutFor(r.mode, msg.loadout);
         if (r.mode === 'golf') r.tees = sanitizeTees(msg.tees);
         r.asyncOk = r.mode === 'duel';        // invited duels are async-friendly
@@ -1439,6 +1479,11 @@ wss.on('connection', (ws) => {
         if (waiting && waiting !== ws && waiting.readyState === 1) {
           const host = waiting; waiting = null;
           const r = createRoom(host, host._qname, host._qskin, { mode: 'duel' });
+          if (!r) {
+            send(host, { type: 'joinError', reason: 'The server is at capacity. Try again shortly.' });
+            send(ws, { type: 'joinError', reason: 'The server is at capacity. Try again shortly.' });
+            break;
+          }
           r.players[0].loadout = host._qloadout || null;
           r.players.push({ ws, name: sanitizeName(msg.name, 1), token: makeToken(), connected: true, dropTimer: null, skin: sanitizeSkin(msg.skin, 1), loadout: sanitizeLoadout(msg.loadout) });
           ws.roomCode = r.code; ws.seat = 1;
@@ -1454,6 +1499,7 @@ wss.on('connection', (ws) => {
         const diff = ['easy', 'medium', 'hard'].includes(msg.difficulty) ? msg.difficulty : 'medium';
         // CPU games stay strictly 2-player.
         const r = createRoom(ws, msg.name, msg.skin, { mode: 'duel' });
+        if (!r) { send(ws, { type: 'joinError', reason: 'The server is at capacity. Try again shortly.' }); break; }
         r.players[0].loadout = sanitizeLoadout(msg.loadout);
         r.vsBot = true;
         r.players[1] = {

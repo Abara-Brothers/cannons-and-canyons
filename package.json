@@ -18,7 +18,8 @@
     "test:golf": "node test/golf.mjs",
     "test:horde": "node test/horde.mjs",
     "test:batch6": "node test/batch6.mjs",
-    "test:golf-hazards": "node test/golf_hazards.mjs"
+    "test:golf-hazards": "node test/golf_hazards.mjs",
+    "test:security": "node test/security.mjs"
   },
   "engines": {
     "node": ">=18"
