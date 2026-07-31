@@ -198,7 +198,7 @@ export const WEAPONS = [
   { id: 'cannon',   name: 'Cannon',        color: '#ff5a52', ammo: 99,
     shots: 1, spread: 0,  speedMul: 1.0, damage: 25, radius: 750, terrain: 'crater',
     desc: 'Standard HE shell. Reliable, unlimited.' },
-  { id: 'mortar',   name: 'Heavy Mortar',  color: '#ffb02e', ammo: 2,
+  { id: 'mortar',   name: 'Heavy Mortar',  color: '#ffb02e', ammo: 4,   // 4 everywhere: default kit AND draft (see DRAFT_AMMO)
     shots: 1, spread: 0,  speedMul: 1.0, damage: 46, radius: 1300, terrain: 'crater',
     desc: 'Massive HE round. Cracks open the landscape.' },
   { id: 'volley',   name: 'Rocket Volley', color: '#7c6cff', ammo: 3,
@@ -328,28 +328,36 @@ export function startingAmmo() {
 }
 
 // Combat-mode loadouts: each player drafts LOADOUT_SIZE weapons from this
-// pool, 2 rounds each. STANDARD ISSUE regardless of picks: the Cannon
-// (unlimited — every mode except golf) and the Tactical Nuke (one). The
-// railgun stays supply-drop exclusive.
+// pool, 2 rounds each (see AMMO_BY_ID for the exceptions). STANDARD ISSUE
+// regardless of picks: the Cannon (unlimited — every mode except golf) and
+// the Tactical Nuke (one). The railgun stays supply-drop exclusive.
 export const LOADOUT_SIZE = 5;
 export const LOADOUT_POOL = WEAPONS
   .filter(w => !w.bossOnly && !w.golfOnly && !w.aiOnly && w.id !== 'nuke' && w.id !== 'railgun' && w.id !== 'cannon')
   .map(w => w.id);
-// Duel / free-for-all / Boss Fight run on 5 picks; the survival modes hand out
-// 7 (a longer fight against respawning waves needs the deeper bag). Golf gets
-// none — the ball is the whole kit.
+// Duel / free-for-all run on 5 picks; the long co-op fights — survival waves
+// and the WARLORD — hand out 7 (a drawn-out fight needs the deeper bag).
+// Golf gets none — the ball is the whole kit. The pool holds 10, so 7 still
+// leaves a real choice.
 export function loadoutSizeFor(mode) {
   if (mode === 'golf') return 0;
-  return mode === 'aliens' ? 7 : 5;
+  return (mode === 'aliens' || mode === 'boss') ? 7 : 5;
 }
 export function validLoadout(picks, n = LOADOUT_SIZE) {
   return Array.isArray(picks) && picks.length === n &&
     new Set(picks).size === n && picks.every(id => LOADOUT_POOL.includes(id));
 }
+// Rounds a drafted weapon carries. Everything is 2 unless it earns otherwise;
+// the Heavy Mortar rides at 4 (Jordan, 8.24) — it is the workhorse arc and two
+// shells never covered a ranging shot plus the correction.
+export const DRAFT_AMMO_DEFAULT = 2;
+export const DRAFT_AMMO = { mortar: 4 };
+export const draftAmmoFor = (id) => DRAFT_AMMO[id] ?? DRAFT_AMMO_DEFAULT;
+
 export function loadoutAmmo(picks) {
   const a = {};
   for (const w of WEAPONS) if (!w.bossOnly && !w.golfOnly && !w.aiOnly) a[w.id] = 0;
-  for (const id of picks) a[id] = 2;
+  for (const id of picks) a[id] = draftAmmoFor(id);
   a.cannon = 99;       // standard issue: the unlimited sidearm, every mode
   a.nuke = 1;          // everyone gets the big one
   a.railgun = 0;       // crate-exclusive, as always

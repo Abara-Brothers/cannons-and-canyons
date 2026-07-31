@@ -43,14 +43,16 @@ function loadoutPass() {
     if (m.type !== 'start') return;
     const lo = m.loadouts && m.loadouts[m.you];
     if (!lo || lo.join() !== picks.join()) fail(`snapshot loadout is ${JSON.stringify(lo)}, expected ${JSON.stringify(picks)}`);
-    for (const id of picks) if (m.ammo[id] !== 2) fail(`picked ${id} has ammo ${m.ammo[id]}, expected 2`);
+    // 2 rounds each, except the Heavy Mortar's 4 (8.24 — DRAFT_AMMO).
+    const want = (id) => (id === 'mortar' ? 4 : 2);
+    for (const id of picks) if (m.ammo[id] !== want(id)) fail(`picked ${id} has ammo ${m.ammo[id]}, expected ${want(id)}`);
     if (m.ammo.nuke !== 1) fail(`nuke ammo ${m.ammo.nuke}, expected 1 (everyone gets it)`);
     for (const id of ['cluster', 'napalm', 'airstrike', 'volley', 'buster']) {
       if (m.ammo[id] !== 0) fail(`unpicked ${id} has ammo ${m.ammo[id]}, expected 0`);
     }
     if (m.ammo.cannon !== 99) fail(`cannon ammo ${m.ammo.cannon}, expected 99 (standard issue)`);
     if ((m.loadouts || []).length && !Array.isArray(m.loadouts[1 - m.you])) fail('the CPU seat has no loadout of its own');
-    step('loadout ammo map correct (5 picks x2 + nuke)');
+    step('loadout ammo map correct (5 picks: mortar x4, rest x2, + nuke)');
     try { ws.close(); } catch {}
     fallbackPass();
   });
@@ -70,7 +72,8 @@ function fallbackPass() {
     }
     if (m.type !== 'pickDone') return;
     for (const id of ['mortar', 'cluster', 'napalm', 'airstrike', 'volley']) {
-      if (m.ammo[id] !== 2) fail(`fallback ${id} ammo ${m.ammo[id]}, expected 2 (default kit)`);
+      const exp = id === 'mortar' ? 4 : 2;        // the mortar rides at 4 in every kit (8.24)
+      if (m.ammo[id] !== exp) fail(`fallback ${id} ammo ${m.ammo[id]}, expected ${exp} (default kit)`);
     }
     if (m.ammo.cannon !== 99) fail(`fallback cannon ammo ${m.ammo.cannon}, expected 99 (standard issue)`);
     if (m.ammo.nuke !== 1) fail(`fallback nuke ammo ${m.ammo.nuke}, expected 1`);

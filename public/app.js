@@ -615,21 +615,13 @@ function paintDockTab() {
   $('dockMini').setAttribute('aria-hidden', String(!shut));
   updateDockMini();          // populate the sliver the moment it appears
 }
-// Every NEW battle opens with the controls SHOWN, then the dock tucks itself
-// away after the player's first shot of that match (Jordan: 'at the very start
-// of every game (not every round), toggle the controls... then toggle them
-// down once the player has shot'). dockIntro arms on a 'start' snapshot only —
-// holes, turns and resyncs never re-run the intro.
-let dockIntro = false;
-$('dockTab').onclick = () => {
-  dockIntro = false;      // they've found the toggle themselves — stop stage-managing
-  setDockCollapsed(!dockShutReq, true);
-};
-// Cold-resume fallback (see applySnapshot): a mid-battle reload comes back
-// with the dock tucked away — the sliver keeps FIRE + the live aim readout,
-// and the labelled tab invites the rest up. New battles instead open RAISED
-// until the first shot (see dockIntro). The slide is measured off the OPEN
-// dock, so wait for a laid-out one before shutting it.
+$('dockTab').onclick = () => { setDockCollapsed(!dockShutReq, true); };
+// EVERY match loads in with the controls tucked away (Jordan, 8.24 — this
+// replaces 8.22's open-then-tuck-after-your-first-shot intro): the battlefield
+// gets the whole screen, the sliver keeps FIRE, the live aim readout and the
+// selected weapon, and the upward-nudging CONTROLS tab invites the rest up.
+// Same for a cold resume. The slide is measured off the OPEN dock, so wait for
+// a laid-out one before shutting it.
 function startDockCollapsed() {
   if (!dockSlidePx()) { requestAnimationFrame(startDockCollapsed); return; }
   setDockCollapsed(true, false);
@@ -1027,7 +1019,7 @@ function openDraft(n) {
   armNeed = n;
   armPicks = armPrefill();
   document.querySelector('#armouryModal .arm-sub').innerHTML =
-    `Pick <b>${armNeed}</b> weapons for this battle — each carries <b>2 rounds</b>. ` +
+    `Pick <b>${armNeed}</b> weapons for this battle — <b>2 rounds</b> each, <b>4</b> for the Heavy Mortar. ` +
     'The <b>Cannon</b> (unlimited) and the <b>Tactical Nuke</b> are standard issue; the <b>Railgun</b> only drops in supply crates.';
   buildArmoury();
   $('armouryModal').classList.remove('hidden');
@@ -1363,14 +1355,9 @@ function applySnapshot(m) {
   closeStageMenus();      // camera + meta always start collapsed
   $('holeScore').classList.remove('show');   // a stale hole card never survives a snapshot
   if (keep) setDockCollapsed(keep.dockShut, false);   // resync: dock stays as you left it
-  else if (m.type === 'start') {
-    // A new battle: show the player their controls first; the fire handler
-    // tucks the dock away after their first shot (see dockIntro above).
-    dockIntro = true;
-    setDockCollapsed(false, false);
-  } else if (m.type === 'hole') {
+  else if (m.type === 'hole') {
     // Next golf hole: not a new game — leave the dock as the player has it.
-  } else startDockCollapsed();   // cold resume mid-battle: hidden — the tab brings it up
+  } else startDockCollapsed();   // new battle or cold resume: hidden, tab brings it up
 }
 
 // The server hands the turn over on ITS clock — usually while this client is
@@ -1891,8 +1878,8 @@ function drawAimGuide() {
   const L = msz * 0.36;
   // SLINGSHOT demo: the hand pulls DOWN AND BACK, the shot flies the other
   // way. Anchor sits toward the target side and high enough that the hand,
-  // pulling down from it, still clears a RAISED dock (battles open with the
-  // controls shown until the first shot — see dockIntro).
+  // pulling down from it, stays clear of the dock even when the player has
+  // raised it.
   const ax = cssW * 0.5 + dir * msz * 0.16, ay = cssH * 0.40;
   const fxv = dir * Math.cos(ANG), fyv = -Math.sin(ANG);   // FIRE direction: toward the enemy, up
   const ux = -fxv, uy = -fyv;                              // pull direction: opposite (slingshot)
@@ -2071,7 +2058,6 @@ $('fireBtn').onclick = () => {
   sendMsg({ type: 'fire', weapon: S.selected, angle: a.angle, power: a.power });
   if (navigator.vibrate) navigator.vibrate(30);
   markAimGuideDone();                        // they can shoot — no more demo, ever
-  if (dockIntro) { dockIntro = false; setDockCollapsed(true, true); }   // intro over: tuck away
   S.charging = false; S.pullPointer = null; S.pullAnchor = null;
   updateDock();
 };
@@ -3310,7 +3296,7 @@ $('leaveYesBtn').onclick = () => { clearResume(); sendMsg({ type: 'leave' }); lo
 // ---------------------------------------------------------------------------
 const HELP_WEAPONS = [
   { id: 'cannon',   name: 'Cannon',        note: 'unlimited',        desc: 'Standard HE shell. Reliable, always available.' },
-  { id: 'mortar',   name: 'Heavy Mortar',  note: '2 rounds',         desc: 'A massive lobbed round that cracks open the landscape.' },
+  { id: 'mortar',   name: 'Heavy Mortar',  note: '4 rounds',         desc: 'A massive lobbed round that cracks open the landscape.' },
   { id: 'volley',   name: 'Rocket Volley', note: '3 rounds',         desc: 'Six rockets in a fan — saturates a whole slope.' },
   { id: 'cluster',  name: 'Cluster Bomb',  note: '2 rounds',         desc: 'Bursts at the top of its arc into five falling bomblets.' },
   { id: 'napalm',   name: 'Napalm',        note: '2 rounds',         desc: 'Splashes burning fuel over a wide area. The fire keeps biting for several turns.' },

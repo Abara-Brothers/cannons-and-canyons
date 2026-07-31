@@ -232,7 +232,12 @@ function killDead(room) {
 //       'aliens'  -> 1..2 humans vs waves of xeno saucers
 // A loadout arrives as an array of weapon ids; anything malformed becomes null
 // and the seat falls back to the default kit at start.
+// n defaults to the duel/FFA five. ALWAYS pass the room's real count for a
+// mode that drafts more (Boss Fight and the survival waves take 7) — validating
+// a 7-pick payload against 5 silently discards it and strands the player in the
+// draft window for the full PICK_MS.
 const sanitizeLoadout = (picks, n = 5) => (validLoadout(picks, n) ? picks.slice() : null);
+const sanitizeLoadoutFor = (mode, picks) => sanitizeLoadout(picks, loadoutSizeFor(mode) || 5);
 const DEFAULT_LOADOUT = ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'];
 const DEFAULT_LOADOUT7 = ['mortar', 'cluster', 'napalm', 'airstrike', 'volley', 'buster', 'gas'];
 const defaultLoadoutFor = (n) => (n >= 7 ? DEFAULT_LOADOUT7.slice() : DEFAULT_LOADOUT.slice());
@@ -663,9 +668,9 @@ function startGame(room) {
       room.hp[i] = hp; room.hpMax[i] = hp;
     }
   } else room.horde = null;
-  // EVERY combat mode drafts a loadout now (5 picks; survival modes 7). A seat
-  // that pre-supplied picks (or is a bot) is ready instantly; everyone else
-  // gets the pick screen and PICK_MS to choose.
+  // EVERY combat mode drafts a loadout now (5 picks; Boss Fight and the
+  // survival modes 7). A seat that pre-supplied picks (or is a bot) is ready
+  // instantly; everyone else gets the pick screen and PICK_MS to choose.
   room.pickN = loadoutSizeFor(room.mode);
   room.loadouts = room.players.map((pl) => {
     if (pl.bot) return pl.boss || pl.horde ? null : randomLoadout(room.pickN);
@@ -1405,7 +1410,7 @@ wss.on('connection', (ws) => {
     switch (msg.type) {
       case 'create': {
         const r = createRoom(ws, msg.name, msg.skin, { mode: msg.mode, max: msg.max });
-        r.players[0].loadout = sanitizeLoadout(msg.loadout);
+        r.players[0].loadout = sanitizeLoadoutFor(r.mode, msg.loadout);
         if (r.mode === 'golf') r.tees = sanitizeTees(msg.tees);
         r.asyncOk = r.mode === 'duel';        // invited duels are async-friendly
         send(ws, { type: 'created', code: r.code, mode: r.mode, max: r.max });
@@ -1421,7 +1426,7 @@ wss.on('connection', (ws) => {
         let seat = r.players.indexOf(null);                 // reuse a lobby hole first
         if (seat < 0) { seat = r.players.length; r.players.push(null); }
         r.players[seat] = {
-          ws, name: sanitizeName(msg.name, seat), token: makeToken(), loadout: sanitizeLoadout(msg.loadout),
+          ws, name: sanitizeName(msg.name, seat), token: makeToken(), loadout: sanitizeLoadoutFor(r.mode, msg.loadout),
           connected: true, dropTimer: null, skin: sanitizeSkin(msg.skin, seat),
         };
         ws.roomCode = code; ws.seat = seat;

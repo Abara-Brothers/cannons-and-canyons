@@ -16,7 +16,9 @@ const send = (m) => ws.send(JSON.stringify(m));
 
 let bossSeat = -1, mySeat = -1, bossFired = false, myTurnSeen = false, shots = 0;
 
-ws.on('open', () => send({ type: 'create', name: 'Raider', skin: 'olive', mode: 'boss', max: 2, loadout: ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'] }));
+// Boss Fight drafts SEVEN (8.24) — a 5-pick loadout is rejected as malformed
+// and would strand this client in the draft window.
+ws.on('open', () => send({ type: 'create', name: 'Raider', skin: 'olive', mode: 'boss', max: 2, loadout: ['mortar', 'cluster', 'napalm', 'airstrike', 'volley', 'buster', 'gas'] }));
 ws.on('message', (raw) => {
   const m = JSON.parse(raw);
   if (m.type === 'created') {

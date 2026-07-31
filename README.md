@@ -118,7 +118,8 @@ Mobile store wrappers, listing copy and art are in **`store/`**.
 - `SPEED_PER_POWER` / `GRAVITY` — tuned so a high-power lob clears the peaks
 - `MAX_HP` — tank health (150); there is no shot clock and no shot limit
 - `MOVE_BUDGET` — how far a tank can drive per turn (4,500)
-- `LOADOUT_SIZE` — how many weapons a player takes into a match (5)
+- `LOADOUT_SIZE` — how many weapons a player takes into a match (5; Boss Fight
+  and Alien Invasion draft 7 — see `loadoutSizeFor`)
 - `CRATER_MUL` — how much larger craters/blasts are than the damage radius
 - `AIM_MIN` / `AIM_MAX` — the 300° firing arc
 - `LAVA_DPS` — damage per second while a tank sits in lava on volcanic maps
