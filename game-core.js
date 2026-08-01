@@ -600,18 +600,46 @@ function deform(terrain, cx, cy, r, mode, wall, opt = {}) {
   const rw = r * (opt.wMul || 1);
   const x0 = Math.max(0, Math.floor(cx - rw));
   const x1 = Math.min(terrain.length - 1, Math.ceil(cx + rw));
+  let dug = 0;                                          // deepest cut this blast actually made
   for (let x = x0; x <= x1; x++) {
     const dx = x - cx;
     if (Math.abs(dx) > rw) continue;
     let dy = Math.sqrt(rw * rw - dx * dx) * (r / rw);   // widen without deepening
     if (opt.sheet) dy = Math.min(dy, rw * 0.30);        // ice shears off in a flat sheet
     if (mode === 'crater') {
+      const before = terrain[x];
       let v = Math.max(terrain[x], cy + dy);            // can only lower ground
       // Indestructible concrete: digging can never pass the deck. Piling dirt on
       // top ('dirt'/'wall') is unaffected.
       if (opt.guard && opt.guard[x]) v = Math.min(v, opt.guard[x]);
       terrain[x] = clampY(v, floor);
+      const cut = terrain[x] - before;                  // >0 = ground removed here
+      if (cut > dug) dug = cut;
     } else if (mode === 'dirt') terrain[x] = clampY(Math.min(terrain[x], cy - dy), floor);
+  }
+
+  // EJECTA RIM. A bowl alone reads as a scoop taken out of the hill; what makes
+  // a hole look like a CRATER is the ring of thrown-up spoil around its lip. The
+  // bowl above is left exactly as it was (so digging depth, bunker-busting and
+  // every damage number are unchanged) and the rim is purely additive.
+  //
+  // Gated on `dug > 0`: an airburst that never reached the ground excavates
+  // nothing, and must not conjure a mound out of clear air. Height scales with
+  // how much was actually excavated, so a graze gets a lip and a nuke gets a
+  // ridge. Capped, and clamped to WALL_TOP like the Earthworks rampart, so
+  // repeatedly shelling one spot can never be ridden upward as a ladder.
+  if (mode === 'crater' && dug > 0) {
+    const inner = rw, outer = rw * 1.5;
+    const peak = Math.min(r * 0.15, dug * 0.4);
+    const rx0 = Math.max(0, Math.floor(cx - outer));
+    const rx1 = Math.min(terrain.length - 1, Math.ceil(cx + outer));
+    for (let x = rx0; x <= rx1; x++) {
+      const ax = Math.abs(x - cx);
+      if (ax < inner || ax > outer) continue;
+      const u = (ax - inner) / (outer - inner);         // 0 at the lip, 1 at the outer fade
+      const lift = peak * 0.5 * (1 + Math.cos(Math.PI * u));   // crest at the lip, smooth to nothing
+      terrain[x] = clampY(Math.max(WALL_TOP, terrain[x] - lift), floor);
+    }
   }
 }
 
