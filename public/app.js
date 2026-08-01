@@ -48,6 +48,7 @@ const S = {
   muzzle: [],                          // directional HD muzzle blasts (own render pass)
   plane: null,                         // Air Strike delivery aircraft (cosmetic, own render pass)
   charging: false, pullPointer: null, pullAnchor: null,
+  shotSent: false,                     // one shot per turn: latched on fire, cleared on the next turn
   userZoom: 1, panY: 0, panX: 0,
   recoil: [0, 0],                      // barrel kick when firing (1 → 0)
   lean: [0, 0], leanV: [0, 0], leanTarget: [0, 0], moveAt: [0, 0],  // drive lean + settle rock
@@ -1336,6 +1337,7 @@ function applySnapshot(m) {
   S.chainQueue = [];
   S.recoil = [0, 0];
   S.charging = false; S.pullPointer = null; S.pullAnchor = null; S.userZoom = START_ZOOM; S.panY = 0; S.panX = 0;
+  S.shotSent = false;               // fresh match / hole / resync: shot re-armed
   if (keep) {
     // Same-session resync: put back what the player had in hand. The weapon
     // only returns if the restored ammo still allows it (99 = unlimited).
@@ -1368,6 +1370,7 @@ function onTurn(m) { deferHp(() => applyTurn(m)); }
 
 function applyTurn(m) {
   S.turn = m.turn; S.fuel = m.fuel;
+  S.shotSent = false;               // a new turn re-arms the one allowed shot
   if (m.ammoSeat === S.you && m.ammo) {
     // The emergency shell: if we were completely dry and the server just slid
     // one cannon round across the table, say so — otherwise it reads as a bug.
@@ -1493,7 +1496,7 @@ function updateFuel() {
 // that one is available.) Resets itself: the next 'hole' snapshot arrives with
 // done[] refilled false.
 function golfHoledMe() { return !!(S.golf && S.golf.done && S.golf.done[S.you]); }
-function myTurn() { return S.turn === S.you && S.playing && !S.anim && !golfHoledMe(); }
+function myTurn() { return S.turn === S.you && S.playing && !S.anim && !S.shotSent && !golfHoledMe(); }
 // You may line up your NEXT shot (aim + weapon) at any time — even while the
 // opponent is shooting. Only moving and firing wait for your turn.
 function canAim() { return S.playing && !golfHoledMe(); }
@@ -2055,6 +2058,12 @@ $('fireBtn').onclick = () => {
   const left = S.ammo[S.selected] ?? 99;
   if (left <= 0) { showToast('Out of ammo — pick another weapon'); return; }
   const a = myAim();
+  // One shot per turn. The server is the authority (room.shotPending), but the
+  // round trip means S.anim — which myTurn() keys off — is not set until the
+  // shot broadcast returns. Without this latch a double-tap, or one tap on a
+  // slow connection, sent a second `fire` inside that window. Cleared by
+  // applyTurn / applySnapshot when the next turn is genuinely granted.
+  S.shotSent = true;
   sendMsg({ type: 'fire', weapon: S.selected, angle: a.angle, power: a.power });
   if (navigator.vibrate) navigator.vibrate(30);
   markAimGuideDone();                        // they can shoot — no more demo, ever

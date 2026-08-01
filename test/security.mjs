@@ -133,11 +133,49 @@ async function frameCap() {
   try { ws.close(); } catch {}
 }
 
+// ---- 4. ONE SHOT PER TURN ---------------------------------------------------
+// room.turn is not reassigned when a shot resolves — the handover waits 300ms,
+// then any burn (5s), and in golf the whole ball roll (30s). Every extra `fire`
+// inside that window used to pass handleFire's guard and resolve again:
+// measured 5 shots from 5 rapid messages, and the cannon has unlimited ammo.
+async function oneShotPerTurn() {
+  const ws = await open();
+  send(ws, {
+    type: 'ai', difficulty: 'easy', name: 'Rapid', skin: 'olive',
+    loadout: ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'],
+  });
+  const start = await wait(ws, 'start', 12000);
+  if (!start) { fail('one-shot: no start snapshot'); ws.close(); return; }
+  const me = start.you;
+  if (start.pick) {
+    send(ws, { type: 'loadout', picks: ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'] });
+    await wait(ws, 'pickDone', 8000);
+  }
+  if (start.turn !== me) {
+    for (let i = 0; i < 12; i++) { const t = await wait(ws, 'turn', 8000); if (t && t.turn === me) break; }
+  }
+
+  let shots = 0;
+  const count = (raw) => { const m = JSON.parse(raw); if (m.type === 'shot' && m.by === me) shots++; };
+  ws.on('message', count);
+
+  // Five fire messages back to back, all inside one turn.
+  for (let i = 0; i < 5; i++) send(ws, { type: 'fire', weapon: 'cannon', angle: 45, power: 60 });
+  await sleep(3500);
+  ws.off('message', count);
+
+  if (shots === 0) fail('one-shot: no shot resolved at all — the fire path may be broken');
+  else if (shots > 1) fail(`one-shot: ${shots} shots resolved from 5 rapid fire messages in ONE turn (expected exactly 1)`);
+  else step('one shot per turn: 5 rapid fire messages produced exactly 1 shot');
+  try { ws.close(); } catch {}
+}
+
 (async () => {
   try {
     await roomHoarding();
     await nanDrive();
     await frameCap();
+    await oneShotPerTurn();
   } catch (e) {
     fail('threw: ' + (e && e.message ? e.message : String(e)));
   }

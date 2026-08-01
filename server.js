@@ -524,6 +524,7 @@ function nextHole(room, first) {
 function golfShot(room, seat, msg) {
   const g = room.golf;
   if (g.done[seat]) return;
+  room.shotPending = true;          // one swing per turn (see handleFire)
   // Three clubs, one ball: any golfOnly weapon id is a legal swing; anything
   // else (or nothing) falls back to the iron.
   const clubW = WEAPON_BY_ID[msg.weapon];
@@ -721,6 +722,7 @@ function startGame(room) {
 // No shot-clock: players take as long as they like. Turns only advance on fire.
 function beginTurn(room) {
   room.fuel = MOVE_BUDGET;
+  room.shotPending = false;         // a fresh turn re-arms the one allowed shot
   room.turnCount = (room.turnCount || 0) + 1;
   // Every path that hands out a turn lands here — including the match opener,
   // which never passes through advance(). The survival rotation needs to know
@@ -1091,6 +1093,14 @@ function endGame(room) {
 
 function handleFire(room, seat, msg) {
   if (room.state !== 'playing' || room.turn !== seat || room.picking) return;
+  // ONE SHOT PER TURN. `room.turn` is NOT reassigned when a shot resolves — the
+  // handover waits 300ms, then any fire/gas burn (up to 5s), and in golf the
+  // whole ball roll (up to 30s). For that entire window room.turn is still the
+  // firing seat, so without this flag every extra `fire` passed the guard above
+  // and resolved again — unlimited shots per turn with the unlimited cannon.
+  // Cleared in beginTurn(), the single choke point through which every granted
+  // turn passes (startGame, advance, golfAdvance, finishPicking).
+  if (room.shotPending) return;
   if (room.mode === 'golf') return golfShot(room, seat, msg);   // one club, no ammo
   const w = WEAPON_BY_ID[msg.weapon];
   if (!w) return;
@@ -1129,6 +1139,7 @@ function buildKillcam(room, result, aliveBefore) {
 // Shared shot resolution — used by both the human 'fire' message and the bot.
 function resolveFire(room, seat, weaponId, angle, power) {
   const w = WEAPON_BY_ID[weaponId] || WEAPON_BY_ID.cannon;
+  room.shotPending = true;          // this turn's shot is spent (see handleFire)
   clearTimeout(room.clock);
   const before = room.terrain.slice();
   const aliveBefore = aliveFlags(room);   // snapshot for the killcam (who this shot kills)
