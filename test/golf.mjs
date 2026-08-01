@@ -15,6 +15,7 @@ const ws = new WebSocket(URL);
 const send = (m) => ws.send(JSON.stringify(m));
 
 let cup = null, par = 0, myX = 0, shots = 0, lastStrokes = 0, movedOnce = false, wrapped = false;
+let holed = false;                 // stop swinging once this hole is done (8.26)
 
 ws.on('open', () => send({ type: 'create', name: 'Golfer', skin: 'olive', mode: 'golf', max: 2 }));
 ws.on('message', (raw) => {
@@ -37,8 +38,15 @@ ws.on('message', (raw) => {
     step(`hole 1: par ${par}, tee at ${Math.round(myX)}, cup at ${Math.round(cup.x)} (biome ${m.biome})`);
     // Driving must be refused in golf.
     send({ type: 'move', dir: 1 });
-    setTimeout(swing, 400);
+    // The opening swing is driven by the `turn` broadcast below, not scheduled
+    // here — see the note on the turn handler.
   }
+  // ONE SWING PER TURN (8.26): the server holds the turn for the whole ball
+  // roll (>= 1100ms) and now refuses a second shot inside that window. This
+  // test used to swing 350ms after each `shot`, which only ever worked because
+  // the extra swings were wrongly accepted. Drive off `turn` instead — exactly
+  // what the real client does (it re-enables FIRE in applyTurn).
+  if (m.type === 'turn' && m.turn === 0 && !holed) setTimeout(swing, 150);
   if (m.type === 'move') fail('server allowed driving in golf mode');
   if (m.type === 'shot') {
     const g = m.golf;
@@ -51,8 +59,7 @@ ws.on('message', (raw) => {
     if (Math.abs(nx - myX) > 1) movedOnce = true;
     myX = nx;
     step(`stroke ${g.strokes[0]}${g.note ? ' (' + g.note + ')' : ''} — ball/tank at ${Math.round(nx)}`);
-    if (!g.done[0]) setTimeout(swing, 350);
-    else step(g.note === 'holed' ? 'SUNK IT' : 'picked up at the cap');
+    if (g.done[0]) { holed = true; step(g.note === 'holed' ? 'SUNK IT' : 'picked up at the cap'); }
   }
   if (m.type === 'hole') {
     if (!m.golf || m.golf.hole !== 2) fail(`expected hole 2 payload, got ${m.golf && m.golf.hole}`);
