@@ -173,24 +173,33 @@ async function oneShotPerTurn() {
 // ---- 5. Message-rate limit --------------------------------------------------
 // maxPayload caps frame SIZE; nothing capped frame COUNT. Legitimate play peaks
 // near 40/s (drive ticks + aim relay), the limit is 60/s with a 120 burst.
+//
+// DO NOT assert on the close event here. Render's proxy holds a dead socket
+// open for ~20s and reports 1006 rather than the server's code — measured at
+// +20,884ms against production, which made an earlier version of this test
+// fail remotely even though the limiter was working perfectly. Assert the
+// server-side OUTCOME instead: a cut-off socket stops being answered. A
+// `join` with a nonsense code is the ideal probe — it always draws a
+// `joinError` reply and has no side effects.
 async function rateLimit() {
+  const probe = (ws, ms = 4000) => {
+    send(ws, { type: 'join', code: 'ZZZZ', name: 'Probe', skin: 'olive' });
+    return wait(ws, 'joinError', ms);
+  };
+
   const ws = await open();
-  let closed = false, closeCode = 0;
-  ws.on('close', (c) => { closed = true; closeCode = c; });
-  // Well past the burst allowance, as fast as the socket will take them.
-  for (let i = 0; i < 400; i++) send(ws, { type: 'ping', i });
-  await sleep(1500);
-  if (!closed) fail('rate limit: 400 rapid messages were accepted (no frequency cap)');
-  else step(`rate limit: flood closed the socket (code ${closeCode})`);
+  if (!await probe(ws)) { fail('rate limit: baseline probe got no reply — cannot test'); try { ws.close(); } catch {} return; }
+  for (let i = 0; i < 400; i++) send(ws, { type: 'ping', i });   // well past the 120 burst
+  await sleep(1200);
+  if (await probe(ws)) fail('rate limit: socket still answered after 400 rapid messages (no frequency cap)');
+  else step('rate limit: flooding socket is cut off — server stops answering it');
   try { ws.close(); } catch {}
 
-  // And the limit must NOT punish normal play: a drive-rate burst survives.
+  // The limit must NOT punish normal play: a drive-rate burst stays answered.
   const ws2 = await open();
-  let closed2 = false;
-  ws2.on('close', () => { closed2 = true; });
   for (let i = 0; i < 30; i++) { send(ws2, { type: 'ping', i }); await sleep(45); }
-  if (closed2) fail('rate limit: a legitimate 22/s drive-rate burst was throttled');
-  else step('rate limit: 30 messages at drive rate (45ms) pass untouched');
+  if (!await probe(ws2)) fail('rate limit: a legitimate 22/s drive-rate burst was throttled');
+  else step('rate limit: 30 messages at drive rate (45ms) stay fully answered');
   try { ws2.close(); } catch {}
 }
 
