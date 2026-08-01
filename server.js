@@ -1449,11 +1449,28 @@ function handleResume(ws, msg) {
 // megabytes into the process.
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 64 * 1024 });
 
+// Per-socket message rate limit. maxPayload caps how BIG one frame may be;
+// nothing capped how MANY. Legitimate play peaks around 40/s (drive ticks every
+// 45ms plus aim relay every 55ms), so 60/s sustained with a 120 burst leaves
+// real headroom for a laggy client whose messages arrive bunched, while still
+// stopping a flood dead. Breaching it closes the socket — the client's existing
+// reconnect path handles that cleanly.
+const MSG_RATE = Number(process.env.MSG_RATE) || 60;      // sustained messages/second
+const MSG_BURST = Number(process.env.MSG_BURST) || 120;   // bucket capacity
+
 wss.on('connection', (ws) => {
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
+  ws.tokens = MSG_BURST;
+  ws.lastRefill = Date.now();
 
   ws.on('message', (raw) => {
+    // Refill before spending, so an idle socket recovers its burst allowance.
+    const now = Date.now();
+    ws.tokens = Math.min(MSG_BURST, ws.tokens + ((now - ws.lastRefill) / 1000) * MSG_RATE);
+    ws.lastRefill = now;
+    if (ws.tokens < 1) { try { ws.close(4029, 'rate limit'); } catch {} return; }
+    ws.tokens -= 1;
     let msg; try { msg = JSON.parse(raw); } catch { return; }
     const room = rooms.get(ws.roomCode);
 
@@ -1622,4 +1639,57 @@ wss.on('close', () => clearInterval(heartbeat));
 
 server.listen(PORT, () => {
   console.log(`Cannons & Canyons running at http://localhost:${PORT}`);
+});
+
+// ---------------------------------------------------------------------------
+// Graceful shutdown
+// ---------------------------------------------------------------------------
+// Render restarts this process on every deploy and whenever a free instance
+// spins back up. Previously the process was simply killed: every player in
+// every live match was dropped with no explanation, mid-animation, and their
+// resume token then failed against a room that no longer existed.
+//
+// This does NOT save matches — all room state is in memory, and surviving a
+// restart needs the persistence layer that ADR-005 is still deciding (see
+// ISSUE-003/005). What it does is make the loss HONEST and fast: everyone is
+// told before the lights go out, sockets close with the standard 1012
+// "service restart" code, and the process exits promptly instead of being
+// SIGKILLed part-way through a write.
+let shuttingDown = false;
+function shutdown(reason, code = 0) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] ${reason} — notifying ${wss.clients.size} socket(s), ${rooms.size} room(s) in memory`);
+  for (const client of wss.clients) {
+    try { send(client, { type: 'serverRestart' }); } catch {}
+  }
+  clearInterval(heartbeat);
+  try { wss.close(); } catch {}          // stop accepting new sockets
+  try { server.close(); } catch {}       // stop accepting new HTTP
+  // Let the notice flush, then close sockets and go.
+  setTimeout(() => {
+    for (const client of wss.clients) {
+      try { client.close(1012, 'server restarting'); } catch {}
+    }
+    setTimeout(() => process.exit(code), 150);
+  }, 250);
+  // Backstop: a shutdown must never hang a deploy. unref'd so it cannot itself
+  // hold the process open.
+  const hard = setTimeout(() => process.exit(code), 4000);
+  if (hard.unref) hard.unref();
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+// A crash used to take the process down silently. Tell the players first, then
+// exit non-zero so the host restarts us.
+process.on('uncaughtException', (err) => {
+  console.error('[fatal] uncaughtException:', err && err.stack ? err.stack : err);
+  shutdown('uncaughtException', 1);
+});
+// Do NOT exit on these: a rejected push send or a stray promise must not kill
+// live matches. Log loudly so it is visible once telemetry exists (ISSUE-006).
+process.on('unhandledRejection', (err) => {
+  console.error('[warn] unhandledRejection:', err && err.stack ? err.stack : err);
 });

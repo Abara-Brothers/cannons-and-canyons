@@ -170,12 +170,37 @@ async function oneShotPerTurn() {
   try { ws.close(); } catch {}
 }
 
+// ---- 5. Message-rate limit --------------------------------------------------
+// maxPayload caps frame SIZE; nothing capped frame COUNT. Legitimate play peaks
+// near 40/s (drive ticks + aim relay), the limit is 60/s with a 120 burst.
+async function rateLimit() {
+  const ws = await open();
+  let closed = false, closeCode = 0;
+  ws.on('close', (c) => { closed = true; closeCode = c; });
+  // Well past the burst allowance, as fast as the socket will take them.
+  for (let i = 0; i < 400; i++) send(ws, { type: 'ping', i });
+  await sleep(1500);
+  if (!closed) fail('rate limit: 400 rapid messages were accepted (no frequency cap)');
+  else step(`rate limit: flood closed the socket (code ${closeCode})`);
+  try { ws.close(); } catch {}
+
+  // And the limit must NOT punish normal play: a drive-rate burst survives.
+  const ws2 = await open();
+  let closed2 = false;
+  ws2.on('close', () => { closed2 = true; });
+  for (let i = 0; i < 30; i++) { send(ws2, { type: 'ping', i }); await sleep(45); }
+  if (closed2) fail('rate limit: a legitimate 22/s drive-rate burst was throttled');
+  else step('rate limit: 30 messages at drive rate (45ms) pass untouched');
+  try { ws2.close(); } catch {}
+}
+
 (async () => {
   try {
     await roomHoarding();
     await nanDrive();
     await frameCap();
     await oneShotPerTurn();
+    await rateLimit();
   } catch (e) {
     fail('threw: ' + (e && e.message ? e.message : String(e)));
   }

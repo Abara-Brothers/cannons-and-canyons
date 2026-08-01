@@ -855,6 +855,14 @@ function handle(m) {
       applySnapshot(m); saveResume(m.code, m.token);
       showToast('Reconnected — battle on!');
       break;
+    // The server is going down for a deploy or restart. It arrives just before
+    // the socket closes; onclose already schedules a reconnect, so all this
+    // needs to do is replace the bare 'Reconnecting…' banner with the reason.
+    // Match state lives in server memory, so a match in progress is genuinely
+    // lost — resume will report that honestly a moment later.
+    case 'serverRestart':
+      showToast(S.playing ? 'Server is updating — reconnecting…' : 'Server is updating…');
+      break;
     case 'resumeError':
       clearResume();
       // The room is gone (ended, or reclaimed after a very long absence).

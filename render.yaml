@@ -11,3 +11,20 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "22"
+      # Push signing keys. server.js prefers these and only falls back to
+      # generating a pair into data/vapid.json — which lives on an EPHEMERAL
+      # filesystem, so without these every deploy silently invalidates every
+      # existing push subscription (ISSUE-002). `sync: false` makes Render
+      # prompt for the value instead of storing it in this file; never commit
+      # the private key. Generate a pair with:
+      #     node -e "console.log(require('web-push').generateVAPIDKeys())"
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
+        sync: false
+# NOTE (ISSUE-005): `plan: free` spins down when idle and has no persistent
+# disk, so every live match dies on spin-down and cold starts take ~30-60s.
+# A paid instance plus a separate staging service is required before launch;
+# that is an owner action in the Render dashboard, not a change to this file.

@@ -72,8 +72,18 @@ else
   run ffa_elim node test/ffa_elim.mjs
   kill_server
 
-  stray=$(grep -v "running at" /tmp/cc_server.log 2>/dev/null | wc -l | tr -d ' ')
-  [ "$stray" != "0" ] && { echo "  server stderr:"; grep -v "running at" /tmp/cc_server.log; }
+  # Spawns and SIGTERMs its OWN server on its own port, so it must run with no
+  # shared server up — and must never be aimed at a deployed one.
+  echo "== self-hosted (spawns + signals its own server) =="
+  run shutdown node test/shutdown.mjs
+
+  # Expected chatter: the listen banner, and the graceful-shutdown line the
+  # harness itself triggers every time it SIGTERMs a shared server. Anything
+  # else in this log is a real problem and must stay loud — do not widen this
+  # filter to silence a genuine error.
+  benign='running at|^\[shutdown\] SIGTERM'
+  stray=$(grep -vE "$benign" /tmp/cc_server.log 2>/dev/null | wc -l | tr -d ' ')
+  [ "$stray" != "0" ] && { echo "  server stderr:"; grep -vE "$benign" /tmp/cc_server.log; }
 fi
 
 echo
