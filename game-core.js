@@ -1,4 +1,4 @@
-// game-core.js — authoritative game logic for Canyons & Cannons.
+// game-core.js — authoritative game logic for Cannons & Canyons.
 // Runs on the server only. Deterministic given the same inputs so both
 // clients, which merely replay the server's resolved shot, stay in sync.
 

@@ -1,4 +1,4 @@
-# Canyons & Cannons
+# Cannons & Canyons
 
 *Made by Abara Brothers.*
 
@@ -95,7 +95,7 @@ when the lobby fills).
 Static hosting (e.g. plain Netlify) can't run this — it needs a live Node server.
 
 ### Render (in use — `render.yaml` included)
-Live at **https://canyons-and-cannons.onrender.com**, auto-deploying on every
+Live at **https://cannons-and-canyons.onrender.com**, auto-deploying on every
 push to `main`.
 
 1. Push this folder to a GitHub repo.

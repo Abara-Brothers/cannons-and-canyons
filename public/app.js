@@ -1,5 +1,5 @@
 'use strict';
-// Canyons & Cannons — client. Renders the shared board, handles input, and
+// Cannons & Canyons — client. Renders the shared board, handles input, and
 // replays the server's authoritative shots so both screens stay identical.
 // HD pixel-art presentation: full-resolution canvas with chunky block terrain,
 // posterized sky. The camera NEVER moves or zooms during a shot — it stays on
@@ -2200,7 +2200,7 @@ function stopClipRecording() { try { if (clipRec && clipRec.state !== 'inactive'
 async function shareBlob(blob, filename, fallbackName) {
   const file = new File([blob], filename, { type: blob.type });
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    try { await navigator.share({ files: [file], title: 'Canyons & Cannons', text: 'Canyons & Cannons — play me: https://canyons-and-cannons.onrender.com' }); return; } catch {}
+    try { await navigator.share({ files: [file], title: 'Cannons & Canyons', text: 'Cannons & Canyons — play me: https://cannons-and-canyons.onrender.com' }); return; } catch {}
   }
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob); a.download = fallbackName || filename;
@@ -2246,7 +2246,7 @@ function buildResultCard() {
   x.fillStyle = '#8a93a8';
   x.textAlign = 'right';
   x.font = '700 28px system-ui, sans-serif';
-  x.fillText('play me — canyons-and-cannons.onrender.com', 1140, 600);
+  x.fillText('play me — cannons-and-canyons.onrender.com', 1140, 600);
   return c;
 }
 
@@ -3274,12 +3274,12 @@ function showOverlay(title, hp, cls, hideRematch) {
   $('overlay').classList.remove('hidden');
 }
 $('shareCardBtn').onclick = () => {
-  buildResultCard().toBlob((b) => { if (b) shareBlob(b, 'canyons-result.png'); }, 'image/png');
+  buildResultCard().toBlob((b) => { if (b) shareBlob(b, 'cannons-result.png'); }, 'image/png');
 };
 $('shareClipBtn').onclick = () => {
   if (!lastClip) return;
   const ext = lastClip.type.includes('mp4') ? 'mp4' : 'webm';
-  shareBlob(lastClip, `canyons-replay.${ext}`);
+  shareBlob(lastClip, `cannons-replay.${ext}`);
 };
 $('rematchBtn').onclick = () => sendMsg({ type: 'rematch' });
 $('exitBtn').onclick = () => { clearResume(); sendMsg({ type: 'leave' }); location.href = location.origin; };

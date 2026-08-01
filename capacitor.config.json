@@ -1,6 +1,6 @@
 {
-  "appId": "com.abarabrothers.canyonsandcannons",
-  "appName": "Canyons & Cannons",
+  "appId": "com.abarabrothers.cannonsandcanyons",
+  "appName": "Cannons & Canyons",
   "webDir": "public",
   "backgroundColor": "#0b1020",
   "server": {

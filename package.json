@@ -1,7 +1,7 @@
 {
-  "name": "canyons-and-cannons",
+  "name": "cannons-and-canyons",
   "version": "0.2.0",
-  "description": "Canyons & Cannons — real-time artillery combat over colossal destructible mountains: duel, 4-player free-for-all, co-op boss fight, alien invasion and artillery golf. Mobile-first, landscape-only, join by code. Free — no ads, no in-app purchases, no tracking.",
+  "description": "Cannons & Canyons — real-time artillery combat over colossal destructible mountains: duel, 4-player free-for-all, co-op boss fight, alien invasion and artillery golf. Mobile-first, landscape-only, join by code. Free — no ads, no in-app purchases, no tracking.",
   "author": "Abara Brothers",
   "type": "module",
   "scripts": {

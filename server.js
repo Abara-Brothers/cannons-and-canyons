@@ -1,4 +1,4 @@
-// server.js — static host + WebSocket relay/authority for Canyons & Cannons.
+// server.js — static host + WebSocket relay/authority for Cannons & Canyons.
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
@@ -110,7 +110,7 @@ function pushNudge(room, seat) {
   if (!webpush || !pl || pl.bot || pl.connected || !pl.pushSub) return;
   const opp = room.players.find((p, i) => p && i !== seat && !p.bot);
   const payload = JSON.stringify({
-    title: 'Canyons & Cannons — your move',
+    title: 'Cannons & Canyons — your move',
     body: opp ? `${opp.name} has taken their shot. Your turn.` : 'Your turn is up.',
     url: `/?room=${room.code}`,
   });
@@ -1610,5 +1610,5 @@ const heartbeat = setInterval(() => {
 wss.on('close', () => clearInterval(heartbeat));
 
 server.listen(PORT, () => {
-  console.log(`Canyons & Cannons running at http://localhost:${PORT}`);
+  console.log(`Cannons & Canyons running at http://localhost:${PORT}`);
 });

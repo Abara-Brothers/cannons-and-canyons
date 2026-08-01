@@ -1,6 +1,6 @@
-# Canyons & Cannons — App Store & Google Play Launch Kit
+# Cannons & Canyons — App Store & Google Play Launch Kit
 
-Made by **Abara Brothers**. App ID: `com.abarabrothers.canyonsandcannons`.
+Made by **Abara Brothers**. App ID: `com.abarabrothers.cannonsandcanyons`.
 
 **Current direction:** a store release is still the plan, and the app ships
 **free — no ads, no in-app purchases, no analytics**. Monetisation is deferred to
@@ -41,13 +41,13 @@ Store accounts you (Jordan) must create — these cannot be automated:
 
 ## 2. Store listing copy (paste-ready)
 
-**Title:** Canyons & Cannons
+**Title:** Cannons & Canyons
 **Subtitle / short description (30 chars):** `Artillery duels, huge maps`
 **Full description:**
 
 > Duel a friend across colossal destructible mountains.
 >
-> Canyons & Cannons is a turn-based online artillery battle. Drag to aim, charge your shot, and arc shells over towering peaks. Crack the landscape open with bunker busters, rain down air strikes, burn ridgelines with napalm, or wall yourself in with earthworks. Every crater changes the battlefield — and the last tank standing wins.
+> Cannons & Canyons is a turn-based online artillery battle. Drag to aim, charge your shot, and arc shells over towering peaks. Crack the landscape open with bunker busters, rain down air strikes, burn ridgelines with napalm, or wall yourself in with earthworks. Every crater changes the battlefield — and the last tank standing wins.
 >
 > ★ Real-time online play — share a 4-letter code, or take on the computer
 > ★ FIVE modes: duel, 4-player free-for-all, co-op boss fight, alien invasion, and nine holes of artillery golf
@@ -119,9 +119,9 @@ section is the place to write down what was chosen and why.
 
 ## 7. Copyright & trademark audit (clean ✅)
 
-- **Name/brand:** "Canyons & Cannons" + Abara Brothers — original; zero references to any existing game trademark anywhere in the shipped app, store copy, or docs (audited by grep). *2026-07-28: the iOS keyword list previously carried a competitor's trademark; it was removed. Keyword fields count as store copy — re-grep them, not just the app.*
+- **Name/brand:** "Cannons & Canyons" + Abara Brothers — original; zero references to any existing game trademark anywhere in the shipped app, store copy, or docs (audited by grep). *2026-07-28: the iOS keyword list previously carried a competitor's trademark; it was removed. Keyword fields count as store copy — re-grep them, not just the app.*
 - **Code:** 100% written for this project. Runtime dependencies are `ws` and `web-push` (both MIT licensed — compatible with commercial use).
 - **Art:** all graphics are original inline SVG/canvas drawings; app icon and splash are original. No third-party sprites, fonts (system font stack only), or images.
 - **Audio:** synthesized in-engine via Web Audio — no samples.
 - **Gameplay:** artillery mechanics as a genre are not copyrightable; no cloned assets, names, or text from any existing title.
-- Recommendation: run trademark searches for "Canyons & Cannons" in AU/US classes 9/41 before spending on marketing, and keep this audit note with your launch records.
+- Recommendation: run trademark searches for "Cannons & Canyons" in AU/US classes 9/41 before spending on marketing, and keep this audit note with your launch records.

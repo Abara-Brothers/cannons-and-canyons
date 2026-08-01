@@ -3,7 +3,7 @@
 # Render injects PORT automatically and supports WebSockets on the free plan.
 services:
   - type: web
-    name: canyons-and-cannons
+    name: cannons-and-canyons
     runtime: node
     plan: free
     buildCommand: npm install
