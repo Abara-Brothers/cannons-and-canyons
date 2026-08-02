@@ -1067,7 +1067,9 @@ body.golf .fuel { display: none; }
   position: absolute; left: 0; right: 0; bottom: calc(100% + 5px);
   background: var(--panel); border: 1px solid var(--line); border-radius: 11px;
   box-shadow: 0 12px 34px rgba(0,0,0,.55); padding: 5px; z-index: 60;
-  display: none; max-height: 46dvh; overflow-y: auto; overscroll-behavior: contain;
+  /* Effective unit, not raw dvh: under the portrait rotation shim a raw dvh
+     measures the wrong axis, so this dropdown could grow past the screen. */
+  display: none; max-height: calc(46 * var(--dvhu)); overflow-y: auto; overscroll-behavior: contain;
 }
 .gsel.open .gsel-list { display: block; }
 .gsel-opt {

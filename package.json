@@ -20,7 +20,8 @@
     "test:batch6": "node test/batch6.mjs",
     "test:golf-hazards": "node test/golf_hazards.mjs",
     "test:security": "node test/security.mjs",
-    "test:shutdown": "node test/shutdown.mjs"
+    "test:shutdown": "node test/shutdown.mjs",
+    "test:house-rules": "node test/house-rules.mjs"
   },
   "engines": {
     "node": ">=18"

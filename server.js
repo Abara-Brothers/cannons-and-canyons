@@ -122,7 +122,13 @@ function pushNudge(room, seat) {
 const server = http.createServer((req, res) => {
   let urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
   if (urlPath === '/push/key') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
+    // CORS, narrowly: a packaged Capacitor build fetches this cross-origin
+    // (its own origin is capacitor://localhost or https://localhost), so
+    // without the header the native app cannot read its own push key. The
+    // VAPID *public* key is public by definition — it ships to every browser
+    // already — so `*` costs nothing here. Do NOT copy this onto any endpoint
+    // that returns player or match data.
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
     return res.end(JSON.stringify({ key: vapidPublicKey }));
   }
   if (urlPath === '/') urlPath = '/index.html';

@@ -751,6 +751,14 @@ function trackGameOver(m) {
 // ---------------------------------------------------------------------------
 // Networking
 // ---------------------------------------------------------------------------
+// Resolve a server path against CC_SERVER, so HTTP calls follow the same rule
+// as the WebSocket. Same-origin on the web; the deployed host in a packaged
+// build, where the bundle's own origin is the device.
+function apiUrl(path) {
+  const remote = window.CC_SERVER;
+  return remote ? `https://${remote}${path}` : path;
+}
+
 function connect() {
   // Never stack sockets: boot, the retry loop and resyncOnReturn can all land
   // here — if a live or connecting socket exists, it wins.
@@ -822,7 +830,11 @@ async function enableTurnPings() {
     const perm = await Notification.requestPermission();
     if (perm !== 'granted') { showToast('Notifications blocked'); return; }
     const reg = await navigator.serviceWorker.ready;
-    const res = await fetch('/push/key');
+    // Must go through apiUrl: a bare '/push/key' resolves against the app
+    // BUNDLE in a packaged build, not the game server, so the whole feature
+    // died silently there while the WebSocket (which does honour CC_SERVER)
+    // worked fine.
+    const res = await fetch(apiUrl('/push/key'));
     const { key } = await res.json();
     if (!key) { showToast('Nudges are not enabled on this server'); return; }
     let sub = await reg.pushManager.getSubscription();

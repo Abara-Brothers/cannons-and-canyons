@@ -1,0 +1,72 @@
+name: CI
+
+# Render auto-deploys `main` the moment it is pushed, with no gate in front of
+# it. Until this existed the only thing standing between a bad commit and every
+# live player was somebody remembering to run the suite by hand.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # A newer push supersedes an in-flight run on the same ref.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Suite (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22 is what Render runs (render.yaml NODE_VERSION); 20 is the oldest
+        # line we claim to support (package.json engines >=18, but 18 is EOL).
+        node: ['20', '22']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # The suite manages its own servers and needs these to find and clear the
+      # port between runs; runners have procps but lsof is not guaranteed.
+      - name: Install process tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq lsof procps
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Syntax check
+        run: |
+          node --check server.js
+          node --check game-core.js
+          node --check public/app.js
+
+      - name: House rules
+        run: node test/house-rules.mjs
+
+      - name: Test suite
+        run: bash test/run-all.sh
+
+      # run-all.sh exits non-zero when any suite fails and prints a 14-line tail
+      # inline; this surfaces the FULL logs so a red build is diagnosable
+      # without re-running locally.
+      - name: Failure logs
+        if: failure()
+        run: |
+          echo "::group::server log"
+          tail -50 /tmp/cc_server.log 2>/dev/null || echo "(none)"
+          echo "::endgroup::"
+          for f in /tmp/cc_*.log; do
+            [ "$f" = "/tmp/cc_server.log" ] && continue
+            echo "::group::$f"
+            tail -40 "$f"
+            echo "::endgroup::"
+          done

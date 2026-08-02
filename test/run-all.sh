@@ -55,6 +55,7 @@ start_server() {             # start_server [extra env assignments...]
 }
 
 echo "== headless (no server needed) =="
+run house_rules node test/house-rules.mjs
 run hitbox node test/hitbox.mjs
 run golf_hazards node test/golf_hazards.mjs
 
