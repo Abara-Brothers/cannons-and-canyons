@@ -1,10 +1,10 @@
 {
   "name": "Cannons & Canyons",
   "short_name": "Cannons",
-  "description": "Cross-canyon artillery duel by Abara Brothers. Arc your shells over the peaks and destroy the enemy tank.",
+  "description": "Real-time artillery combat over colossal destructible mountains, by Abara Brothers. Duel, 4-player free-for-all, co-op Boss Fight, Alien Invasion and 9-hole Artillery Golf. Join by 4-letter code. Free — no ads, no purchases, no tracking.",
   "start_url": "/",
   "display": "fullscreen",
-  "orientation": "any",
+  "orientation": "landscape",
   "background_color": "#0b1020",
   "theme_color": "#0b1020",
   "categories": ["games"],

@@ -855,6 +855,17 @@ body.golf .fuel { display: none; }
 .hs-armoury svg { width: 17px; height: 17px; color: var(--primary); }
 .hs-armoury b { color: var(--accent); font-weight: 800; }
 .hs-error { margin: 0 0 0 auto; }
+/* The privacy link — the app's only anchor, required in-app by App Store
+   5.1.1(i). Pushed to the end of the footer row so it reads as fine print
+   without competing with Career or the paint picker. The 44px min tap target
+   is the platform minimum; the text itself is smaller than that. */
+.hs-legal { margin-left: auto; }
+.hs-legal a {
+  display: inline-flex; align-items: center; min-height: 44px; padding: 0 4px;
+  color: var(--muted); font-size: clamp(10px, calc(1.5 * var(--vhu)), 12px);
+  font-weight: 600; text-decoration: underline; text-underline-offset: 3px;
+}
+.hs-legal a:hover, .hs-legal a:focus-visible { color: var(--text); }
 .hs-foot .skinrow { display: flex; gap: 5px; }
 .hs-foot .skinrow .skin { width: clamp(18px, calc(3.4 * var(--vhu)), 26px); height: clamp(18px, calc(3.4 * var(--vhu)), 26px); }
 

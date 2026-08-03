@@ -187,6 +187,14 @@
         </div>
 
         <p id="homeError" class="error hs-error"></p>
+        <!-- App Store 5.1.1(i) requires the privacy policy to be reachable
+             INSIDE the app, not only from the store listing. This was the
+             app's only anchor element. `target=_blank` opens the system
+             browser from a packaged build rather than navigating the WebView
+             away from the game. -->
+        <p class="hs-legal">
+          <a id="privacyLink" href="privacy.html" target="_blank" rel="noopener">Privacy policy</a>
+        </p>
       </footer>
 
     </div>
