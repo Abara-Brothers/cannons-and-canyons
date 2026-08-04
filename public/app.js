@@ -974,6 +974,11 @@ function handle(m) {
 // The NOUN is drawn first and only adjectives that still fit are eligible, so a
 // roll can never exceed the input's maxlength and be silently truncated.
 // 37 × 41 words → 1454 valid pairs, all 9–14 chars.
+// MIRRORED: game-core.js owns the authoritative copy of CALL_ADJ/CALL_NOUN and
+// the server accepts ONLY pairs from it. This file is a classic script and
+// cannot import that module, so the lists are duplicated — test/house-rules.mjs
+// FAILS if they drift. Adding a word here alone means the server silently
+// renames anyone who rolls it.
 const NAME_MAX = 14;                       // must match #nameInput maxlength
 const CALL_ADJ = [
   'Iron', 'Steel', 'Brass', 'Copper', 'Cobalt', 'Rusty', 'Dusty', 'Ashen',

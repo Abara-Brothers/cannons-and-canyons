@@ -5,6 +5,57 @@
 export const WORLD_W = 48000; // battlefield DOUBLED (2026-07-23, Jordan: 'gameplay needs to feel much larger') — the camera fits all tanks, not the whole map
 export const WORLD_H = 13500; // tall world → room for huge peaks and deep canyons (no ceiling clipping)
 
+// ---- Callsigns ------------------------------------------------------------------
+// Players do NOT type a name. They roll one from these two curated lists
+// (ISSUE-015, decided 2026-08-04). Free-text names are user-generated content,
+// which Apple Guideline 1.2 will not accept without report, block and a staffed
+// contact — an ongoing obligation a two-person studio cannot meet. Removing the
+// free-text field removes the requirement rather than satisfying it.
+//
+// The client owns the same two lists (it is a classic script and cannot import
+// this module), and test/house-rules.mjs FAILS if the two copies disagree — the
+// same guard already used for the mirrored ballistics constants.
+//
+// The readonly input is cosmetic. This module is the boundary that matters: a
+// modified client can send any string it likes, so the server accepts a name
+// ONLY if it is a pair from these lists.
+export const NAME_MAX = 14;                // must match #nameInput maxlength
+export const CALL_ADJ = [
+  'Iron', 'Steel', 'Brass', 'Copper', 'Cobalt', 'Rusty', 'Dusty', 'Ashen',
+  'Flint', 'Basalt', 'Granite', 'Jagged', 'Hollow', 'Crimson', 'Amber',
+  'Ember', 'Molten', 'Cinder', 'Gravel', 'Scorched', 'Reckless', 'Steady',
+  'Silent', 'Sudden', 'Rapid', 'Blunt', 'Grim', 'Bold', 'Lucky', 'Rogue',
+  'Feral', 'Salty', 'Storm', 'Frost', 'Dry', 'Mad', 'Sly',
+];
+export const CALL_NOUN = [
+  'Ridge', 'Mesa', 'Gulch', 'Butte', 'Bluff', 'Canyon', 'Crag', 'Spire',
+  'Arroyo', 'Rim', 'Wash', 'Anvil', 'Cannon', 'Mortar', 'Howitzer', 'Gunner',
+  'Shell', 'Salvo', 'Volley', 'Barrage', 'Fuse', 'Powder', 'Tracer', 'Turret',
+  'Breech', 'Recoil', 'Piston', 'Hammer', 'Ranger', 'Rider', 'Scout',
+  'Marshal', 'Coyote', 'Buzzard', 'Falcon', 'Hawk', 'Raven', 'Viper',
+  'Bronco', 'Mule', 'Bandit',
+];
+
+// Exactly "<Adj> <Noun>", both from the lists above, within NAME_MAX.
+// Deliberately strict: no trimming, no case-folding, no punctuation tolerance.
+// Anything a real client produces passes; anything hand-crafted does not.
+export function isGeneratedCallsign(name) {
+  if (typeof name !== 'string' || name.length > NAME_MAX) return false;
+  const parts = name.split(' ');
+  if (parts.length !== 2) return false;
+  return CALL_ADJ.includes(parts[0]) && CALL_NOUN.includes(parts[1]);
+}
+
+// Deterministic callsign for a rejected or missing name. Deterministic on
+// purpose: if it were random, a griefer could spam names until one landed that
+// they liked, and reconnecting players would change identity mid-match.
+export function callsignFromSeed(seed) {
+  const s = Math.abs(seed | 0);
+  const noun = CALL_NOUN[s % CALL_NOUN.length];
+  const fit = CALL_ADJ.filter(a => a.length + 1 + noun.length <= NAME_MAX);
+  return `${fit[(s / CALL_NOUN.length | 0) % fit.length]} ${noun}`;
+}
+
 const GRAVITY = 900;          // world units / s^2  (no wind, per spec)
 const SPEED_PER_POWER = 52;   // power 0..100 -> speed 0..5200 u/s. Max 45° range = 5200^2/900 ≈ 30,044 —
                               // ~0.63× the 48,000-wide map: you can NO LONGER snipe border to

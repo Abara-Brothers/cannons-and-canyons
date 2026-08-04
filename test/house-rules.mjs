@@ -116,5 +116,43 @@ const UI_FILES = ['public/index.html', 'public/app.js', 'public/styles.css', 'se
   if (!bad) ok(`mirrored ballistics constants agree (${pairs.map(p => p[0]).join(', ')})`);
 }
 
+// ---- 5. CALLSIGN WORD LISTS MUST AGREE (ISSUE-015) ---------------------------
+// Names are not free text. The client rolls from CALL_ADJ/CALL_NOUN and the
+// server accepts ONLY pairs from its own copy of those lists. The client is a
+// classic script and cannot import game-core.js, so the lists are duplicated —
+// and if they drift, the server starts silently renaming players who did
+// nothing wrong. Adding a word to one side without the other is the whole
+// failure mode this guards.
+{
+  const core = read('game-core.js'), app = read('public/app.js');
+  const list = (src, name) => {
+    const m = src.match(new RegExp(`${name}\\s*=\\s*\\[([\\s\\S]*?)\\]`));
+    if (!m) return null;
+    return m[1].match(/'([^']+)'/g)?.map(s => s.slice(1, -1)) ?? [];
+  };
+  let bad = 0;
+  for (const name of ['CALL_ADJ', 'CALL_NOUN']) {
+    const a = list(core, name), b = list(app, name);
+    if (!a || !b) { bad++; fail(`${name} not found in ${!a ? 'game-core.js' : 'public/app.js'}`); continue; }
+    const missing = a.filter(w => !b.includes(w)), extra = b.filter(w => !a.includes(w));
+    if (missing.length || extra.length) {
+      bad++;
+      fail(`${name} drifted — server would rename players using client-only words.` +
+           (missing.length ? `\n      only in game-core.js: ${missing.join(', ')}` : '') +
+           (extra.length ? `\n      only in public/app.js: ${extra.join(', ')}` : ''));
+    }
+  }
+  // Every pair must fit the input, or a rolled name is truncated and then
+  // rejected by the server as not-a-callsign.
+  const adj = list(core, 'CALL_ADJ') || [], noun = list(core, 'CALL_NOUN') || [];
+  const max = Number((core.match(/NAME_MAX\s*=\s*(\d+)/) || [])[1] || 0);
+  const overlong = [];
+  for (const a of adj) for (const n of noun) if (a.length + 1 + n.length > max) overlong.push(`${a} ${n}`);
+  if (overlong.length > adj.length * noun.length * 0.5) {
+    bad++; fail(`over half of all callsign pairs exceed NAME_MAX=${max} — the roll would loop`);
+  }
+  if (!bad) ok(`callsign lists agree (${adj.length}x${noun.length}, ${adj.length * noun.length - overlong.length} pairs fit NAME_MAX=${max})`);
+}
+
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nALL GOOD');
 process.exit(out.errors.length ? 1 : 0);

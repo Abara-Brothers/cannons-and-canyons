@@ -13,6 +13,7 @@
 //      catch it — NaN <= 0 is false.
 //   3. Frame size — the socket now caps a single frame (maxPayload).
 import WebSocket from 'ws';
+import { isGeneratedCallsign } from '../game-core.js';
 
 const URL = process.env.WS || 'ws://localhost:3000/ws';
 const out = { steps: [], errors: [] };
@@ -203,6 +204,69 @@ async function rateLimit() {
   try { ws2.close(); } catch {}
 }
 
+// ---- 6. NO FREE-TEXT NAMES REACH OTHER PLAYERS (ISSUE-015) ------------------
+// The readonly input in index.html stops honest players typing; it stops nobody
+// else. This asserts the SERVER boundary: a client sending an arbitrary string
+// must have it replaced with a rolled callsign, because that name is broadcast
+// to every opponent and painted into the shared result card. If this regresses,
+// the app carries user-generated content and Apple Guideline 1.2 requires
+// report, block and a staffed contact — none of which exist.
+async function noFreeTextNames() {
+  const attempts = [
+    'FOLLOW ME ON TIKTOK',        // advertising — the common real-world abuse
+    'x  x',                       // shape of a callsign, words not on the list
+    'Iron',                       // half a callsign
+    'Iron  Ridge',                // right words, wrong spacing
+    'iron ridge',                 // right words, wrong case
+    'Iron Ridge Extra',           // right words, extra token
+    '<img src=x onerror=alert(1)>',
+    '',
+  ];
+  let clean = 0;
+  for (const attempt of attempts) {
+    const before = out.errors.length;
+    const ws = await open();
+    send(ws, { type: 'create', name: attempt, skin: 'olive', mode: 'duel' });
+    const m = await wait(ws, 'lobby');
+    const shown = m && m.players && m.players[0] && m.players[0].name;
+    try { ws.close(); } catch {}
+    if (!shown) { fail(`no name came back for ${JSON.stringify(attempt)}`); continue; }
+    if (shown === attempt) { fail(`free-text name survived: ${JSON.stringify(attempt)}`); continue; }
+    if (!isGeneratedCallsign(shown)) {
+      fail(`replacement ${JSON.stringify(shown)} is not a callsign from the curated lists`);
+    }
+    if (out.errors.length === before) clean++;
+  }
+  // Only claim success for the ones that actually passed — a blanket "all
+  // replaced" alongside individual FAIL lines is how a bad run reads as good.
+  if (clean === attempts.length) step(`${attempts.length} free-text names all replaced with rolled callsigns`);
+  else fail(`only ${clean}/${attempts.length} free-text names were replaced`);
+
+  // Deterministic, not random: the same rejected input must yield the same
+  // callsign, or a reconnecting player changes identity mid-match and a griefer
+  // can reroll until they land on something they wanted.
+  const seen = [];
+  for (let i = 0; i < 2; i++) {
+    const ws = await open();
+    send(ws, { type: 'create', name: 'SAME BAD INPUT', skin: 'olive', mode: 'duel' });
+    const m = await wait(ws, 'lobby');
+    seen.push(m && m.players && m.players[0] && m.players[0].name);
+    try { ws.close(); } catch {}
+  }
+  if (seen[0] && seen[0] === seen[1]) step(`replacement is deterministic ('${seen[0]}' twice)`);
+  else fail(`replacement is not deterministic: ${seen.join(' vs ')}`);
+
+  // A legitimate rolled callsign must survive untouched — the filter must not
+  // rename players who did nothing wrong.
+  const ws = await open();
+  send(ws, { type: 'create', name: 'Iron Ridge', skin: 'olive', mode: 'duel' });
+  const m = await wait(ws, 'lobby');
+  const kept = m && m.players && m.players[0] && m.players[0].name;
+  try { ws.close(); } catch {}
+  if (kept === 'Iron Ridge') step('a valid rolled callsign is preserved exactly');
+  else fail(`valid callsign 'Iron Ridge' was altered to ${JSON.stringify(kept)}`);
+}
+
 (async () => {
   try {
     await roomHoarding();
@@ -210,6 +274,7 @@ async function rateLimit() {
     await frameCap();
     await oneShotPerTurn();
     await rateLimit();
+    await noFreeTextNames();
   } catch (e) {
     fail('threw: ' + (e && e.message ? e.message : String(e)));
   }

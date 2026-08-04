@@ -83,8 +83,11 @@
         <div class="hs-id">
           <label class="hs-cs">
             <span class="hs-cs-label">Callsign</span>
-            <input id="nameInput" maxlength="14" placeholder="Commander" autocomplete="off"
-                   spellcheck="false" aria-label="Your callsign" />
+            <!-- readonly, not editable: callsigns are rolled, never typed (ISSUE-015).
+                 Still an <input> so the reroll button and every existing
+                 $('nameInput').value read keep working unchanged. -->
+            <input id="nameInput" maxlength="14" autocomplete="off" readonly
+                   spellcheck="false" aria-label="Your callsign — use the roll button to change it" />
             <button id="rerollBtn" type="button" class="hs-reroll" title="Roll a new callsign" aria-label="Roll a new callsign">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M3 7h3.4a4 4 0 0 1 3.3 1.8l4.6 6.4A4 4 0 0 0 17.6 17H21"/>

@@ -13,6 +13,7 @@ import {
   LOADOUT_POOL, validLoadout, loadoutAmmo, loadoutSizeFor,
   fireDamage, FIRE_TICK,
   BIOMES, BIOME_IDS, biomeLavaY, generateProps, generateRuins, prepareGolfHole,
+  isGeneratedCallsign, callsignFromSeed,
 } from './game-core.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -48,7 +49,6 @@ const BAD_SUB = ['fuck', 'shit', 'cunt', 'bitch', 'bastard', 'asshole', 'arsehol
   'paki', 'retard', 'rape', 'rapist', 'pedo', 'paedo', 'nazi', 'hitler', 'porn', 'penis', 'vagin', 'anus',
   'semen', 'jizz', 'dildo', 'blowjob', 'handjob', 'boner', 'nutsack'];
 const BAD_WORD = ['ass', 'arse', 'tit', 'tits', 'cum', 'hoe', 'fag', 'anal', 'kkk', 'fap', 'smd', 'stfu', 'wtf', 'sex'];
-const FALLBACK_NAMES = ['Ranger', 'Maverick', 'Bulwark', 'Sentry', 'Nomad', 'Havoc', 'Granite', 'Longshot', 'Bracken', 'Cinder'];
 const foldLeet = (s) => String(s).toLowerCase().split('').map(c => LEET[c] || c).join('');
 const lettersOf = (s) => foldLeet(s).replace(/[^a-z]/g, '');
 function isProfane(raw) {
@@ -57,12 +57,20 @@ function isProfane(raw) {
   // Short words only count as whole tokens, so "Bass Master" and "Titan" pass.
   return String(raw).toLowerCase().split(/[^a-z0-9@$!+]+/).map(lettersOf).some(t => BAD_WORD.includes(t));
 }
+// Names are NOT free text (ISSUE-015). A client may only send a callsign it
+// rolled from the two curated lists in game-core.js; anything else is replaced,
+// so no player-authored string ever reaches another player's screen or the
+// shared result card. The readonly input in index.html is a convenience — THIS
+// is the boundary, because a modified client can send whatever it wants.
+//
+// Replacement is deterministic on the rejected input: random would let a
+// griefer reroll until they got something they liked, and would change a
+// reconnecting player's identity mid-match.
 function sanitizeName(raw, seat = 0) {
-  const name = String(raw ?? '').replace(/[^\x20-\x7e]/g, '').replace(/\s+/g, ' ').trim().slice(0, 14);
-  if (!name) return `Player ${seat + 1}`;
-  if (!isProfane(name)) return name;
-  const h = [...name].reduce((a, c) => (a * 31 + c.charCodeAt(0)) | 0, 7);
-  return FALLBACK_NAMES[Math.abs(h) % FALLBACK_NAMES.length];
+  const name = String(raw ?? '');
+  if (isGeneratedCallsign(name) && !isProfane(name)) return name;
+  const h = [...name].reduce((a, c) => (a * 31 + c.charCodeAt(0)) | 0, 7) + seat * 2654435761;
+  return callsignFromSeed(h);
 }
 
 // ---- Teams ----------------------------------------------------------------------
