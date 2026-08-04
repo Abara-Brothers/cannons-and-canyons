@@ -3,7 +3,7 @@
 // These are standing project rules that have each been broken at least once and
 // caught only by an ad-hoc grep. Encoding them means they cannot regress
 // silently. Headless — no server required, so CI runs it first and cheaply.
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -175,6 +175,29 @@ const UI_FILES = ['public/index.html', 'public/app.js', 'public/styles.css', 'se
   });
   if (bad.length) fail(`public/game-core.js is no longer browser-safe — offline play would break silently:\n      ${bad.join('\n      ')}`);
   else ok('game-core is browser-safe (no Node builtins, no bare imports)');
+}
+
+// ---- 7. EVERY PRECACHED SHELL ASSET MUST EXIST (BQ-007) ----------------------
+// sw.js caches each entry individually and swallows failures, precisely so one
+// missing icon cannot cost the whole offline shell. The cost of that safety is
+// that a renamed or deleted asset degrades offline support with nothing louder
+// than a console warning nobody reads. This is the loud version.
+{
+  const sw = read('public/sw.js');
+  const block = sw.match(/const SHELL = \[([\s\S]*?)\]/);
+  if (!block) fail('sw.js has no SHELL precache list — offline support may have been removed');
+  else {
+    const list = (block[1].match(/'([^']+)'/g) || []).map(s => s.slice(1, -1));
+    const missing = list.filter(p => p !== './' && !existsSync(path.join(ROOT, 'public', p)));
+    if (!list.length) fail('sw.js SHELL list is empty');
+    else if (missing.length) fail(`sw.js precaches files that do not exist — offline shell is incomplete:\n      ${missing.join('\n      ')}`);
+    else {
+      // game-core is the one entry offline PLAY depends on, as opposed to
+      // offline loading. Name it explicitly so nobody drops it as "an asset".
+      if (!list.includes('game-core.js')) fail('sw.js does not precache game-core.js — the app would load offline but could not play');
+      else ok(`sw.js precaches ${list.length} shell entries, all present (game-core included)`);
+    }
+  }
 }
 
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nALL GOOD');
