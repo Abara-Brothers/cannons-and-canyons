@@ -11,7 +11,10 @@ services:
     # Must match the live service. A blueprint sync against `free` would
     # DOWNGRADE the paid instance and reintroduce idle spin-down.
     plan: starter
-    buildCommand: npm install
+    # --omit=dev: the Capacitor toolchain lives in devDependencies and is only
+    # needed to BUILD the native apps. The server never imports it, so there is
+    # no reason to install ~50MB of it on every deploy.
+    buildCommand: npm install --omit=dev
     startCommand: node server.js
     envVars:
       - key: NODE_VERSION
