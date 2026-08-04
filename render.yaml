@@ -3,7 +3,10 @@
 # Render injects PORT automatically and supports WebSockets on the free plan.
 services:
   - type: web
-    name: cannons-and-canyons
+    # Must match the live service. Renaming here would make a blueprint sync
+    # create a SECOND service rather than update this one.
+    name: cannons-canyons
+    region: singapore
     runtime: node
     plan: free
     buildCommand: npm install

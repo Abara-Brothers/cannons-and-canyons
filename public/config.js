@@ -12,5 +12,5 @@
 //
 // To point a build at staging instead, override CC_NATIVE_HOST before app.js
 // runs (this file is loaded first in index.html).
-window.CC_NATIVE_HOST = 'cannons-and-canyons.onrender.com';
+window.CC_NATIVE_HOST = 'tanks.abarabrothers.com';
 window.CC_SERVER = window.Capacitor ? window.CC_NATIVE_HOST : null;

@@ -2229,7 +2229,7 @@ function stopClipRecording() { try { if (clipRec && clipRec.state !== 'inactive'
 async function shareBlob(blob, filename, fallbackName) {
   const file = new File([blob], filename, { type: blob.type });
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    try { await navigator.share({ files: [file], title: 'Cannons & Canyons', text: 'Cannons & Canyons — play me: https://cannons-and-canyons.onrender.com' }); return; } catch {}
+    try { await navigator.share({ files: [file], title: 'Cannons & Canyons', text: 'Cannons & Canyons — play me: https://tanks.abarabrothers.com' }); return; } catch {}
   }
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob); a.download = fallbackName || filename;
@@ -2275,7 +2275,7 @@ function buildResultCard() {
   x.fillStyle = '#8a93a8';
   x.textAlign = 'right';
   x.font = '700 28px system-ui, sans-serif';
-  x.fillText('play me — cannons-and-canyons.onrender.com', 1140, 600);
+  x.fillText('play me — tanks.abarabrothers.com', 1140, 600);
   return c;
 }
 
