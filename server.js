@@ -14,7 +14,7 @@ import {
   fireDamage, FIRE_TICK,
   BIOMES, BIOME_IDS, biomeLavaY, generateProps, generateRuins, prepareGolfHole,
   isGeneratedCallsign, callsignFromSeed,
-} from './game-core.js';
+} from './public/game-core.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, 'public');

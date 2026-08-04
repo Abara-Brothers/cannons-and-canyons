@@ -4,7 +4,7 @@
 // that kills are counted on the wire, and that a downed enemy respawns
 // stronger on a later turn.
 import WebSocket from 'ws';
-import { aiShot } from '../game-core.js';
+import { aiShot } from '../public/game-core.js';
 
 const URL = process.env.WS || 'ws://localhost:3000/ws';
 const out = { steps: [], errors: [] };

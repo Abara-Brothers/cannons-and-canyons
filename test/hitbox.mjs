@@ -2,7 +2,7 @@
 // deterministic battlefield and assert real damage lands. Guards the three ways
 // this has broken: hitbox too small to hit, shell detonating on its own tank,
 // and fast shells tunnelling through the box.
-import { WEAPONS, simulateShot, pointHitsTank, aiShot, generateTerrain, spawnTanks, laneBounds } from '../game-core.js';
+import { WEAPONS, simulateShot, pointHitsTank, aiShot, generateTerrain, spawnTanks, laneBounds } from '../public/game-core.js';
 
 const FLAT_Y = 9000, ME = 4000, ENEMY = 16000;
 const flat = () => new Array(24001).fill(FLAT_Y);

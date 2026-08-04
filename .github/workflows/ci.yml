@@ -46,7 +46,7 @@ jobs:
       - name: Syntax check
         run: |
           node --check server.js
-          node --check game-core.js
+          node --check public/game-core.js
           node --check public/app.js
 
       - name: House rules

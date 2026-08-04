@@ -13,7 +13,7 @@
 //      catch it — NaN <= 0 is false.
 //   3. Frame size — the socket now caps a single frame (maxPayload).
 import WebSocket from 'ws';
-import { isGeneratedCallsign } from '../game-core.js';
+import { isGeneratedCallsign } from '../public/game-core.js';
 
 const URL = process.env.WS || 'ws://localhost:3000/ws';
 const out = { steps: [], errors: [] };

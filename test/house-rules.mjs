@@ -13,7 +13,7 @@ const ok = (m) => console.log('  ok — ' + m);
 const fail = (m) => { out.errors.push(m); console.error('FAIL ' + m); };
 const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8');
 
-const UI_FILES = ['public/index.html', 'public/app.js', 'public/styles.css', 'server.js', 'game-core.js'];
+const UI_FILES = ['public/index.html', 'public/app.js', 'public/styles.css', 'server.js', 'public/game-core.js'];
 
 // ---- 1. NO EMOJI ANYWHERE IN THE UI -----------------------------------------
 // Every glyph is hand-drawn inline SVG or canvas art. Both forms must be
@@ -76,7 +76,7 @@ const UI_FILES = ['public/index.html', 'public/app.js', 'public/styles.css', 'se
 // the GEOMETRY constants the silhouette is built from, which is what "locked"
 // actually means in practice.
 {
-  const core = read('game-core.js');
+  const core = read('public/game-core.js');
   // TANK_HW/TANK_TOP are derived (1.35r / 1.36r), so pin the multipliers too —
   // changing either silently resizes the hitbox that must match the drawn art.
   const pinned = [
@@ -102,7 +102,7 @@ const UI_FILES = ['public/index.html', 'public/app.js', 'public/styles.css', 'se
 // ballistics. When one side moves and the other does not, the preview silently
 // lies about where the shell will land.
 {
-  const core = read('game-core.js'), app = read('public/app.js');
+  const core = read('public/game-core.js'), app = read('public/app.js');
   const grab = (src, re, label) => { const m = src.match(re); return m ? m[1] : `<${label} not found>`; };
   const pairs = [
     ['DMG_REACH', grab(core, /DMG_REACH\s*=\s*([0-9.]+)/, 'core'), grab(app, /selW\.radius\s*\*\s*([0-9.]+)/, 'client')],
@@ -124,7 +124,7 @@ const UI_FILES = ['public/index.html', 'public/app.js', 'public/styles.css', 'se
 // nothing wrong. Adding a word to one side without the other is the whole
 // failure mode this guards.
 {
-  const core = read('game-core.js'), app = read('public/app.js');
+  const core = read('public/game-core.js'), app = read('public/app.js');
   const list = (src, name) => {
     const m = src.match(new RegExp(`${name}\\s*=\\s*\\[([\\s\\S]*?)\\]`));
     if (!m) return null;
@@ -152,6 +152,29 @@ const UI_FILES = ['public/index.html', 'public/app.js', 'public/styles.css', 'se
     bad++; fail(`over half of all callsign pairs exceed NAME_MAX=${max} — the roll would loop`);
   }
   if (!bad) ok(`callsign lists agree (${adj.length}x${noun.length}, ${adj.length * noun.length - overlong.length} pairs fit NAME_MAX=${max})`);
+}
+
+// ---- 6. game-core MUST STAY BROWSER-SAFE (ADR-001 / BQ-007) ------------------
+// Offline play means this exact file runs in the browser, not a port of it.
+// One `import fs` or `process.env` and offline breaks — but the SERVER keeps
+// working perfectly, so nothing else in the suite would notice. That silence is
+// the reason this check exists.
+{
+  const src = read('public/game-core.js');
+  const bad = [];
+  src.split('\n').forEach((line, i) => {
+    if (/^\s*(\/\/|\*)/.test(line)) return;                 // skip comments
+    const n = i + 1;
+    if (/\brequire\s*\(/.test(line)) bad.push(`${n}: require()`);
+    if (/\bprocess\s*\./.test(line)) bad.push(`${n}: process.*`);
+    if (/\b__dirname\b|\b__filename\b/.test(line)) bad.push(`${n}: __dirname/__filename`);
+    if (/\bBuffer\s*\./.test(line)) bad.push(`${n}: Buffer`);
+    const imp = line.match(/^\s*import\s.*?from\s+['"]([^'"]+)['"]/);
+    if (imp && !imp[1].startsWith('.') && !imp[1].startsWith('/')) bad.push(`${n}: bare import '${imp[1]}'`);
+    if (/from\s+['"]node:/.test(line)) bad.push(`${n}: node: builtin`);
+  });
+  if (bad.length) fail(`public/game-core.js is no longer browser-safe — offline play would break silently:\n      ${bad.join('\n      ')}`);
+  else ok('game-core is browser-safe (no Node builtins, no bare imports)');
 }
 
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nALL GOOD');

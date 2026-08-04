@@ -6,7 +6,7 @@
 //     point at the approach bank; and
 //   - a full-send Driver still comes to REST inside the golf maxT after the
 //     roll retune (a truncated roll reads as a phantom OOB).
-import { prepareGolfHole, simulateShot, generateTerrain } from '../game-core.js';
+import { prepareGolfHole, simulateShot, generateTerrain } from '../public/game-core.js';
 
 let failures = 0;
 const fail = (m) => { console.error('FAIL ' + m); failures++; };
