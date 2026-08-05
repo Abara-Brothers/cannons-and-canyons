@@ -770,6 +770,10 @@ function connect() {
   S.ws = ws;
   ws.onopen = () => {
     S.connected = true; $('connErr').classList.add('hidden');
+    // Clear any "cannot reach the server" line from a tap made while down —
+    // otherwise it outlives the problem it described (ISSUE-017).
+    const he = $('homeError');
+    if (he && /offline|reach the server/i.test(he.textContent)) he.textContent = '';
     const r = loadResume();
     if (r && (S.playing || !S.code)) sendMsg({ type: 'resume', code: r.code, token: r.token });
     flushIntent();
@@ -848,7 +852,26 @@ $('notifyBtn').onclick = () => { Audio.ensure(); enableTurnPings(); };
 
 let pendingIntent = null;
 function flushIntent() { if (pendingIntent) { sendMsg(pendingIntent); pendingIntent = null; } }
-function intent(m) { if (S.connected) sendMsg(m); else pendingIntent = m; }
+// Queue-and-tell (ISSUE-017). Queueing alone is right — a reconnect a moment
+// later still honours the tap — but doing it SILENTLY is what made the home
+// screen feel broken with no network: every button appeared dead.
+//
+// This became reachable in ordinary use with 8.36. Before the service worker
+// cached the shell, no network meant no page at all; now the app loads fine
+// offline, so a player really can sit on a working home screen tapping a mode
+// that will never start. Say so plainly rather than leaving them guessing.
+function intent(m) {
+  if (S.connected) { sendMsg(m); return; }
+  pendingIntent = m;
+  const offline = navigator.onLine === false;
+  const msg = offline
+    ? 'You are offline. Every mode still needs a connection.'
+    : 'Cannot reach the server — retrying.';
+  const el = $('homeError');
+  if (el) el.textContent = msg;
+  showToast(offline ? 'No connection' : 'Reconnecting');
+  connect();          // don't sit out the 1.5s retry loop after a deliberate tap
+}
 
 function handle(m) {
   switch (m.type) {
