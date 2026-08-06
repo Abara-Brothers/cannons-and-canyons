@@ -13,6 +13,7 @@ const $ = (id) => document.getElementById(id);
 // ---------------------------------------------------------------------------
 const S = {
   ws: null, connected: false,
+  local: false,        // match is running against the IN-PAGE engine (offline play)
   world: { w: 48000, h: 13500 },
   you: 0, n: 2, mode: 'duel',
   names: ['Player 1', 'Player 2'],
@@ -668,12 +669,25 @@ let pinchStart = null;
 // Resume support — an accidental disconnect keeps your seat for 2 minutes.
 // ---------------------------------------------------------------------------
 function saveResume(code, token) {
+  // A LOCAL match must never touch this record. Its room lives in this page's
+  // own engine instance, so the code/token mean nothing to the server — and
+  // overwriting would destroy the player's ability to resume a real online
+  // match whose seat may still be held for them.
+  if (S.local) return;
   try { localStorage.setItem('cc_resume', JSON.stringify({ code, token })); } catch {}
 }
 function loadResume() {
   try { return JSON.parse(localStorage.getItem('cc_resume') || 'null'); } catch { return null; }
 }
-function clearResume() { try { localStorage.removeItem('cc_resume'); } catch {} }
+function clearResume() {
+  // Same boundary as saveResume, in the other direction: while a LOCAL match
+  // is running, the stored record can only describe a REAL online match (the
+  // save path above never writes during one), and finishing an offline
+  // vs-CPU game must not cost the player the online seat a server is still
+  // holding for them — an async duel holds it for a full day.
+  if (S.local) return;
+  try { localStorage.removeItem('cc_resume'); } catch {}
+}
 
 // ---------------------------------------------------------------------------
 // Career profile + achievements (local, per device). Every hook feeds PROF and
@@ -875,6 +889,101 @@ $('notifyBtn').onclick = () => { Audio.ensure(); enableTurnPings(); };
 
 let pendingIntent = null;
 function flushIntent() { if (pendingIntent) { sendMsg(pendingIntent); pendingIntent = null; } }
+
+// ---- Offline play (BQ-007 / ADR-001) ----------------------------------------
+// vs-CPU duels and solo golf never needed a server: room-engine.js — the same
+// module server.js runs — is precached by the service worker and runs right
+// here in the page. Going offline is a TRANSPORT swap and nothing else: a
+// stand-in "socket" is installed as S.ws, so sendMsg's readyState gate,
+// connect()'s no-stacking guard, the 1.5s retry loop and the resync watchdog
+// all keep behaving correctly without knowing anything changed. The stand-in
+// delivers the engine's messages through the same handle() the real socket
+// feeds, and bumps S.msgCount exactly as ws.onmessage does — that counter is
+// the resync watchdog's liveness signal, and skipping it would close the link
+// three seconds after every tab-return during an offline match.
+let engineMod = null;      // cached dynamic import of room-engine.js
+let localFallback = null;  // pending server-unreachable fallback timer
+const offlineCapable = (m) =>
+  m.type === 'ai' || (m.type === 'create' && m.mode === 'golf');
+
+let localStarting = false;
+async function startLocal(m) {
+  // Single-flight: the first offline start awaits a module import, and a
+  // double-tap in that window would boot two engine matches feeding one
+  // handle(). One tap, one match; a failed import unlatches for a retry.
+  if (localStarting || S.local) return;
+  localStarting = true;
+  if (!engineMod) {
+    try { engineMod = await import('./room-engine.js'); }
+    catch {
+      // Precache incomplete — the first ever visit went offline mid-install.
+      localStarting = false;
+      const el = $('homeError');
+      if (el) el.textContent = 'Offline play could not load — connect once and it will be ready.';
+      return;
+    }
+  }
+  localStarting = false;
+  // The world may have changed across that await: if the real connection came
+  // back while the module loaded, honour the tap ONLINE instead of hijacking
+  // a healthy socket to play the server's own engine locally.
+  if (S.connected) { sendMsg(m); return; }
+  // Silence any real socket first, half-open or dying: a later onopen would
+  // set S.connected and push a stale resume into the LOCAL engine, and a
+  // later onclose would keep scheduling reconnects underneath the stand-in.
+  if (S.ws) {
+    S.ws.onopen = S.ws.onclose = S.ws.onerror = S.ws.onmessage = null;
+    try { S.ws.close(); } catch { /* never opened */ }
+  }
+  S.local = true;
+  // The stand-in socket has TWO faces, one per direction — conflating them
+  // routes the client's own messages straight back into handle():
+  //   engineLink is what the ENGINE holds. Its send() is the engine talking
+  //   to "the player", so it delivers into handle(), exactly where
+  //   ws.onmessage delivers. The engine also hangs roomCode/seat off it.
+  //   S.ws is what APP CODE holds. Its send() is the player talking to "the
+  //   server", so it feeds the engine's message router.
+  const engineLink = {
+    readyState: 1,                     // the engine's own send() gate
+    send: (str) => {
+      const msg = JSON.parse(str);
+      // Async on purpose: the engine finishes its whole broadcast before any
+      // handler runs — the same ordering a real network delivery gives. The
+      // ownership gate below matters just as much: teardown echoes the leaver
+      // an 'opponentLeft', and on the cancel path that echo is still QUEUED
+      // when endLocal() has already handed the transport back — delivered
+      // late, it would wipe a real online match's resume record and paint
+      // 'Opponent left' over the home screen. A session that no longer owns
+      // the transport has nothing left to say.
+      queueMicrotask(() => {
+        if (!S.local || S.ws !== face) return;
+        S.msgCount = (S.msgCount || 0) + 1; handle(msg);
+      });
+    },
+  };
+  const face = {
+    readyState: 1,                     // satisfies sendMsg's gate and connect()'s guard
+    send: (str) => { engineMod.handleClientMessage(engineLink, JSON.parse(str)); },
+    close: () => {},                   // the resync watchdog may call this
+  };
+  S.ws = face;
+  S.connected = true;
+  pendingIntent = null;                // never replay this tap into a real socket too
+  clearTimeout(localFallback);
+  showToast('Playing offline');
+  sendMsg(m);
+}
+
+// The lobby's Cancel is the one exit that stays on this page (both in-match
+// leave paths navigate away, discarding the engine instance wholesale). Put
+// the transport back so the next tap reaches the real server again.
+function endLocal() {
+  if (!S.local) return;
+  S.local = false;
+  S.ws = null; S.connected = false;
+  connect();
+}
+
 // Queue-and-tell (ISSUE-017). Queueing alone is right — a reconnect a moment
 // later still honours the tap — but doing it SILENTLY is what made the home
 // screen feel broken with no network: every button appeared dead.
@@ -883,17 +992,33 @@ function flushIntent() { if (pendingIntent) { sendMsg(pendingIntent); pendingInt
 // cached the shell, no network meant no page at all; now the app loads fine
 // offline, so a player really can sit on a working home screen tapping a mode
 // that will never start. Say so plainly rather than leaving them guessing.
+//
+// Since 8.44 the dead-end is gone for the two modes that never needed a
+// server (BQ-007): those start locally instead — immediately when the device
+// KNOWS it is offline, or after a short grace when it merely cannot raise
+// the server (down, cold start, captive portal).
 function intent(m) {
   if (S.connected) { sendMsg(m); return; }
-  pendingIntent = m;
   const offline = navigator.onLine === false;
+  if (offline && offlineCapable(m)) { startLocal(m); return; }
+  pendingIntent = m;
   const msg = offline
-    ? 'You are offline. Every mode still needs a connection.'
+    ? 'You are offline. Vs. Computer and solo Golf still work — everything else needs a connection.'
     : 'Cannot reach the server — retrying.';
   const el = $('homeError');
   if (el) el.textContent = msg;
   showToast(offline ? 'No connection' : 'Reconnecting');
   connect();          // don't sit out the 1.5s retry loop after a deliberate tap
+  // The timer self-guards: if the socket opened in time, flushIntent already
+  // sent this intent online and cleared it, so the fallback does nothing.
+  if (offlineCapable(m)) {
+    clearTimeout(localFallback);
+    localFallback = setTimeout(() => {
+      if (S.connected || pendingIntent !== m) return;
+      pendingIntent = null;
+      startLocal(m);
+    }, 4000);
+  }
 }
 
 function handle(m) {
@@ -1008,7 +1133,13 @@ function handle(m) {
       break;
     case 'opponentLeft':
       clearResume(); clearKillcam();
-      S.playing = false; showOverlay('Opponent left', null, 'draw', true); break;
+      // The engine notifies EVERYONE on teardown — the leaver included. When
+      // WE initiated it (cancelBtn nulls S.code and goes home before this
+      // arrives), an 'Opponent left' dialog painted over the home screen
+      // reads as a bug. Anyone still holding a room code genuinely lost
+      // their lobby or match and deserves the notice.
+      if (S.playing || S.code) { S.playing = false; showOverlay('Opponent left', null, 'draw', true); }
+      break;
   }
 }
 
@@ -1253,7 +1384,7 @@ $('joinBtn').onclick = () => {
   intent({ type: 'join', code, name: myName(), skin: mySkin() });
 };
 $('codeInput').addEventListener('input', (e) => { e.target.value = e.target.value.toUpperCase(); });
-$('cancelBtn').onclick = () => { sendMsg({ type: 'leave' }); sendMsg({ type: 'cancelQuick' }); S.code = null; S.quick = false; showScreen('home'); };
+$('cancelBtn').onclick = () => { sendMsg({ type: 'leave' }); sendMsg({ type: 'cancelQuick' }); S.code = null; S.quick = false; endLocal(); showScreen('home'); };
 
 $('copyLinkBtn').onclick = async () => {
   const link = `${location.origin}/?room=${S.code}`;
@@ -1326,6 +1457,18 @@ function renderLobby(m) {
     : m.mode === 'boss' ? `Engage the WARLORD (${filled})`
     : m.mode === 'golf' ? `Tee off (${filled})`
     : `Start battle (${filled})`;
+  // An offline lobby has nobody to invite: its code means nothing outside this
+  // page, so showing it (or the copy buttons) would be a lie. Setting display
+  // BOTH ways also heals a pre-existing asymmetry — showLobby('search') hides
+  // these three and nothing ever un-hid them on this path.
+  const solo = !!S.local;
+  if (solo) {
+    $('lobbyHeading').textContent = 'Artillery Golf — offline solo round';
+    $('lobbyHint').textContent = 'No connection needed for a solo round. Tee off when ready.';
+  }
+  $('lobbyCode').style.display = solo ? 'none' : '';
+  $('copyLinkBtn').style.display = solo ? 'none' : '';
+  $('copyCodeBtn').style.display = solo ? 'none' : '';
   showScreen('lobby');
 }
 $('startMatchBtn').onclick = () => { Audio.ensure(); sendMsg({ type: 'startMatch' }); };

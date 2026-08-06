@@ -1582,7 +1582,12 @@ export function handleClientMessage(ws, msg) {
       if (room) for (const pl of room.players) if (pl && !pl.bot) pl.loadout = null;   // fresh draft every game
       // Everyone still in the room must be present. Eliminated players are still
       // "in the room" — elimination is per-match, not per-room.
-      if (room && room.state === 'over' && room.players.length >= 2
+      // ">= 2" predates the solo modes. A solo golf room is the ONE 1-player
+      // room that can reach 'over' (boss and horde append bot seats), and its
+      // Rematch was a dead button: the tap passed the client UI, failed here,
+      // and nothing came back. startGame routes golf to startGolf, which
+      // resets the scorecard and holes, so a solo rematch is a full new round.
+      if (room && room.state === 'over' && (room.players.length >= 2 || room.mode === 'golf')
         && room.players.every(p => p && (p.bot || p.connected))) startGame(room);
       break;
     }
