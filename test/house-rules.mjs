@@ -14,7 +14,7 @@ const fail = (m) => { out.errors.push(m); console.error('FAIL ' + m); };
 const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8');
 
 const UI_FILES = ['public/index.html', 'public/app.js', 'public/styles.css', 'server.js',
-  'public/game-core.js', 'public/room-engine.js'];
+  'public/game-core.js', 'public/room-engine.js', 'public/cloud.js'];
 
 // ---- 1. NO EMOJI ANYWHERE IN THE UI -----------------------------------------
 // Every glyph is hand-drawn inline SVG or canvas art. Both forms must be

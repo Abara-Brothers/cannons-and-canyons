@@ -715,7 +715,10 @@ const PROF = (() => {
   return { v: 1, modes: {}, weapons: {}, shots: 0, hits: 0, maxDmg: 0, longest: 0,
            kills: 0, aces: 0, golfBest: null, hordeBest: { aliens: 0 }, ach: {} };
 })();
-function saveProf() { try { localStorage.setItem('cc_career', JSON.stringify(PROF)); } catch {} }
+function saveProf() {
+  try { localStorage.setItem('cc_career', JSON.stringify(PROF)); } catch {}
+  cloudQueue();          // debounced, fire-and-forget; a no-op when cloud is off
+}
 function modeStat(mode) { return PROF.modes[mode] || (PROF.modes[mode] = { w: 0, l: 0 }); }
 function award(id) {
   if (PROF.ach[id]) return;
@@ -783,6 +786,73 @@ function trackGameOver(m) {
     }
   }
   saveProf();
+}
+
+// ---------------------------------------------------------------------------
+// Cloud saves (ADR-003/007). cloud.js owns the transport; THIS code owns the
+// meaning: what progression is, and how a cloud copy merges with the local
+// one. Merge is field-wise and lossless-biased — counters take the larger
+// side, bests take the better side, achievements union keeping the earlier
+// date. With a single device the cloud copy is always a past snapshot of
+// local, so merge equals local; across linked devices (8.47+) max/union can
+// under-count a counter but can never invent or destroy progress.
+// ---------------------------------------------------------------------------
+function lootMidnight() { try { return localStorage.getItem('cc_loot_midnight') === '1'; } catch { return false; } }
+function progressionSnapshot() { return { career: PROF, loot: { midnight: lootMidnight() } }; }
+
+function mergeCloudProgression(cloud) {
+  const c = (cloud && cloud.career) || {};
+  for (const k of ['shots', 'hits', 'maxDmg', 'longest', 'kills', 'aces']) {
+    PROF[k] = Math.max(PROF[k] || 0, c[k] || 0);
+  }
+  for (const m in (c.modes || {})) {
+    const s = modeStat(m);
+    s.w = Math.max(s.w, c.modes[m].w || 0);
+    s.l = Math.max(s.l, c.modes[m].l || 0);
+  }
+  for (const w in (c.weapons || {})) PROF.weapons[w] = Math.max(PROF.weapons[w] || 0, c.weapons[w] || 0);
+  for (const a in (c.ach || {})) if (!PROF.ach[a]) PROF.ach[a] = c.ach[a];
+  if (c.golfBest != null && (PROF.golfBest == null || c.golfBest < PROF.golfBest)) PROF.golfBest = c.golfBest;
+  for (const k in (c.hordeBest || {})) PROF.hordeBest[k] = Math.max(PROF.hordeBest[k] || 0, c.hordeBest[k] || 0);
+  if (cloud && cloud.loot && cloud.loot.midnight && !lootMidnight()) {
+    try { localStorage.setItem('cc_loot_midnight', '1'); } catch {}
+  }
+  saveProf();
+  refreshCareerChip();
+}
+
+// Debounced push. Fire-and-forget by design: a failed push leaves cloudDirty
+// set, and the next save, the next 'online' event, or simply the next boot
+// (which always pushes after merging) heals it. No push ever blocks play.
+//
+// The worth-it gate is what keeps sign-in genuinely lazy: boot() rolls a
+// callsign for every first-time visitor, and setCallsign queues a push — so
+// without this gate every drive-by page load would mint an anonymous auth
+// user four seconds in. An existing session, or any real progress, opens it.
+function cloudWorthIt() {
+  return !!(Cloud.userId() || PROF.shots || PROF.kills
+    || Object.keys(PROF.modes).length || Object.keys(PROF.ach).length);
+}
+let cloudTimer = null, cloudDirty = false;
+function cloudQueue() {
+  if (!window.Cloud || !Cloud.enabled() || !cloudWorthIt()) return;
+  cloudDirty = true;
+  clearTimeout(cloudTimer);
+  cloudTimer = setTimeout(async () => {
+    const ok = await Cloud.save(savedName() || null, progressionSnapshot());
+    if (ok) cloudDirty = false;
+  }, 4000);
+}
+window.addEventListener('online', () => { if (cloudDirty) cloudQueue(); });
+
+async function cloudBoot() {
+  if (!window.Cloud || !Cloud.enabled()) return;
+  const row = await Cloud.restore();          // null when signed out / offline
+  if (row && row.progression) mergeCloudProgression(row.progression);
+  // Push the merged (or plain local) state so the row always reflects the
+  // latest device — but only if there is something worth an account for.
+  // A brand-new visitor with zero shots creates no auth row (lazy sign-in).
+  if (row || PROF.shots > 0 || Object.keys(PROF.ach).length) cloudQueue();
 }
 
 // ---------------------------------------------------------------------------
@@ -1192,6 +1262,7 @@ function rollCallsign(prev) {
 function setCallsign(name) {
   $('nameInput').value = name;
   try { localStorage.setItem('pt_name', name); } catch {}
+  cloudQueue();          // the profile row carries the callsign too
 }
 $('rerollBtn').onclick = () => {
   Audio.ensure();
@@ -3460,6 +3531,7 @@ function onGameOver(m) {
         if (localStorage.getItem('cc_loot_midnight') !== '1') {
           localStorage.setItem('cc_loot_midnight', '1');
           lootLine = `${UI_IC.coin} WAR SPOILS: <b>Midnight paint unlocked!</b>`;
+          cloudQueue();          // the unlock is progression: it rides to the cloud too
         }
       } catch {}
       const lt = document.createElement('div');
@@ -6209,6 +6281,10 @@ function boot() {
   resize();
   snapCamera();
   connect();
+  // Cloud restore runs beside the socket, never ahead of it: an existing
+  // session merges its profile row into PROF and pushes the result; a fresh
+  // visitor does nothing (lazy sign-in — see cloudWorthIt).
+  cloudBoot();
   requestAnimationFrame(frame);
   // Deep-link join only if there's no match to resume.
   if (room && hadName && !loadResume()) {

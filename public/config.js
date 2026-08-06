@@ -14,3 +14,10 @@
 // runs (this file is loaded first in index.html).
 window.CC_NATIVE_HOST = 'tanks.abarabrothers.com';
 window.CC_SERVER = window.Capacitor ? window.CC_NATIVE_HOST : null;
+
+// Supabase (ADR-005/007): cloud saves and, later, accounts. The publishable
+// key is PUBLIC by design — like the VAPID public key, it ships to every
+// browser; row access is enforced by RLS in Postgres, not by hiding this.
+// The secret key never appears anywhere under public/.
+window.CC_SUPABASE_URL = 'https://onacdpaxcqdfxikxiecy.supabase.co';
+window.CC_SUPABASE_KEY = 'sb_publishable_vrr31p7LCyzxygy6lb0ujQ_eqrlpmmR';
