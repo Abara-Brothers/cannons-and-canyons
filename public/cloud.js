@@ -111,6 +111,21 @@ window.Cloud = (() => {
     if (!session) throw new Error('no session');
   }
 
+  // Some sessions arrive without a user id: a fragment login (OAuth return)
+  // carries only tokens. One /user call fills it in; everything that writes
+  // a row depends on it.
+  async function hydrateUser() {
+    if (session.user_id) return;
+    const res = await fetch(BASE + '/auth/v1/user', {
+      headers: { apikey: KEY, Authorization: 'Bearer ' + session.access_token },
+    });
+    if (!res.ok) throw new Error('user ' + res.status);
+    const u = await res.json();
+    if (!u || !u.id) throw new Error('no user');
+    session.user_id = u.id;
+    storeSession(session);
+  }
+
   async function rest(path, opts = {}) {
     const res = await fetch(BASE + '/rest/v1' + path, {
       ...opts,
@@ -139,6 +154,7 @@ window.Cloud = (() => {
     async restore() {
       try {
         await ensureSession(false);
+        await hydrateUser();
         const rows = await rest('/profiles?id=eq.' + session.user_id
           + '&select=callsign,progression,progression_version');
         return rows && rows[0] ? rows[0] : null;
@@ -150,6 +166,7 @@ window.Cloud = (() => {
     async save(callsign, progression) {
       try {
         await ensureSession(true);
+        await hydrateUser();
         await rest('/profiles?on_conflict=id', {
           method: 'POST',
           headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
@@ -162,6 +179,94 @@ window.Cloud = (() => {
         });
         return true;
       } catch { return false; }
+    },
+
+    // ---- Google sign-in (8.47) ----------------------------------------------
+    // The IMPLICIT flow, chosen deliberately for a zero-build classic-script
+    // client: the browser goes to /authorize, Google comes back to
+    // redirect_to with tokens in the URL FRAGMENT — which never leaves the
+    // browser (fragments are not sent to servers), and PKCE's code_verifier
+    // bookkeeping never enters the codebase.
+
+    // Fresh sign-in: any prior (guest) session on this DEVICE is replaced;
+    // the local progression then merges into the Google account's row on
+    // return, so nothing a player can see is lost.
+    signInUrl() {
+      return BASE + '/auth/v1/authorize?provider=google&redirect_to='
+        + encodeURIComponent(location.origin + '/');
+    },
+
+    // Link Google to the CURRENT guest account, KEEPING its user id and row.
+    // A plain redirect cannot carry the Authorization header this needs, so
+    // skip_http_redirect asks GoTrue for the Google URL as JSON instead and
+    // the caller navigates to it.
+    async linkUrl() {
+      try {
+        await ensureSession(false);
+        const res = await fetch(BASE + '/auth/v1/user/identities/authorize'
+          + '?provider=google&skip_http_redirect=true&redirect_to='
+          + encodeURIComponent(location.origin + '/'), {
+          headers: { apikey: KEY, Authorization: 'Bearer ' + session.access_token },
+        });
+        if (!res.ok) throw new Error('link ' + res.status);
+        const j = await res.json();
+        return j && j.url ? j.url : null;
+      } catch { return null; }
+    },
+
+    // Consume an OAuth return. Runs synchronously at boot, BEFORE restore():
+    // stores the arriving tokens as the session and scrubs them from the
+    // address bar (they must not survive into history or a shared link).
+    // Returns 'ok', 'error' (user cancelled / provider error), or false.
+    consumeRedirect() {
+      if (!location.hash || location.hash.length < 2) return false;
+      const p = new URLSearchParams(location.hash.slice(1));
+      const scrub = () => history.replaceState(null, '', location.pathname + location.search);
+      if (p.get('error')) { scrub(); return 'error'; }
+      const at = p.get('access_token'), rt = p.get('refresh_token');
+      if (!at || !rt) return false;
+      storeSession({
+        access_token: at,
+        refresh_token: rt,
+        expires_at: Number(p.get('expires_at')) || (now() + Number(p.get('expires_in') || 3600)),
+        user_id: null,                 // hydrateUser fills this on first use
+      });
+      scrub();
+      return 'ok';
+    },
+
+    // Who the session belongs to, for the account strip. Null when signed out.
+    async whoami() {
+      try {
+        await ensureSession(false);
+        const res = await fetch(BASE + '/auth/v1/user', {
+          headers: { apikey: KEY, Authorization: 'Bearer ' + session.access_token },
+        });
+        if (!res.ok) throw new Error('user ' + res.status);
+        const u = await res.json();
+        if (!u || !u.id) return null;
+        if (!session.user_id) { session.user_id = u.id; storeSession(session); }
+        const g = (u.identities || []).find((i) => i.provider === 'google');
+        return {
+          id: u.id,
+          anonymous: !!u.is_anonymous,
+          google: !!g,
+          email: u.email || (g && g.identity_data && g.identity_data.email) || null,
+        };
+      } catch { return null; }
+    },
+
+    // Sign out on the server (revokes the refresh token), then locally. The
+    // next save simply mints a fresh guest — progress already saved to the
+    // signed-out account stays there, waiting for its next sign-in.
+    async signOut() {
+      try {
+        await fetch(BASE + '/auth/v1/logout', {
+          method: 'POST',
+          headers: { apikey: KEY, Authorization: 'Bearer ' + (session || {}).access_token },
+        });
+      } catch { /* revocation is best-effort; local clear is what matters */ }
+      storeSession(null);
     },
   };
 })();

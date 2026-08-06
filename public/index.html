@@ -188,6 +188,13 @@
           <span>Tank paint</span>
           <div class="skinrow" id="skinRow"></div>
         </div>
+        <!-- Account strip (8.47): guest-by-default, Google to keep progress
+             across devices. Hidden until cloud.js confirms it is configured;
+             text set by refreshAccountChip in app.js. -->
+        <button id="accountBtn" type="button" class="hs-chip hs-account hidden">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7z"/></svg>
+          <span id="accountLabel">Sign in</span>
+        </button>
 
         <p id="homeError" class="error hs-error"></p>
         <!-- App Store 5.1.1(i) requires the privacy policy to be reachable

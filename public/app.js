@@ -847,13 +847,62 @@ window.addEventListener('online', () => { if (cloudDirty) cloudQueue(); });
 
 async function cloudBoot() {
   if (!window.Cloud || !Cloud.enabled()) return;
+  // An OAuth return (Google sign-in or guest-to-Google link) lands here with
+  // tokens in the fragment. Consume BEFORE restore, so the merge below runs
+  // against the account the player just became.
+  const arrived = Cloud.consumeRedirect();
+  if (arrived === 'ok') showToast('Signed in — your progress follows you now');
+  else if (arrived === 'error') showToast('Sign-in was cancelled');
   const row = await Cloud.restore();          // null when signed out / offline
   if (row && row.progression) mergeCloudProgression(row.progression);
   // Push the merged (or plain local) state so the row always reflects the
   // latest device — but only if there is something worth an account for.
   // A brand-new visitor with zero shots creates no auth row (lazy sign-in).
   if (row || PROF.shots > 0 || Object.keys(PROF.ach).length) cloudQueue();
+  refreshAccountChip();
 }
+
+// ---- Account strip ----------------------------------------------------------
+// Three states, one small chip in the home footer:
+//   out    - no session at all: offer sign-in (their local progress will merge
+//            into whichever Google account they pick)
+//   guest  - anonymous session: offer to LINK Google, keeping the same account
+//   in     - Google linked: show who, tap to sign out
+async function refreshAccountChip() {
+  const btn = $('accountBtn');
+  if (!btn || !window.Cloud || !Cloud.enabled()) return;
+  const who = await Cloud.whoami();
+  btn.classList.remove('hidden');
+  if (who && !who.anonymous) {
+    btn.dataset.state = 'in';
+    $('accountLabel').textContent = who.email ? `Signed in · ${who.email}` : 'Signed in';
+  } else if (who) {
+    btn.dataset.state = 'guest';
+    $('accountLabel').textContent = 'Guest — keep my progress';
+  } else {
+    btn.dataset.state = 'out';
+    $('accountLabel').textContent = 'Sign in — save your progress';
+  }
+}
+$('accountBtn').onclick = async () => {
+  Audio.ensure();
+  const state = $('accountBtn').dataset.state;
+  if (state === 'in') {
+    // confirm() over a bespoke modal on purpose: matches the prompt()
+    // fallback precedent in copyLinkBtn, and a sign-out deserves a beat.
+    if (confirm('Sign out? Progress saved to this account stays with it; this device starts a fresh guest.')) {
+      await Cloud.signOut();
+      refreshAccountChip();
+      showToast('Signed out');
+    }
+    return;
+  }
+  if (state === 'guest') {
+    const url = await Cloud.linkUrl();       // keeps the current account + row
+    if (url) { location.href = url; return; }
+  }
+  location.href = Cloud.signInUrl();         // fresh sign-in (or link fallback)
+};
 
 // ---------------------------------------------------------------------------
 // Networking
