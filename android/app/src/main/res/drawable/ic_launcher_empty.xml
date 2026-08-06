@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Intentionally empty: a fully transparent 108dp foreground layer.
+
+     The app icon is a full-bleed scene (sun, mountains, tank silhouette), not a
+     logo on a plain field. Android composites an adaptive icon from a
+     background and a foreground, then masks the result to whatever shape the
+     launcher wants — and only the centre ~72dp of the 108dp canvas is
+     guaranteed visible.
+
+     Putting the artwork in the FOREGROUND would therefore crop roughly a third
+     of it away, taking the tank's tracks and the shell arc with it. So the
+     artwork is the background layer, where full-bleed is exactly what is
+     wanted, and this empty vector satisfies the required foreground without
+     drawing anything over it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108" />

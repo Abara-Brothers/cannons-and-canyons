@@ -1,29 +1,97 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- CONCEPT A — "Trajectory" (run 2)
+       Changes from run 1:
+       · arc rebuilt as a real parabola of 6 growing dots + a finned shell —
+         in run 1 it was too faint to register at any size
+       · dropped the scan-line bands across the sun (read as an artefact)
+       · tank gets a warm rim-light on its top edge so it reads as ARMOUR
+         rather than a hole punched in the sun
+       · ridges recoloured off the muddy purple onto clean indigo -->
   <defs>
-    <radialGradient id="bg" cx="50%" cy="36%" r="78%">
-      <stop offset="0" stop-color="#26386c"/>
-      <stop offset="55%" stop-color="#141d40"/>
-      <stop offset="100%" stop-color="#090d1e"/>
+    <linearGradient id="aSky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0"    stop-color="#080d20"/>
+      <stop offset="0.30" stop-color="#152051"/>
+      <stop offset="0.58" stop-color="#4a2a63"/>
+      <stop offset="0.80" stop-color="#a8442b"/>
+      <stop offset="1"    stop-color="#d96a1e"/>
+    </linearGradient>
+    <radialGradient id="aSun" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0"    stop-color="#fffbe8"/>
+      <stop offset="0.30" stop-color="#ffe07a"/>
+      <stop offset="0.62" stop-color="#ffab33"/>
+      <stop offset="0.88" stop-color="#ff8420"/>
+      <stop offset="1"    stop-color="#f26a16"/>
     </radialGradient>
-  </defs><rect width="512" height="512" rx="112" fill="url(#bg)"/>
-  <!-- ground shadow -->
-  <ellipse cx="256" cy="414" rx="158" ry="20" fill="#000" opacity="0.30"/>
+    <radialGradient id="aBloom" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0"    stop-color="#ffb445" stop-opacity="0.62"/>
+      <stop offset="0.5"  stop-color="#ff8a2e" stop-opacity="0.20"/>
+      <stop offset="1"    stop-color="#ff7a2e" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="aRim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd79a"/><stop offset="1" stop-color="#c97a2e"/>
+    </linearGradient>
+    <linearGradient id="aShell" x1="0" y1="0" x2="1" y2="0.5">
+      <stop offset="0" stop-color="#ffffff"/><stop offset="0.55" stop-color="#ffe89a"/><stop offset="1" stop-color="#ffb020"/>
+    </linearGradient>
+    <filter id="aGlow" x="-90%" y="-90%" width="280%" height="280%">
+      <feGaussianBlur stdDeviation="22"/>
+    </filter>
+    <filter id="aDotGlow" x="-90%" y="-90%" width="280%" height="280%">
+      <feGaussianBlur stdDeviation="7"/>
+    </filter>
+  </defs>
 
-  <!-- C&C wordmark (white C's, orange ampersand — matches the logo) -->
-  <text x="258" y="214" text-anchor="middle" font-family="Arial Black" font-weight="900"
-        font-size="176" letter-spacing="-6" fill="#f4f7ff">C<tspan fill="#ff7a33">&amp;</tspan>C</text>
+  <rect width="1024" height="1024" fill="url(#aSky)"/>
 
-  <!-- tank (back-to-front) -->
-  <rect x="168" y="382" width="176" height="36" rx="18" fill="#181b23"/>
-  <g fill="#39402f">
-    <circle cx="196" cy="400" r="10"/><circle cx="232" cy="400" r="10"/>
-    <circle cx="268" cy="400" r="10"/><circle cx="304" cy="400" r="10"/>
-    <circle cx="330" cy="400" r="8"/>
+  <!-- sun -->
+  <circle cx="470" cy="560" r="480" fill="url(#aBloom)"/>
+  <circle cx="470" cy="560" r="288" fill="url(#aSun)"/>
+  <!-- one soft horizon haze band instead of run 1's scan lines -->
+  <rect x="0" y="700" width="1024" height="120" fill="#ff9a3a" opacity="0.10"/>
+
+  <!-- ridges: clean indigo, full width -->
+  <path fill="#182352" d="M0 1024 V806 l130 -78 98 48 120 -82 134 70 110 -56 132 78 110 -52 108 46 V1024 Z"/>
+  <path fill="#0a1024" d="M0 1024 V890 l152 -46 130 32 122 -52 150 44 138 -38 124 52 122 -34 V1024 Z"/>
+
+  <!-- ============ TANK — black silhouette, warm rim-light ============ -->
+  <g transform="translate(452,876) scale(1.68)">
+    <g fill="#04060e">
+      <!-- gun -->
+      <g transform="rotate(-33 6 -60)">
+        <rect x="2" y="-70" width="192" height="22" rx="6"/>
+        <rect x="180" y="-79" width="33" height="39" rx="7"/>
+      </g>
+      <path d="M-46 -72 L-32 -118 H62 L76 -72 Z"/>
+      <rect x="-14" y="-137" width="42" height="21" rx="7"/>
+      <path d="M-118 0 L-92 -72 H104 L130 0 Z"/>
+      <rect x="-114" y="-2" width="244" height="27" rx="9"/>
+      <circle cx="-84" cy="25" r="15"/><circle cx="-36" cy="25" r="15"/>
+      <circle cx="12"  cy="25" r="15"/><circle cx="60"  cy="25" r="15"/>
+      <circle cx="106" cy="25" r="12"/>
+    </g>
+    <!-- rim-light: the sun catching the top edges -->
+    <g fill="url(#aRim)">
+      <path d="M-32 -118 H62 L64 -111 H-30 Z"/>
+      <path d="M-92 -72 H104 L107 -65 H-95 Z"/>
+      <rect x="-14" y="-137" width="42" height="6" rx="3"/>
+      <g transform="rotate(-33 6 -60)"><rect x="2" y="-70" width="192" height="6" rx="3"/></g>
+    </g>
   </g>
-  <path d="M180 386 l16 -36 h120 l16 36 z" fill="#7f8c54"/>
-  <path d="M180 386 l16 -36 h60 l-6 36 z" fill="#8f9c61"/>
-  <rect x="230" y="320" width="80" height="32" rx="12" fill="#606e41"/>
-  <rect x="283" y="280" width="16" height="74" rx="7" transform="rotate(33 291 348)" fill="#c4cbd8"/>
-  <g transform="translate(326,294)">
-    <circle r="15" fill="#ffd23f"/><circle r="8.5" fill="#ff7a33"/>
-  </g></svg>
+
+  <!-- ============ SHELL ARC — a real parabola, unmissable ============ -->
+  <g>
+    <g fill="#fff3c0" filter="url(#aDotGlow)" opacity="0.9">
+      <rect x="592" y="486" width="20" height="20" rx="4" transform="rotate(45 602 496)" opacity="0.40"/>
+      <rect x="650" y="430" width="23" height="23" rx="4" transform="rotate(45 661 441)" opacity="0.56"/>
+      <rect x="712" y="386" width="26" height="26" rx="5" transform="rotate(45 725 399)" opacity="0.72"/>
+      <rect x="778" y="352" width="29" height="29" rx="5" transform="rotate(45 792 366)" opacity="0.88"/>
+    </g>
+    <circle cx="882" cy="304" r="70" fill="#ffc047" opacity="0.42" filter="url(#aGlow)"/>
+    <g transform="rotate(-22 882 304)">
+      <!-- finned artillery round -->
+      <path fill="url(#aShell)" d="M834 280 h50 l40 24 -40 24 h-50 z"/>
+      <path fill="#ffffff" d="M834 280 h16 v48 h-16 z"/>
+      <path fill="#ffd257" d="M828 274 l14 6 v48 l-14 6 z"/>
+    </g>
+  </g>
+</svg>
