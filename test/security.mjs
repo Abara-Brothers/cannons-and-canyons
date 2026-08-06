@@ -267,6 +267,37 @@ async function noFreeTextNames() {
   else fail(`valid callsign 'Iron Ridge' was altered to ${JSON.stringify(kept)}`);
 }
 
+// ---- 7. HOSTILE IDENTITY TOKENS COST NOTHING BUT THE FEATURE (8.48) ---------
+// 'hello' and 'pushSub' carry a Supabase access token the server verifies
+// out-of-band. A garbage, giant, or non-string token must never crash the
+// process, block the message loop, or interfere with the match — the sender
+// just does not get persistent nudges. Verification is async, so this also
+// guards against a malformed token wedging the socket's ordinary traffic.
+async function hostileTokens() {
+  const ws = await open();
+  const nasty = [
+    { type: 'hello' },                                    // no token at all
+    { type: 'hello', token: null },
+    { type: 'hello', token: 12345 },
+    { type: 'hello', token: { evil: true } },
+    { type: 'hello', token: 'x'.repeat(60000) },          // giant string
+    { type: 'hello', token: 'a.b.c' },                    // JWT-shaped junk
+  ];
+  for (const m of nasty) send(ws, m);
+  // The socket must still play a completely normal match afterwards.
+  send(ws, { type: 'ai', difficulty: 'easy', name: 'Iron Ridge' });
+  const started = await wait(ws, 'start', 10000);
+  if (started) step('6 hostile hello tokens ignored; the socket still starts a match');
+  else fail('socket could not start a match after hostile hello tokens');
+  // pushSub with a junk token: the in-room ack must still arrive.
+  send(ws, { type: 'pushSub', sub: { endpoint: 'https://example.com/push/x', keys: {} }, token: 'garbage' });
+  const ok = await wait(ws, 'pushOk', 6000);
+  if (ok) step('pushSub with a junk token still gets its in-room pushOk');
+  else fail('pushSub with a junk token lost its pushOk ack');
+  send(ws, { type: 'leave' });
+  try { ws.close(); } catch {}
+}
+
 (async () => {
   try {
     await roomHoarding();
@@ -275,6 +306,7 @@ async function noFreeTextNames() {
     await oneShotPerTurn();
     await rateLimit();
     await noFreeTextNames();
+    await hostileTokens();
   } catch (e) {
     fail('threw: ' + (e && e.message ? e.message : String(e)));
   }

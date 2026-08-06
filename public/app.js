@@ -933,12 +933,27 @@ function connect() {
     const r = loadResume();
     if (r && (S.playing || !S.code)) sendMsg({ type: 'resume', code: r.code, token: r.token });
     flushIntent();
+    sendHello(ws);
   };
   ws.onclose = () => { S.connected = false; if (S.playing) $('connErr').classList.remove('hidden'); setTimeout(connect, 1500); };
   ws.onerror = () => {};
   ws.onmessage = (e) => { let m; try { m = JSON.parse(e.data); } catch { return; } S.msgCount = (S.msgCount || 0) + 1; handle(m); };
 }
 function sendMsg(m) { if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify(m)); }
+
+// Introduce this socket's account to the server (8.48): with an identity on
+// the socket, turn nudges reach every device the player ever subscribed, not
+// just one browser's in-memory copy. create:false — merely CONNECTING must
+// never mint an account (that is enabling-nudges' job). The token resolves
+// async, so re-check that THIS socket is still the live transport before
+// sending; a swap to offline play or a reconnect may have happened meanwhile.
+async function sendHello(ws) {
+  if (!window.Cloud || !Cloud.enabled()) return;
+  const token = await Cloud.token(false);
+  if (token && S.ws === ws && ws.readyState === 1 && !S.local) {
+    sendMsg({ type: 'hello', token });
+  }
+}
 
 // Coming back from the background (app switch, phone lock, tab switch) is the
 // classic dead-buttons moment: the socket may have died silently, a replay may
@@ -999,7 +1014,12 @@ async function enableTurnPings() {
     if (!key) { showToast('Nudges are not enabled on this server'); return; }
     let sub = await reg.pushManager.getSubscription();
     if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToU8(key) });
-    sendMsg({ type: 'pushSub', sub: sub.toJSON() });
+    // create:true — turning nudges on is an explicit act worth an account:
+    // it is what lets this subscription outlive the room and the deploy, and
+    // follow the player to their next match (ISSUE-003). Without cloud the
+    // token is null and the sub still works the old in-memory way.
+    const token = window.Cloud && Cloud.enabled() ? await Cloud.token(true) : null;
+    sendMsg({ type: 'pushSub', sub: sub.toJSON(), token });
   } catch {
     showToast('Could not enable nudges here');
   }

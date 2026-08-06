@@ -256,6 +256,15 @@ window.Cloud = (() => {
       } catch { return null; }
     },
 
+    // A valid access token for the game server to verify (the ws 'hello' and
+    // 'pushSub' messages carry it). create:true may mint the account first —
+    // right for enabling nudges, an explicit act worth an account; wrong for
+    // merely connecting, so the boot-time hello passes false.
+    async token(create) {
+      try { await ensureSession(!!create); return session.access_token; }
+      catch { return null; }
+    },
+
     // Sign out on the server (revokes the refresh token), then locally. The
     // next save simply mints a fresh guest — progress already saved to the
     // signed-out account stays there, waiting for its next sign-in.

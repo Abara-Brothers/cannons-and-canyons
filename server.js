@@ -14,7 +14,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import {
-  rooms, send, handleClientMessage, handleClose, setPushNudge,
+  rooms, send, handleClientMessage, handleClose,
+  setPushNudge, setAuthSink, setPushSubSink,
 } from './public/room-engine.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -51,18 +52,113 @@ try {
   vapidPublicKey = pub;
 } catch { webpush = null; }
 
-function pushNudge(room, seat) {
+// ---- Supabase (ADR-005) -------------------------------------------------------
+// Two keys, two jobs, deliberately separated:
+//   PUBLISHABLE verifies a client's access token (GET /auth/v1/user) — it can
+//   see nothing a browser could not.
+//   SECRET reads and writes push_subscriptions, a table whose RLS has NO
+//   policies precisely so only this process can touch it. It must never
+//   appear under public/ and never in a client-reachable response.
+// All of it degrades to no-ops when the env is absent (local dev, CI).
+const SB_URL = process.env.SUPABASE_URL || '';
+const SB_PUB = process.env.SUPABASE_PUBLISHABLE_KEY || '';
+const SB_SECRET = process.env.SUPABASE_SECRET_KEY || '';
+
+// Who does this access token belong to? null on any failure — a garbage or
+// expired token must cost the sender nothing but the feature.
+async function sbUserFromToken(token) {
+  if (!SB_URL || !SB_PUB || typeof token !== 'string' || !token || token.length > 4096) return null;
+  try {
+    const res = await fetch(`${SB_URL}/auth/v1/user`, {
+      headers: { apikey: SB_PUB, Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    const u = await res.json();
+    return u && typeof u.id === 'string' ? u.id : null;
+  } catch { return null; }
+}
+
+// Privileged PostgREST call. Body-parsing mirrors the client's hard-won
+// lesson: return=minimal answers 2xx with an EMPTY body, so parse by content.
+async function sbAdmin(method, path, body, prefer) {
+  const res = await fetch(`${SB_URL}/rest/v1${path}`, {
+    method,
+    headers: {
+      apikey: SB_SECRET,
+      Authorization: `Bearer ${SB_SECRET}`,
+      'Content-Type': 'application/json',
+      ...(prefer ? { Prefer: prefer } : {}),
+    },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  if (!res.ok) throw new Error(`sb ${method} ${res.status}`);
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+
+// A socket says hello with its account token: verify, remember. The userId
+// rides on the socket object, so a resumed seat keeps its identity as long
+// as the reconnecting socket says hello too (the client does, on every open).
+setAuthSink((ws, token) => {
+  sbUserFromToken(token).then((id) => { if (id) ws.userId = id; }).catch(() => {});
+});
+
+// A player registered a push subscription: persist it keyed to their account
+// so it survives room teardown, deploys, and works from every device. The
+// engine already stored the in-memory copy and sent pushOk; this is the
+// durable half, best-effort by design (ISSUE-003).
+setPushSubSink((ws, sub, token) => {
+  (async () => {
+    const id = ws.userId || await sbUserFromToken(token);
+    if (id) ws.userId = id;
+    if (!id || !SB_SECRET) return;
+    await sbAdmin('POST', '/push_subscriptions?on_conflict=endpoint', {
+      user_id: id,
+      endpoint: sub.endpoint,
+      sub,
+      last_seen_at: new Date().toISOString(),
+    }, 'resolution=merge-duplicates,return=minimal');
+  })().catch(() => {});
+});
+
+// Nudge every device the player has, not just the one that subscribed in this
+// room's lifetime: the in-memory sub (if any) plus every persisted sub for
+// the account. A push endpoint answering 404/410 is dead — drop it from both
+// stores so the lists self-clean (ISSUE-002's cleanup requirement).
+function pushNudge(room, seat) { pushNudgeAsync(room, seat).catch(() => {}); }
+async function pushNudgeAsync(room, seat) {
   const pl = room.players[seat];
-  if (!webpush || !pl || pl.bot || pl.connected || !pl.pushSub) return;
+  if (!webpush || !pl || pl.bot || pl.connected) return;
+  const targets = new Map();
+  if (pl.pushSub && pl.pushSub.endpoint) targets.set(pl.pushSub.endpoint, pl.pushSub);
+  // The live socket first; the identity the engine carried over at disconnect
+  // second — the disconnect case is precisely when a nudge matters.
+  const uid = (pl.ws && pl.ws.userId) || pl.userId;
+  if (uid && SB_SECRET) {
+    try {
+      const rows = await sbAdmin('GET',
+        `/push_subscriptions?user_id=eq.${encodeURIComponent(uid)}&select=endpoint,sub`);
+      for (const r of rows || []) if (r.sub && r.endpoint) targets.set(r.endpoint, r.sub);
+    } catch { /* the in-memory sub still gets its chance */ }
+  }
+  if (!targets.size) return;
   const opp = room.players.find((p, i) => p && i !== seat && !p.bot);
   const payload = JSON.stringify({
     title: 'Cannons & Canyons — your move',
     body: opp ? `${opp.name} has taken their shot. Your turn.` : 'Your turn is up.',
     url: `/?room=${room.code}`,
   });
-  webpush.sendNotification(pl.pushSub, payload).catch((err) => {
-    if (err && (err.statusCode === 404 || err.statusCode === 410)) pl.pushSub = null;   // subscription expired
-  });
+  for (const [endpoint, sub] of targets) {
+    webpush.sendNotification(sub, payload).catch((err) => {
+      if (err && (err.statusCode === 404 || err.statusCode === 410)) {
+        if (pl.pushSub && pl.pushSub.endpoint === endpoint) pl.pushSub = null;
+        if (SB_SECRET) {
+          sbAdmin('DELETE', `/push_subscriptions?endpoint=eq.${encodeURIComponent(endpoint)}`)
+            .catch(() => {});
+        }
+      }
+    });
+  }
 }
 
 // The one capability the engine cannot have: sending a push needs the VAPID keys

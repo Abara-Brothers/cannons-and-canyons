@@ -47,6 +47,16 @@ const env = (globalThis['process'] || {}).env || {};
 let pushNudge = () => {};
 export function setPushNudge(fn) { pushNudge = typeof fn === 'function' ? fn : () => {}; }
 
+// Identity is a host concern too (ISSUE-003): verifying a Supabase access
+// token and persisting a push subscription both need server-side keys this
+// browser-safe module must never carry. The engine only ANNOUNCES — "this
+// socket claims a token", "this player registered a subscription" — and the
+// host decides what that means. Both default to no-ops offline.
+let authSink = () => {};
+export function setAuthSink(fn) { authSink = typeof fn === 'function' ? fn : () => {}; }
+let pushSubSink = () => {};
+export function setPushSubSink(fn) { pushSubSink = typeof fn === 'function' ? fn : () => {}; }
+
 
 // How long a disconnected player may return before their tank is scuttled.
 // Overridable so the test suite can exercise the forfeit path without a 2-min wait.
@@ -1370,6 +1380,11 @@ function handleClose(ws) {
   }
   if (room.state !== 'playing') return teardown(room);   // 'over' — nothing to hold
 
+  // The socket may carry a host-attached identity (ws.userId, set by the
+  // auth sink). The seat is about to lose its socket — exactly the moment
+  // push nudges need that identity most — so carry it onto the player. An
+  // opaque property only: the engine never reads it, the host does.
+  if (ws.userId) player.userId = ws.userId;
   player.ws = null;
   player.connected = false;
   broadcast(room, { type: 'oppConn', seat, connected: false });
@@ -1422,6 +1437,9 @@ function handleResume(ws, msg) {
   clearTimeout(player.dropTimer);
   clearTimeout(room.emptyTimer);       // somebody's home again — cancel the hold
   player.ws = ws; player.connected = true;
+  // A reconnecting socket that already said hello brings its identity along;
+  // one that has not yet keeps the identity carried over at disconnect.
+  if (ws.userId) player.userId = ws.userId;
   ws.roomCode = room.code; ws.seat = seat;
   if (stale && stale !== ws) { try { stale.terminate(); } catch { /* already gone */ } }
   send(ws, { type: 'restore', ...snapshot(room, seat) });
@@ -1521,6 +1539,14 @@ export function handleClientMessage(ws, msg) {
       if (room.players.every((pl, i) => pl.bot || room.loadouts[i])) finishPicking(room);
       break;
     }
+    case 'hello': {
+      // A socket introducing its account. Nothing in the ENGINE changes —
+      // the host's sink verifies the token and remembers who this socket is,
+      // which is what lets pushNudge find subscriptions saved in earlier
+      // sessions and on other devices.
+      authSink(ws, msg.token);
+      break;
+    }
     case 'pushSub': {
       // Turn-nudge opt-in: hang the browser subscription off the player so a
       // disconnected seat can still be pinged when its turn comes up.
@@ -1528,6 +1554,9 @@ export function handleClientMessage(ws, msg) {
       if (pl2 && msg.sub && typeof msg.sub.endpoint === 'string' && msg.sub.endpoint.startsWith('https://')) {
         pl2.pushSub = msg.sub;
         send(ws, { type: 'pushOk' });
+        // The host may also persist it keyed to the account (ISSUE-003) —
+        // best-effort and async; the pushOk above is the in-room ack.
+        pushSubSink(ws, msg.sub, msg.token);
       }
       break;
     }

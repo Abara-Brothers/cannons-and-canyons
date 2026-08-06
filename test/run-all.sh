@@ -77,6 +77,9 @@ else
   # shared server up — and must never be aimed at a deployed one.
   echo "== self-hosted (spawns + signals its own server) =="
   run shutdown node test/shutdown.mjs
+  # Also self-hosted: mocks Supabase locally and asserts the push-persistence
+  # wire shapes (verify, upsert, nudge lookup, delivery, dead-endpoint delete).
+  run push_persist node test/push_persist.mjs
 
   # Expected chatter: the listen banner, and the graceful-shutdown line the
   # harness itself triggers every time it SIGTERMs a shared server. Anything
