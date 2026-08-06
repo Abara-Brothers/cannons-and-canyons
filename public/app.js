@@ -979,6 +979,10 @@ async function startLocal(m) {
 // the transport back so the next tap reaches the real server again.
 function endLocal() {
   if (!S.local) return;
+  // INVARIANT: S.local and S.ws must flip together, synchronously — here and
+  // in startLocal. The engine face's delivery gate reads both; an await or a
+  // call site that changes one without the other reopens the very
+  // straggler-delivery hole the gate exists to close.
   S.local = false;
   S.ws = null; S.connected = false;
   connect();
@@ -1132,12 +1136,15 @@ function handle(m) {
       else onGameOver(m);
       break;
     case 'opponentLeft':
-      clearResume(); clearKillcam();
-      // The engine notifies EVERYONE on teardown — the leaver included. When
-      // WE initiated it (cancelBtn nulls S.code and goes home before this
-      // arrives), an 'Opponent left' dialog painted over the home screen
-      // reads as a bug. Anyone still holding a room code genuinely lost
-      // their lobby or match and deserves the notice.
+      clearKillcam();
+      // The engine notifies EVERYONE on teardown — the leaver included. The
+      // leaver (cancelBtn nulls S.code before this lands) needs neither the
+      // dialog nor a resume wipe: cc_resume may describe a DIFFERENT match
+      // whose seat a server still holds. A lobby member losing their host
+      // keeps their record too — it can only describe an older abandoned
+      // match, which this lobby's death says nothing about. Only a mid-match
+      // victim's record describes THIS room; clear exactly that one.
+      if (S.playing) clearResume();
       if (S.playing || S.code) { S.playing = false; showOverlay('Opponent left', null, 'draw', true); }
       break;
   }
