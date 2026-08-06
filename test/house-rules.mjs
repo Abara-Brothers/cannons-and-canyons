@@ -200,5 +200,45 @@ const UI_FILES = ['public/index.html', 'public/app.js', 'public/styles.css', 'se
   }
 }
 
+// ---- 8. VERSION MUST AGREE ACROSS ALL THREE PROJECTS (ISSUE-016) ------------
+// package.json is the source; `npm run version:sync` pushes it into the native
+// projects. Nothing forces anyone to run it, and the failure is invisible
+// locally — the app builds and runs perfectly with a stale version. It surfaces
+// at store upload, as a rejection whose message does not name the file to edit.
+// They were ALREADY out of step the day the native projects were generated
+// (package.json 0.2.0 vs both native at 1.0), which is why this is a test.
+{
+  const pkg = JSON.parse(read('package.json'));
+  const grab = (src, re) => { const m = src.match(re); return m ? m[1].trim() : null; };
+  const gradle = read('android/app/build.gradle');
+  const pbx = read('ios/App/App.xcodeproj/project.pbxproj');
+
+  const want = { version: String(pkg.version || ''), build: String(pkg.build ?? '') };
+  const got = {
+    'android versionName': grab(gradle, /versionName\s+"([^"]*)"/),
+    'android versionCode': grab(gradle, /versionCode\s+(\d+)/),
+    'ios MARKETING_VERSION': grab(pbx, /MARKETING_VERSION = ([^;]+);/),
+    'ios CURRENT_PROJECT_VERSION': grab(pbx, /CURRENT_PROJECT_VERSION = ([^;]+);/),
+  };
+
+  const bad = [];
+  if (!/^\d+\.\d+\.\d+$/.test(want.version)) bad.push(`package.json version must be x.y.z, got '${want.version}'`);
+  if (!/^\d+$/.test(want.build)) bad.push(`package.json build must be a positive integer, got '${want.build}'`);
+  for (const [k, v] of Object.entries(got)) {
+    const expect = k.includes('Name') || k.includes('MARKETING') ? want.version : want.build;
+    if (v === null) bad.push(`${k} not found`);
+    else if (v !== expect) bad.push(`${k} is '${v}', package.json says '${expect}'`);
+  }
+  // Both iOS build configurations carry their own copy; a sync that updated
+  // only one would still pass a first-match check.
+  const mv = [...pbx.matchAll(/MARKETING_VERSION = ([^;]+);/g)].map(m => m[1].trim());
+  if (mv.length && new Set(mv).size !== 1) bad.push(`iOS build configurations disagree: MARKETING_VERSION = ${[...new Set(mv)].join(' vs ')}`);
+  const cv = [...pbx.matchAll(/CURRENT_PROJECT_VERSION = ([^;]+);/g)].map(m => m[1].trim());
+  if (cv.length && new Set(cv).size !== 1) bad.push(`iOS build configurations disagree: CURRENT_PROJECT_VERSION = ${[...new Set(cv)].join(' vs ')}`);
+
+  if (bad.length) fail(`version drift — run \`npm run version:sync\`:\n      ${bad.join('\n      ')}`);
+  else ok(`version agrees everywhere (${want.version} build ${want.build})`);
+}
+
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nALL GOOD');
 process.exit(out.errors.length ? 1 : 0);
