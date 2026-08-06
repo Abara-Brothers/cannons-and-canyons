@@ -55,6 +55,17 @@ function alienPass() {
     }
     if (m.type === 'turn' && m.turn === mySeat) {
       shots++;
+      if (shots > 26 && !waveSeen && attempt < 4) {
+        // 26 turns without landing a kill is the same bad-seed class as being
+        // overrun: a lone defender vs three walking saucers can spend the
+        // whole cap missing. Seen three times, only ever on CI runners (8.35
+        // node 22; 8.45 node 20 twice) against 10/10 local. Same remedy as
+        // the overrun branch below: fresh defence, fresh seed. A genuine
+        // kills-never-count regression still fails — every retry hits the cap.
+        step(`no kill in ${shots - 1} turns — retrying (attempt ${attempt})`);
+        try { ws.close(); } catch {}
+        return alienPass();
+      }
       if (shots > 26 || (waveSeen && respawnSeen)) return wrapUp();
       // The game's own gunnery brain solves every shot against the live terrain.
       // Open with the nuke, follow with clusters (its 2 rounds) to land the
