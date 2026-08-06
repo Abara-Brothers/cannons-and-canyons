@@ -1,6 +1,7 @@
 {
   "appId": "com.abarabrothers.cannonsandcanyons",
-  "appName": "Cannons & Canyons",
+  "appName": "C&C",
+  "_appName_note": "HOME-SCREEN name only, deliberately short. The product is 'Cannons & Canyons' and that is what the store listings say — but iOS allows roughly 12 characters under an icon, strips the spaces around '&', and then truncates, so the full name rendered as 'Cannons&Cany...' on every phone. Kept here in sync with iOS CFBundleDisplayName and Android app_name so a fresh `npx cap add` cannot reintroduce the long one.",
   "webDir": "public",
   "backgroundColor": "#0b1020",
   "_server_note": "DO NOT add `server.url`. Pointing the shell at a remote URL is the remote-wrapper model rejected in ADR-006 option B: it kills offline play entirely and invites an App Store 4.2 rejection for being a repackaged website. Assets stay bundled; updates reach shipped apps over the air instead (ADR-006 option C). The host the app talks to for multiplayer lives in public/config.js as CC_NATIVE_HOST.",

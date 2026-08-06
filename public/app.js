@@ -616,7 +616,30 @@ function paintDockTab() {
   $('dockMini').setAttribute('aria-hidden', String(!shut));
   updateDockMini();          // populate the sliver the moment it appears
 }
-$('dockTab').onclick = () => { setDockCollapsed(!dockShutReq, true); };
+// ---- Dock tab: prompt hard, then stop (8.40) --------------------------------
+// The tab glows and its chevron beckons toward wherever a tap takes you — up to
+// bring the controls out, down to put them away. That is right for a player who
+// has not found the controls yet and wrong for one who has.
+//
+// "Learned" deliberately means opened AND closed again, not merely tapped once:
+// a stray tap proves nothing, whereas opening and closing proves they know what
+// the tab does in both directions. Persisted, because re-teaching it at the
+// start of every match is the same nag wearing a different hat.
+const DOCK_LEARNED = 'cc_dock_learned';
+let dockOpenedByTap = false;
+const dockLearned = () => { try { return localStorage.getItem(DOCK_LEARNED) === '1'; } catch { return false; } };
+function applyDockLearned() { document.body.classList.toggle('dock-learned', dockLearned()); }
+applyDockLearned();
+
+$('dockTab').onclick = () => {
+  const opening = dockShutReq;                 // shut right now, so this tap opens it
+  setDockCollapsed(!dockShutReq, true);
+  if (opening) { dockOpenedByTap = true; return; }
+  if (dockOpenedByTap && !dockLearned()) {
+    try { localStorage.setItem(DOCK_LEARNED, '1'); } catch {}
+    applyDockLearned();
+  }
+};
 // EVERY match loads in with the controls tucked away (Jordan, 8.24 — this
 // replaces 8.22's open-then-tuck-after-your-first-shot intro): the battlefield
 // gets the whole screen, the sliver keeps FIRE, the live aim readout and the

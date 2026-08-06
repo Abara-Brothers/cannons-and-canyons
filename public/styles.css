@@ -1232,27 +1232,66 @@ body.dd-open .hs-main { overflow: visible; }
    gesture inviting the tap (Jordan, 8.22). */
 #dock:not(.collapsed) .dock-tab svg { transform: rotate(180deg); }
 /* NB: dtBeckon (below) is the TAB's glow pulse from 8.16 — the chevron's
-   nudge needs its own name or the later keyframes definition swallows it. */
-#dock.collapsed .dock-tab svg { animation: dtNudgeUp 2.2s ease-in-out infinite; }
+   nudge needs its own name or the later keyframes definition swallows it.
+   The chevron now beckons in BOTH states, always toward where a tap takes
+   you: up to bring the controls out, down to put them away.
+   TRAP: the open-state chevron is rotated 180deg via `transform`, and a
+   keyframe that sets `transform` REPLACES it — animating plain translateY
+   there would silently un-rotate the arrow mid-nudge. dtNudgeDown therefore
+   carries the rotation in every keyframe. And because the glyph is upside
+   down, its local -Y is screen-DOWN, which is exactly the direction wanted. */
+#dock.collapsed .dock-tab svg { animation: dtNudgeUp 1.8s ease-in-out infinite; }
+#dock:not(.collapsed) .dock-tab svg { animation: dtNudgeDown 1.8s ease-in-out infinite; }
 @keyframes dtNudgeUp {
   0%, 52%, 100% { transform: translateY(0); }
-  12% { transform: translateY(-2.5px); }
+  12% { transform: translateY(-4px); }
   26% { transform: translateY(0); }
-  38% { transform: translateY(-2.5px); }
+  38% { transform: translateY(-4px); }
 }
+@keyframes dtNudgeDown {
+  0%, 52%, 100% { transform: rotate(180deg) translateY(0); }
+  12% { transform: rotate(180deg) translateY(-4px); }
+  26% { transform: rotate(180deg) translateY(0); }
+  38% { transform: rotate(180deg) translateY(-4px); }
+}
+
+/* LEARNED (8.40). Once a player has opened the controls and closed them
+   again, they have demonstrated they understand the tab — so stop selling it.
+   The chevron still flips to show direction, it just stops moving, and the
+   glow stops looping. Nagging someone who already knows is how a helpful
+   affordance turns into an irritant. */
+/* Specificity note, learned the hard way: the state rules above are
+   `#dock.collapsed .dock-tab svg` (0,1,2,1) — an ID beats any number of
+   classes, so `body.dock-learned .dock-tab svg` LOSES and the chevron kept
+   nudging after the player had learned it. Measured, not assumed. These
+   overrides carry #dock so they actually win. */
+body.dock-learned #dock .dock-tab svg { animation: none; }
+body.dock-learned #dock:not(.collapsed) .dock-tab svg { transform: rotate(180deg); }
+
 @media (prefers-reduced-motion: reduce) {
-  #dock.collapsed .dock-tab svg { animation: none; }
+  #dock .dock-tab svg { animation: none; }
+  #dock:not(.collapsed) .dock-tab svg { transform: rotate(180deg); }
 }
 .dock-tab .dt-label { display: none; }
 #dock.collapsed .dock-tab {
   height: 26px; top: -25px; padding: 0 14px;
   color: #0a1020; background: var(--accent); border-color: var(--accent);
-  animation: dtBeckon 2s ease-in-out 2;
+  /* Was `2` iterations — it pulsed twice on arrival and then sat there
+     inert, so a player who looked away for three seconds never saw it at
+     all. Loops until learned (below), which is what makes it a prompt
+     rather than a thing that already happened. */
+  animation: dtBeckon 2s ease-in-out infinite;
 }
 #dock.collapsed .dock-tab .dt-label { display: inline; }
 @keyframes dtBeckon {
   0%, 100% { box-shadow: 0 0 0 0 rgba(84,200,255,0); }
-  50%      { box-shadow: 0 0 16px 3px rgba(84,200,255,.6); }
+  50%      { box-shadow: 0 0 22px 6px rgba(84,200,255,.78); }
+}
+/* Learned: two closing pulses so the tab does not blink out mid-glow, then
+   silence. Reduced-motion users never get the loop at all. */
+body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out 2; }
+@media (prefers-reduced-motion: reduce) {
+  #dock.collapsed .dock-tab { animation: none; }
 }
 .dock-tab:active { color: var(--text); }
 #dock.collapsed .dock-tab:active { color: #0a1020; filter: brightness(1.12); }
