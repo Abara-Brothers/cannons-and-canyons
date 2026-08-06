@@ -13,7 +13,8 @@ const ok = (m) => console.log('  ok — ' + m);
 const fail = (m) => { out.errors.push(m); console.error('FAIL ' + m); };
 const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8');
 
-const UI_FILES = ['public/index.html', 'public/app.js', 'public/styles.css', 'server.js', 'public/game-core.js'];
+const UI_FILES = ['public/index.html', 'public/app.js', 'public/styles.css', 'server.js',
+  'public/game-core.js', 'public/room-engine.js'];
 
 // ---- 1. NO EMOJI ANYWHERE IN THE UI -----------------------------------------
 // Every glyph is hand-drawn inline SVG or canvas art. Both forms must be
@@ -154,13 +155,17 @@ const UI_FILES = ['public/index.html', 'public/app.js', 'public/styles.css', 'se
   if (!bad) ok(`callsign lists agree (${adj.length}x${noun.length}, ${adj.length * noun.length - overlong.length} pairs fit NAME_MAX=${max})`);
 }
 
-// ---- 6. game-core MUST STAY BROWSER-SAFE (ADR-001 / BQ-007) ------------------
-// Offline play means this exact file runs in the browser, not a port of it.
+// ---- 6. THE OFFLINE MODULES MUST STAY BROWSER-SAFE (ADR-001 / BQ-007) --------
+// Offline play means these exact files run in the browser, not ports of them.
 // One `import fs` or `process.env` and offline breaks — but the SERVER keeps
 // working perfectly, so nothing else in the suite would notice. That silence is
 // the reason this check exists.
-{
-  const src = read('public/game-core.js');
+//
+// room-engine.js joined the list when the room/turn engine came out of
+// server.js: it is the file most likely to regress, because the obvious way to
+// add a server-side feature to it is to reach for a Node builtin.
+for (const file of ['public/game-core.js', 'public/room-engine.js']) {
+  const src = read(file);
   const bad = [];
   src.split('\n').forEach((line, i) => {
     if (/^\s*(\/\/|\*)/.test(line)) return;                 // skip comments
@@ -173,8 +178,8 @@ const UI_FILES = ['public/index.html', 'public/app.js', 'public/styles.css', 'se
     if (imp && !imp[1].startsWith('.') && !imp[1].startsWith('/')) bad.push(`${n}: bare import '${imp[1]}'`);
     if (/from\s+['"]node:/.test(line)) bad.push(`${n}: node: builtin`);
   });
-  if (bad.length) fail(`public/game-core.js is no longer browser-safe — offline play would break silently:\n      ${bad.join('\n      ')}`);
-  else ok('game-core is browser-safe (no Node builtins, no bare imports)');
+  if (bad.length) fail(`${file} is no longer browser-safe — offline play would break silently:\n      ${bad.join('\n      ')}`);
+  else ok(`${file.replace('public/', '')} is browser-safe (no Node builtins, no bare imports)`);
 }
 
 // ---- 7. EVERY PRECACHED SHELL ASSET MUST EXIST (BQ-007) ----------------------
@@ -192,10 +197,13 @@ const UI_FILES = ['public/index.html', 'public/app.js', 'public/styles.css', 'se
     if (!list.length) fail('sw.js SHELL list is empty');
     else if (missing.length) fail(`sw.js precaches files that do not exist — offline shell is incomplete:\n      ${missing.join('\n      ')}`);
     else {
-      // game-core is the one entry offline PLAY depends on, as opposed to
-      // offline loading. Name it explicitly so nobody drops it as "an asset".
-      if (!list.includes('game-core.js')) fail('sw.js does not precache game-core.js — the app would load offline but could not play');
-      else ok(`sw.js precaches ${list.length} shell entries, all present (game-core included)`);
+      // These two are what offline PLAY depends on, as opposed to offline
+      // LOADING. Name them explicitly so nobody drops one as "just an asset":
+      // without either, the app opens with no network and then cannot start a
+      // match, which is a worse failure than not opening at all.
+      const core = ['game-core.js', 'room-engine.js'].filter(f => !list.includes(f));
+      if (core.length) fail(`sw.js does not precache ${core.join(' and ')} — the app would load offline but could not play`);
+      else ok(`sw.js precaches ${list.length} shell entries, all present (game-core + room-engine included)`);
     }
   }
 }

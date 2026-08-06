@@ -23,6 +23,7 @@ const SHELL = [
   'app.js',
   'config.js',
   'game-core.js',        // the authoritative simulation — offline play needs it
+  'room-engine.js',      // rooms/turns/bots — the other half of an offline match
   'styles.css',
   'manifest.webmanifest',
   'privacy.html',        // reachable offline: it is a store requirement (ISSUE-013)
