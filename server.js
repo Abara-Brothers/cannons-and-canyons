@@ -662,7 +662,8 @@ function startGame(room) {
   room.biome = BIOME_IDS[Math.floor(Math.random() * BIOME_IDS.length)];
   room.lavaY = biomeLavaY(room.biome);
   // featMul 2: twice the massifs/canyons for the doubled 48k battlefield.
-  room.terrain = generateTerrain(room.seed, n, room.biome, undefined, 2);
+  // last arg: every combat map gets 1-2 canyons. Golf (startGolf) does not.
+  room.terrain = generateTerrain(room.seed, n, room.biome, undefined, 2, true);
   // Order matters: ruins and bunkers RESHAPE the terrain, so they go before the
   // trees are placed and before the tanks are seated on the final surface.
   room.ruins = (BIOMES[room.biome] || {}).ruins ? generateRuins(room.seed, room.terrain, n) : null;
@@ -722,7 +723,14 @@ function startGame(room) {
   // Everyone starts turned toward the middle of the map. (n=2 -> [1, -1], as before.)
   room.facing = room.tanks.map((_, i) => (i < n / 2 ? 1 : -1));
   room.hazards = []; room.hazardSeq = 1; room.scorch = [];
-  room.turn = Math.floor(Math.random() * n);
+  // A HUMAN always opens against bots. Losing the coin toss to a CPU means
+  // watching a shell land before you have touched anything — in vs-CPU that is
+  // the player's first ever impression of the game, and half the time it was
+  // "the computer went first". Random is still right human-vs-human, where a
+  // coin toss is fair rather than deflating.
+  const firstHuman = room.players.findIndex(pl => pl && !pl.bot);
+  const hasBot = room.players.some(pl => pl && pl.bot);
+  room.turn = (hasBot && firstHuman >= 0) ? firstHuman : Math.floor(Math.random() * n);
   room.state = 'playing';
   for (let i = 0; i < n; i++) send(room.players[i].ws, { type: 'start', ...snapshot(room, i) });
   if (room.picking) {

@@ -881,7 +881,11 @@ body.golf .fuel { display: none; }
 /* Very short landscape phones: tighten the brand row so the panels get room. */
 @media (orientation: landscape) and (max-height: 430px), (orientation: portrait) and (max-width: 430px) {
   .hs-title { font-size: clamp(17px, calc(4.6 * var(--vhu)), 24px); }
-  .hs-by { display: none; }
+  /* The byline used to be display:none here to buy vertical room. It is the
+     studio credit and the owner wants it on every device, so it SHRINKS
+     instead of vanishing: smaller type and tighter tracking cost about 4px of
+     height, which #home can afford, where hiding it cost the credit entirely. */
+  .hs-by { font-size: clamp(7px, calc(1.1 * var(--vhu)), 9px); letter-spacing: .16em; margin-top: 1px; }
   .hs-quick-txt i { display: none; }
   .hs-panel-head i { display: none; }
 }
