@@ -1084,6 +1084,12 @@ async function enableTurnPings() {
   }
 }
 $('notifyBtn').onclick = () => { Audio.ensure(); enableTurnPings(); };
+// Inside a Capacitor shell there is no serviceWorker and no PushManager, so
+// this button could only ever land on its own error toast — shown to a user
+// already inside the installed app (ISSUE-020). An honest absence beats a
+// permanent error. Native push arrives with APNs/FCM (Phase 3 remainder) and
+// brings its own registration UI.
+if (window.Capacitor) $('notifyBtn').classList.add('hidden');
 
 let pendingIntent = null;
 function flushIntent() { if (pendingIntent) { sendMsg(pendingIntent); pendingIntent = null; } }
