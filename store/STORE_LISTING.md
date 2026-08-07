@@ -62,14 +62,28 @@ Store accounts you (Jordan) must create — these cannot be automated:
 
 **Keywords (iOS, ≤100 chars):** `artillery,tank,duel,multiplayer,turn based,pixel,war,cannon,golf,battle`
 **Category:** Games ▸ Strategy (secondary: Action)
-**Age rating answers:** mild cartoon/fantasy violence only → expect **9+ (Apple)** / **Everyone 10+ (Google)**. No gambling, no user chat, no user-generated content, no data collection.
+**Age rating answers:** mild cartoon/fantasy violence only → expect **9+ (Apple)** / **Everyone 10+ (Google)**. No gambling, no user chat, no user-generated content (callsigns come from the game's own word lists).
 
 ## 3. Privacy (both stores require this)
 
-- Hosted policy: `https://<your-deployed-host>/privacy.html` (shipped in `public/`).
-- **Apple App Privacy questionnaire:** "Data Not Collected" across the board (no identifiers, no tracking, no ads SDK; display name is ephemeral session data not linked to identity).
-- **Google Data safety form:** No data collected, no data shared; data (display name, match state) is processed in transit only and not stored.
-- **Push notifications** — the game offers opt-in turn nudges via the Web Push API. The subscription is held in server memory for the life of the match and discarded with it; nothing is written to disk (only the server's own VAPID keypair is). This does not change either answer above, but declare notifications as a capability in both consoles, and be ready to point a reviewer at the "Turn notifications" paragraph of `privacy.html`.
+> **Rewritten 2026-08-07 (batch 8.50).** The original answers said "no data collected" —
+> true before accounts existed, FALSE since 8.46–8.48 (guest/Google accounts, cloud
+> saves, persisted push subscriptions). Filing the old answers now would be a
+> misdeclaration on both stores (was ISSUE-018).
+
+- Hosted policy: `https://tanks.abarabrothers.com/privacy.html` (shipped in `public/`, reachable in-app from the home screen).
+- **Apple App Privacy questionnaire — "Data Linked to You", purpose App Functionality only:**
+  - *Identifiers → User ID* — the random account identifier (guest accounts included).
+  - *Contact Info → Email Address* — ONLY when the player links Google (optional).
+  - *User Content → Gameplay Content* — callsign + progression (wins, achievements, unlocks).
+  - **Tracking: NO** for every item (nothing is used for cross-app tracking or advertising; no ads SDK, no analytics).
+- **Google Play Data safety form:**
+  - Collected: *User IDs* (account identifier); *Personal info → Email address* (optional, Google linking); *App activity → Other user-generated content* (callsign, progression).
+  - Shared: **none**. Sold: **none**. Processed ephemerally: live match relay (names/shots/aim, server memory only).
+  - Security practices: data encrypted in transit; **users can request deletion AND delete in-app** — account deletion (in the game's account panel) erases account, cloud save and push subscriptions in one action. Data export is also in-app.
+- **Push notifications** — opt-in turn nudges. Since 8.48 the subscription persists in the database keyed to the account (that is what makes nudges survive between matches and reach every device), and it is deleted with the account or when the push service reports it dead. Declare notifications as a capability in both consoles; the "Turn notifications" section of `privacy.html` is the reviewer-facing description.
+- **Processors to disclose if asked:** Supabase (database + auth, Singapore), Render (game server, Singapore), Apple/Google/Mozilla push services (delivery only).
+- **Qualified review:** these answers describe the implementation honestly, but a lawyer has not reviewed them — flagged in `PROJECT_STATE.md`; worth a professional pass before submission.
 
 ## 4. Assets checklist
 

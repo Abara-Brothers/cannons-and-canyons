@@ -10,41 +10,112 @@
   h1 { font-size: 28px; } h2 { font-size: 19px; margin-top: 28px; }
   a { color:#54c8ff; }
   .muted { color:#8f9bc4; font-size: 14px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { text-align: left; padding: 6px 10px 6px 0; border-bottom: 1px solid #232c52; vertical-align: top; }
+  th { color:#8f9bc4; font-weight: 600; }
 </style>
 </head>
 <body>
 <main>
   <h1>Privacy Policy — Cannons &amp; Canyons</h1>
-  <p class="muted">Made by Abara Brothers · Last updated: 28 July 2026</p>
+  <p class="muted">Made by Abara Brothers · Last updated: 7 August 2026</p>
 
   <h2>The short version</h2>
-  <p>Cannons &amp; Canyons is an online artillery game for up to four players. It has no accounts, no tracking, no analytics, no ads SDKs, and nothing to buy. We collect as close to nothing as a multiplayer game can.</p>
+  <p>Cannons &amp; Canyons is an online artillery game for up to four players. There are no ads,
+  no analytics, no trackers, no chat, and nothing to buy. The game keeps a small cloud save so
+  your progress can follow you between devices, and — only if you turn them on — push
+  subscriptions so we can tell you when it's your turn. You can download everything we hold
+  about you, or delete all of it, from inside the game. We never sell or share your data.</p>
 
-  <h2>What the game processes</h2>
+  <h2>Who is responsible</h2>
+  <p>Abara Brothers is the data controller for the game. You can reach us through our
+  <a href="https://abarabrothers.com/support">support page</a>.</p>
+
+  <h2>Your account</h2>
+  <p>Playing creates a <b>guest account</b>: a random identifier with no name, email or
+  password attached. It exists so your progress has somewhere to live. You can optionally
+  link a <b>Google account</b> ("Keep my progress"), which attaches your Google email address
+  to the same identifier so you can sign in from another device. Linking is never required
+  to play.</p>
+
+  <h2>What the game stores, and why</h2>
+  <table>
+    <tr><th>Data</th><th>Why</th><th>Where</th></tr>
+    <tr><td>Account identifier (random)</td><td>Ties your save to you</td><td>Our database</td></tr>
+    <tr><td>Email address (only if you link Google)</td><td>Signing in from another device</td><td>Our database</td></tr>
+    <tr><td>Callsign (chosen from the game's generated list)</td><td>Shown on your profile and in matches</td><td>Our database</td></tr>
+    <tr><td>Progression (wins, achievements, unlocks)</td><td>Your career, synced across devices</td><td>Our database</td></tr>
+    <tr><td>Push subscription (only if you enable nudges)</td><td>Delivering "your turn" notifications</td><td>Our database</td></tr>
+  </table>
+  <p class="muted">Legal basis: providing the service you ask for (the game and its cloud
+  save); notifications additionally rest on your opt-in consent.</p>
+
+  <h2>Turn notifications</h2>
+  <p>Off unless you turn them on. If you enable nudges, your browser or device issues a push
+  subscription — a delivery address plus encryption keys — which we store against your account
+  so notifications work in every future match and on every device you enabled them on.
+  Delivery goes through your platform's push service (operated by Apple, Google or Mozilla,
+  depending on your device). You can revoke notifications in your browser or device settings
+  at any time; dead subscriptions are deleted automatically.</p>
+
+  <h2>During a match</h2>
+  <p>Your callsign, tank paint, shots, aim and movement are relayed between the players in
+  your room to run the match. Match state lives in server memory only and is discarded when
+  the room ends or times out. Match results are not stored on the server; your own win/loss
+  record is part of your progression, written by your device.</p>
+
+  <h2>On your device</h2>
+  <p>Your device's local storage holds your callsign, preferences (paint, mute, difficulty,
+  tees), your progression, a match-resume token, and your sign-in session. Local progression
+  is merged with your cloud save; the rest never leaves your device.</p>
+
+  <h2>What we do NOT do</h2>
   <ul>
-    <li><b>Display name</b> — the name you type on the title screen is sent to the other players in your match so they can see who they're playing. It is held in server memory only for the duration of your match and never written to disk.</li>
-    <li><b>Gameplay messages</b> — your shots, aim and movement are relayed between the players to run the match. They are not stored after the match ends.</li>
-    <li><b>Turn notifications (only if you allow them)</b> — if you opt in to turn nudges, your browser gives us a push subscription so we can tell you when it's your turn. It is held in server memory alongside your seat for the life of the match and discarded with it. Notifications are off unless you turn them on, and your browser lets you revoke them at any time.</li>
-    <li><b>Local preferences and career stats</b> — your name, chosen tank paint, mute setting, match-resume token, and your own win/loss record and achievements are stored in your browser's local storage on your own device. They never leave your device except as described above.</li>
+    <li>No advertising, advertising identifiers, or ad SDKs</li>
+    <li>No analytics or third-party trackers</li>
+    <li>No selling or sharing of personal data</li>
+    <li>No location data, contacts, photos, or device files</li>
+    <li>No chat or free-text content between players — callsigns come from the game's own word lists</li>
+    <li>No payment details — the game is free, with nothing to buy</li>
   </ul>
 
-  <h2>What we do NOT collect</h2>
+  <h2>Where your data lives</h2>
+  <p>The game server runs on Render and the database and sign-in service run on Supabase,
+  both hosted in Singapore. Push notifications are delivered by the push service belonging to
+  your platform (Apple, Google or Mozilla). These providers process data on our behalf to run
+  the service and for no other purpose. If you play from the EEA, UK or elsewhere, your data
+  is processed in Singapore as described here.</p>
+
+  <h2>How long we keep it</h2>
+  <p>Your account and everything attached to it exist until you delete them — deleting your
+  account (below) removes the account, cloud save and push subscriptions immediately, in one
+  action. Match state disappears with the room. Ordinary infrastructure logs (such as
+  connection logs) are short-lived and are not used to build profiles.</p>
+
+  <h2>Your rights and controls</h2>
   <ul>
-    <li>No accounts, emails, passwords or phone numbers</li>
-    <li>No location data</li>
-    <li>No advertising identifiers, no third-party trackers, no analytics</li>
-    <li>No contacts, photos, or device files</li>
-    <li>No payment details — the game is free, with no ads and nothing to buy</li>
+    <li><b>Download my data</b> — in the game's account panel: everything we hold about you, as one JSON file.</li>
+    <li><b>Delete my account</b> — in the same panel: erases the account, cloud save, push subscriptions and this device's local progress. It cannot be undone.</li>
+    <li><b>Sign out</b> — any time; your account keeps its progress for your next sign-in.</li>
+    <li><b>Change your callsign</b> — re-roll it on the title screen whenever you like.</li>
+    <li>You can also ask us to access, correct, restrict or delete your data via the
+      <a href="https://abarabrothers.com/support">support page</a>, and you have the right to
+      complain to your local data-protection authority.</li>
   </ul>
 
   <h2>Children</h2>
-  <p>The game is suitable for general audiences, collects no personal information beyond an optional self-chosen display name, and has no chat facility.</p>
+  <p>The game is suitable for ages 9 and up. It has no chat, no ads, no tracking, and no
+  free-text input — callsigns are picked from the game's own word lists. The only personal
+  data a child's account could contain is an email address, and only if a Google account is
+  deliberately linked.</p>
 
-  <h2>Data retention</h2>
-  <p>Match state — including your display name and any turn-notification subscription — lives in server memory only and is deleted when the match ends or times out. There is no database and no user data is written to disk.</p>
+  <h2>Changes</h2>
+  <p>If this policy changes, the new version appears here with an updated date. Material
+  changes will be called out in the game.</p>
 
   <h2>Contact</h2>
-  <p>Questions? Contact Abara Brothers at the support address listed on the store page.</p>
+  <p>Questions? Contact Abara Brothers via the
+  <a href="https://abarabrothers.com/support">support page</a>.</p>
 </main>
 </body>
 </html>
