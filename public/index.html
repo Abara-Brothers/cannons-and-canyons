@@ -571,6 +571,21 @@
     </div>
   </div>
 
+  <!-- Account panel (8.49). Deletion and data export must be reachable
+       IN-APP on both stores — not only from a website. Buttons are shown or
+       hidden per state by app.js. -->
+  <div id="accountModal" class="overlay hidden">
+    <div class="overlay-card">
+      <div class="result">Your account</div>
+      <p class="muted" id="accWho"></p>
+      <button id="accLinkBtn" class="btn big primary hidden">Keep my progress — sign in with Google</button>
+      <button id="accSignOutBtn" class="btn ghost hidden">Sign out</button>
+      <button id="accExportBtn" class="btn ghost">Download my data</button>
+      <button id="accDeleteBtn" class="btn ghost danger">Delete my account</button>
+      <button id="accCloseBtn" class="btn ghost">Close</button>
+    </div>
+  </div>
+
   <div id="connErr" class="conn-banner hidden">Reconnecting…</div>
 </div>
 

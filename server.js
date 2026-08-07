@@ -166,8 +166,56 @@ async function pushNudgeAsync(room, seat) {
 // of the engine simply keeps its no-op default.
 setPushNudge(pushNudge);
 
+// ---- Account deletion (ADR-003; a hard store requirement on both platforms) --
+// GoTrue has no self-serve delete, so this host brokers it: verify the
+// caller's own access token, then delete that user with the secret key. The
+// FK cascade wipes profiles and push_subscriptions with the auth row. Same
+// verify-then-privileged pattern as the push sinks; degrades to 503 without
+// env. The global limiter is deliberately crude — deletion is rare, and the
+// cap's job is only to stop a junk-token flood from turning this endpoint
+// into a relay that hammers GoTrue.
+let delTokens = 10;
+setInterval(() => { delTokens = Math.min(10, delTokens + 1); }, 6000).unref();
+
+async function accountDelete(req, res, cors) {
+  const json = (code, obj) => {
+    res.writeHead(code, { 'Content-Type': 'application/json', ...cors });
+    res.end(JSON.stringify(obj));
+  };
+  if (!SB_URL || !SB_PUB || !SB_SECRET) return json(503, { error: 'accounts are not enabled on this server' });
+  if (delTokens < 1) return json(429, { error: 'try again shortly' });
+  delTokens -= 1;
+  const auth = req.headers.authorization || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  const uid = await sbUserFromToken(token);
+  if (!uid) return json(401, { error: 'invalid or expired session' });
+  try {
+    const del = await fetch(`${SB_URL}/auth/v1/admin/users/${encodeURIComponent(uid)}`, {
+      method: 'DELETE',
+      headers: { apikey: SB_SECRET, Authorization: `Bearer ${SB_SECRET}` },
+    });
+    // 404 = already gone (a retry after a dropped response) — that IS success.
+    if (!del.ok && del.status !== 404) return json(502, { error: 'deletion failed upstream' });
+    json(200, { ok: true });
+  } catch { json(502, { error: 'deletion failed upstream' }); }
+}
+
 const server = http.createServer((req, res) => {
   let urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
+  if (urlPath === '/account/delete') {
+    // CORS like /push/key: a packaged build calls cross-origin, and the
+    // Authorization header forces a preflight. The header is the whole auth
+    // story — the wildcard origin exposes nothing a stolen token would not.
+    const cors = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Authorization',
+    };
+    if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
+    if (req.method !== 'POST') { res.writeHead(405, cors); return res.end(); }
+    accountDelete(req, res, cors);
+    return;
+  }
   if (urlPath === '/push/key') {
     // CORS, narrowly: a packaged Capacitor build fetches this cross-origin
     // (its own origin is capacitor://localhost or https://localhost), so

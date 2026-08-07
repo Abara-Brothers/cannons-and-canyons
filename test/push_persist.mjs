@@ -55,7 +55,7 @@ const SUB = {
 };
 
 // ---- Mock Supabase + push endpoint ------------------------------------------
-const hits = { user: [], upsert: [], nudgeGet: [], pushPost: [], del: [] };
+const hits = { user: [], upsert: [], nudgeGet: [], pushPost: [], del: [], adminDel: [] };
 const mock = http.createServer((req, res) => {
   let body = '';
   req.on('data', (c) => { body += c; });
@@ -69,6 +69,11 @@ const mock = http.createServer((req, res) => {
         return res.end(JSON.stringify({ id: USER, aud: 'authenticated' }));
       }
       res.writeHead(401); return res.end('{}');
+    }
+    if (u.pathname.startsWith('/auth/v1/admin/users/') && req.method === 'DELETE') {
+      hits.adminDel.push({ path: u.pathname, apikey: req.headers.apikey, auth: req.headers.authorization });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end('{}');
     }
     if (u.pathname === '/rest/v1/push_subscriptions') {
       if (req.method === 'POST') {
@@ -197,6 +202,30 @@ const until = async (test, ms, what) => {
     if (hits.del[0].query.includes('endpoint=eq.')) step('a 404 endpoint was deleted from the store (self-cleaning)');
     else fail(`cleanup query wrong: ${hits.del[0].query}`);
   }
+
+  // ---- Account deletion endpoint (8.49) -------------------------------------
+  // Same verify-then-privileged pattern over HTTP: the caller's own token is
+  // verified with the publishable key, the delete lands on the admin API with
+  // the secret key. Junk tokens and wrong methods are turned away.
+  const httpReq = (method, headers) => new Promise((res) => {
+    const r = http.request({ host: '127.0.0.1', port: GAME_PORT, path: '/account/delete', method, headers }, (resp) => {
+      let body = ''; resp.on('data', (c) => { body += c; }); resp.on('end', () => res({ status: resp.statusCode, body }));
+    });
+    r.on('error', () => res({ status: 0 })); r.end();
+  });
+  const wrongMethod = await httpReq('GET', {});
+  if (wrongMethod.status === 405) step('account delete rejects non-POST (405)');
+  else fail(`GET /account/delete answered ${wrongMethod.status}, expected 405`);
+  const junk = await httpReq('POST', { Authorization: 'Bearer not-a-real-token' });
+  if (junk.status === 401 && hits.adminDel.length === 0) step('a junk token gets 401 and never reaches the admin API');
+  else fail(`junk-token delete: status ${junk.status}, adminDel hits ${hits.adminDel.length}`);
+  const real = await httpReq('POST', { Authorization: 'Bearer tok-alice' });
+  if (real.status === 200 && hits.adminDel.length === 1) {
+    const d = hits.adminDel[0];
+    if (d.path.endsWith(`/${USER}`) && d.apikey === 'sk_test' && d.auth === 'Bearer sk_test') {
+      step('a valid token deletes exactly its OWN user via the admin API with the secret key');
+    } else fail(`admin delete shape wrong: ${JSON.stringify(d)}`);
+  } else fail(`valid-token delete: status ${real.status}, adminDel hits ${hits.adminDel.length}`);
 
   try { b.close(); } catch {}
   mock.close();

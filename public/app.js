@@ -884,25 +884,84 @@ async function refreshAccountChip() {
     $('accountLabel').textContent = 'Sign in — save your progress';
   }
 }
-$('accountBtn').onclick = async () => {
+$('accountBtn').onclick = () => {
   Audio.ensure();
   const state = $('accountBtn').dataset.state;
-  if (state === 'in') {
-    // confirm() over a bespoke modal on purpose: matches the prompt()
-    // fallback precedent in copyLinkBtn, and a sign-out deserves a beat.
-    if (confirm('Sign out? Progress saved to this account stays with it; this device starts a fresh guest.')) {
-      await Cloud.signOut();
-      refreshAccountChip();
-      showToast('Signed out');
-    }
-    return;
-  }
-  if (state === 'guest') {
-    const url = await Cloud.linkUrl();       // keeps the current account + row
-    if (url) { location.href = url; return; }
-  }
-  location.href = Cloud.signInUrl();         // fresh sign-in (or link fallback)
+  // Nothing to manage yet: straight to sign-in.
+  if (state === 'out') { location.href = Cloud.signInUrl(); return; }
+  // guest / in: the account panel — where deletion and export live, because
+  // both stores require them reachable IN-APP (ADR-003).
+  $('accWho').textContent = state === 'in'
+    ? $('accountLabel').textContent.replace('Signed in · ', 'Signed in as ')
+    : 'Playing as a guest. Link Google and your progress survives losing this device.';
+  $('accLinkBtn').classList.toggle('hidden', state !== 'guest');
+  $('accSignOutBtn').classList.toggle('hidden', state !== 'in');
+  $('accountModal').classList.remove('hidden');
 };
+$('accCloseBtn').onclick = () => $('accountModal').classList.add('hidden');
+$('accLinkBtn').onclick = async () => {
+  const url = await Cloud.linkUrl();         // keeps the current account + row
+  location.href = url || Cloud.signInUrl();
+};
+$('accSignOutBtn').onclick = async () => {
+  // confirm() over a bespoke modal on purpose: matches the prompt() fallback
+  // precedent in copyLinkBtn, and a sign-out deserves a beat.
+  if (!confirm('Sign out? Progress saved to this account stays with it; this device starts a fresh guest.')) return;
+  await Cloud.signOut();
+  $('accountModal').classList.add('hidden');
+  refreshAccountChip();
+  showToast('Signed out');
+};
+$('accExportBtn').onclick = () => exportMyData();
+$('accDeleteBtn').onclick = () => deleteMyAccount();
+
+// Everything the game holds about the player, as one JSON download. The cloud
+// row comes through the player's own RLS-scoped read; the local half works
+// even offline. GDPR calls this data portability; the stores call it table
+// stakes.
+async function exportMyData() {
+  const row = await Cloud.restore();
+  const data = {
+    exported_at: new Date().toISOString(),
+    account_id: Cloud.userId(),
+    callsign: savedName() || null,
+    cloud_profile: row,
+    local_progression: progressionSnapshot(),
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'cannons-and-canyons-data.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  showToast('Data downloaded');
+}
+
+// Account deletion. The game server brokers it (POST /account/delete with the
+// player's own token) because GoTrue has no self-serve delete; the FK cascade
+// erases the profile row and every push subscription with the auth user.
+// Local progression goes too — recreating the data from this device on the
+// next save would make the deletion a lie.
+async function deleteMyAccount() {
+  if (!confirm('Delete your account? This erases your cloud save, push subscriptions, and this device\'s local progress. It cannot be undone.')) return;
+  if (!confirm('Last chance — permanently delete everything?')) return;
+  const token = await Cloud.token(false);
+  if (!token) { showToast('Not signed in'); return; }
+  try {
+    const res = await fetch(apiUrl('/account/delete'), {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + token },
+    });
+    if (!res.ok) { showToast('Could not delete right now — try again later'); return; }
+  } catch { showToast('Could not delete right now — try again later'); return; }
+  await Cloud.signOut();                     // local clear; revocation is moot
+  try {
+    ['cc_career', 'cc_loot_midnight'].forEach((k) => localStorage.removeItem(k));
+  } catch {}
+  showToast('Account deleted');
+  // In-memory PROF still holds the old numbers; a reload is the clean slate.
+  setTimeout(() => location.reload(), 1200);
+}
 
 // ---------------------------------------------------------------------------
 // Networking
