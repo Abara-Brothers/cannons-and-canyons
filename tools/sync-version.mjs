@@ -73,4 +73,13 @@ let changed = 0;
   if (next !== src) { writeFileSync(p(rel), next); changed++; console.log(`${rel}: MARKETING_VERSION ${version}, CURRENT_PROJECT_VERSION ${build}`); }
 }
 
+// ---- Web client (8.52) ------------------------------------------------------
+// Crash reports carry window.CC_VERSION so a stack trace names its build.
+{
+  const rel = 'public/config.js';
+  const src = read(rel);
+  const next = src.replace(/window\.CC_VERSION = '[^']*';/, `window.CC_VERSION = '${version}+${build}';`);
+  if (next !== src) { writeFileSync(p(rel), next); changed++; console.log(`${rel}: CC_VERSION ${version}+${build}`); }
+}
+
 console.log(changed ? `\nsynced ${changed} file(s) to ${version} (${build})` : `\nalready in sync at ${version} (${build})`);

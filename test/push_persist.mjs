@@ -55,7 +55,7 @@ const SUB = {
 };
 
 // ---- Mock Supabase + push endpoint ------------------------------------------
-const hits = { user: [], upsert: [], nudgeGet: [], pushPost: [], del: [], adminDel: [] };
+const hits = { user: [], upsert: [], nudgeGet: [], pushPost: [], del: [], adminDel: [], errIns: [] };
 const mock = http.createServer((req, res) => {
   let body = '';
   req.on('data', (c) => { body += c; });
@@ -69,6 +69,13 @@ const mock = http.createServer((req, res) => {
         return res.end(JSON.stringify({ id: USER, aud: 'authenticated' }));
       }
       res.writeHead(401); return res.end('{}');
+    }
+    if (u.pathname === '/rest/v1/error_reports' && req.method === 'POST') {
+      hits.errIns.push({ apikey: req.headers.apikey, body: JSON.parse(body || '{}') });
+      res.writeHead(201); return res.end();
+    }
+    if (u.pathname === '/rest/v1/error_reports' && req.method === 'DELETE') {
+      res.writeHead(204); return res.end();       // the retention sweep
     }
     if (u.pathname.startsWith('/auth/v1/admin/users/') && req.method === 'DELETE') {
       hits.adminDel.push({ path: u.pathname, apikey: req.headers.apikey, auth: req.headers.authorization });
@@ -226,6 +233,34 @@ const until = async (test, ms, what) => {
       step('a valid token deletes exactly its OWN user via the admin API with the secret key');
     } else fail(`admin delete shape wrong: ${JSON.stringify(d)}`);
   } else fail(`valid-token delete: status ${real.status}, adminDel hits ${hits.adminDel.length}`);
+
+  // ---- Crash-report ingestion (8.52) ----------------------------------------
+  // Unauthenticated but capped: fields truncate server-side, giant bodies are
+  // cut off, non-POST is refused, and nothing identifying is stored.
+  const errReq = (method, payload) => new Promise((res) => {
+    const data = payload === undefined ? null : JSON.stringify(payload);
+    const r = http.request({ host: '127.0.0.1', port: GAME_PORT, path: '/errors', method,
+      headers: data ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : {} },
+      (resp) => { resp.resume(); resp.on('end', () => res({ status: resp.statusCode })); });
+    r.on('error', () => res({ status: 0 }));
+    if (data) r.write(data);
+    r.end();
+  });
+  const wrongErrMethod = await errReq('GET');
+  if (wrongErrMethod.status === 405) step('/errors rejects non-POST (405)');
+  else fail(`GET /errors answered ${wrongErrMethod.status}, expected 405`);
+  const before = hits.errIns.length;
+  await errReq('POST', { message: 'x'.repeat(600), stack: 'at boom()', source: 'app.js:1:1', version: '1.0.0+1', platform: 'test-agent', account: 'should-be-ignored' });
+  await new Promise((r) => setTimeout(r, 800));
+  const ins = hits.errIns[before];
+  if (ins && ins.apikey === 'sk_test' && ins.body.side === 'client'
+    && ins.body.message.length === 500 && ins.body.account === undefined) {
+    step('a client report lands with the secret key, truncated, with unknown fields dropped');
+  } else fail(`error insert wrong: ${JSON.stringify(ins && ins.body ? { len: ins.body.message.length, side: ins.body.side, extra: 'account' in ins.body } : ins)}`);
+  const giant = await errReq('POST', { message: 'y'.repeat(20000) });
+  await new Promise((r) => setTimeout(r, 500));
+  if (hits.errIns.length === before + 1) step('an oversized body is cut off and never stored');
+  else fail(`oversized body produced ${hits.errIns.length - before - 1} extra insert(s)`);
 
   try { b.close(); } catch {}
   mock.close();

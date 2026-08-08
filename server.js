@@ -200,8 +200,86 @@ async function accountDelete(req, res, cors) {
   } catch { json(502, { error: 'deletion failed upstream' }); }
 }
 
+// ---- Crash / error reports (ISSUE-006) ---------------------------------------
+// Unauthenticated on purpose: crash reporting must work precisely when
+// everything else (auth included) is broken. The defences are caps, not
+// identity: a global rate bucket, an 8KB body ceiling, hard field truncation,
+// and a 204 regardless of outcome so the endpoint leaks nothing. No IP and no
+// account id are ever stored — privacy.html promises exactly that.
+let errTokens = 30;
+setInterval(() => { errTokens = Math.min(30, errTokens + 1); }, 2000).unref();
+
+function ingestError(req, res, cors) {
+  const done = () => { res.writeHead(204, cors); res.end(); };
+  if (errTokens < 1) return done();
+  errTokens -= 1;
+  let body = '';
+  let dead = false;
+  req.on('data', (c) => {
+    body += c;
+    if (body.length > 8192) { dead = true; try { req.destroy(); } catch {} done(); }
+  });
+  req.on('end', () => {
+    if (dead) return;
+    try {
+      const j = JSON.parse(body || '{}');
+      const s = (v, n) => (typeof v === 'string' && v ? v.slice(0, n) : null);
+      const row = {
+        side: 'client',
+        message: s(j.message, 500) || 'unknown error',
+        stack: s(j.stack, 4000),
+        source: s(j.source, 300),
+        version: s(j.version, 40),
+        platform: s(j.platform, 200),
+      };
+      if (SB_SECRET) {
+        sbAdmin('POST', '/error_reports', row, 'return=minimal').catch(() => {});
+      } else {
+        console.error('[client-error]', row.message, row.source || '');
+      }
+    } catch { /* malformed body: drop */ }
+    done();
+  });
+}
+
+// Server-side faults land in the same table, so one query shows both halves.
+function reportServerError(kind, err) {
+  if (!SB_SECRET) return;
+  const msg = err && err.message ? err.message : String(err);
+  sbAdmin('POST', '/error_reports', {
+    side: 'server',
+    message: `${kind}: ${msg}`.slice(0, 500),
+    stack: err && err.stack ? String(err.stack).slice(0, 4000) : null,
+    version: process.env.RENDER_GIT_COMMIT ? String(process.env.RENDER_GIT_COMMIT).slice(0, 40) : null,
+    platform: `node ${process.version}`,
+  }, 'return=minimal').catch(() => {});
+}
+
+// Retention is a promise in privacy.html, so it is enforced here: a daily
+// sweep deletes reports older than 30 days. unref'd — housekeeping must never
+// hold the process open.
+if (SB_SECRET) {
+  const sweep = () => {
+    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    sbAdmin('DELETE', `/error_reports?created_at=lt.${encodeURIComponent(cutoff)}`).catch(() => {});
+  };
+  setTimeout(sweep, 60 * 1000).unref();                       // shortly after boot
+  setInterval(sweep, 24 * 60 * 60 * 1000).unref();            // then daily
+}
+
 const server = http.createServer((req, res) => {
   let urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
+  if (urlPath === '/errors') {
+    const cors = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    };
+    if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
+    if (req.method !== 'POST') { res.writeHead(405, cors); return res.end(); }
+    ingestError(req, res, cors);
+    return;
+  }
   if (urlPath === '/account/delete') {
     // CORS like /push/key: a packaged build calls cross-origin, and the
     // Authorization header forces a preflight. The header is the whole auth
@@ -341,10 +419,12 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 // exit non-zero so the host restarts us.
 process.on('uncaughtException', (err) => {
   console.error('[fatal] uncaughtException:', err && err.stack ? err.stack : err);
+  reportServerError('uncaughtException', err);   // best-effort: shutdown's 4s backstop may cut it off
   shutdown('uncaughtException', 1);
 });
 // Do NOT exit on these: a rejected push send or a stray promise must not kill
-// live matches. Log loudly so it is visible once telemetry exists (ISSUE-006).
+// live matches. Since 8.52 they also land in error_reports (ISSUE-006).
 process.on('unhandledRejection', (err) => {
   console.error('[warn] unhandledRejection:', err && err.stack ? err.stack : err);
+  reportServerError('unhandledRejection', err);
 });

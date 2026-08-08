@@ -14,7 +14,7 @@ const fail = (m) => { out.errors.push(m); console.error('FAIL ' + m); };
 const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8');
 
 const UI_FILES = ['public/index.html', 'public/app.js', 'public/styles.css', 'server.js',
-  'public/game-core.js', 'public/room-engine.js', 'public/cloud.js'];
+  'public/game-core.js', 'public/room-engine.js', 'public/cloud.js', 'public/errors.js'];
 
 // ---- 1. NO EMOJI ANYWHERE IN THE UI -----------------------------------------
 // Every glyph is hand-drawn inline SVG or canvas art. Both forms must be
@@ -243,6 +243,11 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   if (mv.length && new Set(mv).size !== 1) bad.push(`iOS build configurations disagree: MARKETING_VERSION = ${[...new Set(mv)].join(' vs ')}`);
   const cv = [...pbx.matchAll(/CURRENT_PROJECT_VERSION = ([^;]+);/g)].map(m => m[1].trim());
   if (cv.length && new Set(cv).size !== 1) bad.push(`iOS build configurations disagree: CURRENT_PROJECT_VERSION = ${[...new Set(cv)].join(' vs ')}`);
+  // The web client's copy (8.52): crash reports carry it, so a stale stamp
+  // silently mislabels every report from the drifted build.
+  const cc = grab(read('public/config.js'), /window\.CC_VERSION = '([^']*)';/);
+  if (cc === null) bad.push('public/config.js CC_VERSION not found');
+  else if (cc !== `${want.version}+${want.build}`) bad.push(`config.js CC_VERSION is '${cc}', package.json says '${want.version}+${want.build}'`);
 
   if (bad.length) fail(`version drift — run \`npm run version:sync\`:\n      ${bad.join('\n      ')}`);
   else ok(`version agrees everywhere (${want.version} build ${want.build})`);

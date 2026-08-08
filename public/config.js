@@ -15,6 +15,10 @@
 window.CC_NATIVE_HOST = 'tanks.abarabrothers.com';
 window.CC_SERVER = window.Capacitor ? window.CC_NATIVE_HOST : null;
 
+// Stamped by `npm run version:sync` from package.json — do not edit by hand.
+// Crash reports carry it so a stack trace names the build it came from.
+window.CC_VERSION = '1.0.0+1';
+
 // Supabase (ADR-005/007): cloud saves and, later, accounts. The publishable
 // key is PUBLIC by design — like the VAPID public key, it ships to every
 // browser; row access is enforced by RLS in Postgres, not by hiding this.

@@ -72,13 +72,16 @@ Store accounts you (Jordan) must create — these cannot be automated:
 > misdeclaration on both stores (was ISSUE-018).
 
 - Hosted policy: `https://tanks.abarabrothers.com/privacy.html` (shipped in `public/`, reachable in-app from the home screen).
-- **Apple App Privacy questionnaire — "Data Linked to You", purpose App Functionality only:**
-  - *Identifiers → User ID* — the random account identifier (guest accounts included).
-  - *Contact Info → Email Address* — ONLY when the player links Google (optional).
-  - *User Content → Gameplay Content* — callsign + progression (wins, achievements, unlocks).
+- **Apple App Privacy questionnaire — purpose App Functionality only:**
+  - Data Linked to You:
+    - *Identifiers → User ID* — the random account identifier (guest accounts included).
+    - *Contact Info → Email Address* — ONLY when the player links Google (optional).
+    - *User Content → Gameplay Content* — callsign + progression (wins, achievements, unlocks).
+  - Data NOT Linked to You:
+    - *Diagnostics → Crash Data* — anonymous crash reports (error text, build version, user-agent; no account id, no IP stored; 30-day retention, since 8.52).
   - **Tracking: NO** for every item (nothing is used for cross-app tracking or advertising; no ads SDK, no analytics).
 - **Google Play Data safety form:**
-  - Collected: *User IDs* (account identifier); *Personal info → Email address* (optional, Google linking); *App activity → Other user-generated content* (callsign, progression).
+  - Collected: *User IDs* (account identifier); *Personal info → Email address* (optional, Google linking); *App activity → Other user-generated content* (callsign, progression); *App info and performance → Crash logs* (anonymous, 30-day retention).
   - Shared: **none**. Sold: **none**. Processed ephemerally: live match relay (names/shots/aim, server memory only).
   - Security practices: data encrypted in transit; **users can request deletion AND delete in-app** — account deletion (in the game's account panel) erases account, cloud save and push subscriptions in one action. Data export is also in-app.
 - **Push notifications** — opt-in turn nudges. Since 8.48 the subscription persists in the database keyed to the account (that is what makes nudges survive between matches and reach every device), and it is deleted with the account or when the push service reports it dead. Declare notifications as a capability in both consoles; the "Turn notifications" section of `privacy.html` is the reviewer-facing description.
