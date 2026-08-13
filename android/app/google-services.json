@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "280542116826",
+    "project_id": "cannons-and-canyons",
+    "storage_bucket": "cannons-and-canyons.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:280542116826:android:0af91efdcc803cb6551ee3",
+        "android_client_info": {
+          "package_name": "com.abarabrothers.cannonsandcanyons"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "280542116826-dv1c6614a0c2unbthbm777e233tf2fuv.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC-Tv31CJMCRH-XpvkhAJMo-gx4gN9jjbE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "280542116826-dv1c6614a0c2unbthbm777e233tf2fuv.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
