@@ -102,7 +102,23 @@ Store accounts you (Jordan) must create — these cannot be automated:
 - **Sign in with Apple (App Store Guideline 4.8):** offering Google sign-in on iOS triggers the requirement to also offer an equivalent privacy-focused option. This bites the FIRST iOS submission, not a later one — Sign in with Apple must ship in the same build as Google sign-in, or Google sign-in must be hidden on iOS. Blocked on BQ-005 (paid Apple account).
 - **International transfers:** hosting is Singapore (Supabase + Render), which has no EU/UK adequacy decision. Both providers' DPAs incorporate the EU SCCs (verified 2026-08-13: Supabase's DPA states acceptance of the agreement has the same effect as signing the SCCs and includes the UK Addendum v B.1.0; Render's DPA defines and applies the EU SCCs per Commission Decision 2021/914). `privacy.html` states this under "Where your data lives, and transfers".
 - **Processors to disclose if asked:** Supabase (database + auth, Singapore), Render (game server, Singapore), Apple/Google/Mozilla push services (delivery only).
-- **Qualified review — still open, and now scoped.** These answers describe the implementation honestly and have been checked against both platforms' current published requirements, but a lawyer has NOT reviewed them. The specific questions worth paying for: (a) children — the game is rated 9+/E10+ and a child can link Google, which raises COPPA (US, under-13) and GDPR Art. 8 parental-consent questions we have not resolved; (b) whether an EU/UK Art. 27 representative is required for an Australian studio processing EEA/UK players' data; (c) confirmation of the transfer safeguards above; (d) the controller's formal legal identity (registered entity name and address) if one exists, which should replace "Abara Brothers (Australia)" in the policy.
+- **Seller / developer identity:** legal name **Abara Brothers**, Australia. No registered
+  address as at 2026-08-13 — but BOTH stores require a verifiable address at enrolment, and
+  Play publicly displays developer contact details, so this must be settled before signing up.
+  See `docs/LEGAL_POSITION.md` §5: "Abara Brothers" adds a word to a surname and therefore
+  almost certainly requires **ASIC business name registration** (with a free ABN first);
+  trading under an unregistered business name is an offence. Doing that also settles the
+  individual-vs-organisation account question.
+- **Legal review status — analysed in-house, NOT lawyer-reviewed (owner decision 2026-08-13).**
+  A full compliance analysis against primary sources lives at `docs/LEGAL_POSITION.md`. Headline
+  conclusions: the studio is very likely **exempt** from the Australian Privacy Act small
+  business threshold ($3M turnover, no exception applies) and should **not** opt in; the
+  **statutory tort** (from 10 June 2025) and **Australian Consumer Law** apply regardless, which
+  is why privacy copy must stay true after every data-touching feature; the OAIC **Children's
+  Online Privacy Code** (final by 10 Dec 2026) binds APP entities only, so it does not bind us
+  today but would apply immediately on crossing $3M. **Highest residual risk: COPPA** — a child
+  can link Google with no age gate; a neutral age screen before Google sign-in is the
+  recommended mitigation and is not yet built.
 
 ## 4. Assets checklist
 

@@ -888,7 +888,7 @@ $('accountBtn').onclick = () => {
   Audio.ensure();
   const state = $('accountBtn').dataset.state;
   // Nothing to manage yet: straight to sign-in.
-  if (state === 'out') { location.href = Cloud.signInUrl(); return; }
+  if (state === 'out') { startSignIn(() => Cloud.signInUrl()); return; }
   // guest / in: the account panel — where deletion and export live, because
   // both stores require them reachable IN-APP (ADR-003).
   $('accWho').textContent = state === 'in'
@@ -899,9 +899,59 @@ $('accountBtn').onclick = () => {
   $('accountModal').classList.remove('hidden');
 };
 $('accCloseBtn').onclick = () => $('accountModal').classList.add('hidden');
-$('accLinkBtn').onclick = async () => {
-  const url = await Cloud.linkUrl();         // keeps the current account + row
-  location.href = url || Cloud.signInUrl();
+$('accLinkBtn').onclick = () => {
+  startSignIn(async () => (await Cloud.linkUrl()) || Cloud.signInUrl());  // keeps the account + row
+};
+
+// ---- Age gate before Google sign-in -----------------------------------------
+// A guest account holds nothing personal. Linking Google does: Google returns
+// the account email, name and profile picture, and we cannot narrow that scope
+// (verified — GoTrue appends to `email profile`). The game is rated 9+, so
+// children plainly play it, and handing a child's details to a database with
+// no check at all is the one children's-privacy exposure this project can
+// remove cheaply (docs/LEGAL_POSITION.md §3).
+//
+// Deliberately a NEUTRAL screen — it asks for a birth year rather than
+// announcing a threshold, so it cannot teach a player which answer unlocks the
+// button. It is a speed bump, not identity verification; nothing here is
+// stored or sent anywhere, and declining costs the player nothing but the
+// cross-device sync.
+const AGE_OK_KEY = 'cc_age_ok';
+let pendingSignIn = null;
+function startSignIn(urlFn) {
+  let ok = false;
+  try { ok = localStorage.getItem(AGE_OK_KEY) === '1'; } catch {}
+  if (ok) { goSignIn(urlFn); return; }
+  pendingSignIn = urlFn;
+  $('ageYear').value = '';
+  $('ageError').textContent = '';
+  $('accountModal').classList.add('hidden');
+  $('ageModal').classList.remove('hidden');
+}
+async function goSignIn(urlFn) {
+  const url = await urlFn();
+  if (url) location.href = url;
+}
+$('ageCancelBtn').onclick = () => { pendingSignIn = null; $('ageModal').classList.add('hidden'); };
+$('ageOkBtn').onclick = () => {
+  const year = parseInt($('ageYear').value, 10);
+  const now = new Date().getFullYear();
+  if (!Number.isFinite(year) || year < 1900 || year > now) {
+    $('ageError').textContent = 'Please enter the year you were born.';
+    return;
+  }
+  // Youngest possible age for that birth year, so a birthday later in the year
+  // can never let an under-13 through.
+  if (now - year < 13) {
+    $('ageError').textContent = 'Signing in needs a grown-up. Your progress still saves on this '
+      + 'device — you can keep playing as a guest.';
+    $('ageOkBtn').classList.add('hidden');
+    return;
+  }
+  try { localStorage.setItem(AGE_OK_KEY, '1'); } catch {}
+  $('ageModal').classList.add('hidden');
+  const fn = pendingSignIn; pendingSignIn = null;
+  if (fn) goSignIn(fn);
 };
 $('accSignOutBtn').onclick = async () => {
   // confirm() over a bespoke modal on purpose: matches the prompt() fallback

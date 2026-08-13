@@ -253,5 +253,30 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   else ok(`version agrees everywhere (${want.version} build ${want.build})`);
 }
 
+// ---- 9. THE .hidden UTILITY MUST EXIST (8.55) --------------------------------
+// `classList.add('hidden')` is the codebase's universal way to hide something,
+// used on ~30 elements. Until 8.55 the stylesheet had NO generic rule for it —
+// only per-element ones — so on any element without its own rule the call was a
+// silent no-op. That shipped four times before anyone noticed, including the
+// ISSUE-020 fix that was supposed to hide the nudge button in native builds and
+// never did. The failure mode is invisible in JS (the class IS on the element,
+// so classList.contains('hidden') returns true) and only shows up in computed
+// style — which is exactly why it needs a static guard.
+{
+  const css = read('public/styles.css');
+  // Match a standalone `.hidden { … display: none … }` rule, not `.foo.hidden`.
+  const rule = css.match(/(^|\n)\s*\.hidden\s*\{([^}]*)\}/);
+  if (!rule) {
+    fail('public/styles.css has no generic `.hidden` rule — every classList.add(\'hidden\') on an element without its own rule is a silent no-op');
+  } else if (!/display\s*:\s*none/.test(rule[2])) {
+    fail(`the .hidden rule does not set display:none — it says {${rule[2].trim()}}`);
+  } else {
+    // Elements toggled via the class that ALSO carry .btn display rules need the
+    // !important, or the more specific button rule wins.
+    if (!/!important/.test(rule[2])) fail('.hidden sets display:none but without !important — .btn rules out-specify it');
+    else ok('.hidden is a real hide utility (display:none !important)');
+  }
+}
+
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nALL GOOD');
 process.exit(out.errors.length ? 1 : 0);

@@ -586,6 +586,23 @@
     </div>
   </div>
 
+  <!-- Age check before Google sign-in (8.55). Neutral by design: it asks for a
+       birth year rather than stating the threshold, so it cannot coach the
+       answer. Nothing typed here is stored or transmitted — only a local flag
+       that the check was passed. See docs/LEGAL_POSITION.md section 3. -->
+  <div id="ageModal" class="overlay hidden">
+    <div class="overlay-card">
+      <div class="result">One quick check</div>
+      <p class="muted">Signing in links a Google account, which shares your email address and
+        profile with us. Before that, what year were you born?</p>
+      <input id="ageYear" class="code-input age-input" type="number" inputmode="numeric"
+             placeholder="YYYY" min="1900" max="2100" aria-label="Year you were born">
+      <p id="ageError" class="error"></p>
+      <button id="ageOkBtn" class="btn big primary">Continue</button>
+      <button id="ageCancelBtn" class="btn ghost">Keep playing as a guest</button>
+    </div>
+  </div>
+
   <div id="connErr" class="conn-banner hidden">Reconnecting…</div>
 </div>
 

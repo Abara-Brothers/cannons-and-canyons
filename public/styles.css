@@ -96,6 +96,18 @@ input:focus { outline: 2px solid var(--accent); border-color: transparent; }
 }
 .diff:active { transform: scale(.97); }
 .diff.active { color: #0a1020; background: var(--accent); border-color: var(--accent); }
+/* THE hide utility. It did not exist until 8.55, and its absence was invisible:
+   the stylesheet only ever hid SPECIFIC elements (.overlay.hidden,
+   #startMatchBtn.hidden, .hs-selwrap.hidden …), so `classList.add('hidden')` on
+   anything else silently did nothing. Four features quietly depended on a rule
+   that was never there — the account panel showed its link AND sign-out buttons
+   at once (8.49), the account chip appeared before the cloud check (8.47), the
+   age gate could not retract its Continue button (8.55), and — worst — the
+   native nudge-button fix shipped in 8.51 for ISSUE-020 never hid anything at
+   all. `!important` because several of those targets carry .btn display rules.
+   Guarded by test/house-rules.mjs §9. */
+.hidden { display: none !important; }
+
 /* Game-mode picker + FFA player count */
 .modrow { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .countrow { display: flex; gap: 6px; }
@@ -860,6 +872,14 @@ body.golf .fuel { display: none; }
 .hs-armoury { cursor: pointer; font-weight: 800; }
 .hs-armoury svg { width: 17px; height: 17px; color: var(--primary); }
 .hs-armoury b { color: var(--accent); font-weight: 800; }
+/* Age check (8.55). Reuses the code-input look; the number spinners are hidden
+   so it reads as a field to type in, not a control to nudge upward. */
+.age-input { width: 160px; margin: 4px auto 2px; display: block; padding: 10px 12px;
+  background: #0d1430; border: 1px solid var(--line); border-radius: 10px; color: var(--text);
+  letter-spacing: .25em; }
+.age-input::-webkit-outer-spin-button, .age-input::-webkit-inner-spin-button {
+  -webkit-appearance: none; margin: 0; }
+.age-input { -moz-appearance: textfield; appearance: textfield; }
 .hs-account { cursor: pointer; font-weight: 800; }
 .hs-account svg { width: 15px; height: 15px; color: var(--primary); flex: 0 0 auto; }
 /* An email address can be arbitrarily long; the chip must not push the error
