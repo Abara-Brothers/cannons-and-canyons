@@ -73,6 +73,12 @@ const mock = http.createServer((req, res) => {
   req.on('data', (c) => { body += c; });
   req.on('end', () => {
     const u = new URL(req.url, `http://127.0.0.1:${MOCK_PORT}`);
+    // The readiness probe (8.58): a valid apikey gets 200 here, a wrong one 401.
+    if (u.pathname === '/auth/v1/health') {
+      if (req.headers.apikey !== 'pk_test') { res.writeHead(401); return res.end('{}'); }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ name: 'GoTrue', version: 'mock' }));
+    }
     if (u.pathname === '/auth/v1/user') {
       hits.user.push({ apikey: req.headers.apikey, auth: req.headers.authorization });
       const token = (req.headers.authorization || '').replace('Bearer ', '');
@@ -256,6 +262,29 @@ const until = async (test, ms, what) => {
     if (hits.del[0].query.includes('endpoint=eq.')) step('a 404 endpoint was deleted from the store (self-cleaning)');
     else fail(`cleanup query wrong: ${hits.del[0].query}`);
   }
+
+  // ---- Health readiness (8.58) ----------------------------------------------
+  // Production silently dropped every push subscription for nine batches
+  // because one Supabase env var was wrong and nothing reported it. /health is
+  // the fix; this asserts it tells the truth in the configured case AND that it
+  // leaks nothing.
+  const health = await new Promise((res) => {
+    http.get({ host: '127.0.0.1', port: GAME_PORT, path: '/health' }, (r) => {
+      let b = ''; r.on('data', (c) => { b += c; }); r.on('end', () => { try { res(JSON.parse(b)); } catch { res(null); } });
+    }).on('error', () => res(null));
+  });
+  if (health && health.supabase === 'ok' && health.fcm === true && health.webpush === true) {
+    step(`/health reports readiness truthfully (supabase=ok, fcm=true, version ${health.version})`);
+  } else fail(`/health wrong: ${JSON.stringify(health)}`);
+  // Look for the ACTUAL secrets this server holds, not the word "key" — the
+  // first version of this check flagged its own healthy output, because the
+  // value `bad_key_or_url` contains "key".
+  const leaked = JSON.stringify(health || {});
+  const secrets = ['sk_test', 'pk_test', 'BEGIN ', 'PRIVATE KEY', SERVICE_ACCOUNT.slice(0, 40),
+    FCM_TOKEN, `127.0.0.1:${MOCK_PORT}`, 'iam.gserviceaccount.com'];
+  const found = secrets.filter(s => leaked.includes(s));
+  if (found.length) fail(`/health leaks configuration: ${found.join(', ')}`);
+  else step('/health exposes booleans only — no keys, URLs or tokens');
 
   // ---- Native push via FCM (8.57) -------------------------------------------
   // The same nudge that reached the browser must also reach the phone, through

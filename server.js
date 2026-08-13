@@ -22,6 +22,13 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, 'public');
 const PORT = process.env.PORT || 3000;
+// Reported by /health so a deploy can be identified without guessing from
+// asset contents. Read once at boot; a missing package.json must not be fatal.
+let pkgVersion = 'unknown';
+try {
+  const pk = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
+  pkgVersion = `${pk.version}+${pk.build}`;
+} catch {}
 
 // ---- Static file server ----------------------------------------------------
 const MIME = {
@@ -373,8 +380,51 @@ if (SB_SECRET) {
   setInterval(sweep, 24 * 60 * 60 * 1000).unref();            // then daily
 }
 
+// ---- Health / readiness (batch 8.58) -----------------------------------------
+// This exists because a real failure hid for nine batches. Push-subscription
+// persistence (8.48) was verified only against a mock; in production every
+// upsert was silently dropped because the server could not verify a player's
+// token — one wrong Supabase env var — and NOTHING said so. The sink is
+// best-effort by design, so it swallowed the error exactly as written.
+//
+// So: report readiness, out loud at boot and on demand here. No secrets, no
+// URLs, no key prefixes — booleans and one probe result. `supabase` is the one
+// that matters: 'ok' means this server can actually verify a player token,
+// which is the precondition for cloud saves, push persistence and deletion.
+let supabaseHealth = 'unchecked';
+async function checkSupabase() {
+  if (!SB_URL || !SB_PUB || !SB_SECRET) return (supabaseHealth = 'unconfigured');
+  try {
+    // /auth/v1/health is the endpoint that actually DISCRIMINATES: with a valid
+    // apikey it answers 200, with a wrong one 401. (/auth/v1/user does not —
+    // it answers 401 either way when there is no user token, which is exactly
+    // the false negative this check was written wrong with the first time.)
+    const res = await fetch(`${SB_URL}/auth/v1/health`, { headers: { apikey: SB_PUB } });
+    supabaseHealth = res.ok ? 'ok' : 'bad_key_or_url';
+  } catch { supabaseHealth = 'unreachable'; }
+  return supabaseHealth;
+}
+checkSupabase().then((s) => {
+  const line = `[boot] supabase=${s} webpush=${!!webpush} fcm=${!!fcm}`;
+  if (s === 'ok') console.log(line);
+  // Loud, and repeated — a one-line info message at boot is how the last one
+  // went unnoticed. Cloud saves and push are broken in this state.
+  else console.error(`${line}  <-- ACCOUNTS/PUSH/DELETION ARE BROKEN: check SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY`);
+});
+
 const server = http.createServer((req, res) => {
   let urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
+  if (urlPath === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify({
+      ok: true,
+      version: pkgVersion,
+      rooms: rooms.size,
+      supabase: supabaseHealth,          // ok | unconfigured | bad_key_or_url | unreachable
+      webpush: !!webpush,
+      fcm: !!fcm,
+    }));
+  }
   if (urlPath === '/errors') {
     const cors = {
       'Access-Control-Allow-Origin': '*',
