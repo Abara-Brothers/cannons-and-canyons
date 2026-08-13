@@ -406,9 +406,11 @@ async function checkSupabase() {
 }
 checkSupabase().then((s) => {
   const line = `[boot] supabase=${s} webpush=${!!webpush} fcm=${!!fcm}`;
-  if (s === 'ok') console.log(line);
-  // Loud, and repeated — a one-line info message at boot is how the last one
-  // went unnoticed. Cloud saves and push are broken in this state.
+  // 'unconfigured' is the NORMAL state for local dev and CI, which have no
+  // Supabase env by design — shouting there would train everyone to ignore
+  // this line, which is precisely the failure being fixed. The states that
+  // mean something is WIRED WRONG get stderr and an instruction.
+  if (s === 'ok' || s === 'unconfigured') console.log(line);
   else console.error(`${line}  <-- ACCOUNTS/PUSH/DELETION ARE BROKEN: check SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY`);
 });
 

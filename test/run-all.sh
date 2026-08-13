@@ -81,11 +81,14 @@ else
   # wire shapes (verify, upsert, nudge lookup, delivery, dead-endpoint delete).
   run push_persist node test/push_persist.mjs
 
-  # Expected chatter: the listen banner, and the graceful-shutdown line the
-  # harness itself triggers every time it SIGTERMs a shared server. Anything
-  # else in this log is a real problem and must stay loud — do not widen this
-  # filter to silence a genuine error.
-  benign='running at|^\[shutdown\] SIGTERM'
+  # Expected chatter: the listen banner, the readiness line (8.58 — locally it
+  # always reads supabase=unconfigured, which is correct with no env), and the
+  # graceful-shutdown line the harness itself triggers every time it SIGTERMs a
+  # shared server. Anything else in this log is a real problem and must stay
+  # loud — do not widen this filter to silence a genuine error. Note the boot
+  # line only reaches STDERR when something is wired WRONG, so a `[boot]` here
+  # with bad_key_or_url/unreachable is still worth reading.
+  benign='running at|^\[boot\]|^\[shutdown\] SIGTERM'
   stray=$(grep -vE "$benign" /tmp/cc_server.log 2>/dev/null | wc -l | tr -d ' ')
   [ "$stray" != "0" ] && { echo "  server stderr:"; grep -vE "$benign" /tmp/cc_server.log; }
 fi
