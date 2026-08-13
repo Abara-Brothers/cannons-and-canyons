@@ -921,12 +921,25 @@ $('accDeleteBtn').onclick = () => deleteMyAccount();
 // stakes.
 async function exportMyData() {
   const row = await Cloud.restore();
+  // whoami() carries the sign-in identity — without it the file omitted the very
+  // thing a linked player most expects to see, while the policy called the export
+  // complete. Anything still outside the file (push subscriptions, which the
+  // client cannot read by design) is named here AND in the policy, with the
+  // support route for getting it.
+  const who = await Cloud.whoami();
   const data = {
     exported_at: new Date().toISOString(),
     account_id: Cloud.userId(),
+    account_type: who ? (who.anonymous ? 'guest' : 'linked') : 'unknown',
+    sign_in: who ? { google_linked: who.google, email: who.email || null } : null,
     callsign: savedName() || null,
     cloud_profile: row,
     local_progression: progressionSnapshot(),
+    not_included: {
+      push_subscriptions: 'Stored against your account but not readable by the app; '
+        + 'request them via https://abarabrothers.com/support',
+      crash_reports: 'Anonymous and not linked to your account; deleted after 30 days',
+    },
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');

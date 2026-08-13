@@ -29,6 +29,8 @@ const SHELL = [
   'styles.css',
   'manifest.webmanifest',
   'privacy.html',        // reachable offline: it is a store requirement (ISSUE-013)
+  'delete-account.html', // the web deletion pathway Play requires (no apostrophes here:
+                         // house-rules parses this list by single-quoted string)
   'icons/icon.svg',
   'icons/icon-32.png',
   'icons/icon-180.png',

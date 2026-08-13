@@ -56,13 +56,13 @@ Store accounts you (Jordan) must create — these cannot be automated:
 > ★ Fire and poison that keep burning turn after turn
 > ★ Health-based battles — destroy the enemy tank to win
 > ★ Crisp HD pixel-art mountains across five biomes, phone + tablet, built for landscape
-> ★ No account, no ads, no in-app purchases, no tracking. Tap and play.
+> ★ No sign-up needed, no ads, no in-app purchases, no tracking. Tap and play.
 >
 > Made by Abara Brothers.
 
 **Keywords (iOS, ≤100 chars):** `artillery,tank,duel,multiplayer,turn based,pixel,war,cannon,golf,battle`
 **Category:** Games ▸ Strategy (secondary: Action)
-**Age rating answers:** mild cartoon/fantasy violence only → expect **9+ (Apple)** / **Everyone 10+ (Google)**. No gambling, no user chat, no user-generated content (callsigns come from the game's own word lists).
+**Age rating answers:** mild cartoon/fantasy violence only → expect **9+ (Apple)** / **Everyone 10+ (Google)**. No gambling, no user chat, **no user-authored text of any kind** — callsigns are generated from the game's own word lists and the input is readonly (ISSUE-015), so nothing a player types can reach another player. (Note the distinction from Play's *Data safety* form, where the callsign and progression are still "user-generated content" as a DATA TYPE: that is about what we store, not about players publishing text to each other.)
 
 ## 3. Privacy (both stores require this)
 
@@ -71,22 +71,38 @@ Store accounts you (Jordan) must create — these cannot be automated:
 > saves, persisted push subscriptions). Filing the old answers now would be a
 > misdeclaration on both stores (was ISSUE-018).
 
+> **Revised 2026-08-13 (batch 8.54)** after a full re-review against the code and both
+> platforms' current published requirements. Three material corrections: Google sign-in
+> also delivers **name and profile picture** (verified empirically — the authorize URL
+> requests scope `email profile`, and Supabase's GoTrue APPENDS to that default, so it
+> cannot be narrowed from our side); Play requires a **web deletion link** as well as the
+> in-app path; and the push subscription is a stored identifier that both forms should name.
+
 - Hosted policy: `https://tanks.abarabrothers.com/privacy.html` (shipped in `public/`, reachable in-app from the home screen).
+- **Account deletion URL (Play Console → App content → Data safety → Data deletion):**
+  `https://tanks.abarabrothers.com/delete-account.html`. Play's policy requires BOTH an
+  in-app path and a web resource usable by someone who has uninstalled the app; the page
+  offers the in-app route and an email request route, and states exactly what is erased.
 - **Apple App Privacy questionnaire — purpose App Functionality only:**
   - Data Linked to You:
-    - *Identifiers → User ID* — the random account identifier (guest accounts included).
+    - *Identifiers → User ID* — the random account identifier (guest accounts included), and the Google account id when linked.
     - *Contact Info → Email Address* — ONLY when the player links Google (optional).
-    - *User Content → Gameplay Content* — callsign + progression (wins, achievements, unlocks).
+    - *Contact Info → Name* — ONLY when the player links Google: Google's `profile` scope returns the account name and we cannot opt out of it. We never display or use it, but it IS stored, so it must be declared.
+    - *User Content → Photos or Videos* — the Google profile **picture URL**, on the same condition as above. If Apple's console offers a closer-fitting bucket for a provider avatar, prefer it; the requirement is that it is declared somewhere, not that this exact bucket is used.
+    - *User Content → Other User Content* — callsign + progression (wins, achievements, unlocks). Callsign is generated, never typed.
   - Data NOT Linked to You:
     - *Diagnostics → Crash Data* — anonymous crash reports (error text, build version, user-agent; no account id, no IP stored; 30-day retention, since 8.52).
   - **Tracking: NO** for every item (nothing is used for cross-app tracking or advertising; no ads SDK, no analytics).
 - **Google Play Data safety form:**
-  - Collected: *User IDs* (account identifier); *Personal info → Email address* (optional, Google linking); *App activity → Other user-generated content* (callsign, progression); *App info and performance → Crash logs* (anonymous, 30-day retention).
+  - Collected: *User IDs* (account identifier + Google account id); *Personal info → Email address* and *Personal info → Name* (both only on Google linking); *Photos and videos* — the Google profile picture URL, if the console has no closer category; *App activity → Other user-generated content* (callsign, progression); *App info and performance → Crash logs* (anonymous, 30-day retention).
   - Shared: **none**. Sold: **none**. Processed ephemerally: live match relay (names/shots/aim, server memory only).
-  - Security practices: data encrypted in transit; **users can request deletion AND delete in-app** — account deletion (in the game's account panel) erases account, cloud save and push subscriptions in one action. Data export is also in-app.
-- **Push notifications** — opt-in turn nudges. Since 8.48 the subscription persists in the database keyed to the account (that is what makes nudges survive between matches and reach every device), and it is deleted with the account or when the push service reports it dead. Declare notifications as a capability in both consoles; the "Turn notifications" section of `privacy.html` is the reviewer-facing description.
+  - Security practices: data encrypted in transit; **users can delete in-app AND request deletion via the web link above**; account deletion erases account, sign-in identity, cloud save and push subscriptions in one action. Data export is also in-app.
+- **Push notifications** — opt-in turn nudges. Since 8.48 the subscription (endpoint + keys) persists in the database keyed to the account, which makes it a stored device-scoped identifier: declare it under Apple *Identifiers → Device ID* and Play *Device or other IDs*, both Linked/Collected, purpose App Functionality. It is deleted with the account, and when the push service reports it dead. Declare notifications as a capability in both consoles; the "Turn notifications" section of `privacy.html` is the reviewer-facing description.
+  - **Native builds today:** the web-push button is hidden inside Capacitor shells (ISSUE-020, batch 8.51) because a WKWebView has no PushManager, so a native build ships with NO push. Do not declare push data for a native submission until APNs/FCM lands — and re-check these answers when it does.
+- **Sign in with Apple (App Store Guideline 4.8):** offering Google sign-in on iOS triggers the requirement to also offer an equivalent privacy-focused option. This bites the FIRST iOS submission, not a later one — Sign in with Apple must ship in the same build as Google sign-in, or Google sign-in must be hidden on iOS. Blocked on BQ-005 (paid Apple account).
+- **International transfers:** hosting is Singapore (Supabase + Render), which has no EU/UK adequacy decision. Both providers' DPAs incorporate the EU SCCs (verified 2026-08-13: Supabase's DPA states acceptance of the agreement has the same effect as signing the SCCs and includes the UK Addendum v B.1.0; Render's DPA defines and applies the EU SCCs per Commission Decision 2021/914). `privacy.html` states this under "Where your data lives, and transfers".
 - **Processors to disclose if asked:** Supabase (database + auth, Singapore), Render (game server, Singapore), Apple/Google/Mozilla push services (delivery only).
-- **Qualified review:** these answers describe the implementation honestly, but a lawyer has not reviewed them — flagged in `PROJECT_STATE.md`; worth a professional pass before submission.
+- **Qualified review — still open, and now scoped.** These answers describe the implementation honestly and have been checked against both platforms' current published requirements, but a lawyer has NOT reviewed them. The specific questions worth paying for: (a) children — the game is rated 9+/E10+ and a child can link Google, which raises COPPA (US, under-13) and GDPR Art. 8 parental-consent questions we have not resolved; (b) whether an EU/UK Art. 27 representative is required for an Australian studio processing EEA/UK players' data; (c) confirmation of the transfer safeguards above; (d) the controller's formal legal identity (registered entity name and address) if one exists, which should replace "Abara Brothers (Australia)" in the policy.
 
 ## 4. Assets checklist
 
