@@ -11,6 +11,7 @@
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';   // FCM JWT signing — node:crypto, NOT the WebCrypto global
 import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import {
@@ -112,14 +113,105 @@ setPushSubSink((ws, sub, token) => {
     const id = ws.userId || await sbUserFromToken(token);
     if (id) ws.userId = id;
     if (!id || !SB_SECRET) return;
+    // Web subscriptions carry a URL endpoint; native ones carry an FCM token
+    // under `sub.token` with `sub.platform` naming the OS. One row shape, one
+    // upsert — see the 8.57 migration for why endpoint holds both.
+    const native = sub.platform === 'android' || sub.platform === 'ios';
+    const endpoint = native ? sub.token : sub.endpoint;
+    if (!endpoint) return;
     await sbAdmin('POST', '/push_subscriptions?on_conflict=endpoint', {
       user_id: id,
-      endpoint: sub.endpoint,
+      endpoint,
       sub,
+      platform: native ? sub.platform : 'web',
       last_seen_at: new Date().toISOString(),
     }, 'resolution=merge-duplicates,return=minimal');
   })().catch(() => {});
 });
+
+// ---- Firebase Cloud Messaging (native push, batch 8.57) ----------------------
+// FCM's HTTP v1 API needs an OAuth2 access token, which means signing a JWT
+// with the service account's private key. That is ~40 lines with node:crypto
+// and zero dependencies — the same reasoning as ADR-007. The legacy server-key
+// API would have been one header, but Google retired it.
+//
+// FIREBASE_SERVICE_ACCOUNT holds the service-account JSON as a single env
+// string. It is a SECRET (it can mint tokens for the project): server-side
+// only, never in public/, never logged. Absent it, native push degrades to a
+// no-op and web push is unaffected.
+let fcm = null;
+try {
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT;
+  if (raw) {
+    const sa = JSON.parse(raw);
+    if (sa.client_email && sa.private_key && sa.project_id) {
+      fcm = { email: sa.client_email, key: sa.private_key.replace(/\\n/g, '\n'), project: sa.project_id, token: null, exp: 0 };
+    }
+  }
+} catch { fcm = null; }   // malformed JSON must not take the process down
+
+// Test seam. Google's real hosts are the defaults; test/push_persist.mjs points
+// these at a local mock so the WHOLE FCM path — JWT signing, token caching,
+// send shape, dead-token cleanup — is exercised without a Firebase project.
+// Overriding them in production would send push tokens to a third party, so
+// they are deliberately env-only and undocumented outside this comment.
+const FCM_OAUTH_URL = process.env.FCM_OAUTH_URL || 'https://oauth2.googleapis.com/token';
+const FCM_API_BASE = process.env.FCM_API_BASE || 'https://fcm.googleapis.com';
+
+const b64url = (b) => Buffer.from(b).toString('base64url');
+
+// Mint (and cache) a Google OAuth2 access token for the FCM scope.
+async function fcmAccessToken() {
+  if (!fcm) return null;
+  const now = Math.floor(Date.now() / 1000);
+  if (fcm.token && fcm.exp - 60 > now) return fcm.token;
+  const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const claim = b64url(JSON.stringify({
+    iss: fcm.email,
+    scope: 'https://www.googleapis.com/auth/firebase.messaging',
+    aud: 'https://oauth2.googleapis.com/token',
+    iat: now,
+    exp: now + 3600,
+  }));
+  const sig = crypto.sign('RSA-SHA256', Buffer.from(`${header}.${claim}`), fcm.key).toString('base64url');
+  const res = await fetch(FCM_OAUTH_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion: `${header}.${claim}.${sig}`,
+    }),
+  });
+  if (!res.ok) throw new Error(`fcm oauth ${res.status}`);
+  const j = await res.json();
+  fcm.token = j.access_token;
+  fcm.exp = now + (j.expires_in || 3600);
+  return fcm.token;
+}
+
+// Deliver one nudge to one native device. Resolves to 'gone' when FCM says the
+// token is dead, so the caller can clean the row out — the same self-cleaning
+// contract the web push path has.
+async function fcmSend(token, title, body, url) {
+  const access = await fcmAccessToken();
+  if (!access) return 'skip';
+  const res = await fetch(`${FCM_API_BASE}/v1/projects/${fcm.project}/messages:send`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${access}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message: {
+        token,
+        notification: { title, body },
+        data: { url: String(url || '/') },
+        android: { priority: 'high', notification: { tag: 'cc-turn' } },
+      },
+    }),
+  });
+  if (res.ok) return 'ok';
+  // 404 / UNREGISTERED / INVALID_ARGUMENT on the token all mean: stop trying.
+  if (res.status === 404 || res.status === 400) return 'gone';
+  throw new Error(`fcm send ${res.status}`);
+}
 
 // Nudge every device the player has, not just the one that subscribed in this
 // room's lifetime: the in-memory sub (if any) plus every persisted sub for
@@ -128,36 +220,50 @@ setPushSubSink((ws, sub, token) => {
 function pushNudge(room, seat) { pushNudgeAsync(room, seat).catch(() => {}); }
 async function pushNudgeAsync(room, seat) {
   const pl = room.players[seat];
-  if (!webpush || !pl || pl.bot || pl.connected) return;
-  const targets = new Map();
-  if (pl.pushSub && pl.pushSub.endpoint) targets.set(pl.pushSub.endpoint, pl.pushSub);
+  // Either transport is enough to be worth trying: a web-only server (no FCM
+  // key) still nudges browsers, and an FCM-only one still nudges phones.
+  if ((!webpush && !fcm) || !pl || pl.bot || pl.connected) return;
+  const targets = new Map();   // endpoint -> { sub, platform }
+  if (pl.pushSub && pl.pushSub.endpoint) targets.set(pl.pushSub.endpoint, { sub: pl.pushSub, platform: 'web' });
   // The live socket first; the identity the engine carried over at disconnect
   // second — the disconnect case is precisely when a nudge matters.
   const uid = (pl.ws && pl.ws.userId) || pl.userId;
   if (uid && SB_SECRET) {
     try {
       const rows = await sbAdmin('GET',
-        `/push_subscriptions?user_id=eq.${encodeURIComponent(uid)}&select=endpoint,sub`);
-      for (const r of rows || []) if (r.sub && r.endpoint) targets.set(r.endpoint, r.sub);
+        `/push_subscriptions?user_id=eq.${encodeURIComponent(uid)}&select=endpoint,sub,platform`);
+      for (const r of rows || []) {
+        if (r.endpoint) targets.set(r.endpoint, { sub: r.sub, platform: r.platform || 'web' });
+      }
     } catch { /* the in-memory sub still gets its chance */ }
   }
   if (!targets.size) return;
   const opp = room.players.find((p, i) => p && i !== seat && !p.bot);
-  const payload = JSON.stringify({
-    title: 'Cannons & Canyons — your move',
-    body: opp ? `${opp.name} has taken their shot. Your turn.` : 'Your turn is up.',
-    url: `/?room=${room.code}`,
-  });
-  for (const [endpoint, sub] of targets) {
-    webpush.sendNotification(sub, payload).catch((err) => {
-      if (err && (err.statusCode === 404 || err.statusCode === 410)) {
-        if (pl.pushSub && pl.pushSub.endpoint === endpoint) pl.pushSub = null;
-        if (SB_SECRET) {
-          sbAdmin('DELETE', `/push_subscriptions?endpoint=eq.${encodeURIComponent(endpoint)}`)
-            .catch(() => {});
-        }
-      }
-    });
+  const title = 'Cannons & Canyons — your move';
+  const body = opp ? `${opp.name} has taken their shot. Your turn.` : 'Your turn is up.';
+  const url = `/?room=${room.code}`;
+  const payload = JSON.stringify({ title, body, url });
+
+  const drop = (endpoint) => {
+    if (pl.pushSub && pl.pushSub.endpoint === endpoint) pl.pushSub = null;
+    if (SB_SECRET) {
+      sbAdmin('DELETE', `/push_subscriptions?endpoint=eq.${encodeURIComponent(endpoint)}`).catch(() => {});
+    }
+  };
+
+  for (const [endpoint, { sub, platform }] of targets) {
+    if (platform === 'web') {
+      if (!webpush || !sub) continue;
+      webpush.sendNotification(sub, payload).catch((err) => {
+        if (err && (err.statusCode === 404 || err.statusCode === 410)) drop(endpoint);
+      });
+    } else {
+      // android / ios: the endpoint IS the FCM registration token.
+      if (!fcm) continue;
+      fcmSend(endpoint, title, body, url)
+        .then((r) => { if (r === 'gone') drop(endpoint); })
+        .catch(() => { /* transient: the next turn tries again */ });
+    }
   }
 }
 

@@ -278,5 +278,29 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   }
 }
 
+// ---- 10. THE CLIENT MUST NOT IMPORT npm PACKAGES (DEBT-001 / ADR-007) --------
+// public/ is served verbatim: no bundler, and Capacitor copies webDir without
+// node_modules. A bare specifier — `import('@capacitor/push-notifications')` —
+// therefore resolves NOWHERE, in the browser or the shell. It is seductive
+// because the package really is installed for the native build, and it fails
+// only at runtime, inside a try/catch, as a toast nobody attributes. Native
+// plugins are reached through the Capacitor bridge instead.
+{
+  const bad = [];
+  for (const file of ['public/app.js', 'public/cloud.js', 'public/errors.js', 'public/config.js', 'public/sw.js']) {
+    read(file).split('\n').forEach((line, i) => {
+      if (/^\s*(\/\/|\*)/.test(line)) return;                    // skip comments
+      // static `from '…'` and dynamic `import('…')`, bare specifier only
+      const m = line.match(/\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/)
+             || line.match(/^\s*import\s.*?from\s+['"]([^'"]+)['"]/);
+      if (m && !m[1].startsWith('.') && !m[1].startsWith('/')) {
+        bad.push(`${file}:${i + 1}: bare import '${m[1]}'`);
+      }
+    });
+  }
+  if (bad.length) fail(`the client imports an npm package — nothing resolves it at runtime:\n      ${bad.join('\n      ')}`);
+  else ok('client scripts import nothing from node_modules');
+}
+
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nALL GOOD');
 process.exit(out.errors.length ? 1 : 0);

@@ -1551,8 +1551,17 @@ export function handleClientMessage(ws, msg) {
       // Turn-nudge opt-in: hang the browser subscription off the player so a
       // disconnected seat can still be pinged when its turn comes up.
       const pl2 = room && ws.seat != null ? room.players[ws.seat] : null;
-      if (pl2 && msg.sub && typeof msg.sub.endpoint === 'string' && msg.sub.endpoint.startsWith('https://')) {
-        pl2.pushSub = msg.sub;
+      const s = msg.sub;
+      // Two shapes now (8.57). WEB: an https endpoint plus keys, which the
+      // server can push to directly. NATIVE: a platform and an FCM
+      // registration token — opaque here, and NOT hung on the player, because
+      // only the host can deliver it and only the persisted row survives the
+      // room anyway.
+      const webSub = s && typeof s.endpoint === 'string' && s.endpoint.startsWith('https://');
+      const nativeSub = s && (s.platform === 'android' || s.platform === 'ios')
+        && typeof s.token === 'string' && s.token.length > 0 && s.token.length <= 4096;
+      if (pl2 && (webSub || nativeSub)) {
+        if (webSub) pl2.pushSub = s;
         send(ws, { type: 'pushOk' });
         // The host may also persist it keyed to the account (ISSUE-003) —
         // best-effort and async; the pushOk above is the in-room ack.

@@ -47,6 +47,14 @@ services:
         sync: false
       - key: DATABASE_URL
         sync: false
+      # Native push (FCM, batch 8.57). The Firebase SERVICE ACCOUNT JSON, pasted
+      # as a single line. It can mint tokens for the whole Firebase project, so
+      # it is a secret on the same footing as SUPABASE_SECRET_KEY: server-side
+      # only, never under public/, never logged. Get it from the Firebase
+      # console → Project settings → Service accounts → Generate new private
+      # key. Without it, native push is a no-op and web push is unaffected.
+      - key: FIREBASE_SERVICE_ACCOUNT
+        sync: false
 # NOTE (ISSUE-005, partially resolved 2026-08-04): the live service is on the
 # paid Starter plan, so idle spin-down and its 30-60s cold start are gone.
 # STILL OPEN: there is no staging service, and all match state lives in the

@@ -1146,13 +1146,62 @@ async function enableTurnPings() {
     showToast('Could not enable nudges here');
   }
 }
-$('notifyBtn').onclick = () => { Audio.ensure(); enableTurnPings(); };
-// Inside a Capacitor shell there is no serviceWorker and no PushManager, so
-// this button could only ever land on its own error toast — shown to a user
-// already inside the installed app (ISSUE-020). An honest absence beats a
-// permanent error. Native push arrives with APNs/FCM (Phase 3 remainder) and
-// brings its own registration UI.
-if (window.Capacitor) $('notifyBtn').classList.add('hidden');
+$('notifyBtn').onclick = () => { Audio.ensure(); (window.Capacitor ? enableNativePings() : enableTurnPings()); };
+// 8.51 hid this button inside Capacitor shells because a WKWebView has no
+// serviceWorker and no PushManager, so the web path could only ever error
+// (ISSUE-020). Since 8.57 the shells have a REAL push path, so the button
+// comes back — pointed at the native plugin instead.
+if (window.Capacitor) $('notifyBtn').classList.remove('hidden');
+
+// ---- Native turn nudges (FCM / APNs) ----------------------------------------
+// The Capacitor plugin hands back a registration token; the server stores it
+// exactly like a web subscription (same table, platform column) and delivers
+// through FCM. Everything here is best-effort and never blocks play.
+//
+// Reached through the Capacitor BRIDGE (`Capacitor.Plugins.PushNotifications`),
+// never by importing the npm package: this file is a classic script with no
+// bundler (DEBT-001/ADR-007), so a bare specifier like
+// `import('@capacitor/push-notifications')` cannot resolve — not in a browser,
+// and not in the shell either, because Capacitor copies public/ verbatim and
+// never ships node_modules. The bridge is the supported path for an
+// unbundled web layer.
+async function enableNativePings() {
+  try {
+    const cap = window.Capacitor;
+    const Push = cap && cap.Plugins && cap.Plugins.PushNotifications;
+    if (!Push) { showToast('Notifications are not available in this build'); return; }
+
+    let perm = await Push.checkPermissions();
+    if (perm.receive === 'prompt' || perm.receive === 'prompt-with-rationale') {
+      perm = await Push.requestPermissions();
+    }
+    if (perm.receive !== 'granted') { showToast('Notifications blocked'); return; }
+
+    // register() is fire-and-forget; the token arrives on an event, so the
+    // listener goes on FIRST or a fast device can beat us to it.
+    await Push.removeAllListeners();
+    Push.addListener('registration', async (t) => {
+      const token = t && t.value;
+      if (!token) return;
+      const auth = window.Cloud && Cloud.enabled() ? await Cloud.token(true) : null;
+      sendMsg({
+        type: 'pushSub',
+        sub: { platform: cap.getPlatform && cap.getPlatform() === 'ios' ? 'ios' : 'android', token },
+        token: auth,
+      });
+    });
+    Push.addListener('registrationError', () => showToast('Could not enable nudges here'));
+    // Tapping a notification deep-links into the room it is about.
+    Push.addListener('pushNotificationActionPerformed', (a) => {
+      const url = a && a.notification && a.notification.data && a.notification.data.url;
+      const code = typeof url === 'string' && (url.match(/room=([A-Z0-9]{4})/i) || [])[1];
+      if (code) { $('codeInput').value = code.toUpperCase(); intent({ type: 'join', code: code.toUpperCase(), name: myName(), skin: mySkin() }); }
+    });
+    await Push.register();
+  } catch {
+    showToast('Could not enable nudges here');
+  }
+}
 
 let pendingIntent = null;
 function flushIntent() { if (pendingIntent) { sendMsg(pendingIntent); pendingIntent = null; } }

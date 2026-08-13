@@ -74,8 +74,9 @@
   <p>Off unless you turn them on. If you enable nudges, your browser or device issues a push
   subscription — a delivery address plus encryption keys — which we store against your account
   so notifications work in every future match and on every device you enabled them on.
-  Delivery goes through your platform's push service (operated by Apple, Google or Mozilla,
-  depending on your device). You can revoke notifications in your browser or device
+  Delivery goes through your platform's push service — Firebase Cloud Messaging (Google) in the
+  Android app, and your browser's own push service (operated by Apple, Google or Mozilla) on the
+  web. You can revoke notifications in your browser or device
   notification settings at any time, which withdraws your consent for future ones. A
   subscription your push service reports as expired is deleted the next time we try to use
   it, and every subscription is deleted with your account.</p>
@@ -111,9 +112,10 @@
 
   <h2>Where your data lives, and transfers</h2>
   <p>The game server runs on <b>Render</b> and the database and sign-in service run on
-  <b>Supabase</b>, both hosted in <b>Singapore</b>. Push notifications are delivered by the
-  push service belonging to your platform (Apple, Google or Mozilla). These providers are our
-  processors: they handle the data to run the service on our behalf and for no other purpose.</p>
+  <b>Supabase</b>, both hosted in <b>Singapore</b>. Notifications are delivered by
+  <b>Firebase Cloud Messaging</b> (Google) in the Android app, and by your browser's push
+  service (Apple, Google or Mozilla) on the web. These providers are our processors: they
+  handle the data to run the service on our behalf and for no other purpose.</p>
   <p>Singapore is not covered by a UK or European Commission adequacy decision, so if you play
   from the EEA or UK your data is transferred outside that area. Those transfers are made under
   the European Commission's <b>Standard Contractual Clauses</b> (with the UK Addendum where UK

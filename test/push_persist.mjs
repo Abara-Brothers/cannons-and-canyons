@@ -55,7 +55,19 @@ const SUB = {
 };
 
 // ---- Mock Supabase + push endpoint ------------------------------------------
-const hits = { user: [], upsert: [], nudgeGet: [], pushPost: [], del: [], adminDel: [], errIns: [] };
+const hits = { user: [], upsert: [], nudgeGet: [], pushPost: [], del: [], adminDel: [], errIns: [],
+               fcmOauth: [], fcmSend: [] };
+
+// A throwaway RSA key so the server can really sign the OAuth2 JWT — the test
+// verifies the signature, so a broken signing path (wrong crypto, wrong
+// encoding) fails here rather than in production.
+const SA_KEYS = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+const SERVICE_ACCOUNT = JSON.stringify({
+  client_email: 'cc-test@cannons-and-canyons.iam.gserviceaccount.com',
+  private_key: SA_KEYS.privateKey.export({ type: 'pkcs8', format: 'pem' }),
+  project_id: 'cannons-and-canyons',
+});
+const FCM_TOKEN = 'fcm-token-alice-pixel-0001';
 const mock = http.createServer((req, res) => {
   let body = '';
   req.on('data', (c) => { body += c; });
@@ -69,6 +81,31 @@ const mock = http.createServer((req, res) => {
         return res.end(JSON.stringify({ id: USER, aud: 'authenticated' }));
       }
       res.writeHead(401); return res.end('{}');
+    }
+    // ---- FCM mock: OAuth2 token exchange, then the send endpoint ----
+    if (u.pathname === '/fcm-oauth') {
+      const assertion = new URLSearchParams(body).get('assertion') || '';
+      const [h, c, s] = assertion.split('.');
+      let sigOk = false, claim = {};
+      try {
+        sigOk = crypto.verify('RSA-SHA256', Buffer.from(`${h}.${c}`), SA_KEYS.publicKey,
+          Buffer.from(s, 'base64url'));
+        claim = JSON.parse(Buffer.from(c, 'base64url').toString());
+      } catch { /* leave sigOk false */ }
+      hits.fcmOauth.push({ sigOk, claim });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ access_token: 'ya29.mock-access', expires_in: 3600 }));
+    }
+    if (u.pathname.includes('/messages:send')) {
+      const parsed = JSON.parse(body || '{}');
+      hits.fcmSend.push({ path: u.pathname, auth: req.headers.authorization, msg: parsed.message });
+      // Always UNREGISTERED. There is no shot clock, so a match legitimately
+      // STALLS on the disconnected player's turn — exactly one nudge is ever
+      // sent per disconnect, and a test that waited for a second one would
+      // wait forever. Answering dead on the first send exercises the send
+      // shape and the cleanup path from that single opportunity.
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: { status: 'UNREGISTERED' } }));
     }
     if (u.pathname === '/rest/v1/error_reports' && req.method === 'POST') {
       hits.errIns.push({ apikey: req.headers.apikey, body: JSON.parse(body || '{}') });
@@ -90,7 +127,12 @@ const mock = http.createServer((req, res) => {
       if (req.method === 'GET') {
         hits.nudgeGet.push({ query: u.search, apikey: req.headers.apikey });
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify([{ endpoint: SUB.endpoint, sub: SUB }]));
+        // The player has BOTH: a browser subscription and a phone. One nudge
+        // must fan out across both transports.
+        return res.end(JSON.stringify([
+          { endpoint: SUB.endpoint, sub: SUB, platform: 'web' },
+          { endpoint: FCM_TOKEN, sub: { platform: 'android', token: FCM_TOKEN }, platform: 'android' },
+        ]));
       }
       if (req.method === 'DELETE') {
         hits.del.push({ query: u.search });
@@ -134,6 +176,11 @@ const until = async (test, ms, what) => {
       SUPABASE_URL: `http://127.0.0.1:${MOCK_PORT}`,
       SUPABASE_PUBLISHABLE_KEY: 'pk_test',
       SUPABASE_SECRET_KEY: 'sk_test',
+      // Native push: a real (throwaway) service account plus the FCM seam
+      // pointed at the mock above.
+      FIREBASE_SERVICE_ACCOUNT: SERVICE_ACCOUNT,
+      FCM_OAUTH_URL: `http://127.0.0.1:${MOCK_PORT}/fcm-oauth`,
+      FCM_API_BASE: `http://127.0.0.1:${MOCK_PORT}`,
       // Test-only: lets the child trust the throwaway loopback cert.
       NODE_TLS_REJECT_UNAUTHORIZED: '0',
       BOT_FIRE_MS: '150', PICK_MS: '300',
@@ -209,6 +256,39 @@ const until = async (test, ms, what) => {
     if (hits.del[0].query.includes('endpoint=eq.')) step('a 404 endpoint was deleted from the store (self-cleaning)');
     else fail(`cleanup query wrong: ${hits.del[0].query}`);
   }
+
+  // ---- Native push via FCM (8.57) -------------------------------------------
+  // The same nudge that reached the browser must also reach the phone, through
+  // a genuinely signed OAuth2 exchange.
+  if (!(await until(() => hits.fcmOauth.length >= 1, 10000, 'FCM OAuth2 token exchange'))) return finish();
+  const oa = hits.fcmOauth[0];
+  if (oa.sigOk) step('the OAuth2 JWT is signed correctly (verified against the service-account public key)');
+  else fail('the OAuth2 JWT signature did not verify — the FCM path would never authenticate');
+  if (oa.claim.iss === 'cc-test@cannons-and-canyons.iam.gserviceaccount.com'
+    && oa.claim.scope === 'https://www.googleapis.com/auth/firebase.messaging') {
+    step('JWT claims name the service account and the messaging scope');
+  } else fail(`JWT claims wrong: ${JSON.stringify(oa.claim)}`);
+
+  if (!(await until(() => hits.fcmSend.length >= 1, 10000, 'FCM send'))) return finish();
+  const fs1 = hits.fcmSend[0];
+  if (fs1.path.includes('/v1/projects/cannons-and-canyons/messages:send')
+    && fs1.auth === 'Bearer ya29.mock-access'
+    && fs1.msg.token === FCM_TOKEN
+    && fs1.msg.notification && /your move/i.test(fs1.msg.notification.title)
+    && fs1.msg.data && /room=/.test(fs1.msg.data.url)) {
+    step('the phone gets a correctly addressed FCM message with the minted token');
+  } else fail(`FCM send shape wrong: ${JSON.stringify(fs1).slice(0, 300)}`);
+
+  // The mock answered UNREGISTERED, so the row must be deleted — the native
+  // half of the self-cleaning contract that ISSUE-002 asked for.
+  if (await until(() => hits.del.some(d => d.query.includes(encodeURIComponent(FCM_TOKEN))),
+    10000, 'dead FCM token cleanup')) {
+    step('an UNREGISTERED token is deleted from the store (self-cleaning)');
+  }
+  // NOT COVERED HERE, deliberately: access-token CACHING across many sends.
+  // One disconnect produces exactly one nudge (no shot clock — the match stalls
+  // on the absent player's turn), so this suite has no second send to prove the
+  // cache with. The cache is a 60-second-skew expiry check in fcmAccessToken().
 
   // ---- Account deletion endpoint (8.49) -------------------------------------
   // Same verify-then-privileged pattern over HTTP: the caller's own token is
