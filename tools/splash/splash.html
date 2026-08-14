@@ -1,0 +1,68 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8">
+<style>
+  /* ONE template, rendered at every target size. Everything is sized in vmin,
+     so the lockup scales with the frame rather than being cropped by it —
+     that is what lets a 320x480 portrait tile and a 2732x2732 square share a
+     design without separate art.
+     Ground is the app's own #0b1020, so the hand-off from splash to first
+     frame has no visible seam. Type is the home screen's own <h1 class="gtitle">
+     treatment in the same system stack, so the splash reads as the game. */
+  html, body { margin: 0; padding: 0; height: 100%; background: #0b1020; overflow: hidden; }
+  .stage {
+    position: relative; width: 100vw; height: 100vh; background: #0b1020;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  /* The sunset the game opens on, as a wide bloom rather than a literal sun —
+     a second sun would fight the one inside the mark. */
+  .stage::before {
+    content: ''; position: absolute; width: 150vmin; height: 75vmin;
+    background: radial-gradient(ellipse at center, rgba(255,122,46,.22), rgba(255,122,46,.06) 45%, transparent 70%);
+    pointer-events: none;
+  }
+  .mark { position: relative; width: 26vmin; height: 26vmin; margin-bottom: 4.5vmin; }
+  .mark img { width: 100%; height: 100%; display: block; border-radius: 5.4vmin; }
+  .gtitle {
+    position: relative; margin: 0; display: flex; align-items: center;
+    gap: 0 .1em; line-height: .94; text-transform: uppercase;
+    /* The wordmark measures ~10.8em wide, so on a TALL frame vmin alone runs it
+       off both edges — measured, not guessed, from the 1920x1280 render. The
+       vw cap keeps it inside ~86% of the width at every aspect. */
+    font-size: min(9.6vmin, 8vw); font-weight: 900; letter-spacing: .015em; white-space: nowrap;
+  }
+  .gtitle .w {
+    background: linear-gradient(180deg, #ffffff 0%, #ffe2c6 38%, #ff9a4a 74%, #d9500f 100%);
+    -webkit-background-clip: text; background-clip: text;
+    color: transparent; -webkit-text-fill-color: transparent;
+    filter: drop-shadow(0 .4vmin 0 #8d3208) drop-shadow(0 .8vmin 0 #4d1a03) drop-shadow(0 2.4vmin 4vmin rgba(0,0,0,.6));
+  }
+  .gtitle .amp {
+    font-size: .38em; font-weight: 900; color: #2a0d00;
+    width: 1.55em; height: 1.55em; line-height: 1.55em; text-align: center;
+    border-radius: .32em; transform: rotate(-7deg);
+    background: linear-gradient(180deg, #ffb45a, #ff7a2e);
+    box-shadow: 0 .6vmin 0 #8b3708, 0 1.6vmin 3.6vmin rgba(0,0,0,.5);
+  }
+  .rule {
+    position: relative; height: .55vmin; width: 58vmin; margin-top: 2.6vmin; border-radius: .3vmin;
+    background: linear-gradient(90deg, transparent, #ff7a2e 20%, #ffd9a8 50%, #ff7a2e 80%, transparent);
+    box-shadow: 0 0 2.8vmin rgba(255,122,46,.45);
+  }
+  .by {
+    position: relative; margin: 2.6vmin 0 0; font-size: 2.4vmin; color: #8f9bc4;
+    text-transform: uppercase; letter-spacing: .26em; font-weight: 600; white-space: nowrap;
+  }
+  .by b { color: #ff7a2e; font-weight: 800; }
+</style>
+</head>
+<body>
+  <div class="stage">
+    <div class="mark"><img src="icon.svg" alt=""></div>
+    <h1 class="gtitle"><span class="w">Cannons</span><span class="amp">&amp;</span><span class="w">Canyons</span></h1>
+    <div class="rule"></div>
+    <p class="by">Made by the <b>Abara Brothers</b></p>
+  </div>
+</body>
+</html>

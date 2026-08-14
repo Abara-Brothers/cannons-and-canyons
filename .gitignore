@@ -3,3 +3,5 @@ npm-debug.log*
 .DS_Store
 .env
 data/
+tools/splash/out/
+tools/splash/icon.svg
