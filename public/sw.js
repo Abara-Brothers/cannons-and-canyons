@@ -75,13 +75,25 @@ self.addEventListener('fetch', (e) => {
   // build; cached shell only when the network actually fails.
   if (req.mode === 'navigate') {
     e.respondWith((async () => {
+      // Which document is this navigation for? Only the GAME may be written
+      // back as the offline shell. Storing every navigation under
+      // 'index.html' meant a visit to /privacy.html (or /delete-account.html)
+      // OVERWROTE the shell — and the next offline launch opened the privacy
+      // policy instead of the game, with no way back while offline.
+      const isGame = url.pathname === '/' || url.pathname === '/index.html';
       try {
         const fresh = await fetch(req);
-        const cache = await caches.open(VERSION);
-        cache.put('index.html', fresh.clone());
+        if (fresh && fresh.ok) {
+          const cache = await caches.open(VERSION);
+          // Each document updates its OWN cache entry, never another's.
+          cache.put(isGame ? 'index.html' : url.pathname.replace(/^\//, ''), fresh.clone());
+        }
         return fresh;
       } catch {
-        return (await caches.match('index.html')) || (await caches.match('./')) || Response.error();
+        // Offline: serve the requested document if we have it, and fall back
+        // to the game shell only for a navigation that WAS the game.
+        const own = isGame ? null : await caches.match(url.pathname.replace(/^\//, ''));
+        return own || (await caches.match('index.html')) || (await caches.match('./')) || Response.error();
       }
     })());
     return;

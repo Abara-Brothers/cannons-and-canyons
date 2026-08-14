@@ -925,6 +925,11 @@ function startSignIn(urlFn) {
   pendingSignIn = urlFn;
   $('ageYear').value = '';
   $('ageError').textContent = '';
+  // Restore Continue. The under-13 branch hides it, and 8.55 never brought it
+  // back — so one under-13 answer locked sign-in and account linking out of
+  // the WHOLE page session, including for a parent who then wanted to link
+  // their own account. Re-opening the gate is a fresh question, not a verdict.
+  $('ageOkBtn').classList.remove('hidden');
   $('accountModal').classList.add('hidden');
   $('ageModal').classList.remove('hidden');
 }

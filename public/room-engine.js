@@ -1639,7 +1639,18 @@ export function handleClientMessage(ws, msg) {
       break;
     }
     case 'leave': {
-      if (room) teardown(room, true);
+      if (!room) break;
+      // Leaving must end the match for the LEAVER, not for everyone else.
+      // Tearing the room down unconditionally meant one player quitting a
+      // 4-player free-for-all, a Boss Fight or an Alien Invasion ended it for
+      // all of them — and in a lobby, any guest tapping Cancel destroyed the
+      // host's room. handleClose already models a departure correctly (seat
+      // freed while waiting, tank scuttled mid-match, room reclaimed once the
+      // last human is gone), so route through it and only tear down when this
+      // really is the last human present.
+      const others = room.players.some((p, i) => p && !p.bot && p.connected && i !== ws.seat);
+      if (others) { handleClose(ws); ws.roomCode = null; ws.seat = null; }
+      else teardown(room, true);
       break;
     }
   }

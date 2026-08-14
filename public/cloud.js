@@ -23,6 +23,8 @@ window.Cloud = (() => {
   const BASE = window.CC_SUPABASE_URL || '';
   const KEY = window.CC_SUPABASE_KEY || '';
   const SKEY = 'cc_session';
+  // Marks "this tab is expecting OAuth tokens back". See consumeRedirect.
+  const PENDING = 'cc_oauth_pending';
   const REFRESH_SKEW_S = 60;          // refresh this long before expiry
   let session = null;                  // { access_token, refresh_token, expires_at, user_id }
   let refreshTimer = null;
@@ -49,13 +51,28 @@ window.Cloud = (() => {
     };
   }
 
+  // Every request is bounded. Without a timeout, a black-holed connection (a
+  // captive portal, a dead cell hand-off) left the single-flight latch pending
+  // forever, and with it the account chip, Export and Delete — no error, no
+  // recovery, for the life of the page.
+  const REQ_TIMEOUT_MS = 12000;
+  const timeout = () => (typeof AbortSignal !== 'undefined' && AbortSignal.timeout
+    ? AbortSignal.timeout(REQ_TIMEOUT_MS) : undefined);
+
   async function authPost(path, body) {
     const res = await fetch(BASE + path, {
       method: 'POST',
       headers: { apikey: KEY, 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: timeout(),
     });
-    if (!res.ok) throw new Error('auth ' + res.status);
+    // A 4xx means the server looked and said no — those credentials are dead.
+    // Anything else (5xx, offline, timeout) says nothing about them.
+    if (!res.ok) {
+      const e = new Error('auth ' + res.status);
+      e.rejected = res.status >= 400 && res.status < 500;
+      throw e;
+    }
     return res.json();
   }
 
@@ -101,7 +118,17 @@ window.Cloud = (() => {
     const flight = (async () => {
       if (session && session.refresh_token) {
         try { await refresh(); return; }
-        catch { storeSession(null); }   // rotten pair: fall through
+        catch (err) {
+          // Distinguish REJECTED from UNREACHABLE. Discarding the stored pair
+          // on any failure meant a single flaky moment — a tunnel, a dropped
+          // wifi hop — silently orphaned the player's account: a fresh
+          // anonymous one was minted, their cloud save became unreachable
+          // forever, and Delete/Export then acted on the WRONG account. Only
+          // a definitive rejection from the server may discard credentials;
+          // a network error must leave them alone and fail this call.
+          if (err && err.rejected) storeSession(null);
+          else throw err;
+        }
       }
       if (create) await signUpAnon();
     })();
@@ -118,6 +145,7 @@ window.Cloud = (() => {
     if (session.user_id) return;
     const res = await fetch(BASE + '/auth/v1/user', {
       headers: { apikey: KEY, Authorization: 'Bearer ' + session.access_token },
+      signal: timeout(),
     });
     if (!res.ok) throw new Error('user ' + res.status);
     const u = await res.json();
@@ -128,6 +156,7 @@ window.Cloud = (() => {
 
   async function rest(path, opts = {}) {
     const res = await fetch(BASE + '/rest/v1' + path, {
+      signal: timeout(),
       ...opts,
       headers: {
         apikey: KEY,
@@ -192,6 +221,7 @@ window.Cloud = (() => {
     // the local progression then merges into the Google account's row on
     // return, so nothing a player can see is lost.
     signInUrl() {
+      try { sessionStorage.setItem(PENDING, '1'); } catch {}
       return BASE + '/auth/v1/authorize?provider=google&redirect_to='
         + encodeURIComponent(location.origin + '/');
     },
@@ -207,10 +237,13 @@ window.Cloud = (() => {
           + '?provider=google&skip_http_redirect=true&redirect_to='
           + encodeURIComponent(location.origin + '/'), {
           headers: { apikey: KEY, Authorization: 'Bearer ' + session.access_token },
+          signal: timeout(),
         });
         if (!res.ok) throw new Error('link ' + res.status);
         const j = await res.json();
-        return j && j.url ? j.url : null;
+        if (!j || !j.url) return null;
+        try { sessionStorage.setItem(PENDING, '1'); } catch {}
+        return j.url;
       } catch { return null; }
     },
 
@@ -222,6 +255,17 @@ window.Cloud = (() => {
       if (!location.hash || location.hash.length < 2) return false;
       const p = new URLSearchParams(location.hash.slice(1));
       const scrub = () => history.replaceState(null, '', location.pathname + location.search);
+      // ONLY accept tokens for a sign-in THIS TAB started. Without this, any
+      // link of the form https://…/#access_token=<attacker's token> silently
+      // signed the visitor into the ATTACKER's account: their progress would
+      // then sync into it, and the attacker could read it at will. A login
+      // CSRF, exploitable by pasting a link. The flag lives in sessionStorage
+      // so it is per-tab and dies with it; a crafted link opened anywhere else
+      // has no flag and its tokens are discarded.
+      let initiated = false;
+      try { initiated = sessionStorage.getItem(PENDING) === '1'; } catch {}
+      if (!initiated) { scrub(); return false; }
+      try { sessionStorage.removeItem(PENDING); } catch {}
       if (p.get('error')) { scrub(); return 'error'; }
       const at = p.get('access_token'), rt = p.get('refresh_token');
       if (!at || !rt) return false;
@@ -241,6 +285,7 @@ window.Cloud = (() => {
         await ensureSession(false);
         const res = await fetch(BASE + '/auth/v1/user', {
           headers: { apikey: KEY, Authorization: 'Bearer ' + session.access_token },
+          signal: timeout(),
         });
         if (!res.ok) throw new Error('user ' + res.status);
         const u = await res.json();
@@ -273,6 +318,7 @@ window.Cloud = (() => {
         await fetch(BASE + '/auth/v1/logout', {
           method: 'POST',
           headers: { apikey: KEY, Authorization: 'Bearer ' + (session || {}).access_token },
+          signal: timeout(),
         });
       } catch { /* revocation is best-effort; local clear is what matters */ }
       storeSession(null);
