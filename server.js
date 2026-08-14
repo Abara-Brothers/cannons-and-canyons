@@ -443,7 +443,33 @@ checkSupabase().then(() => {
 });
 
 const server = http.createServer((req, res) => {
-  let urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
+  // EVERY request is wrapped. A synchronous throw in here reaches
+  // 'uncaughtException', whose handler shuts the process down — so before
+  // batch 8.61 a single `GET /%` killed the server and every live match with
+  // it. Verified: the process exited, remotely, from one unauthenticated
+  // request. Two ways in, both fixed below, but the wrapper is the real
+  // guarantee: no future edit in this handler can take the game down.
+  try {
+    handleRequest(req, res);
+  } catch (err) {
+    reportServerError('request', err);
+    try { if (!res.headersSent) res.writeHead(400); res.end(); } catch {}
+  }
+});
+
+function handleRequest(req, res) {
+  // decodeURIComponent THROWS on a malformed escape ('%', '%zz', '%e0%a4%a').
+  // A bad path is a 400, not a crash.
+  const raw = (req.url || '/').split('?')[0];
+  let urlPath;
+  try { urlPath = decodeURIComponent(raw); }
+  catch { res.writeHead(400, { 'Content-Type': 'text/plain' }); return res.end('Bad request'); }
+  // A NUL in a path makes fs throw synchronously, which was the second way to
+  // kill the process. Nothing legitimate contains one.
+  if (urlPath.indexOf('\0') !== -1) {
+    res.writeHead(400, { 'Content-Type': 'text/plain' });
+    return res.end('Bad request');
+  }
   if (urlPath === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify({
@@ -506,7 +532,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': MIME[path.extname(filePath)] || 'application/octet-stream' });
     res.end(data);
   });
-});
+}
 
 // ---- WebSocket wiring -------------------------------------------------------
 // maxPayload caps a single frame. Game messages are tiny (the largest inbound
@@ -540,7 +566,21 @@ wss.on('connection', (ws) => {
     if (ws.tokens < 1) { try { ws.close(4029, 'rate limit'); } catch {} return; }
     ws.tokens -= 1;
     let msg; try { msg = JSON.parse(raw); } catch { return; }
-    handleClientMessage(ws, msg);
+    // `JSON.parse` succeeding does NOT mean the frame is a message: 'null',
+    // '5' and '"str"' all parse fine, and the engine then reads .type off
+    // them. Before batch 8.61 one `null` frame from any anonymous client
+    // reached uncaughtException and shut the process down — verified, the
+    // server died on the first frame. Two layers now:
+    //   * shape check here, so nonsense never enters the engine at all
+    //   * try/catch here, so NO future throw in 1,600 lines of engine can
+    //     take the process — and every live match — down with it
+    if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
+    try {
+      handleClientMessage(ws, msg);
+    } catch (err) {
+      reportServerError('clientMessage', err);
+      try { ws.close(4000, 'bad frame'); } catch {}
+    }
   });
 
   ws.on('close', () => handleClose(ws));

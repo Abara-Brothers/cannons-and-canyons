@@ -298,6 +298,43 @@ async function hostileTokens() {
   try { ws.close(); } catch {}
 }
 
+// ---- 8. THE SERVER MUST SURVIVE HOSTILE INPUT (8.61) ------------------------
+// Two remotely-triggerable KILLS were live in production until this batch, both
+// unauthenticated, both one request:
+//   * `GET /%` — decodeURIComponent throws on a malformed escape, the throw
+//     reached uncaughtException, and that handler shuts the process down.
+//     `/a%00b.png` did the same via fs.
+//   * a single WebSocket frame containing `null` — JSON.parse succeeds, so the
+//     existing catch did not fire, and the engine read .type off null.
+// Every live match died with the process. These assertions exist so no future
+// edit can reopen either door.
+async function survivesHostileInput() {
+  const base = URL.replace(/^ws/, 'http').replace(/\/ws$/, '');
+  const up = async () => {
+    try { const r = await fetch(base + '/health', { signal: AbortSignal.timeout(3000) }); return r.ok; }
+    catch { return false; }
+  };
+  if (!(await up())) { fail('server was not reachable before the hostile-input checks'); return; }
+
+  const paths = ['/%', '/a%00b.png', '/%zz', '/%e0%a4%a', '/..%00/', '/%FF%FE'];
+  for (const p of paths) {
+    try { await fetch(base + p, { signal: AbortSignal.timeout(3000) }); } catch {}
+  }
+  if (await up()) step(`server survived ${paths.length} malformed URL paths`);
+  else { fail(`server DIED on a malformed URL path — a single unauthenticated GET kills it`); return; }
+
+  const frames = ['null', '5', '"str"', '[]', '{}', '{"type":"join","code":123}',
+    '{"type":"resume","code":{}}', `{"type":"join","code":"${'A'.repeat(5000)}"}`,
+    '{"type":null}', '{"type":{"a":1}}', '{"type":"fire","weapon":{},"angle":"x"}', '{"type":"move","dir":[]}'];
+  for (const f of frames) {
+    const ws = await open();
+    await new Promise((res) => { ws.send(f); setTimeout(res, 120); });
+    try { ws.close(); } catch {}
+  }
+  if (await up()) step(`server survived ${frames.length} hostile WebSocket frames`);
+  else fail('server DIED on a hostile WebSocket frame — one anonymous frame kills it');
+}
+
 (async () => {
   try {
     await roomHoarding();
@@ -307,6 +344,7 @@ async function hostileTokens() {
     await rateLimit();
     await noFreeTextNames();
     await hostileTokens();
+    await survivesHostileInput();
   } catch (e) {
     fail('threw: ' + (e && e.message ? e.message : String(e)));
   }

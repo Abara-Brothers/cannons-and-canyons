@@ -902,7 +902,9 @@ body.golf .fuel { display: none; }
 .hs-foot .skinrow .skin { width: clamp(18px, calc(3.4 * var(--vhu)), 26px); height: clamp(18px, calc(3.4 * var(--vhu)), 26px); }
 
 /* Narrow / portrait: stack the columns; everything stays inside the viewport
-   because the bands share the height budget and panels compress via clamps. */
+   because the bands share the height budget and panels compress via clamps.
+   That assumption holds only while there is height to compress INTO — see the
+   very-short rules below, which take the columns back off the stack. */
 @media (orientation: landscape) and (max-width: 640px), (orientation: portrait) and (max-height: 640px) {
   .hs-main { grid-template-columns: 1fr; overflow: hidden; }
   .hs-title { font-size: clamp(19px, calc(3.4 * var(--vhu)), 30px); }
@@ -920,6 +922,31 @@ body.golf .fuel { display: none; }
   .hs-by { font-size: clamp(7px, calc(1.1 * var(--vhu)), 9px); letter-spacing: .16em; margin-top: 1px; }
   .hs-quick-txt i { display: none; }
   .hs-panel-head i { display: none; }
+}
+
+/* SMALLEST supported landscape — iPhone SE 1st gen is 568x320 and iOS 15 still
+   runs on it, so this is a real device, not a hypothetical.
+   Two bugs lived here (found by geometric audit, batch 8.61):
+     1. The narrow-width rule above STACKS the two columns, which needs MORE
+        height — exactly the thing this viewport has none of. The create panel
+        was handed 98px for 160px of content and clipped 62px away, taking the
+        CREATE GAME button with it. Side by side fits: 568px is plenty wide.
+     2. `.modegrid` is a flex child with `min-height: 0` and no shrink control,
+        so flex crushed it to ZERO height while its wrapped tiles kept theirs —
+        the tiles then painted outside their box, on top of the buttons below.
+        21 measured overlaps. `flex: 0 0 auto` makes the grid own its height.
+   The panel still cannot show everything at 320px tall, so `.hs-main` scrolls
+   as ONE unit: the modes are visible immediately and the button is 58px down,
+   which beats a sticky button over an invisible, un-hinted scroll region. */
+@media (orientation: landscape) and (max-width: 640px) and (max-height: 400px) {
+  .hs-main { grid-template-columns: 1fr 1fr; overflow-y: auto; }
+  .modegrid { flex: 0 0 auto; gap: 4px; }
+  .modegrid .mode { padding: 5px 3px; font-size: 9px; gap: 2px; }
+  .modegrid .mode svg { width: 14px; height: 14px; }
+  .hs-panel { padding: 7px; gap: 5px; }
+  .hs-panel-head { font-size: 11.5px; }
+  #createBtn { padding: 9px; font-size: 13px; }
+  #oppBtns .opp { padding: 5px 6px; font-size: 10px; }
 }
 
 /* ---- Armoury modal ---- */

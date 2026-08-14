@@ -127,6 +127,15 @@ const rooms = new Map();
 let waiting = null; // a socket sitting in the quick-match queue
 const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
+// A room code off the wire is whatever the sender felt like sending. `(code ||
+// '').toUpperCase()` reads fine and throws on `{"code": 123}` — a number has no
+// toUpperCase — which used to reach uncaughtException and stop the process.
+// The host now catches that too (batch 8.61), but the engine must not depend on
+// being hosted: the SAME file runs in the browser for offline play, where there
+// is no such net. Coerce, then bound the length so a megabyte string cannot be
+// used to make the Map do work.
+const roomCode = (v) => (typeof v === 'string' ? v : '').toUpperCase().trim().slice(0, 8);
+
 function makeCode() {
   let code;
   do {
@@ -1421,7 +1430,7 @@ function handleClose(ws) {
 }
 
 function handleResume(ws, msg) {
-  const room = rooms.get((msg.code || '').toUpperCase().trim());
+  const room = rooms.get(roomCode(msg.code));
   if (!room || room.state !== 'playing') return send(ws, { type: 'resumeError' });
   const seat = room.players.findIndex(p => p && p.token === msg.token);
   if (seat < 0) return send(ws, { type: 'resumeError' });
@@ -1474,7 +1483,7 @@ export function handleClientMessage(ws, msg) {
       break;
     }
     case 'join': {
-      const code = (msg.code || '').toUpperCase().trim();
+      const code = roomCode(msg.code);
       const r = rooms.get(code);
       if (!r) return send(ws, { type: 'joinError', reason: 'No game with that code.' });
       if (r.state !== 'waiting') return send(ws, { type: 'joinError', reason: 'That battle has already started.' });
