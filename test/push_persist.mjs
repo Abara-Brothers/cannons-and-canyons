@@ -249,8 +249,11 @@ const until = async (test, ms, what) => {
   });
   send(b, { type: 'join', code: created.code, name: 'Stone Falcon', skin: 'desert' });
   if (!(await until(() => !!started, 8000, 'duel start'))) return finish();
-  if (!(await until(() => hits.nudgeGet.length >= 1, 30000, 'nudge subscription lookup'))) return finish();
-  const g = hits.nudgeGet[0];
+  // Pick the NUDGE lookup specifically: /health's readiness probe (8.59) also
+  // GETs this table, so index 0 is not reliably the one under test.
+  const isNudge = (h) => h.query.includes('user_id=eq.');
+  if (!(await until(() => hits.nudgeGet.some(isNudge), 30000, 'nudge subscription lookup'))) return finish();
+  const g = hits.nudgeGet.find(isNudge);
   if (g.query.includes(`user_id=eq.${USER}`) && g.apikey === 'sk_test') step('nudge looks subscriptions up by account with the secret key');
   else fail(`nudge lookup wrong: ${JSON.stringify(g)}`);
   if (!inbox) {
@@ -273,8 +276,13 @@ const until = async (test, ms, what) => {
       let b = ''; r.on('data', (c) => { b += c; }); r.on('end', () => { try { res(JSON.parse(b)); } catch { res(null); } });
     }).on('error', () => res(null));
   });
-  if (health && health.supabase === 'ok' && health.fcm === true && health.webpush === true) {
-    step(`/health reports readiness truthfully (supabase=ok, fcm=true, version ${health.version})`);
+  // supabaseAdmin is the leg that matters most: with a good publishable key and
+  // a stale SECRET key, sign-in and cloud saves work while push storage,
+  // deletion and crash reports fail silently — production's exact state on
+  // 2026-08-13, which the first version of this endpoint reported as healthy.
+  if (health && health.supabase === 'ok' && health.supabaseAdmin === 'ok'
+    && health.fcm === true && health.webpush === true) {
+    step(`/health reports readiness truthfully (supabase+admin ok, fcm=true, version ${health.version})`);
   } else fail(`/health wrong: ${JSON.stringify(health)}`);
   // Look for the ACTUAL secrets this server holds, not the word "key" — the
   // first version of this check flagged its own healthy output, because the

@@ -391,9 +391,19 @@ if (SB_SECRET) {
 // URLs, no key prefixes — booleans and one probe result. `supabase` is the one
 // that matters: 'ok' means this server can actually verify a player token,
 // which is the precondition for cloud saves, push persistence and deletion.
-let supabaseHealth = 'unchecked';
+// TWO keys, two jobs, two ways to be wrong — and the first version of this
+// check only tested one of them. With a correct publishable key and a stale
+// SECRET key, everything a player does directly (sign-in, cloud save) works
+// while everything the SERVER does on their behalf (push storage, deletion,
+// crash reports) fails silently. That is exactly the state production was found
+// in, one fix after the URL. Both are probed now.
+let supabaseHealth = 'unchecked';        // auth/client path: publishable key
+let supabaseAdminHealth = 'unchecked';   // privileged path: secret key
 async function checkSupabase() {
-  if (!SB_URL || !SB_PUB || !SB_SECRET) return (supabaseHealth = 'unconfigured');
+  if (!SB_URL || !SB_PUB || !SB_SECRET) {
+    supabaseHealth = supabaseAdminHealth = 'unconfigured';
+    return supabaseHealth;
+  }
   try {
     // /auth/v1/health is the endpoint that actually DISCRIMINATES: with a valid
     // apikey it answers 200, with a wrong one 401. (/auth/v1/user does not —
@@ -402,16 +412,34 @@ async function checkSupabase() {
     const res = await fetch(`${SB_URL}/auth/v1/health`, { headers: { apikey: SB_PUB } });
     supabaseHealth = res.ok ? 'ok' : 'bad_key_or_url';
   } catch { supabaseHealth = 'unreachable'; }
+  try {
+    // A zero-row read of a table whose RLS has NO policies: only a key that
+    // bypasses RLS gets 200, so this proves the secret key without returning
+    // any data or writing anything.
+    const res = await fetch(`${SB_URL}/rest/v1/push_subscriptions?select=id&limit=0`, {
+      headers: { apikey: SB_SECRET, Authorization: `Bearer ${SB_SECRET}` },
+    });
+    supabaseAdminHealth = res.ok ? 'ok' : 'bad_secret_key';
+  } catch { supabaseAdminHealth = 'unreachable'; }
   return supabaseHealth;
 }
-checkSupabase().then((s) => {
-  const line = `[boot] supabase=${s} webpush=${!!webpush} fcm=${!!fcm}`;
+checkSupabase().then(() => {
+  const line = `[boot] supabase=${supabaseHealth} supabaseAdmin=${supabaseAdminHealth}`
+    + ` webpush=${!!webpush} fcm=${!!fcm}`;
   // 'unconfigured' is the NORMAL state for local dev and CI, which have no
   // Supabase env by design — shouting there would train everyone to ignore
   // this line, which is precisely the failure being fixed. The states that
-  // mean something is WIRED WRONG get stderr and an instruction.
-  if (s === 'ok' || s === 'unconfigured') console.log(line);
-  else console.error(`${line}  <-- ACCOUNTS/PUSH/DELETION ARE BROKEN: check SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY`);
+  // mean something is WIRED WRONG get stderr and an instruction naming the
+  // variable to check, because "supabase is broken" cost two round trips.
+  const bad = [];
+  if (supabaseHealth !== 'ok' && supabaseHealth !== 'unconfigured') {
+    bad.push('SIGN-IN/CLOUD SAVES are broken: check SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY');
+  }
+  if (supabaseAdminHealth !== 'ok' && supabaseAdminHealth !== 'unconfigured') {
+    bad.push('PUSH STORAGE/ACCOUNT DELETION/CRASH REPORTS are broken: check SUPABASE_SECRET_KEY');
+  }
+  if (!bad.length) console.log(line);
+  else console.error(`${line}\n       <-- ${bad.join('\n       <-- ')}`);
 });
 
 const server = http.createServer((req, res) => {
@@ -422,7 +450,8 @@ const server = http.createServer((req, res) => {
       ok: true,
       version: pkgVersion,
       rooms: rooms.size,
-      supabase: supabaseHealth,          // ok | unconfigured | bad_key_or_url | unreachable
+      supabase: supabaseHealth,            // ok | unconfigured | bad_key_or_url | unreachable
+      supabaseAdmin: supabaseAdminHealth,  // ok | unconfigured | bad_secret_key | unreachable
       webpush: !!webpush,
       fcm: !!fcm,
     }));
