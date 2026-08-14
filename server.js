@@ -108,6 +108,12 @@ async function sbAdmin(method, path, body, prefer) {
 // rides on the socket object, so a resumed seat keeps its identity as long
 // as the reconnecting socket says hello too (the client does, on every open).
 setAuthSink((ws, token) => {
+  // An explicit null token means "this socket is nobody now" — the client
+  // sends it on sign-out. Without it the socket kept the PREVIOUS account's
+  // identity for its whole life, so a device that signed out carried on
+  // receiving that account's turn nudges, and any subscription it registered
+  // was filed under the wrong person.
+  if (token === null) { ws.userId = null; return; }
   sbUserFromToken(token).then((id) => { if (id) ws.userId = id; }).catch(() => {});
 });
 
@@ -399,6 +405,7 @@ if (SB_SECRET) {
 // in, one fix after the URL. Both are probed now.
 let supabaseHealth = 'unchecked';        // auth/client path: publishable key
 let supabaseAdminHealth = 'unchecked';   // privileged path: secret key
+let lastHealthCheck = 0;                 // re-probe throttle, see the /health route
 async function checkSupabase() {
   if (!SB_URL || !SB_PUB || !SB_SECRET) {
     supabaseHealth = supabaseAdminHealth = 'unconfigured';
@@ -471,6 +478,14 @@ function handleRequest(req, res) {
     return res.end('Bad request');
   }
   if (urlPath === '/health') {
+    // Re-probe at most once a minute. A boot-time snapshot held forever would
+    // keep reporting 'ok' long after a key was rotated or Supabase went away —
+    // the exact blind spot this endpoint exists to remove. Fire-and-forget so
+    // the response is never delayed by the probe.
+    if (Date.now() - lastHealthCheck > 60000) {
+      lastHealthCheck = Date.now();
+      checkSupabase().catch(() => {});
+    }
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify({
       ok: true,

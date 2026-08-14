@@ -963,6 +963,9 @@ $('accSignOutBtn').onclick = async () => {
   // precedent in copyLinkBtn, and a sign-out deserves a beat.
   if (!confirm('Sign out? Progress saved to this account stays with it; this device starts a fresh guest.')) return;
   await Cloud.signOut();
+  // Tell the server this socket is nobody now, or it keeps the old identity
+  // and this device carries on getting that account's turn nudges.
+  sendMsg({ type: 'hello', token: null });
   $('accountModal').classList.add('hidden');
   refreshAccountChip();
   showToast('Signed out');
