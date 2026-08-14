@@ -5,3 +5,4 @@ npm-debug.log*
 data/
 tools/splash/out/
 tools/splash/icon.svg
+backups/
