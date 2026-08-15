@@ -738,13 +738,31 @@ const ACHS = [
   ['ace', 'Hole in One', 'Sink the ball in a single stroke'],
   ['underpar', 'Under Par', 'Finish the 9 holes under par'],
 ];
+// Rebuilt onto a complete default rather than returned as-is. The old loader
+// checked `p.v === 1` and then trusted the whole object, so a partially-written
+// profile — `{"v":1}` with no sub-objects, or with them set to null — passed the
+// version check and came back missing `ach`. `cloudBoot()` then died on
+// `Object.keys(PROF.ach).length`, which meant no cloud sync and no account-chip
+// refresh: the game played fine and sign-in silently half-completed, exactly the
+// failure the jsonb merge had. Storage is not a trusted input either: a quota
+// error mid-write, a future schema change, or another tab can all leave a
+// partial value behind. Take the VALUES, never the shape.
 const PROF = (() => {
+  const prof = { v: 1, modes: {}, weapons: {}, shots: 0, hits: 0, maxDmg: 0, longest: 0,
+                 kills: 0, aces: 0, golfBest: null, hordeBest: { aliens: 0 }, ach: {} };
   try {
     const p = JSON.parse(localStorage.getItem('cc_career') || 'null');
-    if (p && p.v === 1) return p;
+    if (p && typeof p === 'object' && !Array.isArray(p) && p.v === 1) {
+      for (const k of ['shots', 'hits', 'maxDmg', 'longest', 'kills', 'aces']) {
+        if (typeof p[k] === 'number' && Number.isFinite(p[k])) prof[k] = p[k];
+      }
+      if (typeof p.golfBest === 'number' && Number.isFinite(p.golfBest)) prof.golfBest = p.golfBest;
+      for (const k of ['modes', 'weapons', 'ach', 'hordeBest']) {
+        if (p[k] && typeof p[k] === 'object' && !Array.isArray(p[k])) prof[k] = p[k];
+      }
+    }
   } catch {}
-  return { v: 1, modes: {}, weapons: {}, shots: 0, hits: 0, maxDmg: 0, longest: 0,
-           kills: 0, aces: 0, golfBest: null, hordeBest: { aliens: 0 }, ach: {} };
+  return prof;
 })();
 function saveProf() {
   try { localStorage.setItem('cc_career', JSON.stringify(PROF)); } catch {}

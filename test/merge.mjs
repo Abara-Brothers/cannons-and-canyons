@@ -236,11 +236,88 @@ for (const [label, cloud] of [
   check('a cloud-only cosmetic unlock is adopted', r.midnight === true, `midnight=${r.midnight}`);
 }
 
+// ---- corruption recovery on LOAD -------------------------------------------
+// The other half of `RELEASE_CHECKLIST.md` §6's corruption line. `PROF` is built
+// once at module load from `cc_career`, so unlike the merge this can only be
+// tested across a reload. What matters is that a damaged local profile degrades
+// to defaults instead of bricking the boot — a player whose storage got mangled
+// should lose their stats, not their game.
+async function bootWith(raw) {
+  await evalJs(`try { ${raw === null ? "localStorage.removeItem('cc_career')"
+    : `localStorage.setItem('cc_career', ${JSON.stringify(raw)})`} } catch (e) {} 1`);
+  await send('Page.navigate', { url: `http://127.0.0.1:${appPort}/` });
+  for (let i = 0; i < 60; i++) {
+    const ready = await evalJs('typeof PROF === "object" && PROF !== null').catch(() => false);
+    if (ready) break;
+    await sleep(200);
+  }
+  return evalJs(`(() => {
+    const shapeOk = PROF && PROF.v === 1
+      && PROF.modes && typeof PROF.modes === 'object'
+      && PROF.weapons && typeof PROF.weapons === 'object'
+      && PROF.ach && typeof PROF.ach === 'object'
+      && PROF.hordeBest && typeof PROF.hordeBest === 'object';
+    // The exact access cloudBoot() makes — it threw on a partial profile.
+    let cloudBootSafe = true;
+    try { void (PROF.shots > 0 || Object.keys(PROF.ach).length); } catch (e) { cloudBootSafe = false; }
+    // And the app must actually be usable, not merely have a PROF.
+    const menuUp = !!document.querySelector('[data-mode="duel"]');
+    return { shapeOk, cloudBootSafe, menuUp, shots: PROF.shots };
+  })()`);
+}
+
+for (const [label, raw] of [
+  ['unparseable json', '{not json at all'],
+  ['literal null', 'null'],
+  ['an array', '[1,2,3]'],
+  ['a bare string', '"career"'],
+  ['wrong version', '{"v":99,"shots":5}'],
+  ['no version', '{"shots":5}'],
+  ['valid v1 but EMPTY — no sub-objects', '{"v":1}'],
+  ['valid v1 with null sub-objects', '{"v":1,"modes":null,"weapons":null,"ach":null,"hordeBest":null}'],
+  ['absent', null],
+]) {
+  const r = await bootWith(raw);
+  check(`boot survives ${label}`, r.menuUp && r.cloudBootSafe && r.shapeOk,
+    JSON.stringify(r));
+}
+
+// The loader normalises onto a default shape, so the risk it introduces is the
+// opposite one: silently DROPPING a real career. Prove a full profile round-trips.
+{
+  const real = {
+    v: 1, shots: 1234, hits: 890, maxDmg: 97, longest: 4210, kills: 33, aces: 4,
+    golfBest: 28, modes: { duel: { w: 12, l: 5 }, golf: { w: 3, l: 0 } },
+    weapons: { cannon: 400, nuke: 7 }, hordeBest: { aliens: 14 },
+    ach: { firstBlood: '2026-01-02', sniper: '2026-02-11' },
+  };
+  await evalJs(`try { localStorage.setItem('cc_career', ${JSON.stringify(JSON.stringify(real))}) } catch (e) {} 1`);
+  await send('Page.navigate', { url: `http://127.0.0.1:${appPort}/` });
+  for (let i = 0; i < 60; i++) {
+    if (await evalJs('typeof PROF === "object" && PROF !== null').catch(() => false)) break;
+    await sleep(200);
+  }
+  const got = await evalJs('JSON.parse(JSON.stringify(PROF))');
+  // Compare by VALUE, not by serialised text: the loader builds its default
+  // object first and then fills it, so key order legitimately differs from the
+  // stored literal. A `JSON.stringify` comparison flags that as data loss when
+  // nothing was lost — it did exactly that on the first run of this check.
+  const deepEq = (a, b) => {
+    if (a === b) return true;
+    if (typeof a !== 'object' || typeof b !== 'object' || !a || !b) return false;
+    const ka = Object.keys(a), kb = Object.keys(b);
+    return ka.length === kb.length && ka.every((k) => deepEq(a[k], b[k]));
+  };
+  const same = deepEq(got, real);
+  check('a complete career survives the loader untouched', same,
+    same ? '' : `got ${JSON.stringify(got)}`);
+}
+
 // ---- done ------------------------------------------------------------------
 ws.close();
 chrome.kill();
 srv.kill();
-rmSync(profile, { recursive: true, force: true });
+try { rmSync(profile, { recursive: true, force: true }); } catch {}   // Chrome may still be writing
 try { execSync(`pkill -f 'cc-merge-${dbgPort}'`, { stdio: 'ignore' }); } catch {}
 
 console.log(`\n${pass} passed, ${fail} failed`);
