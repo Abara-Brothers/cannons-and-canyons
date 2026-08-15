@@ -16,14 +16,36 @@ S="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$S/../.." && pwd)"
 CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 OUT="$S/out"; mkdir -p "$OUT"
+TPL="$S/splash.html"
 # The template references icon.svg next to itself.
 cp "$ROOT/public/icons/icon.svg" "$S/icon.svg"
+
+# Headless Chrome exits 0 when a file:// navigation fails: it screenshots its own
+# "Your file couldn't be accessed" page at the requested window size. With the
+# output silenced, `set -euo pipefail` never trips and `--install` happily copies
+# 12 KB error pages over the shipped 1.29 MB assets. That is exactly what a stale
+# filename here did once — the template is splash.html, not splash-tpl.html — and
+# it went unnoticed because nothing ever looked at the result. So: check the
+# template up front, let Chrome's stderr through, and sanity-check every render.
+[ -f "$TPL" ] || { echo "template missing: $TPL" >&2; exit 1; }
 
 render() {              # render <w> <h> <outfile>
   local w=$1 h=$2 out=$3
   "$CHROME" --headless --disable-gpu --hide-scrollbars \
     --screenshot="$out" --window-size="$w,$h" --default-background-color=0b1020ff \
-    "file://$S/splash-tpl.html" >/dev/null 2>&1
+    "file://$TPL" 2>&1 | grep -vi 'devtools listening\|^$' || true
+  [ -s "$out" ] || { echo "render produced nothing: $out" >&2; exit 1; }
+
+  # An error page is nearly flat, so it compresses to a fraction of the real
+  # artwork. The genuine renders sit above 0.15 bytes/pixel; the error pages
+  # measured 0.009. 0.05 separates them with two orders of magnitude to spare.
+  local px=$((w * h))
+  local bytes; bytes=$(wc -c < "$out" | tr -d ' ')
+  if [ "$((bytes * 1000 / px))" -lt 50 ]; then
+    echo "render looks blank or is an error page: $out (${bytes}B for ${w}x${h})" >&2
+    echo "nothing was installed. Open it and check the template renders." >&2
+    exit 1
+  fi
 }
 
 # iOS: one square, centre-cropped by the OS to every device aspect.

@@ -174,10 +174,25 @@ const FCM_API_BASE = process.env.FCM_API_BASE || 'https://fcm.googleapis.com';
 const b64url = (b) => Buffer.from(b).toString('base64url');
 
 // Mint (and cache) a Google OAuth2 access token for the FCM scope.
+// Single-flight guard for the OAuth mint below.
+let fcmMint = null;
+
 async function fcmAccessToken() {
   if (!fcm) return null;
   const now = Math.floor(Date.now() / 1000);
   if (fcm.token && fcm.exp - 60 > now) return fcm.token;
+  // One nudge fans out across every stored subscription, and each send asks for
+  // a token — so an expired cache meant a burst minted one token PER DEVICE,
+  // several OAuth round-trips for a single credential. Share the in-flight mint
+  // instead. The derived promise is assigned before it can settle and cleared
+  // by `.finally`, so a failed mint can never latch a rejected promise in for
+  // the life of the process (the shape that bit cloud.js in 8.62).
+  if (!fcmMint) fcmMint = mintFcmToken().finally(() => { fcmMint = null; });
+  return fcmMint;
+}
+
+async function mintFcmToken() {
+  const now = Math.floor(Date.now() / 1000);
   const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
   const claim = b64url(JSON.stringify({
     iss: fcm.email,
@@ -332,15 +347,24 @@ function ingestError(req, res, cors) {
   const done = () => { res.writeHead(204, cors); res.end(); };
   if (errTokens < 1) return done();
   errTokens -= 1;
-  let body = '';
+  // Collect Buffers and decode ONCE at the end. `body += chunk` decodes each
+  // chunk on its own, so a multi-byte UTF-8 character straddling a chunk
+  // boundary is torn into replacement characters — and crash text, which is
+  // where non-ASCII actually turns up (curly quotes, accented identifiers,
+  // non-English messages), is exactly what this endpoint carries. The cap is
+  // counted in BYTES for the same reason: string length is not wire size.
+  const chunks = [];
+  let size = 0;
   let dead = false;
   req.on('data', (c) => {
-    body += c;
-    if (body.length > 8192) { dead = true; try { req.destroy(); } catch {} done(); }
+    size += c.length;
+    if (size > 8192) { dead = true; try { req.destroy(); } catch {} done(); return; }
+    chunks.push(c);
   });
   req.on('end', () => {
     if (dead) return;
     try {
+      const body = Buffer.concat(chunks).toString('utf8');
       const j = JSON.parse(body || '{}');
       const s = (v, n) => (typeof v === 'string' && v ? v.slice(0, n) : null);
       const row = {
@@ -537,7 +561,16 @@ function handleRequest(req, res) {
   if (!filePath.startsWith(PUBLIC)) { res.writeHead(403); return res.end('Forbidden'); }
   fs.readFile(filePath, (err, data) => {
     if (err) {
-      // SPA fallback so /?room=CODE deep links still load.
+      // SPA fallback so extension-less deep links still load — but ONLY those.
+      // Falling back for everything answered 200 + text/html for a MISSING
+      // asset, so a typo'd <script src> or a renamed image looked like a
+      // successful load: the browser got HTML where it expected JS, the
+      // network tab said 200, and the service worker happily cached the page
+      // under the asset's URL. A missing asset must 404 and say so.
+      if (path.extname(urlPath)) {
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+        return res.end('Not found');
+      }
       return fs.readFile(path.join(PUBLIC, 'index.html'), (e2, html) => {
         if (e2) { res.writeHead(404); return res.end('Not found'); }
         res.writeHead(200, { 'Content-Type': MIME['.html'] });

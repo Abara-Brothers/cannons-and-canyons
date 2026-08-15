@@ -11,29 +11,40 @@ a later release; see §6. Everything below assumes that.
 ## 1. How the mobile apps are built (Capacitor wrapper)
 
 The game is a self-contained web app + Node multiplayer server. The mobile apps
-are thin native wrappers around it. **Recommended setup — remote wrapper**: the
-app loads your deployed game URL, so every game update ships instantly with no
-store re-review.
+are thin native wrappers around it, and **the assets are BUNDLED into the app,
+not loaded from a URL.**
+
+> **Rewritten 2026-08-15.** This section previously recommended a *remote
+> wrapper* — pointing the shell at the deployed URL. **Do not do that.** It is
+> ADR-006 option B, which was rejected: it kills offline play entirely and
+> invites an App Store 4.2 rejection for shipping a repackaged website.
+> `capacitor.config.json` carries a standing note forbidding `server.url` for
+> exactly this reason. Updates reach shipped apps over the air (ADR-006 option
+> C), not by pointing the app at a web server. The old text also told you to run
+> `npx cap add` (both native projects already exist and are committed, with
+> hand-tuned Info.plist and manifest entries that a re-add would discard) and to
+> regenerate assets with `@capacitor/assets`, which would **overwrite the
+> branded icon and the 8.60 splash screens**.
+
+Both native projects are already in the repo. The normal build loop is:
 
 ```bash
-# One-time (requires Node, Xcode for iOS, Android Studio for Android)
-npm i -D @capacitor/cli @capacitor/core @capacitor/ios @capacitor/android
-npx cap add ios
-npx cap add android
+npm run version:sync    # keeps package.json, iOS, Android and config.js in step
+npx cap sync            # copies public/ into both shells
 
-# 1. Deploy the game (Render/Railway/Fly — see README.md) and note the URL.
-# 2. In capacitor.config.json: rename "_url" to "url" and set your deployed
-#    HTTPS URL (also set public/config.js CC_SERVER if you ever bundle locally).
-npx cap sync
-
-# Icons + splash screens for BOTH stores from the SVG masters:
-npm i -D @capacitor/assets
-npx capacitor-assets generate --iconBackgroundColor '#0b1020' --splashBackgroundColor '#0b1020'
-#   (masters: resources/icon.svg + resources/splash.svg — see §4)
-
-npx cap open ios       # → Xcode: set signing team, then Product ▸ Archive
-npx cap open android   # → Android Studio: Build ▸ Generate Signed Bundle (.aab)
+npx cap open ios        # → Xcode: set signing team, then Product ▸ Archive
+npx cap open android    # → Android Studio: Build ▸ Generate Signed Bundle (.aab)
 ```
+
+Gradle needs **JDK 21** (Capacitor 8 requires 21, not 17):
+
+```bash
+JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home \
+  ./gradlew assembleDebug
+```
+
+The multiplayer host the shells talk to is `CC_NATIVE_HOST` in `public/config.js`
+— that is the only place a server URL belongs.
 
 Store accounts you (Jordan) must create — these cannot be automated:
 - **Apple Developer Program** — developer.apple.com, US$99/yr
@@ -119,9 +130,13 @@ Store accounts you (Jordan) must create — these cannot be automated:
   **statutory tort** (from 10 June 2025) and **Australian Consumer Law** apply regardless, which
   is why privacy copy must stay true after every data-touching feature; the OAIC **Children's
   Online Privacy Code** (final by 10 Dec 2026) binds APP entities only, so it does not bind us
-  today but would apply immediately on crossing $3M. **Highest residual risk: COPPA** — a child
-  can link Google with no age gate; a neutral age screen before Google sign-in is the
-  recommended mitigation and is not yet built.
+  today but would apply immediately on crossing $3M. **Highest residual risk: COPPA.** The
+  recommended mitigation — a neutral age screen before Google sign-in — **shipped in batch
+  8.55**: the game asks for a birth year before either Google entry point, stores and transmits
+  nothing, and steers an under-13 answer back to guest play. It is described in the published
+  privacy policy under *Children* (added 2026-08-15, so the policy matches what the code does
+  and the mitigation can be cited to either store). Residual risk remains — an age screen is a
+  declaration, not verification — and is accepted by the owner in `docs/LEGAL_POSITION.md` §3.
 
 ## 4. Assets checklist
 
@@ -143,18 +158,36 @@ Full detail — concepts, sizes, and how each was produced — is in
 
 ## 5. Device compatibility statement
 
-The game targets **iOS 14+ / Android 8+ (API 26+)** WebViews and uses only
-broadly-supported web APIs: Canvas 2D, WebSocket, Pointer Events, Web Audio,
-localStorage. **The game is landscape-only by design** — held in portrait it
-shows a rotate prompt rather than a reflowed layout, which is deliberate and
-should be declared as such (iOS: landscape-only orientations; Play: the listing
-screenshots are all landscape). Verified behaviors: safe-area insets (notches),
-touch drag/pinch, audio unlock on first gesture, background-tab recovery, and
-automatic match resume after disconnects.
+The shipped minimums are **iOS 15.0** and **Android minSdk 24 (Android 7.0)**,
+compiling and targeting API 36.
+
+> **Corrected 2026-08-15.** This section previously said "iOS 14+ / Android 8+
+> (API 26+)" — wrong in *both directions*, and the iOS one mattered: advertising
+> iOS 14 support for a build with a 15.0 deployment target promises a device it
+> cannot install on. Android was the opposite: the build supports API 24, two
+> levels lower than the listing claimed. Take the numbers from
+> `IPHONEOS_DEPLOYMENT_TARGET` and `android/variables.gradle`, never from here.
+
+The game uses only broadly-supported web APIs: Canvas 2D, WebSocket, Pointer
+Events, Web Audio, localStorage.
+
+**The game is landscape-only by design**, and should be declared as such (iOS:
+landscape-only orientations; Play: every listing screenshot is landscape). **There
+is no rotate prompt** — the old one was retired when the CSS rotate shim replaced
+it, and its stylesheet rule is now behind a media query that can never match. In
+the packaged apps the OS locks orientation, so portrait never reaches the app at
+all; on the web build the whole UI rotates 90° instead of reflowing.
+
+Verified behaviours: safe-area insets (notches), touch drag/pinch, audio unlock on
+first gesture, background-tab recovery, and automatic match resume after
+disconnects.
+
 Final certification requires running the store builds on physical devices via
-Xcode/Android Studio — checklist: launch, rotate (expect the rotate prompt in
-portrait), background/foreground mid-match, network drop mid-match (should
-auto-resume), notch overlap.
+Xcode/Android Studio — checklist: launch, **rotate (expect the layout to stay
+upright and landscape — do NOT expect a rotate prompt; there isn't one, and the
+old wording here would have had a tester file that as a bug)**,
+background/foreground mid-match, network drop mid-match (should auto-resume),
+notch overlap.
 
 ## 6. Monetisation: none in this release
 

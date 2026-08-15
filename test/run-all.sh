@@ -80,6 +80,12 @@ else
   # Also self-hosted: mocks Supabase locally and asserts the push-persistence
   # wire shapes (verify, upsert, nudge lookup, delivery, dead-endpoint delete).
   run push_persist node test/push_persist.mjs
+  # Also self-hosted, and it asks the OS for a free port rather than taking one
+  # — kill_server() above only clears $PORT, so a hardcoded port left busy by a
+  # crashed run would surface here as a misleading "server never came up".
+  # Guards ISSUE-036 (b) UTF-8 across chunk boundaries in /errors, and (c) a
+  # missing asset returning a real 404 instead of 200 + text/html.
+  run http_contract node test/http_contract.mjs
 
   # Expected chatter: the listen banner, the readiness line (8.58 — locally it
   # always reads supabase=unconfigured, which is correct with no env), and the

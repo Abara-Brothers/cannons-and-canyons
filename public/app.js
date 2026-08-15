@@ -900,7 +900,18 @@ $('accountBtn').onclick = () => {
 };
 $('accCloseBtn').onclick = () => $('accountModal').classList.add('hidden');
 $('accLinkBtn').onclick = () => {
-  startSignIn(async () => (await Cloud.linkUrl()) || Cloud.signInUrl());  // keeps the account + row
+  startSignIn(async () => {
+    const url = await Cloud.linkUrl();          // keeps the account + row
+    if (url) return url;
+    // Do NOT fall back to a plain sign-in. This button is labelled "Keep my
+    // progress", and `signInUrl()` mints a DIFFERENT account: the guest's cloud
+    // row — and anything earned on another device under it — is orphaned where
+    // the player can never reach it again, while the UI reports success. The
+    // button is only shown to an existing guest, so a link failure is always a
+    // transient one worth retrying, never a reason to start over.
+    showToast('Could not link your account right now — check your connection and try again');
+    return null;                                 // goSignIn() only navigates on a URL
+  });
 };
 
 // ---- Age gate before Google sign-in -----------------------------------------
@@ -1026,8 +1037,16 @@ async function deleteMyAccount() {
     if (!res.ok) { showToast('Could not delete right now — try again later'); return; }
   } catch { showToast('Could not delete right now — try again later'); return; }
   await Cloud.signOut();                     // local clear; revocation is moot
+  // Both confirms promise "this device's local progress" and the privacy policy
+  // promises everything — but this cleared only two keys, leaving the callsign,
+  // chosen paint, saved loadout, tee and difficulty preferences, the resume
+  // token and the age-gate flag behind. Sweep by PREFIX rather than by a list,
+  // so a key added later cannot quietly survive deletion the way these did.
+  // Supabase's own `sb-*` keys are already gone via signOut() above.
   try {
-    ['cc_career', 'cc_loot_midnight'].forEach((k) => localStorage.removeItem(k));
+    Object.keys(localStorage)
+      .filter((k) => k.startsWith('cc_') || k.startsWith('pt_'))
+      .forEach((k) => localStorage.removeItem(k));
   } catch {}
   showToast('Account deleted');
   // In-memory PROF still holds the old numbers; a reload is the clean slate.
@@ -1158,8 +1177,24 @@ $('notifyBtn').onclick = () => { Audio.ensure(); (window.Capacitor ? enableNativ
 // 8.51 hid this button inside Capacitor shells because a WKWebView has no
 // serviceWorker and no PushManager, so the web path could only ever error
 // (ISSUE-020). Since 8.57 the shells have a REAL push path, so the button
-// comes back — pointed at the native plugin instead.
-if (window.Capacitor) $('notifyBtn').classList.remove('hidden');
+// comes back — pointed at the native plugin instead. (The markup no longer
+// carries `hidden`, so the old remove() was a no-op; the gate below is the
+// one that does something.)
+//
+// iOS is the exception, and it must stay hidden there. This build ships
+// WITHOUT push on iOS: there is no `aps-environment` entitlement (no
+// .entitlements file and no CODE_SIGN_ENTITLEMENTS), no UIBackgroundModes, and
+// AppDelegate.swift forwards none of the APNs callbacks the plugin needs. So
+// requestPermissions() raises a REAL iOS notification prompt, register() then
+// fails, and neither `registration` nor `registrationError` can ever fire —
+// the player gets a system permission dialog followed by silence. A prompt
+// that leads nowhere is both a dead end and an App Review risk, and it
+// contradicts what the store answers already say (STORE_LISTING §3). Unhide
+// this once APNs is configured (BQ-005 → ISSUE-033). Web push and Android FCM
+// are untouched.
+if (window.Capacitor && window.Capacitor.getPlatform && window.Capacitor.getPlatform() === 'ios') {
+  $('notifyBtn').classList.add('hidden');
+}
 
 // ---- Native turn nudges (FCM / APNs) ----------------------------------------
 // The Capacitor plugin hands back a registration token; the server stores it
