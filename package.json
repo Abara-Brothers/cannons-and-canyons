@@ -24,6 +24,7 @@
     "test:security": "node test/security.mjs",
     "test:shutdown": "node test/shutdown.mjs",
     "test:house-rules": "node test/house-rules.mjs",
+    "test:load": "node test/load.mjs",
     "version:sync": "node tools/sync-version.mjs",
     "version:bump": "node tools/sync-version.mjs --bump"
   },
