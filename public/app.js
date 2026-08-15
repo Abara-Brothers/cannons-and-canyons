@@ -800,21 +800,52 @@ function trackGameOver(m) {
 function lootMidnight() { try { return localStorage.getItem('cc_loot_midnight') === '1'; } catch { return false; } }
 function progressionSnapshot() { return { career: PROF, loot: { midnight: lootMidnight() } }; }
 
+// The cloud row is `jsonb` — nothing between Postgres and here guarantees its
+// shape, and the client is the only writer, so a bad client (or a hand-edited
+// row) poisons it for every other device on that account. Two real defects, both
+// found by test/merge.mjs, the first client-side test this project ever had:
+//
+//   1. A non-numeric value NaN'd a real counter. `Math.max(42, 'x')` is NaN,
+//      which `JSON.stringify` writes as null — so the local career was
+//      overwritten AND the corruption synced straight back up.
+//   2. A null inside `modes` threw outright. cloudBoot() does not catch, so the
+//      throw skipped cloudQueue() and refreshAccountChip(): sign-in half-
+//      completed and the player was left looking signed out.
+//
+// Hence: coerce every number, treat every container as untrusted, and never let
+// a malformed row take anything away. A merge can only ever move a counter UP.
 function mergeCloudProgression(cloud) {
-  const c = (cloud && cloud.career) || {};
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  const obj = (v) => (v && typeof v === 'object' ? v : {});
+
+  const c = obj(obj(cloud).career);
+  // PROF's own containers are the app's invariant, but this is exactly where a
+  // previously-corrupted profile would surface, so re-establish them cheaply.
+  if (!PROF.weapons) PROF.weapons = {};
+  if (!PROF.ach) PROF.ach = {};
+  if (!PROF.hordeBest) PROF.hordeBest = {};
+
   for (const k of ['shots', 'hits', 'maxDmg', 'longest', 'kills', 'aces']) {
-    PROF[k] = Math.max(PROF[k] || 0, c[k] || 0);
+    PROF[k] = Math.max(num(PROF[k]), num(c[k]));
   }
-  for (const m in (c.modes || {})) {
+  const cModes = obj(c.modes);
+  for (const m in cModes) {
+    const src = obj(cModes[m]);                 // `modes: { duel: null }` used to throw here
     const s = modeStat(m);
-    s.w = Math.max(s.w, c.modes[m].w || 0);
-    s.l = Math.max(s.l, c.modes[m].l || 0);
+    s.w = Math.max(num(s.w), num(src.w));
+    s.l = Math.max(num(s.l), num(src.l));
   }
-  for (const w in (c.weapons || {})) PROF.weapons[w] = Math.max(PROF.weapons[w] || 0, c.weapons[w] || 0);
-  for (const a in (c.ach || {})) if (!PROF.ach[a]) PROF.ach[a] = c.ach[a];
-  if (c.golfBest != null && (PROF.golfBest == null || c.golfBest < PROF.golfBest)) PROF.golfBest = c.golfBest;
-  for (const k in (c.hordeBest || {})) PROF.hordeBest[k] = Math.max(PROF.hordeBest[k] || 0, c.hordeBest[k] || 0);
-  if (cloud && cloud.loot && cloud.loot.midnight && !lootMidnight()) {
+  const cWeapons = obj(c.weapons);
+  for (const w in cWeapons) PROF.weapons[w] = Math.max(num(PROF.weapons[w]), num(cWeapons[w]));
+  const cAch = obj(c.ach);
+  for (const a in cAch) if (!PROF.ach[a]) PROF.ach[a] = cAch[a];
+  // Golf is the one field where lower is better, so it takes the MIN — and only
+  // from a real finite number, or a string would win the `<` comparison.
+  if (typeof c.golfBest === 'number' && Number.isFinite(c.golfBest)
+      && (PROF.golfBest == null || c.golfBest < PROF.golfBest)) PROF.golfBest = c.golfBest;
+  const cHorde = obj(c.hordeBest);
+  for (const k in cHorde) PROF.hordeBest[k] = Math.max(num(PROF.hordeBest[k]), num(cHorde[k]));
+  if (obj(obj(cloud).loot).midnight && !lootMidnight()) {
     try { localStorage.setItem('cc_loot_midnight', '1'); } catch {}
   }
   saveProf();
