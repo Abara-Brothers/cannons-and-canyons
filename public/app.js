@@ -2928,6 +2928,18 @@ const KC = {
 
 function startKillcam(kc) {
   if (!kc || S.killcam) return;
+  // Reduced motion: skip it entirely. This is a ~3.25 s camera move that zooms
+  // 2.6x, slows time, slides letterbox bars in and refuses input throughout —
+  // the single largest piece of involuntary motion in the game.
+  //
+  // Safe to skip because it is NOT load-bearing for the game-over overlay,
+  // despite `stepKillcam` containing a release for `pendingOver`. That release
+  // is the edge case (DoT kills, where no shot animation is left to hand off);
+  // the normal path is `startNextShot()`, which releases the overlay when the
+  // shot queue drains. With `S.killcam` null the frame is never held
+  // (`if (S.killcam && …) return`), so the queue drains as usual and the
+  // overlay arrives — just without the slow-motion. Verified, not assumed.
+  if (!MOTION_OK) return;
   S.killcam = { seat: kc.seat, pi: kc.proj, x: kc.x, y: kc.y, phase: 'idle', t: 0, pt: 0, mix: 0 };
 }
 function clearKillcam() {
@@ -3762,7 +3774,10 @@ function drawMushroom() {
   //    the exact shapes the muzzle blast uses.
   const ft = clamp01(t / MUSH.flash);
   if (ft < 1) {
-    const fa = Math.pow(1 - ft, 1.5);
+    // Scaled under reduced motion, on the same reasoning as the blast wash: the
+    // mushroom cloud is what tells you a nuke landed and it stays at full
+    // strength — this is only the white-hot ground-zero glare on top of it.
+    const fa = Math.pow(1 - ft, 1.5) * (MOTION_OK ? 1 : 0.25);
     const fy = gy - U * 0.25;
     ctx.globalCompositeOperation = 'lighter';
     const bl = U * (1.10 + 2.40 * Math.pow(ft, 0.40));
