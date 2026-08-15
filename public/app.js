@@ -56,6 +56,37 @@ const S = {
 };
 const WW = () => S.world.w, WH = () => S.world.h;
 const MOVE_MIN = 60;
+
+// ---- Reduced motion + flash safety ------------------------------------------
+// The stylesheet honours `prefers-reduced-motion` in five places, but every
+// CANVAS effect ignored it: whole-world shake, the full-screen blast wash, the
+// nuke glare. None of that is CSS, so none of it was ever gated. This flag is
+// the JS half. (It goes here, AFTER the `S` object literal closes — inside it a
+// `let` is a syntax error, which is where an earlier draft of this fix put it.)
+//
+// Both effects are gated at their single DRAW site rather than at their six
+// writers, so nothing can be added later that quietly escapes the gate.
+let MOTION_OK = true;
+try {
+  const mq = matchMedia('(prefers-reduced-motion: reduce)');
+  MOTION_OK = !mq.matches;
+  mq.addEventListener('change', (e) => { MOTION_OK = !e.matches; });
+} catch {}
+
+// WCAG 2.3.1 general flash threshold: more than three flashes a second, above
+// ~10% relative-luminance delta. An Air Strike lands five bombs roughly 286 ms
+// apart (~3.5/sec), each a discrete full-canvas wash — measured at 12.1–12.7%
+// over the volcanic biome, so genuinely over the line there. Rate-limiting the
+// ONSETS keeps the effect while capping it under 3/sec; amplitude is left alone
+// so the game still reads the way it was designed to.
+const FLASH_MIN_GAP_MS = 340;
+let lastFlashAt = 0;
+function addFlash(amount) {
+  const now = performance.now();
+  if (now - lastFlashAt < FLASH_MIN_GAP_MS) return;
+  lastFlashAt = now;
+  S.flash = Math.min(0.5, S.flash + amount);
+}
 // Seat identity: colour + fallback paint. Must stay in sync with --p0..--p3 in
 // styles.css and SEAT_SKIN in server.js.
 const SEAT_COLORS = ['#54c8ff', '#ff6b6b', '#ffd23f', '#b6ff5a'];
@@ -2187,6 +2218,12 @@ function buildWeaponStrip() {
     const ammoTxt = w.ammo >= 99 ? '∞' : `×${left}`;
     chip.innerHTML = `<span class="wrow"><span class="wi">${ICONS[w.id] || ''}</span><span class="wt">${TRAJ[w.id] || ''}</span></span><span class="wn">${w.name}</span><span class="wa">${ammoTxt}</span>`;
     chip.title = w.desc;
+    // `.wn` (the weapon's name) is display:none on phone-width layouts, so the
+    // accessible name computed to the ammo string alone — every chip announced
+    // as "×3" or "∞". Say the name and the rounds explicitly; `title` is only a
+    // fallback for an EMPTY name, so w.desc never surfaced either.
+    chip.setAttribute('aria-label',
+      `${w.name}, ${w.ammo >= 99 ? 'unlimited rounds' : `${left} ${left === 1 ? 'round' : 'rounds'} left`}`);
     chip.onclick = () => {
       if (left > 0 && canAim()) { S.selected = w.id; buildWeaponStrip(); flashWeaponName(w.id); }
     };
@@ -2923,7 +2960,7 @@ function stepKillcam(dt) {
     if ((pr.path.length - 1) - (A.elapsed - pr.delay) > lead && !pr.done) return;
     K.phase = 'run'; K.t = 0;
     $('game').classList.add('killcam');
-    S.flash = Math.min(0.5, S.flash + 0.18);       // a beat of white as time bends
+    addFlash(0.18);                                // a beat of white as time bends
     Audio.killcam();
     if (navigator.vibrate) navigator.vibrate([12, 60, 12]);
   }
@@ -3076,7 +3113,7 @@ function detonate(det, beacon) {
     S.rings.push({ x: det.x, y: det.y, r: 20, rMax: 160, age: 0, life: 0.4, color: det.color });
     return;
   }
-  S.flash = Math.min(0.5, S.flash + (det.r / 500) * 0.35);
+  addFlash((det.r / 500) * 0.35);
   S.shake = Math.min(8, S.shake + det.r / 130);   // just a little kick on impact
   S.rings.push({ x: det.x, y: det.y, r: det.r * 0.3, rMax: det.r * 2.2, age: 0, life: 0.5, color: det.color });
   S.rings.push({ x: det.x, y: det.y, r: det.r * 0.15, rMax: det.r * 1.4, age: 0, life: 0.32, color: '#fff2c0' });
@@ -4217,7 +4254,8 @@ function draw() {
   if (view.dispW !== (canvas.clientWidth || 0) || view.dispH !== (canvas.clientHeight || 0)) resize();
   const { cssW, cssH } = view;
   ctx.save();
-  if (S.shake > 0.15) ctx.translate((Math.random() - 0.5) * S.shake, (Math.random() - 0.5) * S.shake);
+  // Gated here, at the one place shake is APPLIED, so all six writers are covered.
+  if (MOTION_OK && S.shake > 0.15) ctx.translate((Math.random() - 0.5) * S.shake, (Math.random() - 0.5) * S.shake);
 
   drawSky(cssW, cssH);
   if (S.terrain) {
@@ -4263,7 +4301,10 @@ function draw() {
   ctx.restore();
 
   drawAimGuide();                 // first-play gesture demo — screen space, above the shake
-  if (S.flash > 0.01) { ctx.fillStyle = `rgba(255,240,210,${S.flash})`; ctx.fillRect(0, 0, cssW, cssH); }
+  // Scaled, not removed: with reduced motion the blast should still register,
+  // just not as a full-strength wash across the whole screen.
+  const flashA = MOTION_OK ? S.flash : S.flash * 0.25;
+  if (flashA > 0.01) { ctx.fillStyle = `rgba(255,240,210,${flashA})`; ctx.fillRect(0, 0, cssW, cssH); }
   drawKillcam(cssW, cssH);        // bars/vignette sit outside the shake transform
 }
 
@@ -4946,7 +4987,7 @@ function muzzleBlast(i) {
     age: 0, life: 0.62,                        // fire ~0.16s, smoke rides out the rest
     seed: Math.random() * 1000,
   });
-  S.flash = Math.min(0.5, S.flash + 0.05);     // the blast lights the scene
+  addFlash(0.05);                              // the blast lights the scene
   S.shake = Math.min(8, S.shake + 2.2);        // ~0.07s of kick
 }
 
