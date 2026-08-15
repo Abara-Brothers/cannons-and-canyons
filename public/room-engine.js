@@ -1649,8 +1649,21 @@ export function handleClientMessage(ws, msg) {
       // Rematch was a dead button: the tap passed the client UI, failed here,
       // and nothing came back. startGame routes golf to startGolf, which
       // resets the scorecard and holes, so a solo rematch is a full new round.
-      if (room && room.state === 'over' && (room.players.length >= 2 || room.mode === 'golf')
-        && room.players.every(p => p && (p.bot || p.connected))) startGame(room);
+      // ISSUE-031: every one of these guards used to fail SILENTLY. The client
+      // sent `rematch`, nothing came back, and the button was simply dead — with
+      // no way for the player to tell a refusal from a dropped connection. Two
+      // reachable cases were found by the 8.44 verifiers: a duo golf round ended
+      // by a disconnect forfeit (the survivor fails `every(connected)`), and a
+      // partner's socket closing while the room is 'over' (the room is torn down,
+      // so there is no room at all). Say which, in words a player can act on.
+      const why = !room ? 'That match has already been cleaned up — start a new game.'
+        : room.state !== 'over' ? 'That match is still in progress.'
+        : !(room.players.length >= 2 || room.mode === 'golf') ? 'There is nobody left to rematch.'
+        : !room.players.every(p => p && (p.bot || p.connected))
+          ? 'The other player has left — start a new game to play again.'
+          : null;
+      if (why) { send(ws, { type: 'rematchDenied', reason: why }); break; }
+      startGame(room);
       break;
     }
     case 'leave': {

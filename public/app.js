@@ -1452,6 +1452,13 @@ function handle(m) {
     case 'lobby': renderLobby(m); break;
     case 'queued': showLobby('search'); break;
     case 'joinError': $('homeError').textContent = m.reason; break;
+    // ISSUE-031: the server used to refuse a rematch in silence, leaving a dead
+    // button. Say why, and drop the button so the player is pointed at the only
+    // thing that WILL work.
+    case 'rematchDenied':
+      showToast(m.reason || 'That rematch is no longer available');
+      { const rb = $('rematchBtn'); if (rb) rb.style.display = 'none'; }
+      break;
     case 'start': applySnapshot(m); saveResume(m.code, m.token); break;
     case 'hole':
       applySnapshot(m); saveResume(m.code, m.token);
