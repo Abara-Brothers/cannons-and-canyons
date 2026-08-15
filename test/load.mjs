@@ -2,8 +2,9 @@
 // developer account (`RELEASE_CHECKLIST.md` §7: "Do before any marketing push").
 //
 // It answers the questions the checklist says are unvalidated: one Render
-// Starter instance, every match in process memory, `MAX_ROOMS` 500. What breaks
-// first, at what number, and what does a player see when it does?
+// Starter instance, every match in process memory, `MAX_ROOMS` (500 when this
+// was written; lowered to 250 in 8.72 on the strength of what it measured).
+// What breaks first, at what number, and what does a player see when it does?
 //
 // STRICTLY LOCAL. It spawns its own server on a free port and never touches a
 // deployment — pointing this at production would create hundreds of real rooms
@@ -22,9 +23,9 @@ import { spawn } from 'node:child_process';
 import net from 'node:net';
 import WebSocket from 'ws';
 
-const TARGET = Number(process.env.ROOMS || 620);        // past the 500 default cap
+const TARGET = Number(process.env.ROOMS || 320);        // past the 250 default cap
 const STEP = Number(process.env.STEP || 50);
-const SERVER_MAX_ROOMS = process.env.MAX_ROOMS || '';   // '' = server default (500)
+const SERVER_MAX_ROOMS = process.env.MAX_ROOMS || '';   // '' = server default (250)
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -149,7 +150,7 @@ const loggedCapacity = /capacity|MAX_ROOMS/i.test(srvLog);
 console.log('\n──────────── results ────────────');
 console.log(`rooms created            : ${created}`);
 console.log(`live rooms at peak       : ${Math.max(...rows.map((r) => r.live))}`);
-console.log(`server cap (MAX_ROOMS)   : ${SERVER_MAX_ROOMS || '500 (default)'}`);
+console.log(`server cap (MAX_ROOMS)   : ${SERVER_MAX_ROOMS || '250 (default)'}`);
 console.log(`refused first at         : ${refusedAt === null ? 'never reached the cap' : `${refusedAt} live rooms`}`);
 console.log(`refusal a player sees    : ${refusalReason ? `"${refusalReason}"` : '(none seen)'}`);
 console.log(`server logged the refusal: ${loggedCapacity ? 'yes' : 'NO — rooms count is the only signal'}`);

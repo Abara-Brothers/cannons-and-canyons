@@ -285,10 +285,25 @@ function releasePriorRoom(ws) {
   teardown(prev, others);          // notify only if someone else is actually in there
 }
 
-// Backstop against room-count exhaustion from any source. Well above any
-// plausible real load for this game; refusing is always better than an OOM
-// that kills every match in progress.
-const MAX_ROOMS = Number(env.MAX_ROOMS) || 500;
+// Backstop against room-count exhaustion from any source. Refusing is always
+// better than an OOM that kills every match in progress — but that only holds
+// if the cap is reachable BEFORE the memory runs out, and until 2026-08-15 it
+// was not.
+//
+// `test/load.mjs` measured **~1.2–1.4 MiB per live room** (300 rooms held, then
+// 150 with every bot firing; latency stayed flat at 0.8–2.2 ms throughout, so
+// memory is the binding constraint, not CPU). At the old default of 500 that is
+// 600–700 MiB of room state alone. A 512 MB Render Starter instance would be
+// OOM-killed somewhere around 320–375 rooms — destroying every live match —
+// while this guard sat at 500, never firing. The polite path was unreachable.
+//
+// 250 restores it: 250 × 1.4 MiB ≈ 350 MiB, plus a ~62 MiB baseline, leaves
+// roughly 100 MiB of headroom for GC and request handling. It is deliberately
+// conservative and safe by default — raise it with the env var once the
+// instance's real RAM is confirmed (RISK-014), and nothing is lost by having
+// been cautious in the meantime. For scale: production has never exceeded a
+// handful of concurrent rooms.
+const MAX_ROOMS = Number(env.MAX_ROOMS) || 250;
 
 function createRoom(hostWs, name, skin, opts = {}) {
   releasePriorRoom(hostWs);
