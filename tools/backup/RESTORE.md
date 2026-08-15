@@ -9,14 +9,23 @@
 
 | | |
 |---|---|
-| Automatic daily backups | **Only on Pro and above.** The free plan has **none** |
-| Point-in-time recovery | Paid add-on, Pro and above only |
-| What we rely on | `tools/backup/backup.sh`, run by a human, stored off-site |
+| Automatic daily backups | **NONE.** Confirmed 2026-08-15: this project is on the **FREE** plan |
+| Point-in-time recovery | **NONE.** Paid add-on, Pro and above only |
+| What we rely on | `tools/backup/backup-auto.sh` on a weekly schedule |
 
-**If this project is on the free plan, `backup.sh` is the only thing standing
-between a mistake and permanent loss of every player's account and progress.**
-Confirm the plan in the Supabase dashboard → Settings → Billing, and if it is
-free, either upgrade or put the script on a schedule.
+> **Confirmed 2026-08-15, and it was worse than this page assumed.** The plan is
+> **free**, so there are no automatic backups and no PITR — and on the same day
+> it emerged that `backup.sh` **had never been run**: there was no `backups/`
+> directory, and the Supabase CLI was not installed, so it could not have run.
+> The sentence that used to sit here — "`backup.sh` is the only thing standing
+> between a mistake and permanent loss" — was true, and nothing was standing
+> there. A backup procedure nobody runs is not a backup procedure.
+>
+> `backup-auto.sh` + `install-schedule.sh` now make it unattended: the DB URL is
+> read from the macOS Keychain (never a file, never shell history, never a chat),
+> a weekly launchd job runs it, and both scripts **refuse loudly** rather than
+> scheduling something that would fail silently every week. The dumps are still
+> LOCAL — that covers a bad migration or a mistaken delete, not a lost laptop.
 
 ## The finding that matters most
 
