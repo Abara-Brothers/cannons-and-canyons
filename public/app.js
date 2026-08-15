@@ -1761,24 +1761,36 @@ $('oppBtns').addEventListener('click', (e) => {
 
 // Custom in-game dropdowns: a game-styled menu driving each hidden native
 // <select>, so every existing `.value` read and `.onchange` handler is untouched.
-function closeAllGsel() { for (const g of document.querySelectorAll('.gsel.open')) g.classList.remove('open'); document.body.classList.remove('dd-open'); }
+function closeAllGsel() {
+  for (const g of document.querySelectorAll('.gsel.open')) {
+    g.classList.remove('open');
+    const b = g.querySelector('.gsel-btn'); if (b) b.setAttribute('aria-expanded', 'false');
+  }
+  document.body.classList.remove('dd-open');
+}
 function buildGameSelect(sel) {
   const wrap = document.createElement('div');
   wrap.className = 'gsel';
   const btn = document.createElement('button');
   btn.type = 'button'; btn.className = 'gsel-btn'; btn.setAttribute('aria-haspopup', 'listbox');
+  btn.setAttribute('aria-expanded', 'false');   // a listbox trigger must say whether it is open
   btn.innerHTML = '<span class="gsel-cur"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
   const cur = btn.querySelector('.gsel-cur');
   const list = document.createElement('div'); list.className = 'gsel-list'; list.setAttribute('role', 'listbox');
   const paint = () => {
     const o = sel.options[sel.selectedIndex];
     cur.textContent = o ? o.textContent : '';
-    for (const el of list.children) el.classList.toggle('sel', el.dataset.val === sel.value);
+    for (const el of list.children) {
+      const on = el.dataset.val === sel.value;
+      el.classList.toggle('sel', on);
+      el.setAttribute('aria-selected', on ? 'true' : 'false');   // role="option" without this is incomplete
+    }
   };
   for (const o of sel.options) {
     const item = document.createElement('button');
     item.type = 'button'; item.className = 'gsel-opt'; item.dataset.val = o.value;
     item.textContent = o.textContent; item.setAttribute('role', 'option');
+    item.tabIndex = -1;                          // roving: reached with arrows, not Tab
     item.onclick = () => {
       sel.value = o.value;
       sel.dispatchEvent(new Event('change', { bubbles: true }));
@@ -1791,8 +1803,30 @@ function buildGameSelect(sel) {
     const willOpen = !wrap.classList.contains('open');
     closeAllGsel();
     wrap.classList.toggle('open', willOpen);
+    btn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
     document.body.classList.toggle('dd-open', willOpen);
+    // Opening with the keyboard has to land somewhere, or the list is unreachable.
+    if (willOpen) (list.querySelector('.gsel-opt.sel') || list.firstElementChild)?.focus();
   };
+  // Arrow keys walk the options, Escape closes and hands focus back to the
+  // trigger. Without this the list was mouse-only: it had role="listbox" and
+  // role="option" but none of the keyboard behaviour those roles promise.
+  const shut = () => { closeAllGsel(); btn.focus(); };
+  wrap.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { if (wrap.classList.contains('open')) { e.preventDefault(); shut(); } return; }
+    if (!wrap.classList.contains('open')) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); btn.click(); }
+      return;
+    }
+    const opts = [...list.children];
+    const at = opts.indexOf(document.activeElement);
+    let to = -1;
+    if (e.key === 'ArrowDown') to = Math.min(opts.length - 1, at + 1);
+    else if (e.key === 'ArrowUp') to = Math.max(0, at - 1);
+    else if (e.key === 'Home') to = 0;
+    else if (e.key === 'End') to = opts.length - 1;
+    if (to >= 0) { e.preventDefault(); opts[to]?.focus(); }
+  });
   sel.addEventListener('change', paint);
   sel.classList.add('gsel-native');
   wrap.appendChild(btn); wrap.appendChild(list);
