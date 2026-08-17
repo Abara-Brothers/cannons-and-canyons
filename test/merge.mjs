@@ -217,17 +217,32 @@ for (const [label, cloud] of [
     JSON.stringify(r.prof.hordeBest));
 }
 
-// 7. Achievements union. NOTE the documented claim is "union keeping earlier
-//    dates", but the code is `if (!PROF.ach[a])` — so a LOCAL entry always
-//    wins, even when the cloud's date is earlier. Pinned here as the ACTUAL
-//    behaviour, with the mismatch raised rather than silently blessed.
+// 7. Achievements union. These are `Date.now()` NUMBERS (see grantAch), not
+//    strings — an earlier version of this test used ISO strings, which passed
+//    only because the old code never compared them. An achievement is earned
+//    once, so when both sides hold one the truthful record is the FIRST time.
 {
-  const r1 = await merge(base({ ach: {} }), { career: { ach: { sniper: '2026-02-01' } } });
-  check('an achievement only in the cloud is adopted', r1.prof.ach.sniper === '2026-02-01', JSON.stringify(r1.prof.ach));
+  const EARLY = 1767225600000;   // 2026-01-01
+  const LATE  = 1772928000000;   // 2026-03-08
 
-  const r2 = await merge(base({ ach: { sniper: '2026-03-09' } }), { career: { ach: { sniper: '2026-01-01' } } });
-  check('when both hold an achievement, the LOCAL date wins (not the earlier one)',
-    r2.prof.ach.sniper === '2026-03-09', `got ${r2.prof.ach.sniper}`);
+  const r1 = await merge(base({ ach: {} }), { career: { ach: { sniper: EARLY } } });
+  check('an achievement only in the cloud is adopted', r1.prof.ach.sniper === EARLY, JSON.stringify(r1.prof.ach));
+
+  const r2 = await merge(base({ ach: { sniper: LATE } }), { career: { ach: { sniper: EARLY } } });
+  check('both hold it, cloud earlier -> the EARLIER date wins',
+    r2.prof.ach.sniper === EARLY, `got ${r2.prof.ach.sniper}`);
+
+  const r3 = await merge(base({ ach: { sniper: EARLY } }), { career: { ach: { sniper: LATE } } });
+  check('both hold it, local earlier -> the earlier date is kept',
+    r3.prof.ach.sniper === EARLY, `got ${r3.prof.ach.sniper}`);
+
+  const r4 = await merge(base({ ach: { sniper: LATE } }), { career: { ach: { sniper: 'garbage' } } });
+  check('a malformed cloud timestamp cannot overwrite a real one',
+    r4.prof.ach.sniper === LATE, `got ${JSON.stringify(r4.prof.ach.sniper)}`);
+
+  const r5 = await merge(base({ ach: { sniper: LATE } }), { career: { ach: { sniper: 0 } } });
+  check('a zero cloud timestamp is not treated as "earlier"',
+    r5.prof.ach.sniper === LATE, `got ${r5.prof.ach.sniper}`);
 }
 
 // 8. The midnight cosmetic unlock crosses over from the cloud.

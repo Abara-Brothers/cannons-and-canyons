@@ -886,8 +886,25 @@ function mergeCloudProgression(cloud) {
   }
   const cWeapons = obj(c.weapons);
   for (const w in cWeapons) PROF.weapons[w] = Math.max(num(PROF.weapons[w]), num(cWeapons[w]));
+  // Achievements are timestamps (`Date.now()` at award — see grantAch), and an
+  // achievement is earned ONCE. So when both sides hold one, the truthful record
+  // is the FIRST time it happened: keep the earlier value. This used to keep
+  // whatever the local device had, which meant re-earning something on a second
+  // device could overwrite the original date with a later one — and the stored
+  // timestamp goes into the player's data export, so it is a record about them,
+  // not just a display detail.
+  //
+  // It is also the consistent rule: every other field takes the player's BEST
+  // value — counters the max, golfBest the min because lower is better — and for
+  // a first-earned date, best is earliest.
   const cAch = obj(c.ach);
-  for (const a in cAch) if (!PROF.ach[a]) PROF.ach[a] = cAch[a];
+  for (const a in cAch) {
+    const mine = PROF.ach[a], theirs = cAch[a];
+    if (!mine) { PROF.ach[a] = theirs; continue; }        // not earned here: adopt the cloud's record
+    // Guarded so a malformed cloud value cannot overwrite a real local one.
+    if (typeof mine === 'number' && typeof theirs === 'number'
+        && Number.isFinite(theirs) && theirs > 0 && theirs < mine) PROF.ach[a] = theirs;
+  }
   // Golf is the one field where lower is better, so it takes the MIN — and only
   // from a real finite number, or a string would win the `<` comparison.
   if (typeof c.golfBest === 'number' && Number.isFinite(c.golfBest)
