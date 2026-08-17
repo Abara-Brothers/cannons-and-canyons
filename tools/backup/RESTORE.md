@@ -22,7 +22,11 @@
 > there. A backup procedure nobody runs is not a backup procedure.
 >
 > `backup-auto.sh` + `install-schedule.sh` now make it unattended: the DB URL is
-> read from the macOS Keychain (never a file, never shell history, never a chat),
+> read from the macOS Keychain (never a file, never shell history, never a chat).
+> Store it with `security add-generic-password -a "$USER" -s cc-supabase-db-url -U -w`
+> — **no value after `-w`**, so it prompts and reads without echo; that also avoids
+> the shell mangling a password containing `!`, `$` or `#`, which is the usual
+> reason this step fails silently.
 > a weekly launchd job runs it, and both scripts **refuse loudly** rather than
 > scheduling something that would fail silently every week. The dumps are still
 > LOCAL — that covers a bad migration or a mistaken delete, not a lost laptop.

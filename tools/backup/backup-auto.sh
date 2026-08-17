@@ -25,12 +25,18 @@
 #      (aws-1-…pooler.supabase.com), NOT db.<ref>.supabase.co — the direct
 #      host is IPv6-only and fails from most networks.
 #
-#   3. Store it in the Keychain. Note the leading space: with most shells that
-#      keeps the line out of your history. Better still, run it, then confirm
-#      with `history | tail`.
+#   3. Store it in the Keychain. Run it with NO value after -w: `security` then
+#      prompts and reads it without echo, so the string never appears on the
+#      command line, in your shell history, or in a process list. It also side-
+#      steps shell quoting, which is the usual reason this step silently fails —
+#      database passwords routinely contain !, $ or #, and an unquoted (or
+#      double-quoted) value gets mangled by the shell before `security` sees it.
 #
-#        security add-generic-password -a "$USER" -s cc-supabase-db-url \
-#          -w 'postgresql://postgres.<ref>:<password>@aws-1-...:5432/postgres' -U
+#        security add-generic-password -a "$USER" -s cc-supabase-db-url -U -w
+#
+#      Paste the URI at the prompt, press return. Then check it took:
+#
+#        security find-generic-password -s cc-supabase-db-url >/dev/null && echo stored
 #
 #   4. Prove it works before trusting the schedule:
 #        bash tools/backup/backup-auto.sh
