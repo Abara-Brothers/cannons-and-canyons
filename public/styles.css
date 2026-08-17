@@ -596,6 +596,25 @@ body.golf .golf-only { display: flex; }
 #game.killcam .mute, #game.killcam .leave, #game.killcam .zoomctl,
 #game.killcam .metamenu, #game.killcam .dock-tab { opacity: 0; pointer-events: none; }
 
+/* "Tap to skip" — the killcam holds the frame for ~3.25s and refuses input, so
+   the skip has to be discoverable or it is not really a feature. Delayed 0.9s
+   so it never competes with the impact it is offering to interrupt, and
+   pointer-events:none because the tap is handled on the canvas beneath it —
+   anywhere on screen works, not just on these words. */
+.kc-skip {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  bottom: max(14px, env(safe-area-inset-bottom)); z-index: 19; pointer-events: none;
+  font-size: 11px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase;
+  color: rgba(234, 240, 255, .55); text-shadow: 0 1px 3px rgba(0,0,0,.7);
+  opacity: 0; transition: opacity .45s ease;
+}
+/* Driven by the killcam's own 'hold' phase rather than a CSS delay: 'hold' IS
+   the moment the impact has landed and the crawl begins, so the hint arrives
+   exactly when it should instead of at a guessed 0.9s. It also survives a
+   throttled tab, where a delayed animation simply never runs — and a hint that
+   depends on animation timing is not a hint you can rely on. */
+#game.killcam-hold .kc-skip { opacity: 1; }
+
 @media (orientation: landscape) and (min-width: 620px), (orientation: portrait) and (min-height: 620px) {
   .aim-readout { grid-template-columns: 1fr 1fr; max-width: 640px; margin: 0 auto; width: 100%; }
   .control-rows { max-width: 640px; margin: 0 auto; width: 100%; }

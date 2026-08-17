@@ -2479,6 +2479,9 @@ function aimFromVector(dx, dy) {
 const evX = (e) => e.offsetX * view.cssW / (view.dispW || 1);
 const evY = (e) => e.offsetY * view.cssH / (view.dispH || 1);
 canvas.addEventListener('pointerdown', (e) => {
+  // A tap during the killcam skips it, and is consumed: without the early
+  // return the same press would anchor an aim drag as the bars retract.
+  if (skipKillcam()) return;
   pointers.set(e.pointerId, { x: evX(e), y: evY(e) });
   guideHoldOff = performance.now() + 2600;   // the aim guide yields to a real finger
   // Capture is a nicety (keeps the drag alive off-canvas), never a dependency —
@@ -3020,7 +3023,24 @@ function startKillcam(kc) {
 }
 function clearKillcam() {
   S.killcam = null;
-  const g = $('game'); if (g) g.classList.remove('killcam');
+  const g = $('game'); if (g) g.classList.remove('killcam', 'killcam-hold');
+}
+
+// Tap to skip. Returns true if a killcam was running, so the caller can swallow
+// the tap instead of letting it start an aim drag on the way out.
+//
+// It does NOT tear the killcam down: it fast-forwards to the end of the 'out'
+// phase and lets the phase machine finish normally on the next tick. That keeps
+// a single completion path — including the `pendingOver` release that a DoT kill
+// depends on, and the `$('game').classList.remove('killcam')` that restores the
+// HUD. Calling clearKillcam() here instead would skip both and could strand the
+// game-over overlay on exactly the kind of kill that ends a match.
+function skipKillcam() {
+  const K = S.killcam;
+  if (!K || K.phase === 'done') return false;
+  K.phase = 'out';
+  K.pt = KC.out;          // the next stepKillcam() tick runs the real ending
+  return true;
 }
 
 // Battlefield time scale. 1 everywhere except inside a killcam.
@@ -3058,7 +3078,10 @@ function stepKillcam(dt) {
     const pr = A && A.projectiles[K.pi];
     if (!A || !pr || pr.exploded || pr.done) { K.phase = 'hold'; K.pt = 0; }
   } else if (K.phase === 'hold') {
+    // 'hold' is the beat after the detonation — the right moment to offer the
+    // skip, and the reason the hint is phase-driven rather than time-delayed.
     K.mix = 1; K.pt += dt;
+    $('game').classList.add('killcam-hold');
     const settled = !S.anim || S.anim.projectiles.every(p => p.done);
     if (K.pt >= KC.hold && (settled || K.pt > KC.hold + 2)) { K.phase = 'out'; K.pt = 0; }
   } else if (K.phase === 'out') {
@@ -3066,7 +3089,7 @@ function stepKillcam(dt) {
     K.mix = 1 - easeOut3(K.pt / KC.out);
     if (K.pt >= KC.out) {
       K.phase = 'done'; K.mix = 0;
-      $('game').classList.remove('killcam');
+      $('game').classList.remove('killcam', 'killcam-hold');
       // No shot animation left to hand off through startNextShot (DoT/edge cases):
       // release the overlay here instead. The shell path releases in startNextShot.
       if (!S.anim && !S.queue.length && S.pendingOver) {
