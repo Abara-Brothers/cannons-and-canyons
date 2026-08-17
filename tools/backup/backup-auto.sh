@@ -83,6 +83,18 @@ if [ -z "$DB_URL" ]; then
   exit 1
 fi
 
+# Shape-check BEFORE connecting. On 2026-08-17 a malformed URI (password still
+# wrapped in the dashboard's square brackets) was passed straight to psql, which
+# rejected it by quoting the password field back into the terminal — turning a
+# typo into a credential rotation. The reason string below never contains the
+# value, only the name of the rule that failed.
+. "$HERE/lib-validate.sh"
+if ! reason="$(validate_db_url "$DB_URL")"; then
+  say "FAILED: the stored connection string is malformed — $reason"
+  say "        Fix it with: security add-generic-password -a \"\$USER\" -s $KEYCHAIN_SERVICE -T /usr/bin/security -U -w"
+  exit 1
+fi
+
 # backup.sh does the real work: roles + auth + public, in restore order. The
 # auth schema is not optional — a public-only dump cannot be restored, which the
 # 2026-08-14 drill proved by having the insert rejected on a foreign key.
