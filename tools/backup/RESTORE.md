@@ -23,7 +23,7 @@
 >
 > `backup-auto.sh` + `install-schedule.sh` now make it unattended: the DB URL is
 > read from the macOS Keychain (never a file, never shell history, never a chat).
-> Store it with `security add-generic-password -a "$USER" -s cc-supabase-db-url -U -w`
+> Store it with `security add-generic-password -a "$USER" -s cc-supabase-db-url -T /usr/bin/security -U -w`
 > — **no value after `-w`**, so it prompts and reads without echo; that also avoids
 > the shell mangling a password containing `!`, `$` or `#`, which is the usual
 > reason this step fails silently.

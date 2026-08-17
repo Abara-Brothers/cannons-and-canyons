@@ -32,9 +32,17 @@
 #      database passwords routinely contain !, $ or #, and an unquoted (or
 #      double-quoted) value gets mangled by the shell before `security` sees it.
 #
-#        security add-generic-password -a "$USER" -s cc-supabase-db-url -U -w
+#        security add-generic-password -a "$USER" -s cc-supabase-db-url \
+#          -T /usr/bin/security -U -w
 #
-#      Paste the URI at the prompt, press return. Then check it took:
+#      Paste the URI at the prompt, press return. `-T /usr/bin/security` puts the
+#      security binary on the item's access list, so the scheduled job can read it
+#      without a GUI dialog — a launchd job cannot answer one, and a backup that
+#      blocks on an invisible prompt is a backup that never runs. Only that one
+#      binary is trusted; do NOT use -A, which trusts every application on the Mac.
+#      If a dialog appears anyway on the first read, choose Always Allow.
+#
+#      Then check it took:
 #
 #        security find-generic-password -s cc-supabase-db-url >/dev/null && echo stored
 #
