@@ -45,6 +45,49 @@
 > password field back into the terminal**, and the credential had to be rotated.
 > The editing step was the defect, so it no longer exists.
 
+## Is this backup restorable? Run the drill and find out
+
+```bash
+bash tools/backup/restore-drill.sh          # newest backup; add a path for a specific one
+```
+
+It builds a throwaway PostgreSQL 17 cluster on port 55432, replays **exactly the
+Case 2 sequence below** into it, and tears the cluster down afterwards. Nothing
+touches production but one read (the `auth` schema DDL, standing in for what
+Supabase creates automatically in a new project — our migrations do not create
+`auth` and cannot).
+
+**Result, 2026-08-18, against backup `20260818T052216Z`: PASSED.**
+
+| Check | Result |
+|---|---|
+| roles → auth DDL → migrations → auth.sql → public.sql | all loaded |
+| Row counts vs production | `auth.users` 16/16, `profiles` 14/14 |
+| **Content** md5 of `auth.users` (id, role, email, created_at, is_anonymous) | **identical** |
+| **Content** md5 of `profiles` (id, callsign, **progression**, version, created_at) | **identical** |
+| `profiles` with no matching `auth.users` row — *the 2026-08-14 failure* | **0** |
+
+The content hashes matter more than the counts: a restore can produce the right
+number of rows and the wrong data in every one of them. The `progression` column
+is in that hash, so **the actual game careers are verified, not just the account
+shells**.
+
+### Two things the drill will show you that are NOT faults
+
+**`roles.sql` reports ~23 errors, and that is expected.** They are all
+`already exists`, `permission denied to alter role`, and `permission denied to
+grant privileges as role "supabase_admin"`. Supabase manages its own roles: they
+exist before you restore, and the login you restore with is not `supabase_admin`.
+The same refusals will appear against a real fresh Supabase project. The drill
+classifies them and fails on anything else. **Do not "fix" them, and do not let
+them stop you mid-restore** — the data steps after them are what matter.
+
+**Timestamps must be compared in one timezone.** Supabase runs `UTC`; a local
+cluster inherits the Mac's zone, so the same instant renders `+00` there and
+`+10` here and every content hash differs for a reason that has nothing to do
+with the backup. The drill exports `PGTZ=UTC` for both sides. This cost a
+false failure before it was pinned.
+
 ## The finding that matters most
 
 **A `public`-only dump is NOT restorable.** Every row in `profiles` and
