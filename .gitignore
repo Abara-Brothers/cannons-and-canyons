@@ -6,3 +6,4 @@ data/
 tools/splash/out/
 tools/splash/icon.svg
 backups/
+tools/backup/db.conf

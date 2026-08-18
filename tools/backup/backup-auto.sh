@@ -2,62 +2,38 @@
 #
 # Unattended wrapper around backup.sh, for a schedule.
 #
-# WHY THIS EXISTS: this project is on the Supabase FREE plan (confirmed
-# 2026-08-15), which has NO automatic backups and NO point-in-time recovery.
-# `backup.sh` was documented as "the only thing standing between a mistake and
-# permanent loss of every account" — and on 2026-08-15 it turned out it had
-# never been run, there was no backups/ directory, and the Supabase CLI was not
-# even installed. A backup procedure nobody runs is not a backup procedure.
-#
-# THE SECRET NEVER TOUCHES A FILE. backup.sh needs SUPABASE_DB_URL, which
-# embeds the database password. That must not live in a script, in a plist, in
-# shell history, or in a chat log. It is read from the macOS Keychain at run
-# time instead, so the only copy is the one the OS protects.
+# WHY THIS EXISTS: this project is on the Supabase FREE plan, which has NO
+# automatic backups and NO point-in-time recovery. `backup.sh` was documented as
+# "the only thing standing between a mistake and permanent loss of every
+# account" — and on 2026-08-15 it turned out it had never been run, there was no
+# backups/ directory, and the Supabase CLI was not even installed. A backup
+# procedure nobody runs is not a backup procedure.
 #
 # ---------------------------------------------------------------------------
-# ONE-TIME SETUP — run these yourself; do not paste the URL to anyone.
+# SETUP IS ONE COMMAND. Do not hand-edit connection strings:
 #
-#   1. Install the CLI:
-#        brew install supabase/tap/supabase
+#     bash tools/backup/setup-credential.sh
 #
-#   2. Get the connection string: Supabase dashboard → Project Settings →
-#      Database → Connection string → URI. Use the SESSION POOLER host
-#      (aws-1-…pooler.supabase.com), NOT db.<ref>.supabase.co — the direct
-#      host is IPv6-only and fails from most networks.
+# It asks for the dashboard's connection URI (paste it UNEDITED — the password
+# field is discarded) and then for the password, via macOS's own hidden prompt.
+# Everything non-secret lands in db.conf; the password lands in the Keychain.
 #
-#   3. Store it in the Keychain. Run it with NO value after -w: `security` then
-#      prompts and reads it without echo, so the string never appears on the
-#      command line, in your shell history, or in a process list. It also side-
-#      steps shell quoting, which is the usual reason this step silently fails —
-#      database passwords routinely contain !, $ or #, and an unquoted (or
-#      double-quoted) value gets mangled by the shell before `security` sees it.
-#
-#        security add-generic-password -a "$USER" -s cc-supabase-db-url \
-#          -T /usr/bin/security -U -w
-#
-#      Paste the URI at the prompt, press return. `-T /usr/bin/security` puts the
-#      security binary on the item's access list, so the scheduled job can read it
-#      without a GUI dialog — a launchd job cannot answer one, and a backup that
-#      blocks on an invisible prompt is a backup that never runs. Only that one
-#      binary is trusted; do NOT use -A, which trusts every application on the Mac.
-#      If a dialog appears anyway on the first read, choose Always Allow.
-#
-#      Then check it took:
-#
-#        security find-generic-password -s cc-supabase-db-url >/dev/null && echo stored
-#
-#   4. Prove it works before trusting the schedule:
-#        bash tools/backup/backup-auto.sh
-#
-#   5. Schedule it:
-#        bash tools/backup/install-schedule.sh
+# Then prove it works, and only then schedule it:
+#     bash tools/backup/backup-auto.sh
+#     bash tools/backup/install-schedule.sh
 # ---------------------------------------------------------------------------
+#
+# THE SECRET NEVER TOUCHES A FILE, A COMMAND LINE, OR SHELL HISTORY. It is read
+# from the Keychain at run time and handed to pg_dump through PGPASSWORD.
+# Arguments are world-readable via `ps`; a subprocess environment is not.
 set -uo pipefail
 
-KEYCHAIN_SERVICE="cc-supabase-db-url"
+KEYCHAIN_SERVICE="cc-supabase-db-password"
+LEGACY_SERVICE="cc-supabase-db-url"       # pre-2026-08-17 hand-spliced URI
 KEEP=8                                    # ~2 months of weekly runs
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
+CONF="$HERE/db.conf"
 OUT_ROOT="${CC_BACKUP_DIR:-$ROOT/backups}"
 LOG="$OUT_ROOT/backup.log"
 
@@ -66,44 +42,62 @@ say() { printf '%s  %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" | tee -a "$LOG
 
 say "starting"
 
-if ! command -v supabase >/dev/null 2>&1; then
-  # Homebrew is not on a launchd job's PATH by default.
-  for p in /opt/homebrew/bin /usr/local/bin; do
-    [ -x "$p/supabase" ] && PATH="$p:$PATH" && break
-  done
-fi
-if ! command -v supabase >/dev/null 2>&1; then
-  say "FAILED: supabase CLI not found. Install it: brew install supabase/tap/supabase"
+# Homebrew is not on a launchd job's PATH, and libpq is keg-only on top of that.
+for p in /opt/homebrew/opt/libpq/bin /usr/local/opt/libpq/bin /opt/homebrew/bin /usr/local/bin; do
+  [ -d "$p" ] && PATH="$p:$PATH"
+done
+export PATH
+if ! command -v pg_dump >/dev/null 2>&1; then
+  say "FAILED: pg_dump not found. Install it:  brew install libpq"
   exit 1
 fi
 
-DB_URL="$(security find-generic-password -s "$KEYCHAIN_SERVICE" -w 2>/dev/null || true)"
-if [ -z "$DB_URL" ]; then
-  say "FAILED: no '$KEYCHAIN_SERVICE' entry in the Keychain — see the setup notes in this file"
+if [ ! -f "$CONF" ]; then
+  say "FAILED: $CONF is missing — run:  bash tools/backup/setup-credential.sh"
   exit 1
 fi
 
-# Shape-check BEFORE connecting. On 2026-08-17 a malformed URI (password still
-# wrapped in the dashboard's square brackets) was passed straight to psql, which
-# rejected it by quoting the password field back into the terminal — turning a
-# typo into a credential rotation. The reason string below never contains the
-# value, only the name of the rule that failed.
+# Read as data, not sourced: a config file that gets executed is a config file
+# that can run anything.
+getconf() { grep -E "^$1=" "$CONF" 2>/dev/null | head -1 | cut -d= -f2-; }
+PGHOST="$(getconf PGHOST)"
+PGPORT="$(getconf PGPORT)"
+PGUSER="$(getconf PGUSER)"
+PGDATABASE="$(getconf PGDATABASE)"
+if [ -z "$PGHOST" ] || [ -z "$PGUSER" ]; then
+  say "FAILED: $CONF has no PGHOST/PGUSER — re-run setup-credential.sh"
+  exit 1
+fi
+
+PGPASSWORD="$(security find-generic-password -s "$KEYCHAIN_SERVICE" -w 2>/dev/null || true)"
+if [ -z "$PGPASSWORD" ]; then
+  if security find-generic-password -s "$LEGACY_SERVICE" >/dev/null 2>&1; then
+    say "FAILED: found the OLD '$LEGACY_SERVICE' keychain item, which held a hand-spliced URI."
+    say "        That scheme is retired. Run:  bash tools/backup/setup-credential.sh"
+  else
+    say "FAILED: no password in the Keychain — run:  bash tools/backup/setup-credential.sh"
+  fi
+  exit 1
+fi
+
 . "$HERE/lib-validate.sh"
-if ! reason="$(validate_db_url "$DB_URL")"; then
-  say "FAILED: the stored connection string is malformed — $reason"
-  say "        Fix it with: security add-generic-password -a \"\$USER\" -s $KEYCHAIN_SERVICE -T /usr/bin/security -U -w"
+if ! reason="$(validate_db_password "$PGPASSWORD")"; then
+  say "FAILED: the stored password is not usable — $reason"
+  say "        Re-run:  bash tools/backup/setup-credential.sh"
   exit 1
 fi
 
 # backup.sh does the real work: roles + auth + public, in restore order. The
 # auth schema is not optional — a public-only dump cannot be restored, which the
 # 2026-08-14 drill proved by having the insert rejected on a foreign key.
-if SUPABASE_DB_URL="$DB_URL" bash "$HERE/backup.sh" "$OUT_ROOT" >>"$LOG" 2>&1; then
+if PGHOST="$PGHOST" PGPORT="${PGPORT:-5432}" PGUSER="$PGUSER" \
+   PGDATABASE="${PGDATABASE:-postgres}" PGPASSWORD="$PGPASSWORD" \
+   bash "$HERE/backup.sh" "$OUT_ROOT" >>"$LOG" 2>&1; then
   latest="$(ls -1dt "$OUT_ROOT"/*/ 2>/dev/null | head -1)"
   # A "successful" dump of nothing is the failure mode worth catching: if auth.sql
   # is empty the backup is useless and everything downstream would look fine.
   if [ -n "$latest" ] && [ -s "${latest}auth.sql" ] && [ -s "${latest}public.sql" ]; then
-    say "OK: $(basename "$latest") — $(du -sh "$latest" | cut -f1)"
+    say "OK: $(basename "$latest") — $(du -sh "$latest" | cut -f1) — $(grep '^live_rows' "${latest}MANIFEST.txt" 2>/dev/null | cut -d: -f2-)"
   else
     say "FAILED: dump completed but auth.sql or public.sql is EMPTY — do not trust it"
     exit 1
