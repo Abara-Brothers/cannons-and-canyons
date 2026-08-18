@@ -21,15 +21,29 @@
 > between a mistake and permanent loss" — was true, and nothing was standing
 > there. A backup procedure nobody runs is not a backup procedure.
 >
-> `backup-auto.sh` + `install-schedule.sh` now make it unattended: the DB URL is
-> read from the macOS Keychain (never a file, never shell history, never a chat).
-> Store it with `security add-generic-password -a "$USER" -s cc-supabase-db-url -T /usr/bin/security -U -w`
-> — **no value after `-w`**, so it prompts and reads without echo; that also avoids
-> the shell mangling a password containing `!`, `$` or `#`, which is the usual
-> reason this step fails silently.
-> a weekly launchd job runs it, and both scripts **refuse loudly** rather than
-> scheduling something that would fail silently every week. The dumps are still
-> LOCAL — that covers a bad migration or a mistaken delete, not a lost laptop.
+> `backup-auto.sh` + `install-schedule.sh` now make it unattended, a weekly
+> launchd job runs it, and both scripts **refuse loudly** rather than scheduling
+> something that would fail silently every week. The dumps are still LOCAL —
+> that covers a bad migration or a mistaken delete, not a lost laptop.
+>
+> **Setup is one command, and you never edit a connection string:**
+>
+> ```bash
+> bash tools/backup/setup-credential.sh
+> ```
+>
+> It takes the dashboard's URI pasted **unedited** (the password field in it is
+> parsed out and thrown away) and then the password on its own, through macOS's
+> hidden prompt. Host, port, user and database — none of them secret — go to
+> `tools/backup/db.conf`; the password goes to the Keychain, and reaches
+> `pg_dump` through `PGPASSWORD`. It is never in a file, an argument, `ps`, or
+> shell history, and because it is not part of a URI it needs no percent-encoding.
+>
+> That design is the direct result of 2026-08-17: the previous instructions had a
+> human splice the password into the URI by hand, which produced a value with the
+> dashboard's square brackets still around it. `psql` rejected it **by quoting the
+> password field back into the terminal**, and the credential had to be rotated.
+> The editing step was the defect, so it no longer exists.
 
 ## The finding that matters most
 
@@ -43,8 +57,8 @@ REJECTED by FK — a public-only backup is NOT restorable without auth.users
 ```
 
 So a backup **must** include the `auth` schema, and a restore **must** load it
-first. `backup.sh` does this; a hand-rolled `supabase db dump -f data.sql` does
-not, which is the trap this runbook exists to prevent.
+first. `backup.sh` does this; a hand-rolled `pg_dump --schema=public` does not,
+which is the trap this runbook exists to prevent.
 
 ## Restoring
 
@@ -54,10 +68,12 @@ not, which is the trap this runbook exists to prevent.
    game; matches in progress are lost either way).
 2. Restore in dependency order, always auth first:
    ```bash
-   psql "$SUPABASE_DB_URL" -f <backup>/roles.sql
-   psql "$SUPABASE_DB_URL" -f <backup>/auth.sql
-   psql "$SUPABASE_DB_URL" -f <backup>/public.sql
+   bash tools/backup/db-connect.sh -f <backup>/roles.sql
+   bash tools/backup/db-connect.sh -f <backup>/auth.sql
+   bash tools/backup/db-connect.sh -f <backup>/public.sql
    ```
+   `db-connect.sh` is plain `psql` with the stored credential applied, so there
+   is no URI to assemble while under pressure. Any psql argument passes through.
 3. Verify before resuming — see **Verify** below.
 4. Resume the Render service and check `/health` reports
    `supabase=ok supabaseAdmin=ok`.
@@ -68,7 +84,8 @@ not, which is the trap this runbook exists to prevent.
    the original was moved out of Mumbai for exactly this reason).
 2. Rebuild the schema by replaying the tracked migrations, in filename order:
    ```bash
-   for f in supabase/migrations/*.sql; do psql "$NEW_DB_URL" -f "$f"; done
+   bash tools/backup/setup-credential.sh   # re-point it at the NEW project first
+   for f in supabase/migrations/*.sql; do bash tools/backup/db-connect.sh -f "$f"; done
    ```
    The drill proved these three files reconstruct every table, index, RLS
    policy and trigger with no manual steps.

@@ -24,16 +24,20 @@ fi
 
 # Refuse to schedule something that cannot work — a job that fails silently every
 # week is worse than no job, because the calendar entry reads as protection.
-if ! command -v supabase >/dev/null 2>&1 \
-   && [ ! -x /opt/homebrew/bin/supabase ] && [ ! -x /usr/local/bin/supabase ]; then
-  echo "REFUSING: the Supabase CLI is not installed." >&2
-  echo "  brew install supabase/tap/supabase" >&2
+if ! command -v pg_dump >/dev/null 2>&1 \
+   && [ ! -x /opt/homebrew/opt/libpq/bin/pg_dump ] && [ ! -x /usr/local/opt/libpq/bin/pg_dump ]; then
+  echo "REFUSING: pg_dump not found. Install it first:" >&2
+  echo "  brew install libpq" >&2
   exit 1
 fi
-if ! security find-generic-password -s cc-supabase-db-url -w >/dev/null 2>&1; then
-  echo "REFUSING: no 'cc-supabase-db-url' entry in your Keychain." >&2
-  echo "  See the setup notes at the top of tools/backup/backup-auto.sh." >&2
-  echo "  Store the connection string yourself — never paste it into a chat or a file." >&2
+if [ ! -f "$HERE/db.conf" ]; then
+  echo "REFUSING: no db.conf. Run this first:" >&2
+  echo "  bash tools/backup/setup-credential.sh" >&2
+  exit 1
+fi
+if ! security find-generic-password -s cc-supabase-db-password >/dev/null 2>&1; then
+  echo "REFUSING: no 'cc-supabase-db-password' entry in your Keychain." >&2
+  echo "  Run: bash tools/backup/setup-credential.sh" >&2
   exit 1
 fi
 
