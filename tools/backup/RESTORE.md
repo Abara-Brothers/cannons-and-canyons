@@ -88,6 +88,58 @@ cluster inherits the Mac's zone, so the same instant renders `+00` there and
 with the backup. The drill exports `PGTZ=UTC` for both sides. This cost a
 false failure before it was pinned.
 
+## Getting a copy OFF this machine
+
+The local dumps cover a bad migration or a mistaken delete. They do not cover a
+lost, stolen or dead laptop — the disk holding the database copy is the same
+disk holding the only copy of the copy.
+
+```bash
+bash tools/backup/offsite.sh                  # encrypt the newest backup
+bash tools/backup/offsite.sh --verify <file>  # prove a copy is still good
+bash tools/backup/offsite.sh --drill  <file>  # decrypt AND fully restore it
+```
+
+Output is one `.enc` file (12 KB for the current database) plus an unencrypted
+`HOW-TO-DECRYPT.txt` — the command is not a secret, only the passphrase is.
+Copy both anywhere: external disk, object storage, another machine.
+
+**AES-256-CBC, PBKDF2-HMAC-SHA512, 600,000 iterations, random salt per archive.**
+Plain `openssl`, deliberately: a recovery must never be blocked on installing
+software, and `openssl` is already on every Mac and Linux box you might restore
+from. The passphrase is fed on a file descriptor — never an argument (`ps` is
+world-readable), never a temp file.
+
+**Integrity is sealed inside the encryption.** `SHA256SUMS` is generated *before*
+encrypting, so it travels within the ciphertext rather than beside it where
+anyone could edit it to match altered content. Verified 2026-08-18 against all
+four cases: correct passphrase passes; wrong passphrase, a **single flipped bit**,
+and truncation all fail with exit 1 and a plain-language reason. The flipped-bit
+case is the instructive one — CBC is malleable so the file still *decrypted*, and
+the sealed checksum is what caught it. Treat the guarantee as "damage and
+tampering are detected", not a formal AEAD; if an active attacker with write
+access to your storage is the threat model, use `age` or `gpg` instead.
+
+**Proven end to end, not assumed:** `--drill` decrypts an archive and runs the
+full restore drill on its contents. Passed 2026-08-18 — 16/16 users, 14/14
+profiles, zero orphaned foreign keys, content hashes identical to production.
+
+### The passphrase is the whole thing — read this once, properly
+
+It lives in your Keychain so the tooling can run unattended. **The Keychain is on
+the laptop.** If the laptop is what you lost, that copy is gone with it and every
+archive is unreadable permanently — there is no reset and no support line.
+
+So create it in your password manager FIRST, save it there, and only then store
+a copy for automation:
+
+```bash
+security add-generic-password -a "$USER" -s cc-backup-archive-passphrase -T /usr/bin/security -U -w
+```
+
+Nothing echoes as you paste. `offsite.sh` refuses to run until this exists, and
+says exactly this if you try.
+
 ## The finding that matters most
 
 **A `public`-only dump is NOT restorable.** Every row in `profiles` and
