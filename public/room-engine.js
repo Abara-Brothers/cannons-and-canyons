@@ -281,8 +281,16 @@ function releasePriorRoom(ws) {
   const mine = prev.players[seat] && prev.players[seat].ws === ws;
   if (!mine) return;
   if (prev.state !== 'waiting') return;
-  const others = prev.players.some((p, i) => p && i !== seat && !p.bot && p.connected);
-  teardown(prev, others);          // notify only if someone else is actually in there
+  // Route through handleClose instead of tearing the room down. This used to
+  // call teardown() unconditionally, which destroys the HOST'S lobby when the
+  // socket moving on is only a GUEST — the same bug `case 'leave'` was fixed
+  // for, and harmless here only while `create` was the sole caller (a host
+  // creating a new room really should end its old one). `join` now calls this
+  // too, so a guest reaches it, and the unconditional teardown would have
+  // become a way to destroy someone else's lobby by joining a second game.
+  handleClose(ws);
+  ws.roomCode = null;
+  ws.seat = null;
 }
 
 // Backstop against room-count exhaustion from any source. Refusing is always
@@ -1502,7 +1510,28 @@ export function handleClientMessage(ws, msg) {
       const r = rooms.get(code);
       if (!r) return send(ws, { type: 'joinError', reason: 'No game with that code.' });
       if (r.state !== 'waiting') return send(ws, { type: 'joinError', reason: 'That battle has already started.' });
+      // ONE SOCKET, ONE SEAT. Without this a second `join` for a room you are
+      // already sitting in takes ANOTHER seat, and every route to it is one an
+      // ordinary player hits by accident: joinBtn has no debounce, tapping a
+      // push notification for your current room re-sends `join`, and so does
+      // opening a ?room= link while seated. Take enough seats and the
+      // `seatCount(r) >= r.max` line below auto-starts the match — then ONE
+      // disconnect frees only ws.seat, because handleClose resolves a single
+      // seat. The rest stay `connected: true` behind a dead socket, and with
+      // no shot clock (see beginTurn) the turn eventually lands on a ghost and
+      // the match never advances again for the real player. Duels escaped it
+      // only because they start at 2 seats and `state !== 'waiting'` then
+      // blocks the next join; FFA, Boss Fight and Alien Invasion did not.
+      if (r.players.some((p) => p && p.ws === ws)) {
+        return send(ws, { type: 'joinError', reason: 'You are already in that game.' });
+      }
       if (seatCount(r) >= r.max) return send(ws, { type: 'joinError', reason: 'That game is full.' });
+      // Joining a lobby leaves whichever one we were in. Skipping this stranded
+      // a seat in the OLD room held by a socket that can never speak for it
+      // again: handleClose only ever resolves the newest ws.roomCode, and
+      // nothing sweeps `rooms`. Safe to call after the guard above — if the
+      // prior room IS this one, `mine` is false there and it returns early.
+      releasePriorRoom(ws);
       let seat = r.players.indexOf(null);                 // reuse a lobby hole first
       if (seat < 0) { seat = r.players.length; r.players.push(null); }
       r.players[seat] = {
@@ -1525,6 +1554,7 @@ export function handleClientMessage(ws, msg) {
           break;
         }
         r.players[0].loadout = host._qloadout || null;
+        releasePriorRoom(ws);            // the joiner may have been sitting in a lobby
         r.players.push({ ws, name: sanitizeName(msg.name, 1), token: makeToken(), connected: true, dropTimer: null, skin: sanitizeSkin(msg.skin, 1), loadout: sanitizeLoadout(msg.loadout) });
         ws.roomCode = r.code; ws.seat = 1;
         startGame(r);

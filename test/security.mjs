@@ -12,6 +12,14 @@
 //      `fuel < MOVE_STEP` is false for NaN). The old `moved <= 0` guard did not
 //      catch it — NaN <= 0 is false.
 //   3. Frame size — the socket now caps a single frame (maxPayload).
+//   4. Seat hoarding — `join` checked room state and fullness but never whether
+//      the socket ALREADY held a seat, so one socket could take several. Filling
+//      an FFA lobby that way auto-started the match; a single disconnect then
+//      freed only ws.seat and left the rest `connected` behind a dead socket.
+//      With no shot clock the turn eventually reached a ghost and the match
+//      never advanced again. Reachable by accident, not just malice: joinBtn has
+//      no debounce, and a push notification or ?room= link for the room you are
+//      already in re-sends `join`.
 import WebSocket from 'ws';
 import { isGeneratedCallsign } from '../public/game-core.js';
 
@@ -335,6 +343,56 @@ async function survivesHostileInput() {
   else fail('server DIED on a hostile WebSocket frame — one anonymous frame kills it');
 }
 
+
+// ---- 4. One socket cannot hold more than one seat ---------------------------
+// Regression for the 2026-08-18 ghost-seat defect. Reproduced before the fix:
+// five joins from one socket took three seats in a 4-player lobby, auto-started
+// the match, and left two seats marked `connected` behind a dead socket.
+async function seatHoarding() {
+  const host = await open();
+  send(host, { type: 'create', name: 'Host', skin: 'olive', mode: 'ffa', max: 4 });
+  const made = await wait(host, 'created', 6000);
+  if (!made) { fail('seat hoarding: no room created'); try { host.close(); } catch {} return; }
+
+  // Join once legitimately, then four more times exactly as a double-tapped
+  // button or a duplicate deep-link would.
+  const guest = await open();
+  send(guest, { type: 'join', code: made.code, name: 'Guest', skin: 'desert' });
+  const seated = await Promise.race([wait(guest, 'lobby', 5000), wait(guest, 'start', 5000)]);
+  if (!seated) { fail('seat hoarding: the first legitimate join did not seat'); }
+
+  let refusals = 0;
+  for (let i = 0; i < 4; i++) {
+    send(guest, { type: 'join', code: made.code, name: 'Guest', skin: 'desert' });
+    const m = await Promise.race([wait(guest, 'joinError', 2500), wait(guest, 'start', 2500), wait(guest, 'lobby', 2500)]);
+    if (m && m.type === 'joinError') refusals++;
+    await sleep(60);
+  }
+  if (refusals !== 4) fail(`seat hoarding: expected 4 duplicate joins to be refused, got ${refusals}`);
+  else step('seat hoarding: a socket already seated cannot take a second seat');
+
+  // The decisive assertion: those repeat joins must not have filled the lobby
+  // and started the match. A `start` here means the ghost-seat bug is back.
+  const started = await Promise.race([wait(host, 'start', 1500), sleep(1600).then(() => null)]);
+  if (started) fail('seat hoarding: repeat joins from ONE socket auto-started the match');
+  else step('seat hoarding: a 4-seat lobby is not filled by one socket rejoining');
+
+  // And a guest moving to another lobby must not destroy the host's room —
+  // releasePriorRoom used to teardown() unconditionally, which only became
+  // reachable by a guest once `join` started calling it.
+  send(guest, { type: 'create', name: 'Guest', skin: 'desert', mode: 'ffa', max: 4 });
+  const own = await wait(guest, 'created', 6000);
+  if (!own) fail('seat hoarding: the guest could not create its own room');
+  await sleep(150);
+  const probe = await open();
+  send(probe, { type: 'join', code: made.code, name: 'Probe', skin: 'desert' });
+  const alive = await Promise.race([wait(probe, 'lobby', 4000), wait(probe, 'start', 4000), wait(probe, 'joinError', 4000)]);
+  if (!alive || alive.type === 'joinError') fail("seat hoarding: a guest leaving DESTROYED the host's lobby");
+  else step("seat hoarding: a guest moving to another room leaves the host's lobby intact");
+
+  try { host.close(); guest.close(); probe.close(); } catch {}
+}
+
 (async () => {
   try {
     await roomHoarding();
@@ -345,6 +403,7 @@ async function survivesHostileInput() {
     await noFreeTextNames();
     await hostileTokens();
     await survivesHostileInput();
+    await seatHoarding();
   } catch (e) {
     fail('threw: ' + (e && e.message ? e.message : String(e)));
   }
