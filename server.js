@@ -16,7 +16,7 @@ import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import {
   rooms, send, handleClientMessage, handleClose,
-  setPushNudge, setAuthSink, setPushSubSink,
+  setPushNudge, setAuthSink, setPushSubSink, setFaultSink,
 } from './public/room-engine.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -299,6 +299,13 @@ async function pushNudgeAsync(room, seat) {
 // and the Node library above. Injected rather than imported so the browser copy
 // of the engine simply keeps its no-op default.
 setPushNudge(pushNudge);
+
+// A timer callback inside the engine that throws no longer reaches
+// 'uncaughtException' (which would shut the process down and destroy every live
+// match). It is contained to its own room instead — but containment without
+// visibility is how a room silently stops advancing and nobody ever finds out,
+// so route the fault to the same table every other server fault lands in.
+setFaultSink((err) => reportServerError('engineTimer', err));
 
 // ---- Account deletion (ADR-003; a hard store requirement on both platforms) --
 // GoTrue has no self-serve delete, so this host brokers it: verify the

@@ -57,6 +57,34 @@ export function setAuthSink(fn) { authSink = typeof fn === 'function' ? fn : () 
 let pushSubSink = () => {};
 export function setPushSubSink(fn) { pushSubSink = typeof fn === 'function' ? fn : () => {}; }
 
+// Timer callbacks run DETACHED: when one fires there is nothing on the stack to
+// catch a throw, so it reaches process 'uncaughtException' — and server.js's
+// handler for that shuts the process down, taking EVERY live match with it, not
+// just the room that faulted. server.js already hardens the two inbound entry
+// points it owns and explains why; timers were the third and were bare. Most of
+// what runs unattended in this file is on a timer (the bot chain, fire and gas
+// ticks, drop and empty-room reclaim), so a single unexpected null in bot logic
+// during one CPU match could drop every player on the server.
+//
+// Containment must not become concealment. Swallowing quietly would trade a
+// visible crash for an invisible stall — one room silently stops advancing and
+// nothing anywhere says so, which is the harder failure to diagnose and exactly
+// the blind spot ISSUE-035 was. So every fault is logged AND announced to the
+// host, which routes it to the same error_reports table as any server fault.
+let faultSink = () => {};
+export function setFaultSink(fn) { faultSink = typeof fn === 'function' ? fn : () => {}; }
+function onTimerFault(err) {
+  try { console.error('[timer] callback threw:', err && err.stack ? err.stack : err); } catch {}
+  try { faultSink(err); } catch { /* the reporter must never be the second fault */ }
+}
+// The returned handle is the real one, so clearTimeout/clearInterval still work.
+function safeTimeout(fn, ms) {
+  return setTimeout(() => { try { fn(); } catch (e) { onTimerFault(e); } }, ms);
+}
+function safeInterval(fn, ms) {
+  return setInterval(() => { try { fn(); } catch (e) { onTimerFault(e); } }, ms);
+}
+
 
 // How long a disconnected player may return before their tank is scuttled.
 // Overridable so the test suite can exercise the forfeit path without a 2-min wait.
@@ -606,7 +634,7 @@ function golfShot(room, seat, msg) {
   const ptsMs = ((result.projectiles[0] && result.projectiles[0].path.length) || 0) * 9;
   // Cap raised with the roll retune + maxT 100: the longest legal replay is
   // ~3000 points ≈ 26s of playback — the hold must outlast it.
-  room.clock = setTimeout(() => { room.clock = null; golfAdvance(room, seat); }, 1100 + Math.min(30000, Math.round(ptsMs)));
+  room.clock = safeTimeout(() => { room.clock = null; golfAdvance(room, seat); }, 1100 + Math.min(30000, Math.round(ptsMs)));
 }
 
 function golfAdvance(room, by) {
@@ -741,7 +769,7 @@ function startGame(room) {
   for (let i = 0; i < n; i++) send(room.players[i].ws, { type: 'start', ...snapshot(room, i) });
   if (room.picking) {
     clearTimeout(room.pickTimer);
-    room.pickTimer = setTimeout(() => finishPicking(room), PICK_MS);
+    room.pickTimer = safeTimeout(() => finishPicking(room), PICK_MS);
   } else {
     beginTurn(room);
   }
@@ -876,7 +904,7 @@ function scheduleBot(room) {
   // an NPC that starts driving mid-replay reads as moving on the human's turn.
   // Scaled by the test knob (BOT_FIRE_MS) so fast suites stay fast.
   const watch = Math.max(0, (room.replayUntil || 0) - Date.now()) * Math.min(1, BOT_FIRE_MS / 1500);
-  room.botTimer = setTimeout(() => botAct(room), watch + (quick ? 220 + Math.random() * 240 : 850 + Math.random() * 750));
+  room.botTimer = safeTimeout(() => botAct(room), watch + (quick ? 220 + Math.random() * 240 : 850 + Math.random() * 750));
 }
 
 // Bots want the supply drops too. If a crate is inside this turn's fuel budget,
@@ -950,7 +978,7 @@ function botPlan(room, seat) {
 function botWalk(room, seat, dir, opts = {}) {
   clearInterval(room.botWalker);
   let steps = opts.steps ?? 999;
-  room.botWalker = setInterval(() => {
+  room.botWalker = safeInterval(() => {
     if (room.state !== 'playing' || room.turn !== seat) { clearInterval(room.botWalker); return; }
     const crateGone = opts.crateId != null && !room.crates.some(c => c.id === opts.crateId);
     const arrived = opts.crateX != null && Math.abs(opts.crateX - room.tanks[seat].x) <= CRATE_REACH - 40;
@@ -1046,7 +1074,7 @@ function botFire(room) {
     broadcast(room, { type: 'face', seat, dir: shot.dir });
   }
   broadcast(room, { type: 'aim', seat, angle: shot.angle, power: shot.power, weapon: shot.weapon });
-  room.botTimer = setTimeout(() => {
+  room.botTimer = safeTimeout(() => {
     if (room.state === 'playing' && room.turn === seat) resolveFire(room, seat, shot.weapon, shot.angle, shot.power);
   }, bot.horde ? Math.min(550, BOT_FIRE_MS) : BOT_FIRE_MS);
 }
@@ -1261,7 +1289,7 @@ function resolveFire(room, seat, weaponId, angle, power) {
   clearTimeout(room.clock);
   // Null the handle when it runs: the fire clock uses `room.clock` as a
   // "handover already pending" flag, so a stale fired-Timeout must not read busy.
-  room.clock = setTimeout(() => { room.clock = null; startBurn(room, seat); }, 300);
+  room.clock = safeTimeout(() => { room.clock = null; startBurn(room, seat); }, 300);
 }
 
 // Real-time 5-second damage-over-time: any tank sitting in a fire/gas area loses
@@ -1273,7 +1301,7 @@ function startBurn(room, seat) {
   const first = burnTick(room.hazards, room.tanks, room.lavaY);
   if (!first.some(d => d > 0)) return advance(room, seat);        // nobody's standing in it
   let ticks = 0;
-  room.dotTimer = setInterval(() => {
+  room.dotTimer = safeInterval(() => {
     if (room.state !== 'playing') { clearInterval(room.dotTimer); room.dotTimer = null; return; }
     ticks++;
     const dmg = burnTick(room.hazards, room.tanks, room.lavaY);
@@ -1306,7 +1334,7 @@ function stopFire(room) { clearInterval(room.fireTimer); room.fireTimer = null; 
 function startFire(room) {
   if (!room.hazards.some(h => h.until != null)) return stopFire(room);
   if (room.fireTimer) return;          // an existing blaze keeps its cadence
-  room.fireTimer = setInterval(() => fireBite(room), FIRE_TICK);
+  room.fireTimer = safeInterval(() => fireBite(room), FIRE_TICK);
 }
 
 function fireBite(room) {
@@ -1427,7 +1455,7 @@ function handleClose(ws) {
   // than the multiplayer grace without losing their tank.
   const otherHumans = room.players.some((p, i) => p && !p.bot && i !== seat);
   if (otherHumans) {
-    player.dropTimer = setTimeout(() => {
+    player.dropTimer = safeTimeout(() => {
       if (player.connected || room.state !== 'playing') return;
       // Grace expired. Scuttle only THEIR tank — the free-for-all carries on.
       room.hp[seat] = 0;
@@ -1447,7 +1475,7 @@ function handleClose(ws) {
   // is that mode's NORMAL state, and the push nudge is what brings them back.
   if (!room.players.some(p => p && !p.bot && p.connected)) {
     clearTimeout(room.emptyTimer);
-    room.emptyTimer = setTimeout(() => teardown(room),
+    room.emptyTimer = safeTimeout(() => teardown(room),
       room.asyncOk ? ASYNC_GRACE_MS : EMPTY_ROOM_GRACE_MS);
   }
 }
@@ -1611,9 +1639,32 @@ export function handleClientMessage(ws, msg) {
       // registration token — opaque here, and NOT hung on the player, because
       // only the host can deliver it and only the persisted row survives the
       // room anyway.
-      const webSub = s && typeof s.endpoint === 'string' && s.endpoint.startsWith('https://');
+      //
+      // BOUNDED, 2026-08-18. The native branch below has always capped its token
+      // at 4096; the web branch checked only that `endpoint` was an https string,
+      // so `sub` could be any size — and it is both held on the player and
+      // PERSISTED. `profiles.progression` two dozen lines away in the same
+      // migration carries `check (pg_column_size(progression) <= 65536)` with the
+      // comment "64KB cap stops abuse"; `push_subscriptions.sub` is a bare jsonb
+      // with no such guard. With maxPayload at 64KB and MSG_RATE at 60/s that is
+      // ~3.8 MB/s aimed at a 500MB free-plan database, and because `endpoint` is
+      // the unique upsert key, simply varying it turns replacement into growth.
+      //
+      // Bounded by SIZE rather than by shape: a real subscription is a few
+      // hundred bytes, so these ceilings are far above anything legitimate,
+      // while policing the shape risks rejecting a browser whose payload differs
+      // from the ones we happened to test.
+      const PUSH_ENDPOINT_MAX = 2048;
+      const PUSH_SUB_MAX = 4096;              // same order as the native cap
+      const PUSH_SUBS_PER_SOCKET = 5;         // a real client subscribes once
+      let subBytes = 0;
+      try { subBytes = JSON.stringify(s || null).length; } catch { subBytes = Infinity; }
+      const webSub = s && typeof s.endpoint === 'string' && s.endpoint.startsWith('https://')
+        && s.endpoint.length <= PUSH_ENDPOINT_MAX && subBytes <= PUSH_SUB_MAX;
       const nativeSub = s && (s.platform === 'android' || s.platform === 'ios')
         && typeof s.token === 'string' && s.token.length > 0 && s.token.length <= 4096;
+      ws.pushSubCount = (ws.pushSubCount || 0) + 1;
+      if (ws.pushSubCount > PUSH_SUBS_PER_SOCKET) break;
       if (pl2 && (webSub || nativeSub)) {
         if (webSub) pl2.pushSub = s;
         send(ws, { type: 'pushOk' });

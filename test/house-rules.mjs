@@ -302,5 +302,32 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   else ok('client scripts import nothing from node_modules');
 }
 
+// ---- NO BARE TIMERS IN THE ENGINE -------------------------------------------
+// A timer callback runs detached, so a throw inside one is caught by nothing and
+// reaches process 'uncaughtException' — whose handler in server.js shuts the
+// process down and destroys EVERY live match, not just the room that faulted.
+// room-engine.js schedules almost everything that runs unattended (the bot
+// chain, fire and gas ticks, drop and empty-room reclaim), so this is the
+// difference between one broken match and a server-wide outage.
+//
+// safeTimeout/safeInterval wrap the callback and route the fault to the host.
+// The two helpers are the ONLY places a bare timer is allowed.
+{
+  const src = read('public/room-engine.js').split('\n');
+  const bare = [];
+  src.forEach((line, i) => {
+    if (/^\s*(\/\/|\*)/.test(line)) return;                       // skip comments
+    if (!/\b(setTimeout|setInterval)\s*\(/.test(line)) return;
+    // the helpers themselves — they are what everything else goes through
+    if (/return (setTimeout|setInterval)\(\(\) => \{ try \{ fn\(\);/.test(line)) return;
+    bare.push(`public/room-engine.js:${i + 1}: ${line.trim().slice(0, 76)}`);
+  });
+  if (bare.length) {
+    fail(`bare timer in the engine — a throw there kills every live match; use safeTimeout/safeInterval:\n      ${bare.join('\n      ')}`);
+  } else {
+    ok('engine schedules only through safeTimeout/safeInterval');
+  }
+}
+
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nALL GOOD');
 process.exit(out.errors.length ? 1 : 0);

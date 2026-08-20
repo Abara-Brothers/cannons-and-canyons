@@ -960,6 +960,25 @@ async function cloudBoot() {
 }
 
 // ---- Account strip ----------------------------------------------------------
+// Google sign-in CANNOT COMPLETE inside the native shells (verified 2026-08-18).
+// `signInUrl()` and `linkUrl()` both set redirect_to = location.origin + '/',
+// which is capacitor://localhost on iOS and https://localhost on Android — and
+// neither project can receive it: Info.plist declares no CFBundleURLTypes and
+// AndroidManifest.xml has no BROWSABLE intent-filter or scheme, so the authorize
+// page leaves the WebView and there is no route back. Even a reply that did
+// return would be discarded, because consumeRedirect() requires the
+// cc_oauth_pending flag set in a session the WebView no longer owns.
+//
+// So the Google actions are hidden in the packaged apps rather than shipped
+// dead. This is NOT the same as hiding the account panel: deletion and export
+// live in there and both stores require them reachable in-app (ADR-003), so the
+// chip and modal stay — only the two buttons that cannot work go.
+//
+// Making them work needs a URL scheme in both native projects AND that scheme
+// added to Supabase's redirect allow-list, which is a dashboard change.
+const IS_NATIVE = !!(window.Capacitor && window.Capacitor.getPlatform
+  && window.Capacitor.getPlatform() !== 'web');
+
 // Three states, one small chip in the home footer:
 //   out    - no session at all: offer sign-in (their local progress will merge
 //            into whichever Google account they pick)
@@ -975,9 +994,13 @@ async function refreshAccountChip() {
     $('accountLabel').textContent = who.email ? `Signed in · ${who.email}` : 'Signed in';
   } else if (who) {
     btn.dataset.state = 'guest';
-    $('accountLabel').textContent = 'Guest — keep my progress';
+    // "keep my progress" is a promise about linking Google, which the shells
+    // cannot do — do not make it there.
+    $('accountLabel').textContent = IS_NATIVE ? 'Account' : 'Guest — keep my progress';
   } else {
     btn.dataset.state = 'out';
+    // No session AND no way to start one: the chip has nothing to offer here.
+    if (IS_NATIVE) { btn.classList.add('hidden'); return; }
     $('accountLabel').textContent = 'Sign in — save your progress';
   }
 }
@@ -985,13 +1008,18 @@ $('accountBtn').onclick = () => {
   Audio.ensure();
   const state = $('accountBtn').dataset.state;
   // Nothing to manage yet: straight to sign-in.
-  if (state === 'out') { startSignIn(() => Cloud.signInUrl()); return; }
+  if (state === 'out') {
+    if (IS_NATIVE) return;                       // chip is hidden in this state
+    startSignIn(() => Cloud.signInUrl()); return;
+  }
   // guest / in: the account panel — where deletion and export live, because
   // both stores require them reachable IN-APP (ADR-003).
   $('accWho').textContent = state === 'in'
     ? $('accountLabel').textContent.replace('Signed in · ', 'Signed in as ')
-    : 'Playing as a guest. Link Google and your progress survives losing this device.';
-  $('accLinkBtn').classList.toggle('hidden', state !== 'guest');
+    : (IS_NATIVE
+      ? 'Playing as a guest. Your progress is saved on this device.'
+      : 'Playing as a guest. Link Google and your progress survives losing this device.');
+  $('accLinkBtn').classList.toggle('hidden', state !== 'guest' || IS_NATIVE);
   $('accSignOutBtn').classList.toggle('hidden', state !== 'in');
   $('accountModal').classList.remove('hidden');
 };
