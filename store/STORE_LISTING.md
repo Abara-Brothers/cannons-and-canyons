@@ -150,8 +150,15 @@ Full detail — concepts, sizes, and how each was produced — is in
 | Production icon set (iOS 1024, Play 512, adaptive, PWA) | `store/export/` | ✅ rendered + verified |
 | Google feature graphic (1024×500) | `store/export/android/feature-graphic-1024x500.png` | ✅ rendered |
 | Screenshots (iPhone 6.9"/6.5", iPad 13", Play phone + tablet) | `store/screenshots/run2/` — 5 frames per device class, captured from the live canvas | ✅ rendered |
-| Splash screens for the Capacitor wrapper | `npx capacitor-assets generate` | ⬜ outstanding — needs the icon concept locked first |
+| Splash screens for the Capacitor wrapper | `bash tools/splash/make-splash.sh --install` | ✅ rendered + installed in both native projects (2026-08-14) |
 | PWA manifest + icons (Android quality bar) | `public/manifest.webmanifest`, `public/icons/` | ✅ |
+
+> **Do NOT run `npx capacitor-assets generate` for splashes.** It was listed here
+> as the outstanding step, but the splash screens are already done and installed:
+> `android/app/src/main/res/**/splash.png` and `ios/App/App/Assets.xcassets/Splash.imageset/`
+> were written by `tools/splash/make-splash.sh --install` on 2026-08-14. That script
+> renders the real template at every density; `capacitor-assets` would overwrite all
+> of it with its own output from `resources/splash.svg`. Regenerate with the script.
 
 > **Decision still open:** three app-icon concepts were rendered and compared; the
 > export set is currently built from concept A. See §1 of `DESIGN-ASSETS.md`.
