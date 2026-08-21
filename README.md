@@ -75,10 +75,19 @@ when the lobby fills).
   Dependencies: [`ws`](https://www.npmjs.com/package/ws) and
   [`web-push`](https://www.npmjs.com/package/web-push). It also still carries a
   dormant quick-match queue — the wire path works, but no client UI reaches it.
-- **`game-core.js`** — authoritative, deterministic game logic (terrain
-  generation, physics, weapons, hazards, damage). The server simulates each shot
-  and broadcasts the resolved result; every client replays it identically, so
-  screens never desync. World size is sent to clients on match start.
+- **`public/room-engine.js`** — **the match authority, and the file most changes
+  belong in.** Rooms, seats, turn rotation, elimination, bots, hazards, the
+  rematch flow and every timer live here. It is deliberately browser-safe, so
+  the *same* file runs server-side for online play and in-page for offline solo
+  play — one implementation, not two that drift. Timers must be scheduled
+  through `safeTimeout`/`safeInterval`: a throw in a bare timer callback reaches
+  `uncaughtException` and takes down every live match, and `test/house-rules.mjs`
+  fails the build if a bare one appears.
+- **`game-core.js`** — deterministic shot/physics maths (terrain generation,
+  trajectories, weapons, hazards, damage). The server simulates each shot and
+  broadcasts the resolved result; every client replays it identically, so screens
+  never desync. World size is sent to clients on match start. *This is the maths
+  layer — it does not own rooms or turns; `room-engine.js` does.*
 - **`public/`** — the client: vanilla HTML/CSS + a Canvas renderer (`app.js`). No
   build step, no framework. Ships as an installable PWA
   (`manifest.webmanifest`, service worker, `privacy.html`).
@@ -101,6 +110,22 @@ push to `main`.
 1. Push this folder to a GitHub repo.
 2. On [render.com](https://render.com): **New +** → **Blueprint** → select the repo.
 3. Render reads `render.yaml`, builds, and gives you a public `https://…onrender.com`
+4. **Set the secret env vars by hand — this step is not optional and has bitten us.**
+   `render.yaml` declares nine variables `sync: false`, which means Render creates
+   them **empty** and never fills them in. The game still boots and plays perfectly
+   with them unset, so nothing looks wrong — but accounts, cloud saves, push and
+   account deletion are all silently dead. That exact state (`SUPABASE_SECRET_KEY`
+   mis-set) survived **nine batches** before anyone noticed, which is why `/health`
+   exists. After deploying, confirm:
+
+   ```
+   curl -s https://<your-host>/health
+   ```
+
+   You want `"supabase":"ok"` and `"supabaseAdmin":"ok"`. **Do not check the HTTP
+   status or the `ok` field** — `/health` answers 200 unconditionally and `ok` is a
+   hardcoded literal, so both report healthy while every backend is down. Parse the
+   body.
    URL with WebSockets working.
 
 ### Railway / Fly.io (alternatives)
