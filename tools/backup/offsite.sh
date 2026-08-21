@@ -100,7 +100,11 @@ ossl_dec() { exec 3< <(printf '%s' "$PASS"); "$OSSL" enc -d "${CIPHER[@]}" -pass
 
 # ---------------------------------------------------------------- create
 create() {
-  local src="${1:-$(ls -1dt "$ROOT"/backups/*/ 2>/dev/null | head -1)}"
+  # Filter to STAMP-SHAPED directories. backups/ also holds offsite/, whose mtime
+# jumps to newest every time an archive is written — after which this selector
+# picked offsite/ and the command aborted with "no usable backup found", which
+# was false: several usable backups were sitting right there.
+local src="${1:-$(ls -1dt "$ROOT"/backups/*/ 2>/dev/null | grep -E '/[0-9]{8}T[0-9]{6}Z/$' | head -1)}"
   # MANIFEST.txt is written LAST by backup.sh, so its presence is the only signal
   # that the dump ran to completion. Guarding on auth.sql alone meant the residue
   # of a FAILED backup — a truncated public.sql, no manifest — was picked up by
@@ -172,6 +176,13 @@ verify() {
     || { echo "  CHECKSUM MISMATCH — contents do not match what was encrypted"; return 1; }
   [ -s "$d/auth.sql" ] && [ -s "$d/public.sql" ] || { echo "  auth.sql or public.sql is EMPTY inside the archive"; return 1; }
   [ -s "$d/MANIFEST.txt" ] || { echo "  no MANIFEST.txt inside the archive — it holds an UNFINISHED backup"; return 1; }
+  # Same row check as backup-auto.sh: a dump of nothing is ~800 bytes of headers
+  # and passes every size test. An archive of an empty database is not a backup.
+  _rows="$(grep '^live_rows' "$d/MANIFEST.txt" | cut -d: -f2-)"
+  _users="$(printf '%s' "$_rows" | sed -n 's/.*auth\.users=\([0-9][0-9]*\).*/\1/p')"
+  if [ -z "$_users" ] || [ "$_users" -eq 0 ]; then
+    echo "  the archive reports '${_rows:-no live_rows}' — it holds no accounts"; return 1
+  fi
   echo "  decrypts, unpacks, and every checksum matches ($(ls -1 "$d" | wc -l | tr -d ' ') files)"
   echo "  rows recorded: $(grep '^live_rows' "$d/MANIFEST.txt" 2>/dev/null | cut -d: -f2-)"
   return 0

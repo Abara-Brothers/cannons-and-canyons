@@ -162,13 +162,38 @@ which is the trap this runbook exists to prevent.
 1. Stop writes: Render → the service → **Suspend** (players see the offline
    game; matches in progress are lost either way).
 2. Restore in dependency order, always auth first:
+   > **CORRECTED 2026-08-22 — the previous version of this step did not work.**
+   > These are **data-only** dumps. Replayed over a table whose rows survive, the
+   > `COPY` hits a duplicate key, **aborts, loads zero rows — and `psql` exits 0.**
+   > Measured on a scratch cluster: 4 rows, 2 deleted, restore run, **still 2
+   > rows, exit code 0, three commands all reporting success.** Adding
+   > `ON_ERROR_STOP` alone makes the failure visible but still restores nothing.
+   > **You must clear the target tables first.** Both halves are required.
+
+   **a. Clear the target tables, children first** (the FK to `auth.users` means
+   order matters, and this is the destructive step — be certain of the backup
+   before running it):
+   ```bash
+   bash tools/backup/db-connect.sh -c "truncate table public.push_subscriptions, public.profiles"
+   ```
+   > `auth.users` is **not** truncated here: the `auth` schema belongs to
+   > Supabase's own service, and `auth.sql` below reloads it. If you are
+   > restoring into a project whose `auth.users` still holds the accounts, skip
+   > `auth.sql` and reload `public.sql` only.
+
+   **b. Reload in dependency order:**
    ```bash
    bash tools/backup/db-connect.sh -f <backup>/roles.sql
    bash tools/backup/db-connect.sh -f <backup>/auth.sql
    bash tools/backup/db-connect.sh -f <backup>/public.sql
    ```
-   `db-connect.sh` is plain `psql` with the stored credential applied, so there
-   is no URI to assemble while under pressure. Any psql argument passes through.
+   `db-connect.sh` is plain `psql` with the stored credential applied, so there is
+   no URI to assemble while under pressure, and it now sets `ON_ERROR_STOP=1` so a
+   failed load **stops and exits non-zero** instead of scrolling past. Any psql
+   argument passes through.
+
+   **c. Check the row counts came back** — see **Verify** below. Do not skip this:
+   the failure mode this step was corrected for looked exactly like success.
 3. Verify before resuming — see **Verify** below.
 4. Resume the Render service and check `/health` reports
    `supabase=ok supabaseAdmin=ok`.

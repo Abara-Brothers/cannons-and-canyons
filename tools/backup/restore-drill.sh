@@ -35,7 +35,11 @@ export PGTZ=UTC
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
-SRC="${1:-$(ls -1dt "$ROOT"/backups/*/ 2>/dev/null | head -1)}"
+# Filter to STAMP-SHAPED directories. backups/ also holds offsite/, whose mtime
+# jumps to newest every time an archive is written — after which this selector
+# picked offsite/ and the command aborted with "no usable backup found", which
+# was false: several usable backups were sitting right there.
+SRC="${1:-$(ls -1dt "$ROOT"/backups/*/ 2>/dev/null | grep -E '/[0-9]{8}T[0-9]{6}Z/$' | head -1)}"
 [ -n "$SRC" ] && [ -s "$SRC/auth.sql" ] || { echo "no usable backup found in $ROOT/backups" >&2; exit 1; }
 
 PORT=55432
@@ -46,8 +50,20 @@ echo "restoring: $SRC"
 echo "scratch  : $D"
 
 initdb -D "$D/data" -U postgres --encoding=UTF8 >"$D/initdb.log" 2>&1 || { tail -5 "$D/initdb.log"; exit 1; }
+# REFUSE if something already owns the port. Without this the readiness probe
+# below cannot tell whose cluster answered: pg_ctl's failure was discarded
+# (>/dev/null with no `||`, and `set -uo pipefail` has no -e), the probe passed
+# against the FOREIGN cluster, and everything after it — roles, the live auth DDL,
+# the migrations, and auth.sql with real users' emails — was replayed into a
+# database this script does not own and its EXIT trap does not clean up.
+if psql -h 127.0.0.1 -p "$PORT" -U postgres -Atc 'select 1' >/dev/null 2>&1; then
+  echo "REFUSING: something is already listening on port $PORT. The drill will not" >&2
+  echo "          write production data into a cluster it does not own." >&2
+  exit 1
+fi
 pg_ctl -D "$D/data" -o "-p $PORT -c listen_addresses=127.0.0.1 -c unix_socket_directories=/tmp" \
-       -l "$D/server.log" start >/dev/null 2>&1
+       -l "$D/server.log" start >/dev/null 2>&1 \
+  || { echo "pg_ctl failed to start the drill cluster:" >&2; tail -10 "$D/server.log" >&2; exit 1; }
 for i in $(seq 1 20); do psql -h 127.0.0.1 -p $PORT -U postgres -Atc "select 1" >/dev/null 2>&1 && break; sleep 1; done
 psql -h 127.0.0.1 -p $PORT -U postgres -Atc "select 1" >/dev/null 2>&1 || { tail -10 "$D/server.log"; exit 1; }
 

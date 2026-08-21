@@ -32,11 +32,17 @@ getconf() { grep -E "^$1=" "$CONF" 2>/dev/null | head -1 | cut -d= -f2-; }
 PW="$(security find-generic-password -s "$SERVICE" -w 2>/dev/null || true)"
 [ -n "$PW" ] || { echo "no password in the Keychain — run: bash tools/backup/setup-credential.sh" >&2; exit 1; }
 
+# ON_ERROR_STOP=1 by DEFAULT. Without it psql prints an error, carries on, and
+# EXITS 0 — which is how the documented restore came to report success while
+# restoring nothing (measured 2026-08-22: a data-only reload over surviving rows
+# aborted its COPY on a duplicate key, loaded 0 rows, and returned 0). Override
+# with -v ON_ERROR_STOP=0 if you genuinely want to continue past errors.
 exec env \
+  PGOPTIONS="${PGOPTIONS:-}" \
   PGHOST="$(getconf PGHOST)" \
   PGPORT="$(getconf PGPORT)" \
   PGUSER="$(getconf PGUSER)" \
   PGDATABASE="$(getconf PGDATABASE)" \
   PGPASSWORD="$PW" \
   PGCONNECT_TIMEOUT=30 \
-  "$PSQL" "$@"
+  "$PSQL" -v ON_ERROR_STOP="${ON_ERROR_STOP:-1}" "$@"

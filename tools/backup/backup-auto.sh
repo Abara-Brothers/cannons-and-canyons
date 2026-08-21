@@ -96,6 +96,20 @@ if PGHOST="$PGHOST" PGPORT="${PGPORT:-5432}" PGUSER="$PGUSER" \
   latest="$(ls -1dt "$OUT_ROOT"/*/ 2>/dev/null | head -1)"
   # A "successful" dump of nothing is the failure mode worth catching: if auth.sql
   # is empty the backup is useless and everything downstream would look fine.
+  # ROWS, NOT BYTES. `[ -s ]` only asks whether the file is non-empty, and
+  # pg_dump emits ~800 bytes of SET/header for a schema with no data at all —
+  # measured 2026-08-22: a zero-row dump produced auth.sql 805 bytes and
+  # public.sql 815 bytes, and this guard blessed it. The comment above has always
+  # said "a 'successful' dump of nothing is the failure mode worth catching"; it
+  # did not catch it. With a weekly job and KEEP=8, eight weeks of a misconfigured
+  # db.conf would evict every good local copy while logging OK each time.
+  rows="$(grep '^live_rows' "${latest}MANIFEST.txt" 2>/dev/null | cut -d: -f2-)"
+  users="$(printf '%s' "$rows" | sed -n 's/.*auth\.users=\([0-9][0-9]*\).*/\1/p')"
+  if [ -z "$users" ] || [ "$users" -eq 0 ]; then
+    say "FAILED: manifest reports '${rows:-no live_rows line}' — refusing to bless a backup with no accounts."
+    say "        If the database really is empty, set CC_ALLOW_EMPTY_BACKUP=1 deliberately."
+    [ "${CC_ALLOW_EMPTY_BACKUP:-0}" = "1" ] || exit 1
+  fi
   if [ -n "$latest" ] && [ -s "${latest}auth.sql" ] && [ -s "${latest}public.sql" ]; then
     say "OK: $(basename "$latest") — $(du -sh "$latest" | cut -f1) — $(grep '^live_rows' "${latest}MANIFEST.txt" 2>/dev/null | cut -d: -f2-)"
   else
@@ -126,7 +140,19 @@ while IFS= read -r d; do
   [ -n "$d" ] || continue
   n=$((n + 1))
   if [ "$n" -gt "$KEEP" ]; then
-    rm -rf -- "$d" && say "pruned $(basename "$d")"
+    # STRIP THE TRAILING SLASH, and never follow a symlink. `ls -1dt */` emits
+    # "path/", and `rm -rf link/` resolves the link and deletes its TARGET, while
+    # `rm -rf link` would remove only the link. The `--` and the quoting were both
+    # already correct; the slash defeated them. RESTORE.md pushes operators toward
+    # keeping copies off the machine, so a symlink under backups/ is a plausible
+    # thing for someone to create — and the dangling link would survive to repeat
+    # the deletion every week.
+    d="${d%/}"
+    if [ -L "$d" ]; then
+      say "skipped $(basename "$d") — it is a symlink; refusing to delete through it"
+    else
+      rm -rf -- "$d" && say "pruned $(basename "$d")"
+    fi
   fi
 done < <(ls -1dt -- "$OUT_ROOT"/*/ 2>/dev/null | grep -E '/[0-9]{8}T[0-9]{6}Z/$')
 
