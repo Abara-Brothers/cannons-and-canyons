@@ -210,8 +210,19 @@ select
 ```
 
 The fingerprint is the real test: equal counts can still hide corrupted
-progression JSON. In the drill, original and restored both read
-`66f62169a2d39b0fb7b871f77f3e2be0`.
+progression JSON.
+
+**Compare against the `profiles_fingerprint` line in that backup's own
+`MANIFEST.txt`** — it is computed at dump time, from the data actually in the
+dump.
+
+> **Corrected 2026-08-18.** This section used to quote a single hardcoded value,
+> `66f62169a2d39b0fb7b871f77f3e2be0`, from the 2026-08-14 drill when there were
+> **4** profiles. There are now 14, so that value **cannot match**, and the
+> manifest it sent you to carried no fingerprint at all. A restore is done under
+> pressure; meeting a mismatch you cannot explain is exactly when someone
+> abandons a good backup. Run the query with `PGTZ=UTC` — `created_at` renders in
+> the session timezone, and an unpinned comparison fails on formatting alone.
 
 Then exercise the app, not just the database:
 

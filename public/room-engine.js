@@ -73,6 +73,15 @@ export function setPushSubSink(fn) { pushSubSink = typeof fn === 'function' ? fn
 // host, which routes it to the same error_reports table as any server fault.
 let faultSink = () => {};
 export function setFaultSink(fn) { faultSink = typeof fn === 'function' ? fn : () => {}; }
+
+// Hitting MAX_ROOMS refuses every new match with a player-visible message and,
+// until 2026-08-18, recorded NOTHING server-side — the stated residual of
+// RISK-014. `rooms` on /health was the only external signal, and it over-counts
+// live play (empty rooms are held 30 minutes, async duels 24 hours), so the one
+// number available was also the wrong one. Announce it instead; the host routes
+// it to the same error_reports table as any other server fault.
+let capacitySink = () => {};
+export function setCapacitySink(fn) { capacitySink = typeof fn === 'function' ? fn : () => {}; }
 function onTimerFault(err) {
   try { console.error('[timer] callback threw:', err && err.stack ? err.stack : err); } catch {}
   try { faultSink(err); } catch { /* the reporter must never be the second fault */ }
@@ -164,10 +173,23 @@ const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 // used to make the Map do work.
 const roomCode = (v) => (typeof v === 'string' ? v : '').toUpperCase().trim().slice(0, 8);
 
+// getRandomValues, not Math.random — the same CSPRNG `makeToken` uses a few
+// lines below, which makes the old call an inconsistency rather than a decision.
+// A room code is a capability: anyone holding it can take a seat in that lobby,
+// and until 2026-08-18 nothing stopped one socket taking SEVERAL. Math.random is
+// seeded predictably enough that guessing live codes from a 31^4 space is not
+// the barrier it looks like. Rejection sampling keeps the alphabet uniform —
+// `% len` would quietly bias toward the first few characters.
 function makeCode() {
   let code;
+  const pick = () => {
+    const b = new Uint8Array(1);
+    const limit = 256 - (256 % CODE_CHARS.length);   // discard the biased tail
+    do { globalThis.crypto.getRandomValues(b); } while (b[0] >= limit);
+    return CODE_CHARS[b[0] % CODE_CHARS.length];
+  };
   do {
-    code = Array.from({ length: 4 }, () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]).join('');
+    code = Array.from({ length: 4 }, pick).join('');
   } while (rooms.has(code));
   return code;
 }
@@ -343,7 +365,12 @@ const MAX_ROOMS = Number(env.MAX_ROOMS) || 250;
 
 function createRoom(hostWs, name, skin, opts = {}) {
   releasePriorRoom(hostWs);
-  if (rooms.size >= MAX_ROOMS) return null;
+  if (rooms.size >= MAX_ROOMS) {
+    // Rate-limited by the host, not here: at the cap this fires on EVERY
+    // attempt, and a refusal storm must not become its own outage.
+    try { capacitySink(rooms.size, MAX_ROOMS); } catch { /* never the second fault */ }
+    return null;
+  }
   const code = makeCode();
   const MODES = ['duel', 'ffa', 'boss', 'golf', 'aliens'];
   const mode = MODES.includes(opts.mode) ? opts.mode : 'duel';

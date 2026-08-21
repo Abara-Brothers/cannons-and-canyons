@@ -16,7 +16,7 @@ import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import {
   rooms, send, handleClientMessage, handleClose,
-  setPushNudge, setAuthSink, setPushSubSink, setFaultSink,
+  setPushNudge, setAuthSink, setPushSubSink, setFaultSink, setCapacitySink,
 } from './public/room-engine.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -306,6 +306,20 @@ setPushNudge(pushNudge);
 // visibility is how a room silently stops advancing and nobody ever finds out,
 // so route the fault to the same table every other server fault lands in.
 setFaultSink((err) => reportServerError('engineTimer', err));
+
+// Room capacity refusals were invisible server-side (RISK-014's residual): the
+// player was told the server was full and nothing recorded that it had happened.
+// Reported at most once a minute — at the cap this fires on every single attempt,
+// and a refusal storm turning into a report storm would be a self-inflicted
+// outage on the very endpoint meant to diagnose it.
+let lastCapacityReport = 0;
+setCapacitySink((live, cap) => {
+  const now = Date.now();
+  if (now - lastCapacityReport < 60000) return;
+  lastCapacityReport = now;
+  console.error(`[capacity] room creation REFUSED — ${live}/${cap} rooms in memory`);
+  reportServerError('capacity', new Error(`room creation refused at ${live}/${cap} rooms`));
+});
 
 // ---- Account deletion (ADR-003; a hard store requirement on both platforms) --
 // GoTrue has no self-serve delete, so this host brokers it: verify the

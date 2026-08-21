@@ -95,6 +95,24 @@ counts="$("$PSQL" -Atc "
       || ' push_subs=' || (select count(*) from public.push_subscriptions)
 " 2>/dev/null || echo 'unavailable')"
 
+# The fingerprint is the check that counts cannot make: equal row counts still
+# hide corrupted progression JSON. It is computed HERE, at dump time, and written
+# into the manifest — because RESTORE.md used to carry one hardcoded value from
+# the 4-profile drill of 2026-08-14, which could never match once there were 14
+# profiles, and the manifest it told you to compare against held no fingerprint
+# at all. An operator meets that contradiction mid-incident, and concludes the
+# backup is corrupt.
+#
+# PGTZ is pinned because created_at::text renders in the session's timezone: the
+# same data fingerprints differently from a UTC server and a local machine, which
+# cost a false failure in the restore drill before it was pinned.
+fingerprint="$(PGTZ=UTC "$PSQL" -Atc "
+  select coalesce(md5(string_agg(
+      p.id::text || coalesce(p.callsign,'') || coalesce(p.progression::text,''),
+      '|' order by p.id::text)), 'no-rows')
+  from public.profiles p
+" 2>/dev/null || echo 'unavailable')"
+
 cat > "$OUT/MANIFEST.txt" <<EOF
 Cannons & Canyons backup
 taken_at   : $STAMP
@@ -102,6 +120,11 @@ host       : $PGHOST:$PGPORT  (password not recorded)
 database   : $PGDATABASE as $PGUSER
 dumped_by  : $("$DUMP" --version)
 live_rows  : $counts
+profiles_fingerprint : $fingerprint
+  (md5 over id + callsign + progression, ordered by id, computed with PGTZ=UTC.
+   After a restore, re-run the same query and compare against THIS value —
+   never against a number written in a runbook, which goes stale the moment
+   anyone signs up.)
 files      : roles.sql auth.sql public.sql
 restore    : see tools/backup/RESTORE.md — auth.sql MUST be loaded before public.sql
 EOF
