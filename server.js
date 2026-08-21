@@ -409,10 +409,64 @@ async function accountDelete(req, res, cors) {
 let errTokens = 30;
 setInterval(() => { errTokens = Math.min(30, errTokens + 1); }, 2000).unref();
 
+// RESERVE BUCKET (2026-08-22, owner decision). The single bucket above could be
+// drained by one source and held at zero, after which every genuine crash report
+// was dropped with a 204 — indistinguishable from "no crashes", which is the
+// exact blindness this endpoint exists to remove.
+//
+// The obvious fix is a per-IP limit. It is deliberately NOT used: privacy.html
+// promises "no IP addresses against your account or your crash reports", and that
+// promise is worth more than the marginal protection.
+//
+// So: a second, slower bucket that only a message we have NOT SEEN RECENTLY can
+// spend. This is aimed at the realistic failure — one build crash-looping and
+// repeating the SAME message thousands of times, which is what actually exhausts
+// a shared bucket in practice. That flood cannot touch the reserve at all, so
+// unrelated players' first-time crashes still get through.
+//
+// HONEST LIMIT, stated rather than implied: an attacker who randomises the
+// message text can still spend the reserve, and without identity nothing here can
+// stop that. What it cannot do any more is go UNNOTICED — see errDropped below.
+let errReserve = 6;
+setInterval(() => { errReserve = Math.min(6, errReserve + 1); }, 10000).unref();
+
+// Seen-message memory for the novelty test. Bounded in both directions: at most
+// SEEN_MAX entries, each forgotten after SEEN_TTL, so it cannot grow unboundedly
+// and a message stops being "old news" once the incident is over.
+const SEEN_TTL = 10 * 60 * 1000;
+const SEEN_MAX = 300;
+const seenErrors = new Map();          // message -> last seen ms
+function isNovelError(msg) {
+  const now = Date.now();
+  if (seenErrors.size > SEEN_MAX) {
+    for (const [k, t] of seenErrors) { if (now - t > SEEN_TTL) seenErrors.delete(k); }
+    while (seenErrors.size > SEEN_MAX) seenErrors.delete(seenErrors.keys().next().value);
+  }
+  const last = seenErrors.get(msg);
+  seenErrors.set(msg, now);
+  return last === undefined || now - last > SEEN_TTL;
+}
+
+// BEING BLIND MUST NOT LOOK LIKE BEING HEALTHY. Every dropped report is counted
+// and surfaced on /health, so "zero errors" can be told apart from "the limiter
+// ate them". That distinction is the whole lesson of ISSUE-035.
+let errDropped = 0;
+
 function ingestError(req, res, cors) {
   const done = () => { res.writeHead(204, cors); res.end(); };
-  if (errTokens < 1) return done();
-  errTokens -= 1;
+  // Fast path spends the main bucket. Otherwise the reserve may still admit this
+  // report — but only if it survives the novelty test after the body is read, and
+  // only while the reserve has a token, so a drained main bucket cannot turn into
+  // unlimited body parsing.
+  let useReserve = false;
+  if (errTokens >= 1) {
+    errTokens -= 1;
+  } else if (errReserve >= 1) {
+    useReserve = true;
+  } else {
+    errDropped += 1;
+    return done();
+  }
   // Collect Buffers and decode ONCE at the end. `body += chunk` decodes each
   // chunk on its own, so a multi-byte UTF-8 character straddling a chunk
   // boundary is torn into replacement characters — and crash text, which is
@@ -441,6 +495,14 @@ function ingestError(req, res, cors) {
         version: s(j.version, 40),
         platform: s(j.platform, 200),
       };
+      // Reserve admission: a repeat of something already seen is dropped here,
+      // which is what keeps a single crash-looping build from consuming it.
+      if (useReserve) {
+        if (!isNovelError(row.message)) { errDropped += 1; return done(); }
+        errReserve -= 1;
+      } else {
+        isNovelError(row.message);          // keep the memory warm on the fast path
+      }
       if (SB_SECRET) {
         sbAdmin('POST', '/error_reports', row, 'return=minimal').catch(() => {});
       } else {
@@ -660,6 +722,10 @@ function handleRequest(req, res) {
       // exactly this.
       commit: process.env.RENDER_GIT_COMMIT ? String(process.env.RENDER_GIT_COMMIT).slice(0, 40) : null,
       uptimeSeconds: Math.round(process.uptime()),
+      // A non-zero value here means crash reports are being DROPPED by the rate
+      // limiter — so an empty error_reports table means "we are blind", not "we
+      // are healthy". Alert on any sustained rise; see docs/ALERTING.md.
+      errorsDropped: errDropped,
       rooms: rooms.size,
       supabase: supabaseHealth,            // ok | unconfigured | bad_key_or_url | unreachable
       supabaseAdmin: supabaseAdminHealth,  // ok | unconfigured | bad_secret_key | unreachable

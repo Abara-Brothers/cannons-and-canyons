@@ -43,6 +43,16 @@
 			</array>
 		</dict>
 	</dict>
+	<!-- Export-compliance declaration, signed off by the owner 2026-08-22.
+	     FALSE is accurate and was verified, not assumed: no file under public/ uses
+	     crypto.subtle or any custom cryptography, and the only runtime dependencies
+	     (ws, web-push) are server-side and never enter this binary. The app's only
+	     encryption is HTTPS/TLS for calls to its own backend, which Apple exempts.
+	     Without this key EVERY upload — the first TestFlight build included — lands
+	     as "Missing Compliance" and cannot reach testers until someone answers the
+	     question by hand, every single time. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
