@@ -120,6 +120,16 @@ const mock = http.createServer((req, res) => {
     if (u.pathname === '/rest/v1/error_reports' && req.method === 'DELETE') {
       res.writeHead(204); return res.end();       // the retention sweep
     }
+    if (u.pathname === '/rest/v1/error_reports' && req.method === 'GET') {
+      // The /health admin probe. It watches BOTH privileged tables now (2026-08-22):
+      // watching push_subscriptions alone left a grant/RLS/schema fault confined to
+      // error_reports invisible, while that is the table crash reporting depends on
+      // and its insert path swallows failures. A zero-row select proves the secret
+      // key and the table's reachability without reading anyone's data.
+      hits.errProbe = (hits.errProbe || 0) + 1;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end('[]');
+    }
     if (u.pathname.startsWith('/auth/v1/admin/users/') && req.method === 'DELETE') {
       hits.adminDel.push({ path: u.pathname, apikey: req.headers.apikey, auth: req.headers.authorization });
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -293,6 +303,13 @@ const until = async (test, ms, what) => {
   const found = secrets.filter(s => leaked.includes(s));
   if (found.length) fail(`/health leaks configuration: ${found.join(', ')}`);
   else step('/health exposes booleans only — no keys, URLs or tokens');
+
+  // The admin probe must touch BOTH privileged tables. Watching push_subscriptions
+  // alone left a grant/RLS/schema fault confined to error_reports invisible to
+  // every signal the server emits — while that is the table crash reporting
+  // depends on, and its insert path swallows failures (2026-08-22).
+  if (!hits.errProbe) fail('/health never probed error_reports — an error_reports-only fault would be invisible');
+  else step('/health probes error_reports as well as push_subscriptions');
 
   // ---- Native push via FCM (8.57) -------------------------------------------
   // The same nudge that reached the browser must also reach the phone, through
