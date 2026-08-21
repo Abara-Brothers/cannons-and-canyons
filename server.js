@@ -77,8 +77,14 @@ const SB_SECRET = process.env.SUPABASE_SECRET_KEY || '';
 async function sbUserFromToken(token) {
   if (!SB_URL || !SB_PUB || typeof token !== 'string' || !token || token.length > 4096) return null;
   try {
+    // BOUND THE WAIT. Without a signal a degraded GoTrue leaves every one of
+    // these pending forever, and each pending fetch holds its request, response
+    // and closure alive. Measured on 2026-08-22: 8 anonymous sockets pushed RSS
+    // from 64 MB to 191 MB in ten seconds against a hanging upstream, with no
+    // recovery afterwards — the RISK-014 OOM path, reachable with no account.
     const res = await fetch(`${SB_URL}/auth/v1/user`, {
       headers: { apikey: SB_PUB, Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) return null;
     const u = await res.json();
@@ -114,6 +120,25 @@ setAuthSink((ws, token) => {
   // receiving that account's turn nudges, and any subscription it registered
   // was filed under the wrong person.
   if (token === null) { ws.userId = null; return; }
+
+  // BUDGET AND DEDUPE. `hello` is unauthenticated, needs no room and no seat, and
+  // relayed 1:1 to GoTrue with nothing in the way — measured at 3,976 frames
+  // producing 3,976 outbound calls from 8 sockets in ten seconds, each staying
+  // under the 60 frames/s limiter so it never fired. `accountDelete` has carried a
+  // budget for exactly this since it was written, and its comment names the
+  // reason: stopping a junk-token flood turning an endpoint into a relay that
+  // hammers GoTrue. This is the same relay, at ~6x the rate, unauthenticated.
+  //
+  // The dedupe carries most of the weight: a real client sends ONE token and
+  // repeats it, so it verifies once and every repeat is free. Only a client
+  // rotating its token pays, which no honest client does.
+  if (ws.lastHelloToken === token) return;
+  const now = Date.now();
+  ws.authTokens = Math.min(5, (ws.authTokens ?? 5) + (now - (ws.authRefill || now)) / 10000);
+  ws.authRefill = now;
+  if (ws.authTokens < 1) return;
+  ws.authTokens -= 1;
+  ws.lastHelloToken = token;
   sbUserFromToken(token).then((id) => { if (id) ws.userId = id; }).catch(() => {});
 });
 
@@ -443,6 +468,13 @@ function isNovelError(msg) {
     while (seenErrors.size > SEEN_MAX) seenErrors.delete(seenErrors.keys().next().value);
   }
   const last = seenErrors.get(msg);
+  // Delete before set. Map.set on an EXISTING key keeps its original position, so
+  // the eviction below was FIFO by first insertion, not LRU: a constantly-repeated
+  // message kept its early slot and was evicted while colder newer entries
+  // survived — after which it counted as novel again and could spend the reserve,
+  // exactly inverting the point of the reserve. Measured: a message seen 3,000
+  // times was judged novel 10 times; with this line, once.
+  seenErrors.delete(msg);
   seenErrors.set(msg, now);
   return last === undefined || now - last > SEEN_TTL;
 }
@@ -462,6 +494,14 @@ function ingestError(req, res, cors) {
   if (errTokens >= 1) {
     errTokens -= 1;
   } else if (errReserve >= 1) {
+    // Spend HERE, at the gate. Deducting at end-of-body meant every request whose
+    // body had not yet arrived passed this same test before any of them
+    // decremented — and the refill has a ceiling but no floor, so the counter went
+    // arbitrarily negative. Measured: 120 novel reports admitted against a cap of
+    // 6, purely because head and body arrived in separate writes, which is
+    // ordinary on mobile networks. Spending at the gate also means a malformed or
+    // repeated body can no longer get a free 8 KB read and JSON.parse.
+    errReserve -= 1;
     useReserve = true;
   } else {
     errDropped += 1;
@@ -478,7 +518,7 @@ function ingestError(req, res, cors) {
   let dead = false;
   req.on('data', (c) => {
     size += c.length;
-    if (size > 8192) { dead = true; try { req.destroy(); } catch {} done(); return; }
+    if (size > 8192) { dead = true; errDropped += 1; try { req.destroy(); } catch {} done(); return; }
     chunks.push(c);
   });
   req.on('end', () => {
@@ -498,17 +538,23 @@ function ingestError(req, res, cors) {
       // Reserve admission: a repeat of something already seen is dropped here,
       // which is what keeps a single crash-looping build from consuming it.
       if (useReserve) {
-        if (!isNovelError(row.message)) { errDropped += 1; return done(); }
-        errReserve -= 1;
+        // Refund a repeat: the token was taken at the gate, and a message we have
+        // already seen was never entitled to it.
+        if (!isNovelError(row.message)) { errReserve += 1; errDropped += 1; return done(); }
       } else {
         isNovelError(row.message);          // keep the memory warm on the fast path
       }
       if (SB_SECRET) {
-        sbAdmin('POST', '/error_reports', row, 'return=minimal').catch(() => {});
+        // Count the DATABASE loss too. Swallowing this meant a grant, RLS or schema
+        // fault on error_reports destroyed every report while errorsDropped stayed
+        // 0 and every /health signal read green — 25 reports in, 25 destroyed,
+        // nothing anywhere. That is the precise blindness this counter exists to
+        // remove, reinstated by a different route.
+        sbAdmin('POST', '/error_reports', row, 'return=minimal').catch(() => { errDropped += 1; });
       } else {
         console.error('[client-error]', row.message, row.source || '');
       }
-    } catch { /* malformed body: drop */ }
+    } catch { errDropped += 1; /* malformed body: drop */ }
     done();
   });
 }
@@ -575,10 +621,23 @@ async function checkSupabase() {
     // A zero-row read of a table whose RLS has NO policies: only a key that
     // bypasses RLS gets 200, so this proves the secret key without returning
     // any data or writing anything.
-    const res = await fetch(`${SB_URL}/rest/v1/push_subscriptions?select=id&limit=0`, {
-      headers: { apikey: SB_SECRET, Authorization: `Bearer ${SB_SECRET}` },
-    });
-    supabaseAdminHealth = res.ok ? 'ok' : 'bad_secret_key';
+    // Probe BOTH privileged tables, and report the worse result. Watching only
+    // push_subscriptions meant a grant, RLS or schema fault confined to
+    // error_reports was invisible to every signal the server emits — while that
+    // is the table crash reporting depends on, and its insert path swallows
+    // failures. A zero-row select proves the secret key and the table's
+    // reachability without reading a single user's data.
+    const probes = await Promise.all([
+      fetch(`${SB_URL}/rest/v1/push_subscriptions?select=id&limit=0`, {
+        headers: { apikey: SB_SECRET, Authorization: `Bearer ${SB_SECRET}` },
+        signal: AbortSignal.timeout(8000),
+      }),
+      fetch(`${SB_URL}/rest/v1/error_reports?select=id&limit=0`, {
+        headers: { apikey: SB_SECRET, Authorization: `Bearer ${SB_SECRET}` },
+        signal: AbortSignal.timeout(8000),
+      }),
+    ]);
+    supabaseAdminHealth = probes.every((r) => r.ok) ? 'ok' : 'bad_secret_key';
   } catch { supabaseAdminHealth = 'unreachable'; }
   return supabaseHealth;
 }
