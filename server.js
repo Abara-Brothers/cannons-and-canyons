@@ -305,7 +305,22 @@ setPushNudge(pushNudge);
 // match). It is contained to its own room instead — but containment without
 // visibility is how a room silently stops advancing and nobody ever finds out,
 // so route the fault to the same table every other server fault lands in.
-setFaultSink((err) => reportServerError('engineTimer', err));
+// Throttled, for the same reason the capacity sink below is: a fault that
+// repeats — a per-frame timer, or many rooms hitting one bad input at once —
+// would otherwise turn one defect into a sustained write storm against a
+// free-plan database, on the very table real client crashes land in. Defence in
+// depth: safeInterval now disarms a throwing interval at the source, and this
+// caps whatever still gets through.
+let lastFaultReport = 0;
+let suppressedFaults = 0;
+setFaultSink((err) => {
+  const now = Date.now();
+  if (now - lastFaultReport < 60000) { suppressedFaults += 1; return; }
+  lastFaultReport = now;
+  const note = suppressedFaults ? ` (+${suppressedFaults} suppressed in the last minute)` : '';
+  suppressedFaults = 0;
+  reportServerError('engineTimer' + note, err);
+});
 
 // Room capacity refusals were invisible server-side (RISK-014's residual): the
 // player was told the server was full and nothing recorded that it had happened.

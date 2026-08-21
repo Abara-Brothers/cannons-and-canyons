@@ -318,8 +318,12 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   src.forEach((line, i) => {
     if (/^\s*(\/\/|\*)/.test(line)) return;                       // skip comments
     if (!/\b(setTimeout|setInterval)\s*\(/.test(line)) return;
-    // the helpers themselves — they are what everything else goes through
-    if (/return (setTimeout|setInterval)\(\(\) => \{ try \{ fn\(\);/.test(line)) return;
+    // The two helpers are the only legitimate bare timers, marked explicitly.
+    // This used to match their exact source text with a regex, which broke the
+    // moment safeInterval grew a body (to clear a faulting handle) — the rule
+    // then failed on the very function it exists to enforce. A marker cannot
+    // drift with the code's shape.
+    if (/BARE-TIMER-OK/.test(line)) return;
     bare.push(`public/room-engine.js:${i + 1}: ${line.trim().slice(0, 76)}`);
   });
   if (bare.length) {

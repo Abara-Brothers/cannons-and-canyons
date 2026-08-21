@@ -88,10 +88,26 @@ function onTimerFault(err) {
 }
 // The returned handle is the real one, so clearTimeout/clearInterval still work.
 function safeTimeout(fn, ms) {
-  return setTimeout(() => { try { fn(); } catch (e) { onTimerFault(e); } }, ms);
+  return setTimeout(() => { try { fn(); } catch (e) { onTimerFault(e); } }, ms);  // BARE-TIMER-OK
 }
+// A faulting INTERVAL must disarm itself. Without this the same throw repeats
+// every tick forever and each repeat reaches the fault sink: measured at 172
+// inserts into `error_reports` in 30 s from a single fault, peaking at 22/s,
+// against a free-plan database and the same table real client crashes land in.
+// The trade this batch intended was "one room stalls instead of the process
+// dying"; what shipped was "one room storms". Stop after the first fault — a
+// callback that threw once will throw again, and the report already went out.
+//
+// The owning field (room.dotTimer, room.fireTimer, …) still holds the cleared
+// handle, which stays truthy. `startFire` guards on `if (room.fireTimer) return`,
+// so a faulted fire timer blocks a new blaze in that room. That is consistent
+// with what has actually happened — this room has stalled — and is preferable to
+// silently re-arming a callback that is known to throw.
 function safeInterval(fn, ms) {
-  return setInterval(() => { try { fn(); } catch (e) { onTimerFault(e); } }, ms);
+  const h = setInterval(() => {                                                   // BARE-TIMER-OK
+    try { fn(); } catch (e) { clearInterval(h); onTimerFault(e); }
+  }, ms);
+  return h;
 }
 
 
@@ -349,6 +365,20 @@ function releasePriorRoom(ws) {
   // creating a new room really should end its old one). `join` now calls this
   // too, so a guest reaches it, and the unconditional teardown would have
   // become a way to destroy someone else's lobby by joining a second game.
+  // A LONE HOST abandoning their own empty lobby is just a removal. Routing that
+  // through handleClose reaches `if (seat === room.hostSeat) return teardown(room,
+  // true)`, and that notify flag is unconditional — so `opponentLeft` is broadcast
+  // to the person who left. Their client still has the OLD room code in S.code when
+  // it lands, so double-tapping CREATE GAME buried the brand-new lobby under an
+  // undismissable "Opponent left" card, whose only control destroys the new lobby.
+  // The window is one server round-trip wide and createBtn has no debounce.
+  const others = prev.players.some((p, i) => p && i !== seat && !p.bot && p.connected);
+  if (prev.state === 'waiting' && seat === prev.hostSeat && !others) {
+    teardown(prev, false);
+    ws.roomCode = null;
+    ws.seat = null;
+    return;
+  }
   handleClose(ws);
   // handleClose arms the 30-minute empty-room grace, because it models a player
   // who DISCONNECTED and may come back. This socket did not disconnect — it

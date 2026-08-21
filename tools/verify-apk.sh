@@ -25,9 +25,15 @@ APK="${1:-$ROOT/android/app/build/outputs/apk/debug/app-debug.apk}"
 
 [ -f "$APK" ] || { echo "no APK at $APK — build one:  cd android && ./gradlew assembleDebug" >&2; exit 1; }
 
+# EVERY file under public/, not a hand-listed few. The first version named seven
+# JS files, so a stale 102 KB styles.css — or a changed icon, manifest or privacy
+# page — sailed through and the script still printed "safe to test on a device".
+# A hand-maintained list is the same class of mistake as the version-string check
+# it replaced: it looks like coverage and is not.
+#
 # index.html is EXEMPT: `cap sync` legitimately injects cordova script tags, so it
 # is expected to differ and comparing it would cry wolf on every run.
-FILES="app.js room-engine.js game-core.js cloud.js errors.js config.js sw.js"
+EXEMPT="index.html"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 
 echo "APK : $APK"
@@ -36,16 +42,21 @@ echo "HEAD : $(cd "$ROOT" && git rev-parse --short HEAD 2>/dev/null || echo '?')
 echo
 
 stale=0
-for f in $FILES; do
-  [ -f "$ROOT/public/$f" ] || continue
-  if ! unzip -p "$APK" "assets/public/$f" > "$tmp/$f" 2>/dev/null; then
-    printf '  %-16s MISSING FROM APK\n' "$f"; stale=$((stale + 1)); continue
+checked=0
+while IFS= read -r rel; do
+  case " $EXEMPT " in *" $rel "*) continue ;; esac
+  checked=$((checked + 1))
+  mkdir -p "$tmp/$(dirname "$rel")"
+  if ! unzip -p "$APK" "assets/public/$rel" > "$tmp/$rel" 2>/dev/null; then
+    printf '  %-28s MISSING FROM APK\n' "$rel"; stale=$((stale + 1)); continue
   fi
-  a="$(shasum -a 256 "$tmp/$f" | cut -d' ' -f1)"
-  b="$(shasum -a 256 "$ROOT/public/$f" | cut -d' ' -f1)"
-  if [ "$a" = "$b" ]; then printf '  %-16s ok   %s\n' "$f" "${a:0:12}"
-  else printf '  %-16s STALE  apk=%s  tree=%s\n' "$f" "${a:0:12}" "${b:0:12}"; stale=$((stale + 1)); fi
-done
+  a="$(shasum -a 256 "$tmp/$rel" | cut -d' ' -f1)"
+  b="$(shasum -a 256 "$ROOT/public/$rel" | cut -d' ' -f1)"
+  if [ "$a" != "$b" ]; then
+    printf '  %-28s STALE  apk=%s  tree=%s\n' "$rel" "${a:0:12}" "${b:0:12}"; stale=$((stale + 1))
+  fi
+done < <(cd "$ROOT/public" && find . -type f ! -name '.DS_Store' | sed 's|^\./||' | sort)
+echo "  checked $checked file(s) under public/ (exempt: $EXEMPT)"
 
 echo
 if [ "$stale" -eq 0 ]; then

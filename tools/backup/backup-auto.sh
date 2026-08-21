@@ -108,13 +108,29 @@ else
 fi
 
 # Prune, newest kept. Local rotation only — see the off-site note below.
+#
+# `for d in $(ls ...)` word-splits on WHITESPACE, and this project's path is
+# ".../Projects/Pocket Tanks Online/backups". Every directory therefore became
+# three iterations — [.../Pocket] [Tanks] [Online/backups/<stamp>/] — so the log
+# proudly reported `pruned Pocket` and `pruned Tanks` while pruning NOTHING (rm -rf
+# on a nonexistent path exits 0, so the `&& say` chain ran anyway and the count was
+# a fiction). Two failures in one line: retention never worked, and `rm -rf` was
+# firing at RELATIVE paths — under launchd the working directory is the project
+# root, so a directory literally named `Tanks` or `Online` there would have been
+# destroyed. Nothing was lost only because no such directory exists.
+#
+# Read a line at a time, quote everything, and match the stamp shape so `offsite/`
+# (encrypted archives, not dumps) is never counted or deleted as a backup.
 n=0
-for d in $(ls -1dt "$OUT_ROOT"/*/ 2>/dev/null); do
+while IFS= read -r d; do
+  [ -n "$d" ] || continue
   n=$((n + 1))
-  [ "$n" -gt "$KEEP" ] && rm -rf "$d" && say "pruned $(basename "$d")"
-done
+  if [ "$n" -gt "$KEEP" ]; then
+    rm -rf -- "$d" && say "pruned $(basename "$d")"
+  fi
+done < <(ls -1dt -- "$OUT_ROOT"/*/ 2>/dev/null | grep -E '/[0-9]{8}T[0-9]{6}Z/$')
 
-say "done ($(ls -1d "$OUT_ROOT"/*/ 2>/dev/null | wc -l | tr -d ' ') kept)"
+say "done ($(ls -1d -- "$OUT_ROOT"/*/ 2>/dev/null | grep -cE '/[0-9]{8}T[0-9]{6}Z/$') kept)"
 
 # HONEST LIMITATION: this is a LOCAL copy on the same machine that made it,
 # which is not a backup in the sense that matters — one disk failure or one

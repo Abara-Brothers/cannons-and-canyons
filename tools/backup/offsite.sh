@@ -48,6 +48,25 @@ OUT_DIR="${CC_OFFSITE_DIR:-$ROOT/backups/offsite}"
 die() { echo "ERROR: $*" >&2; exit 1; }
 [ -x "$OSSL" ] || die "no openssl at $OSSL"
 
+# ONE cleanup registry, cleaned on EVERY exit path.
+#
+# The per-function `trap ... RETURN` this replaces does NOT fire when the script
+# exits or is signalled — macOS ships bash 3.2 — so any failure between mktemp and
+# the end of the function left the DECRYPTED dump (every account and every career,
+# in plaintext) sitting in /private/tmp. Per-function EXIT traps would not fix it
+# either: create() calls verify(), so the second trap would simply replace the
+# first and orphan create's directory.
+CLEANUP=()
+cleanup_all() {
+  for d in ${CLEANUP[@]+"${CLEANUP[@]}"}; do [ -n "$d" ] && rm -rf -- "$d"; done
+}
+trap cleanup_all EXIT INT TERM
+# Registration MUST happen in the parent shell. A scratch() helper called as
+# work="$(scratch ...)" looks tidy and silently does nothing: command
+# substitution runs in a SUBSHELL, so CLEANUP+= there mutates a copy that dies
+# with it, and the parent registry stays empty. That version passed inspection
+# and still leaked a plaintext dump on the first forced-failure test.
+
 get_pass() {
   PASS="$(security find-generic-password -s "$SERVICE" -w 2>/dev/null || true)"
   if [ -z "$PASS" ]; then
@@ -86,7 +105,7 @@ create() {
   src="${src%/}"
   local stamp; stamp="$(basename "$src")"
   local work; work="$(mktemp -d /tmp/ccoff.XXXXXX)"
-  trap 'rm -rf "$work"' RETURN
+  CLEANUP+=("$work")          # in the PARENT, not a subshell
 
   get_pass
   mkdir -p "$OUT_DIR"
@@ -137,7 +156,7 @@ verify() {
   local enc="$1"; [ -s "$enc" ] || die "no such archive: $enc"
   get_pass
   local work; work="$(mktemp -d /tmp/ccver.XXXXXX)"
-  trap 'rm -rf "$work"' RETURN
+  CLEANUP+=("$work")          # in the PARENT, not a subshell
 
   ossl_dec "$enc" "$work/p.tar.gz" || { echo "  DECRYPT FAILED — wrong passphrase, or the file is damaged"; return 1; }
   tar -xzf "$work/p.tar.gz" -C "$work" 2>/dev/null || { echo "  UNPACK FAILED — the file is damaged"; return 1; }
@@ -156,7 +175,7 @@ drill() {
   local enc="$1"; [ -s "$enc" ] || die "no such archive: $enc"
   get_pass
   local work; work="$(mktemp -d /tmp/ccdrl.XXXXXX)"
-  trap 'rm -rf "$work"' RETURN
+  CLEANUP+=("$work")          # in the PARENT, not a subshell
   ossl_dec "$enc" "$work/p.tar.gz" || die "decrypt failed"
   tar -xzf "$work/p.tar.gz" -C "$work" || die "unpack failed"
   local d; d="$(ls -1d "$work"/*/ 2>/dev/null | head -1)"
