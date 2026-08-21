@@ -570,6 +570,35 @@ const server = http.createServer((req, res) => {
 //
 // connect-src is built from SB_URL rather than hardcoded, so a project move
 // cannot silently leave the client unable to reach its own backend.
+// connect-src must cover the origin the CLIENT will actually call, which is not
+// necessarily the one this process has in its env. `public/config.js` hardcodes
+// CC_SUPABASE_URL for the browser; the server reads SUPABASE_URL. When the two
+// disagree the CSP silently refuses the client's own backend — and running the
+// server locally per README (no SUPABASE_URL set) did exactly that: multiplayer
+// kept working, because same-origin ws is covered by 'self', while sign-in, cloud
+// save, profile sync and account deletion were all blocked with nothing in the
+// server log. The nastier variant is an env pointing at a DIFFERENT working
+// project: /health then reports supabase:"ok" while every browser is refused.
+//
+// So take the union, and say so loudly on mismatch rather than leaving it to be
+// discovered in a console somewhere.
+const CONNECT_ORIGINS = (() => {
+  const out = new Set();
+  if (SB_URL) out.add(SB_URL);
+  let clientOrigin = '';
+  try {
+    const cfg = fs.readFileSync(path.join(__dirname, 'public', 'config.js'), 'utf8');
+    const m = cfg.match(/CC_SUPABASE_URL\s*=\s*['"]([^'"]+)['"]/);
+    if (m) { clientOrigin = m[1].replace(/\/+$/, ''); out.add(clientOrigin); }
+  } catch { /* no config.js: fall back to the env alone */ }
+  if (clientOrigin && SB_URL && clientOrigin !== SB_URL.replace(/\/+$/, '')) {
+    console.error(`[csp] WARNING: public/config.js points the browser at ${clientOrigin} `
+      + `but SUPABASE_URL is ${SB_URL}. Both are allowed by connect-src, but /health `
+      + `reports on the SERVER's origin only — it cannot tell you the client is broken.`);
+  }
+  return [...out];
+})();
+
 const CSP = [
   "default-src 'self'",
   "base-uri 'self'",
@@ -579,7 +608,7 @@ const CSP = [
   "img-src 'self' data: blob:",
   "style-src 'self' 'unsafe-inline'",
   "script-src 'self'",
-  `connect-src 'self'${SB_URL ? ' ' + SB_URL : ''}`,
+  `connect-src ${['\'self\'', ...CONNECT_ORIGINS].join(' ')}`,
   "worker-src 'self'",
   "manifest-src 'self'",
 ].join('; ');

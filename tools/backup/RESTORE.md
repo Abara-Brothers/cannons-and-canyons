@@ -191,7 +191,17 @@ which is the trap this runbook exists to prevent.
    `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY` — plus
    `public/config.js` (`CC_SUPABASE_URL`, `CC_SUPABASE_KEY`) and redeploy.
    **Getting one of these wrong is what caused ISSUE-035**, which silently
-   broke accounts, push and deletion for nine batches. `/health` now catches it.
+   broke accounts, push and deletion for nine batches. `/health` catches the
+   SERVER half of it.
+   > **It does not catch a mismatch between the two, and that gap is real**
+   > (corrected 2026-08-21). `/health` reports on the origin *this process* holds
+   > in `SUPABASE_URL`. If the env points at a working project and
+   > `public/config.js` still names the old one, `/health` reports
+   > `supabase:"ok"` while **every browser is refused** — the server is healthy
+   > and the app is dead. The CSP now allows both origins and the server logs a
+   > `[csp] WARNING` on boot when they disagree, so **read the boot log after
+   > changing either**. Then confirm from a browser, not from curl: sign in and
+   > watch the career numbers come back.
 6. Google OAuth: add the new project's callback URL in the Google console.
 
 ## Verify — never assume a restore worked

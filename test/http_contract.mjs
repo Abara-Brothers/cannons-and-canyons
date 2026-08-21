@@ -116,6 +116,8 @@ const root = await get('/');
 // token is refused before any network call, so nothing is ever contacted.
 let delAllStatuses = [];
 let concurrent401s = -1;
+let csp2 = '';
+let mockOrigin = '';
 {
   const port2 = await freePort();
   // A SLOW mock upstream, not an unreachable one. The race being tested lives in
@@ -157,6 +159,10 @@ let concurrent401s = -1;
       await r.arrayBuffer();
       delAllStatuses.push(r.status);
     }
+    const r2 = await fetch(`http://127.0.0.1:${port2}/`);
+    await r2.arrayBuffer();
+    csp2 = r2.headers.get('content-security-policy') || '';
+    mockOrigin = `http://127.0.0.1:${mockPort}`;
   } finally { srv2.kill(); mock.close(); }
 }
 
@@ -196,6 +202,19 @@ const results = [
   ['(e) CSP has no unsafe-inline for SCRIPT', !/script-src[^;]*unsafe-inline/.test(sec.csp)],
   ['(f) 40 CONCURRENT junk deletes cannot exceed the budget of 10',
     concurrent401s >= 0 && concurrent401s <= 10],
+  // The (e) block asserted five directives and never the one that decides whether
+  // the game can talk to anything. A scratch build set to `connect-src 'none'`
+  // passed every (e) assertion and printed "all checks passed" while real Chrome
+  // refused the game's own WebSocket — multiplayer dead, gate green.
+  ['(g) CSP allows same-origin connect (the game WebSocket)', /connect-src[^;]*'self'/.test(sec.csp)],
+  // This server has SUPABASE_URL DELETED, so connect-src can only carry the
+  // Supabase origin if the server also reads the client's own public/config.js.
+  // Without that, running locally per the README silently kills sign-in, cloud
+  // save and account deletion while multiplayer keeps working.
+  ['(g) CSP carries the CLIENT config.js Supabase origin even with no env',
+    /connect-src[^;]*https:\/\/[a-z0-9]+\.supabase\.co/.test(sec.csp)],
+  ['(g) CSP carries the SERVER env origin when one is set',
+    csp2.includes(mockOrigin)],
 ];
 
 let bad = 0;

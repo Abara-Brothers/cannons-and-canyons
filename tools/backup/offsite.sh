@@ -101,7 +101,13 @@ ossl_dec() { exec 3< <(printf '%s' "$PASS"); "$OSSL" enc -d "${CIPHER[@]}" -pass
 # ---------------------------------------------------------------- create
 create() {
   local src="${1:-$(ls -1dt "$ROOT"/backups/*/ 2>/dev/null | head -1)}"
+  # MANIFEST.txt is written LAST by backup.sh, so its presence is the only signal
+  # that the dump ran to completion. Guarding on auth.sql alone meant the residue
+  # of a FAILED backup — a truncated public.sql, no manifest — was picked up by
+  # the newest-first auto-selection, encrypted, "verified", and reported as good.
+  # The only tell was a blank `rows recorded:` line nobody would notice.
   [ -n "$src" ] && [ -s "$src/auth.sql" ] || die "no usable backup found in $ROOT/backups"
+  [ -s "$src/MANIFEST.txt" ] || die "$(basename "$src") has no MANIFEST.txt — that backup did not finish; do not archive it"
   src="${src%/}"
   local stamp; stamp="$(basename "$src")"
   local work; work="$(mktemp -d /tmp/ccoff.XXXXXX)"
@@ -165,6 +171,7 @@ verify() {
   ( cd "$d" && shasum -a 256 -c SHA256SUMS >/dev/null 2>&1 ) \
     || { echo "  CHECKSUM MISMATCH — contents do not match what was encrypted"; return 1; }
   [ -s "$d/auth.sql" ] && [ -s "$d/public.sql" ] || { echo "  auth.sql or public.sql is EMPTY inside the archive"; return 1; }
+  [ -s "$d/MANIFEST.txt" ] || { echo "  no MANIFEST.txt inside the archive — it holds an UNFINISHED backup"; return 1; }
   echo "  decrypts, unpacks, and every checksum matches ($(ls -1 "$d" | wc -l | tr -d ' ') files)"
   echo "  rows recorded: $(grep '^live_rows' "$d/MANIFEST.txt" 2>/dev/null | cut -d: -f2-)"
   return 0

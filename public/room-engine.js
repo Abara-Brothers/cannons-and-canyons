@@ -1748,9 +1748,16 @@ export function handleClientMessage(ws, msg) {
       const nativeSub = s && (s.platform === 'android' || s.platform === 'ios')
         && typeof s.token === 'string' && s.token.length > 0 && s.token.length <= 4096
         && subBytes <= PUSH_SUB_MAX;
-      ws.pushSubCount = (ws.pushSubCount || 0) + 1;
-      if (ws.pushSubCount > PUSH_SUBS_PER_SOCKET) break;
+      // Count ACCEPTED subscriptions, not attempts. Counting attempts meant a
+      // client that tried before it held a seat — the realistic native path, since
+      // Push.register()'s `registration` listener resolves asynchronously and the
+      // player may still be on the home screen — burned all five silently, and
+      // every later, valid subscription was then dropped with NO frame back at
+      // all. A dead nudge button with no toast and no error. The flood ceiling is
+      // unchanged: five ACCEPTED rows per socket.
       if (pl2 && (webSub || nativeSub)) {
+        ws.pushSubCount = (ws.pushSubCount || 0) + 1;
+        if (ws.pushSubCount > PUSH_SUBS_PER_SOCKET) break;
         if (webSub) pl2.pushSub = s;
         send(ws, { type: 'pushOk' });
         // The host may also persist it keyed to the account (ISSUE-003) —

@@ -50,6 +50,22 @@
       e.error && e.error.stack
     );
   });
+  // A CSP violation fires NEITHER of the handlers below: `error` does not bubble
+  // for a blocked <script src> without a capture listener, and a refused fetch
+  // rejects inside code that already catches. So the strict policy shipped on
+  // 2026-08-18 could break a whole subsystem — sign-in, cloud save, push — and
+  // produce zero telemetry, on a page whose entire reason for existing is that
+  // silent breakage is what hurt this project before. Reuses report(), so the
+  // 5-per-load and one-per-message caps apply and a violation storm cannot
+  // become a firehose.
+  window.addEventListener('securitypolicyviolation', (e) => {
+    report(
+      'CSP ' + (e.violatedDirective || 'violation') + ' blocked ' + (e.blockedURI || 'unknown'),
+      e.sourceFile ? `${e.sourceFile}:${e.lineNumber || 0}` : null,
+      null,
+    );
+  });
+
   window.addEventListener('unhandledrejection', (e) => {
     const r = e.reason;
     report((r && r.message) || String(r), null, r && r.stack);
