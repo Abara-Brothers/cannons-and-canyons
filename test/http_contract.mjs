@@ -104,6 +104,52 @@ const deepLink = await get('/some-deep-link');
 const realAsset = await get('/app.js');
 const root = await get('/');
 
+// ---- (d) an unauthenticated /account/delete must not spend the budget -------
+// Until 2026-08-18 `delTokens -= 1` ran BEFORE the Authorization header was even
+// read, so ten header-less requests emptied the bucket and one every six seconds
+// held it at zero — denying real players a deletion that delete-account.html
+// promises is "immediate and permanent" and that both stores require in-app.
+//
+// Needs Supabase env, which the server above deliberately lacks (it would 503),
+// so this runs its own. The values are fake on purpose: a request with no Bearer
+// token is refused before any network call, so nothing is ever contacted.
+let delAllStatuses = [];
+{
+  const port2 = await freePort();
+  const env2 = {
+    ...process.env, PORT: String(port2),
+    SUPABASE_URL: 'http://127.0.0.1:1', SUPABASE_PUBLISHABLE_KEY: 'fake', SUPABASE_SECRET_KEY: 'fake',
+  };
+  const srv2 = spawn('node', ['server.js'], { env: env2, stdio: ['ignore', 'pipe', 'pipe'] });
+  try {
+    for (let i = 0; i < 80; i++) {
+      try { await fetch(`http://127.0.0.1:${port2}/health`); break; } catch {}
+      await sleep(150);
+    }
+    // Well past the bucket size of 10.
+    for (let i = 0; i < 15; i++) {
+      const r = await fetch(`http://127.0.0.1:${port2}/account/delete`, { method: 'POST' });
+      await r.arrayBuffer();
+      delAllStatuses.push(r.status);
+    }
+  } finally { srv2.kill(); }
+}
+
+// ---- (e) security response headers -----------------------------------------
+// None of these were served before 2026-08-18. The Supabase session — refresh
+// token included — sits in localStorage on this origin, and the game is played
+// on public Wi-Fi, so a missing HSTS leaves one plaintext hop in which a hostile
+// network serves script on the real origin and keeps the account.
+const sec = await fetch(`http://127.0.0.1:${port}/`).then(async (r) => {
+  await r.arrayBuffer();
+  return {
+    hsts: r.headers.get('strict-transport-security') || '',
+    nosniff: r.headers.get('x-content-type-options') || '',
+    referrer: r.headers.get('referrer-policy') || '',
+    csp: r.headers.get('content-security-policy') || '',
+  };
+});
+
 srv.kill();
 
 const results = [
@@ -115,6 +161,14 @@ const results = [
   ['(c) extension-less deep link still 200 html', deepLink.status === 200 && deepLink.type.includes('html')],
   ['(c) real asset still 200 js', realAsset.status === 200 && realAsset.type.includes('javascript')],
   ['(c) root still 200 html', root.status === 200 && root.type.includes('html')],
+  ['(d) 15 header-less deletes all 401', delAllStatuses.length === 15 && delAllStatuses.every((s) => s === 401)],
+  ['(d) none of them hit the 429 budget', !delAllStatuses.includes(429)],
+  ['(e) HSTS present with a year max-age', /max-age=31536000/.test(sec.hsts)],
+  ['(e) nosniff present', sec.nosniff === 'nosniff'],
+  ['(e) Referrer-Policy present', sec.referrer === 'no-referrer'],
+  ['(e) CSP blocks framing', /frame-ancestors 'none'/.test(sec.csp)],
+  ['(e) CSP restricts scripts to self', /script-src 'self'/.test(sec.csp)],
+  ['(e) CSP has no unsafe-inline for SCRIPT', !/script-src[^;]*unsafe-inline/.test(sec.csp)],
 ];
 
 let bad = 0;

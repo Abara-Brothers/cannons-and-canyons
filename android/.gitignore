@@ -53,9 +53,13 @@ captures/
 .idea/navEditor.xml
 
 # Keystore files
-# Uncomment the following lines if you do not want to check your keystore files in.
-#*.jks
-#*.keystore
+# UNCOMMENTED 2026-08-18. These arrive commented out in the stock template, and
+# this repo is PUBLIC. A signing key committed to public GitHub is unrecoverable:
+# it cannot be un-published, and the mistake is made on submission day under time
+# pressure, which is exactly when nobody re-reads .gitignore.
+*.jks
+*.keystore
+keystore.properties
 
 # External native build folder generated in Android Studio 2.2 and later
 .externalNativeBuild

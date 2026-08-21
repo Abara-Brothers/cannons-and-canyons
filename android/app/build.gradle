@@ -1,5 +1,25 @@
 apply plugin: 'com.android.application'
 
+// Release signing is read from android/keystore.properties, which is gitignored
+// along with *.jks / *.keystore. Nothing here holds a secret, and the key itself
+// is minted by the owner — never by tooling and never pasted into a chat.
+//
+// Create android/keystore.properties (NOT tracked) with:
+//     storeFile=/absolute/path/outside/this/repo/upload-keystore.jks
+//     storePassword=...
+//     keyAlias=upload
+//     keyPassword=...
+//
+// Keep the .jks OUTSIDE the repo entirely. The gitignore is a backstop, not the
+// plan. Under Play App Signing this is only the UPLOAD key: if it is ever lost
+// or exposed, Google can reset it — losing the app signing key would not be
+// recoverable, which is why Play holds that one.
+def keystorePropsFile = rootProject.file("keystore.properties")
+def keystoreProps = new Properties()
+if (keystorePropsFile.exists()) {
+    keystoreProps.load(new FileInputStream(keystorePropsFile))
+}
+
 android {
     namespace = "com.abarabrothers.cannonsandcanyons"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -16,10 +36,27 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // Absent keystore.properties this block is simply not created, so debug
+    // builds, CI and every contributor without the key keep working unchanged.
+    signingConfigs {
+        if (keystorePropsFile.exists()) {
+            release {
+                storeFile file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            // Unsigned when the file is absent — Gradle then produces an
+            // -unsigned.apk rather than failing, which is the honest outcome.
+            if (keystorePropsFile.exists()) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 }

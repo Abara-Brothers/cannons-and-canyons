@@ -324,12 +324,29 @@ async function accountDelete(req, res, cors) {
     res.end(JSON.stringify(obj));
   };
   if (!SB_URL || !SB_PUB || !SB_SECRET) return json(503, { error: 'accounts are not enabled on this server' });
-  if (delTokens < 1) return json(429, { error: 'try again shortly' });
-  delTokens -= 1;
+
+  // A request carrying no credential at all cannot become a GoTrue relay, so it
+  // must not touch the budget. Previously the token was spent BEFORE the header
+  // was even read (`delTokens -= 1` preceded it), which meant ten header-less
+  // requests emptied the bucket and one every six seconds held it at zero —
+  // denying real players the deletion that `delete-account.html` promises
+  // happens "immediately and permanently" and that both stores require in-app.
   const auth = req.headers.authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  if (!token) return json(401, { error: 'invalid or expired session' });
+
+  // The budget gates the RELAY, which is what the cap is for. It is spent only
+  // when verification FAILS: a genuine deletion now costs nothing, so ordinary
+  // use can never exhaust the endpoint for anyone else.
+  //
+  // HONEST RESIDUAL: a flood of well-formed-but-invalid tokens still drains the
+  // budget and blocks everyone, because telling that flood apart from a real
+  // player needs per-client identity — and this server deliberately keeps none
+  // (see the /errors note; privacy.html promises no IP is stored). Closing that
+  // is an owner decision, not an oversight.
+  if (delTokens < 1) return json(429, { error: 'try again shortly' });
   const uid = await sbUserFromToken(token);
-  if (!uid) return json(401, { error: 'invalid or expired session' });
+  if (!uid) { delTokens -= 1; return json(401, { error: 'invalid or expired session' }); }
   try {
     const del = await fetch(`${SB_URL}/auth/v1/admin/users/${encodeURIComponent(uid)}`, {
       method: 'DELETE',
@@ -495,7 +512,47 @@ const server = http.createServer((req, res) => {
   }
 });
 
+// Security response headers. None of these were served before 2026-08-18: a
+// live check returned only date, content-type, cf-*, rndr-id, server, vary and
+// alt-svc. That matters more here than on a typical site because the Supabase
+// session — REFRESH TOKEN INCLUDED — lives in localStorage on this origin
+// (cloud.js), and this is a mobile game played on public Wi-Fi. Without HSTS
+// there is one plaintext hop in which a hostile network can serve script on the
+// real origin and walk away with the account, cloud saves and /account/delete.
+//
+// The CSP is unusually strict because the page earns it: index.html has zero
+// inline <script>, zero inline <style>, zero on* handlers, and app.js contains
+// no eval or new Function — verified, not assumed. The one concession is
+// 'unsafe-inline' for STYLE only (a single style= attribute), which does not
+// carry the script-execution risk that makes the directive notorious.
+//
+// connect-src is built from SB_URL rather than hardcoded, so a project move
+// cannot silently leave the client unable to reach its own backend.
+const CSP = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+  "object-src 'none'",
+  "img-src 'self' data: blob:",
+  "style-src 'self' 'unsafe-inline'",
+  "script-src 'self'",
+  `connect-src 'self'${SB_URL ? ' ' + SB_URL : ''}`,
+  "worker-src 'self'",
+  "manifest-src 'self'",
+].join('; ');
+
+function setSecurityHeaders(res) {
+  // Set once, at the top of every request, so no individual writeHead can
+  // forget them. Node merges these with whatever writeHead passes later.
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Content-Security-Policy', CSP);
+}
+
 function handleRequest(req, res) {
+  setSecurityHeaders(res);
   // decodeURIComponent THROWS on a malformed escape ('%', '%zz', '%e0%a4%a').
   // A bad path is a 400, not a crash.
   const raw = (req.url || '/').split('?')[0];
@@ -521,6 +578,17 @@ function handleRequest(req, res) {
     return res.end(JSON.stringify({
       ok: true,
       version: pkgVersion,
+      // `version` is the package version and is IDENTICAL across every revision
+      // since 1.0.0, so it carries no deploy identity: it cannot tell you what
+      // production is running, cannot confirm a rollback took, and cannot show
+      // that the process restarted. Confirming what was live on 2026-08-15 took
+      // a byte-comparison of the served app.js against every recent revision.
+      // These two fields make that a curl. RENDER_GIT_COMMIT was already read
+      // elsewhere in this file; uptime is what makes an unexpected restart —
+      // the RISK-014 OOM case — visible at all. docs/ALERTING.md asked for
+      // exactly this.
+      commit: process.env.RENDER_GIT_COMMIT ? String(process.env.RENDER_GIT_COMMIT).slice(0, 40) : null,
+      uptimeSeconds: Math.round(process.uptime()),
       rooms: rooms.size,
       supabase: supabaseHealth,            // ok | unconfigured | bad_key_or_url | unreachable
       supabaseAdmin: supabaseAdminHealth,  // ok | unconfigured | bad_secret_key | unreachable
