@@ -393,6 +393,61 @@ async function seatHoarding() {
   try { host.close(); guest.close(); probe.close(); } catch {}
 }
 
+
+// ---- 5. Abandoning a match must not strand the room ------------------------
+// releasePriorRoom used to skip a room that was already 'playing', which also
+// skipped clearing ws.roomCode — so the caller overwrote it and the old room was
+// orphaned with a seat still flagged `connected` behind a socket that had moved
+// on. The empty-room reaper is gated on no connected humans, so it never fired
+// either. Measured before the fix: 8 vs-CPU games from ONE socket held 8 rooms,
+// and closing that socket freed none. Permanent until process restart.
+async function abandonedRooms() {
+  const roomsNow = async () => {
+    try {
+      const r = await fetch(URL.replace(/^ws/, 'http').replace(/\/ws$/, '') + '/health');
+      return (await r.json()).rooms;
+    } catch { return null; }
+  };
+  const before = await roomsNow();
+  if (before === null) { step('abandoned rooms: /health unreachable, skipped'); return; }
+
+  const ws = await open();
+  for (let i = 0; i < 6; i++) {
+    send(ws, { type: 'ai', difficulty: 'easy', name: 'Abandoner', skin: 'olive',
+      loadout: ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'] });
+    await wait(ws, 'start', 8000);
+  }
+  const after = await roomsNow();
+  const leaked = after - before;
+  // One live room is correct — the game currently in progress. Six is the bug.
+  if (leaked > 2) fail(`abandoned rooms: 6 successive games from one socket left ${leaked} extra rooms (expected ~1) — they are orphaned`);
+  else step(`abandoned rooms: 6 successive games leave ${leaked} room(s), not 6`);
+  try { ws.close(); } catch {}
+}
+
+// ---- 6. A native push subscription is size-bounded too ---------------------
+// The cap was added to the WEB branch only, leaving the native shape an open door
+// to the same abuse: {platform:'android', token:<unique>, junk:<60KB>} wrote
+// unbounded rows, and because `endpoint` is UNIQUE a varying token INSERTs rather
+// than upserts. The test written alongside that change only sent web shapes.
+async function pushSubBounds() {
+  const ws = await open();
+  send(ws, { type: 'ai', difficulty: 'easy', name: 'Pusher', skin: 'olive',
+    loadout: ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'] });
+  if (!await wait(ws, 'start', 12000)) { fail('pushSub bounds: no start'); try { ws.close(); } catch {} return; }
+
+  send(ws, { type: 'pushSub', sub: { platform: 'android', token: 'T'.repeat(120), junk: 'x'.repeat(60000) } });
+  const bloated = await wait(ws, 'pushOk', 2000);
+  if (bloated) fail('pushSub bounds: a 60KB NATIVE subscription was accepted');
+  else step('pushSub bounds: an oversized native subscription is refused');
+
+  send(ws, { type: 'pushSub', sub: { platform: 'android', token: 'T'.repeat(140) } });
+  const real = await wait(ws, 'pushOk', 3000);
+  if (!real) fail('pushSub bounds: a REAL native subscription was rejected');
+  else step('pushSub bounds: a realistic native subscription is still accepted');
+  try { ws.close(); } catch {}
+}
+
 (async () => {
   try {
     await roomHoarding();
@@ -404,6 +459,8 @@ async function seatHoarding() {
     await hostileTokens();
     await survivesHostileInput();
     await seatHoarding();
+    await abandonedRooms();
+    await pushSubBounds();
   } catch (e) {
     fail('threw: ' + (e && e.message ? e.message : String(e)));
   }

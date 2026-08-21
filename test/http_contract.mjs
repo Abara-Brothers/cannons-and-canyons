@@ -22,6 +22,7 @@
 // events it saw. Until then, the negative test is the real evidence: revert
 // ingestError() to `body += c` and this file must fail.
 import { spawn } from 'node:child_process';
+import http from 'node:http';
 import net from 'node:net';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -114,11 +115,23 @@ const root = await get('/');
 // so this runs its own. The values are fake on purpose: a request with no Bearer
 // token is refused before any network call, so nothing is ever contacted.
 let delAllStatuses = [];
+let concurrent401s = -1;
 {
   const port2 = await freePort();
+  // A SLOW mock upstream, not an unreachable one. The race being tested lives in
+  // the gap between checking the budget and spending it, which is only open while
+  // `sbUserFromToken` is awaited — point SUPABASE_URL at 127.0.0.1:1 and the
+  // connection is refused almost instantly, the window never opens, and this check
+  // PASSES against the very bug it exists to catch. That false pass was observed:
+  // the broken ordering was restored and the assertion still went green.
+  const mockPort = await freePort();
+  const mock = http.createServer((req, res) => {
+    setTimeout(() => { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end('{"msg":"no"}'); }, 80);
+  });
+  await new Promise((r) => mock.listen(mockPort, '127.0.0.1', r));
   const env2 = {
     ...process.env, PORT: String(port2),
-    SUPABASE_URL: 'http://127.0.0.1:1', SUPABASE_PUBLISHABLE_KEY: 'fake', SUPABASE_SECRET_KEY: 'fake',
+    SUPABASE_URL: `http://127.0.0.1:${mockPort}`, SUPABASE_PUBLISHABLE_KEY: 'fake', SUPABASE_SECRET_KEY: 'fake',
   };
   const srv2 = spawn('node', ['server.js'], { env: env2, stdio: ['ignore', 'pipe', 'pipe'] });
   try {
@@ -126,13 +139,25 @@ let delAllStatuses = [];
       try { await fetch(`http://127.0.0.1:${port2}/health`); break; } catch {}
       await sleep(150);
     }
+    // CONCURRENT junk must not drive the counter negative. The check and the spend
+    // were once separated by the await on sbUserFromToken, so N concurrent junk
+    // tokens all passed the check and all decremented after it: measured at 40
+    // concurrent, every one got a 401 and every one relayed to GoTrue, against a
+    // budget of 10 — and real deletions were denied for far longer than the refill
+    // implies. Sequential requests CANNOT catch this; it needs true concurrency.
+    const burst = await Promise.all(Array.from({ length: 40 }, (_, i) =>
+      fetch(`http://127.0.0.1:${port2}/account/delete`, {
+        method: 'POST', headers: { Authorization: 'Bearer junk-' + i },
+      }).then(async (r) => { await r.arrayBuffer(); return r.status; })));
+    concurrent401s = burst.filter((s) => s === 401).length;
+
     // Well past the bucket size of 10.
     for (let i = 0; i < 15; i++) {
       const r = await fetch(`http://127.0.0.1:${port2}/account/delete`, { method: 'POST' });
       await r.arrayBuffer();
       delAllStatuses.push(r.status);
     }
-  } finally { srv2.kill(); }
+  } finally { srv2.kill(); mock.close(); }
 }
 
 // ---- (e) security response headers -----------------------------------------
@@ -169,6 +194,8 @@ const results = [
   ['(e) CSP blocks framing', /frame-ancestors 'none'/.test(sec.csp)],
   ['(e) CSP restricts scripts to self', /script-src 'self'/.test(sec.csp)],
   ['(e) CSP has no unsafe-inline for SCRIPT', !/script-src[^;]*unsafe-inline/.test(sec.csp)],
+  ['(f) 40 CONCURRENT junk deletes cannot exceed the budget of 10',
+    concurrent401s >= 0 && concurrent401s <= 10],
 ];
 
 let bad = 0;

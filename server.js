@@ -358,9 +358,22 @@ async function accountDelete(req, res, cors) {
   // player needs per-client identity — and this server deliberately keeps none
   // (see the /errors note; privacy.html promises no IP is stored). Closing that
   // is an owner decision, not an oversight.
+  // SPEND BEFORE THE AWAIT. Checking here and decrementing after
+  // `sbUserFromToken` put a network round-trip between the two, so N concurrent
+  // junk tokens all passed this line and all decremented afterwards: the counter
+  // went arbitrarily NEGATIVE (measured: 15 concurrent junk requests left it at
+  // -5 and denied real deletions for 36 s; the relationship is linear, so ~10k
+  // requests buys about 17 hours). It also meant the cap no longer capped the
+  // relay — 300 concurrent junk tokens produced 300 verifications against GoTrue
+  // instead of 10. Both are worse than the drained-bucket residual documented
+  // below, and both were introduced by moving the spend.
   if (delTokens < 1) return json(429, { error: 'try again shortly' });
+  delTokens -= 1;
   const uid = await sbUserFromToken(token);
-  if (!uid) { delTokens -= 1; return json(401, { error: 'invalid or expired session' }); }
+  // A genuine deletion still costs nothing: refund once the token proves valid,
+  // which keeps ordinary use from ever exhausting the endpoint for anyone else.
+  if (uid) delTokens = Math.min(10, delTokens + 1);
+  if (!uid) return json(401, { error: 'invalid or expired session' });
   try {
     const del = await fetch(`${SB_URL}/auth/v1/admin/users/${encodeURIComponent(uid)}`, {
       method: 'DELETE',

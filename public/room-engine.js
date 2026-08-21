@@ -330,7 +330,18 @@ function releasePriorRoom(ws) {
   const seat = ws.seat;
   const mine = prev.players[seat] && prev.players[seat].ws === ws;
   if (!mine) return;
-  if (prev.state !== 'waiting') return;
+  // The `if (prev.state !== 'waiting') return;` that used to sit here leaked every
+  // room the socket left mid-match. Its reasoning was sound for `teardown` — a
+  // playing room belongs to the resume system and may hold an opponent, so it
+  // must not be destroyed — but this function now calls handleClose, which is the
+  // ORDINARY DEPARTURE path and already models all of that: it marks the seat
+  // disconnected, starts the drop/forfeit grace, leaves the opponent playing, and
+  // arms the empty-room reaper once the last human is gone. Returning early
+  // skipped the `ws.roomCode = null` below, so the caller then overwrote it and
+  // the old room was orphaned with a seat still flagged `connected` behind a
+  // socket that had moved on — which is why the reaper never fired either.
+  // Measured: 8 successive vs-CPU games from ONE socket held 8 rooms, and closing
+  // that socket freed none. At MAX_ROOMS that is a permanent outage until restart.
   // Route through handleClose instead of tearing the room down. This used to
   // call teardown() unconditionally, which destroys the HOST'S lobby when the
   // socket moving on is only a GUEST — the same bug `case 'leave'` was fixed
@@ -339,6 +350,15 @@ function releasePriorRoom(ws) {
   // too, so a guest reaches it, and the unconditional teardown would have
   // become a way to destroy someone else's lobby by joining a second game.
   handleClose(ws);
+  // handleClose arms the 30-minute empty-room grace, because it models a player
+  // who DISCONNECTED and may come back. This socket did not disconnect — it
+  // deliberately started another game, so there is nothing to return to. Holding
+  // the room anyway leaves it counted against MAX_ROOMS for half an hour, and 250
+  // of those is still a denial of service, just a slower one. If no human remains,
+  // reclaim it now. If someone else IS still in there, handleClose has already done
+  // the right thing and the room stays theirs.
+  const stillHuman = prev.players.some((p) => p && !p.bot && p.connected);
+  if (!stillHuman && rooms.has(prev.code)) teardown(prev);
   ws.roomCode = null;
   ws.seat = null;
 }
@@ -1688,8 +1708,16 @@ export function handleClientMessage(ws, msg) {
       try { subBytes = JSON.stringify(s || null).length; } catch { subBytes = Infinity; }
       const webSub = s && typeof s.endpoint === 'string' && s.endpoint.startsWith('https://')
         && s.endpoint.length <= PUSH_ENDPOINT_MAX && subBytes <= PUSH_SUB_MAX;
+      // `subBytes` applies to BOTH shapes. When the cap was added it was attached
+      // only to `webSub` above, leaving this branch an open door to the very abuse
+      // the change was written to close: {platform:'android', token:<unique>,
+      // junk:<60KB>} still wrote unbounded rows, and because `endpoint` is UNIQUE a
+      // varying token INSERTs rather than upserts. Measured at ~1.5 MiB/s into a
+      // 500 MB free-plan database. The test written alongside that change only ever
+      // sent web-shaped payloads, which is why it passed.
       const nativeSub = s && (s.platform === 'android' || s.platform === 'ios')
-        && typeof s.token === 'string' && s.token.length > 0 && s.token.length <= 4096;
+        && typeof s.token === 'string' && s.token.length > 0 && s.token.length <= 4096
+        && subBytes <= PUSH_SUB_MAX;
       ws.pushSubCount = (ws.pushSubCount || 0) + 1;
       if (ws.pushSubCount > PUSH_SUBS_PER_SOCKET) break;
       if (pl2 && (webSub || nativeSub)) {
