@@ -82,6 +82,39 @@ export function setFaultSink(fn) { faultSink = typeof fn === 'function' ? fn : (
 // it to the same error_reports table as any other server fault.
 let capacitySink = () => {};
 export function setCapacitySink(fn) { capacitySink = typeof fn === 'function' ? fn : () => {}; }
+
+// The match ledger (RISK-004 steps 1-2). The engine already decides who won and
+// then throws it away; this announces the result so the host can persist it.
+// Entitlement can only ever be derived from what the server WITNESSED, so
+// without a record there is nothing to derive from — and a match played before
+// the ledger existed can never be reconstructed.
+//
+// Announce only. The engine stays browser-safe and knows nothing about a
+// database; in an offline solo match this keeps its no-op default, which is also
+// exactly the right behaviour — nothing witnessed it, so nothing is recorded.
+let matchSink = () => {};
+export function setMatchSink(fn) { matchSink = typeof fn === 'function' ? fn : () => {}; }
+
+// Called at every gameover. Reports the seats' account ids where the socket
+// proved one; a seat that never authenticated simply has none, which is why
+// playerCount is reported separately rather than inferred from the array.
+function recordMatch(room, winner, golf) {
+  try {
+    const seats = room.players || [];
+    const humans = seats.filter((p) => p && !p.bot);
+    const players = humans.map((p) => (p.ws && p.ws.userId) || p.userId).filter(Boolean);
+    const w = seats[winner];
+    matchSink({
+      mode: room.mode,
+      players,
+      playerCount: humans.length,
+      winnerSeat: typeof winner === 'number' && winner >= 0 ? winner : null,
+      winnerUser: (w && !w.bot && ((w.ws && w.ws.userId) || w.userId)) || null,
+      vsBot: !!room.vsBot || seats.some((p) => p && p.bot),
+      golf: golf || null,
+    });
+  } catch { /* the ledger must never be able to affect a live match */ }
+}
 function onTimerFault(err) {
   try { console.error('[timer] callback threw:', err && err.stack ? err.stack : err); } catch {}
   try { faultSink(err); } catch { /* the reporter must never be the second fault */ }
@@ -738,11 +771,13 @@ function finishGolf(room) {
     const best = Math.min(...totals);
     winner = totals.filter(t => t === best).length === 1 ? totals.indexOf(best) : -1;
   }
+  const golfCard = { totals, parTotal, pars: GOLF_HOLES.map(h => h.par), strokes: room.golf.strokes, done: room.golf.done.slice() };
   broadcast(room, {
     type: 'gameover', winner, team: null,
     hp: room.hp.map(h => Math.max(0, Math.round(h))), alive: aliveFlags(room),
-    golf: { totals, parTotal, pars: GOLF_HOLES.map(h => h.par), strokes: room.golf.strokes, done: room.golf.done.slice() },
+    golf: golfCard,
   });
+  recordMatch(room, winner, golfCard);
 }
 
 function startGame(room) {
@@ -1222,6 +1257,7 @@ function endGame(room) {
     stats: room.stat ? { dealt: room.stat.dealt.map(Math.round), received: room.stat.received.map(Math.round) } : undefined,
     loot: team === 'players',        // slaying the WARLORD pays out
   });
+  recordMatch(room, winner, null);
 }
 
 function handleFire(room, seat, msg) {

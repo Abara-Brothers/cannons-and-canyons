@@ -16,7 +16,7 @@ import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import {
   rooms, send, handleClientMessage, handleClose,
-  setPushNudge, setAuthSink, setPushSubSink, setFaultSink, setCapacitySink,
+  setPushNudge, setAuthSink, setPushSubSink, setFaultSink, setCapacitySink, setMatchSink,
 } from './public/room-engine.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -352,6 +352,27 @@ setFaultSink((err) => {
 // Reported at most once a minute — at the cap this fires on every single attempt,
 // and a refusal storm turning into a report storm would be a self-inflicted
 // outage on the very endpoint meant to diagnose it.
+// The match ledger (RISK-004 steps 1-2). Best-effort and fire-and-forget, in the
+// same shape as the push sinks: a ledger write must never be able to affect a
+// live match, and a failure here must never propagate back into the engine.
+//
+// A failed write IS counted, though — silently losing the evidence base for
+// entitlement is precisely the class of blindness that cost this project nine
+// batches with ISSUE-035, and `errorsDropped` exists because of it.
+let ledgerDropped = 0;
+setMatchSink((r) => {
+  if (!SB_SECRET) return;
+  sbAdmin('POST', '/match_results', {
+    mode: r.mode,
+    players: r.players || [],
+    player_count: r.playerCount,
+    vs_bot: !!r.vsBot,
+    winner_seat: r.winnerSeat,
+    winner_user: r.winnerUser,
+    golf: r.golf,
+  }, 'return=minimal').catch(() => { ledgerDropped += 1; });
+});
+
 let lastCapacityReport = 0;
 setCapacitySink((live, cap) => {
   const now = Date.now();
@@ -785,6 +806,10 @@ function handleRequest(req, res) {
       // limiter — so an empty error_reports table means "we are blind", not "we
       // are healthy". Alert on any sustained rise; see docs/ALERTING.md.
       errorsDropped: errDropped,
+      // Failed match-ledger writes. Non-zero means the evidence base for
+      // entitlement is incomplete — and unlike a lost crash report, a lost match
+      // cannot be re-observed later.
+      ledgerDropped,
       rooms: rooms.size,
       supabase: supabaseHealth,            // ok | unconfigured | bad_key_or_url | unreachable
       supabaseAdmin: supabaseAdminHealth,  // ok | unconfigured | bad_secret_key | unreachable

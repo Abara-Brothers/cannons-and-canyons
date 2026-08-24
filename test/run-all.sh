@@ -101,6 +101,7 @@ else
   # Guards ISSUE-036 (b) UTF-8 across chunk boundaries in /errors, and (c) a
   # missing asset returning a real 404 instead of 200 + text/html.
   run http_contract node test/http_contract.mjs
+  run ledger node test/ledger.mjs
   # First CLIENT-side coverage (RISK-012). Drives the real mergeCloudProgression
   # in a real page over CDP, so it cannot drift from a copy of the logic.
   # Skips cleanly when Chrome is absent, so a bare CI runner stays green.
