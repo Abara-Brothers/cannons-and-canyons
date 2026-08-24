@@ -463,6 +463,35 @@ async function pushSubBounds() {
   try { ws.close(); } catch {}
 }
 
+
+// ---- 12. The aim relay is not a free-text channel ---------------------------
+// `angle` is clamped and `power` is clamped, and between them `weapon` was
+// forwarded verbatim — the only field on this wire that was neither validated nor
+// bounded. Two modified clients could pass arbitrary strings through it, against
+// privacy.html's promise of "no free-text input" and no chat between players.
+// Measured before the fix: a 60-character sentence arrived at the opponent intact.
+async function aimRelay() {
+  const host = await open();
+  send(host, { type: 'create', name: 'AimHost', skin: 'olive', mode: 'duel' });
+  const made = await wait(host, 'created', 6000);
+  if (!made) { fail('aim relay: no room'); try { host.close(); } catch {} return; }
+  const guest = await open();
+  send(guest, { type: 'join', code: made.code, name: 'AimGuest', skin: 'desert' });
+  if (!await wait(host, 'start', 8000)) { fail('aim relay: match never started'); }
+
+  const PAYLOAD = 'free text that should never reach another player';
+  send(guest, { type: 'aim', angle: 45, power: 60, weapon: PAYLOAD });
+  const leaked = await wait(host, 'aim', 3000);
+  if (leaked && leaked.weapon === PAYLOAD) fail('aim relay: arbitrary text reached the opponent');
+  else step('aim relay: an unknown weapon id is not forwarded');
+
+  send(guest, { type: 'aim', angle: 40, power: 55, weapon: 'cannon' });
+  const real = await wait(host, 'aim', 3000);
+  if (!real || real.weapon !== 'cannon') fail('aim relay: a REAL weapon stopped relaying');
+  else step('aim relay: a real weapon still relays');
+  try { host.close(); guest.close(); } catch {}
+}
+
 (async () => {
   try {
     await roomHoarding();
@@ -476,6 +505,7 @@ async function pushSubBounds() {
     await seatHoarding();
     await abandonedRooms();
     await pushSubBounds();
+    await aimRelay();
   } catch (e) {
     fail('threw: ' + (e && e.message ? e.message : String(e)));
   }

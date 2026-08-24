@@ -1780,10 +1780,19 @@ export function handleClientMessage(ws, msg) {
       // Relay both players' aims so barrels track live (pre-aiming included).
       const relayPow = Math.max(1, Math.min(100, Number.isFinite(Number(msg.power)) ? Number(msg.power) : 60));
       const relayAng = clampAim(msg.angle);
+      const relayWeapon = (typeof msg.weapon === 'string' && WEAPON_BY_ID[msg.weapon]) ? msg.weapon : null;
       for (let i = 0; i < room.players.length; i++) {
         const p = room.players[i];
         if (i === ws.seat || !p || !p.ws) continue;
-        send(p.ws, { type: 'aim', seat: ws.seat, angle: relayAng, power: relayPow, weapon: msg.weapon });
+        // `weapon` was the ONE field on this wire that was neither validated nor
+        // bounded — angle and power are clamped either side of it, names go
+        // through sanitizeName, skins through sanitizeSkin, loadouts through
+        // sanitizeLoadout. Relayed verbatim it is a working free-text channel
+        // between two modified clients, against privacy.html's promise that there
+        // is "no free-text input" and no chat. Measured: a 60-character sentence
+        // arrived at the opponent intact. Nothing renders it in the stock client,
+        // so this closes a boundary that was documented but not enforced.
+        send(p.ws, { type: 'aim', seat: ws.seat, angle: relayAng, power: relayPow, weapon: relayWeapon });
       }
       break;
     }
