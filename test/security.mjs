@@ -361,6 +361,15 @@ async function seatHoarding() {
   const seated = await Promise.race([wait(guest, 'lobby', 5000), wait(guest, 'start', 5000)]);
   if (!seated) { fail('seat hoarding: the first legitimate join did not seat'); }
 
+  // Watch for `start` from BEFORE the loop. `wait()` attaches its listener at call
+  // time and keeps no backlog, so asking afterwards cannot see a `start` emitted
+  // DURING the loop — which is exactly when the bug would fire. The assertion
+  // below called itself decisive while looking in the wrong direction in time.
+  let sawStart = false;
+  const startWatch = (raw) => { try { if (JSON.parse(raw).type === 'start') sawStart = true; } catch {} };
+  host.on('message', startWatch);
+  guest.on('message', startWatch);
+
   let refusals = 0;
   for (let i = 0; i < 4; i++) {
     send(guest, { type: 'join', code: made.code, name: 'Guest', skin: 'desert' });
@@ -373,8 +382,9 @@ async function seatHoarding() {
 
   // The decisive assertion: those repeat joins must not have filled the lobby
   // and started the match. A `start` here means the ghost-seat bug is back.
-  const started = await Promise.race([wait(host, 'start', 1500), sleep(1600).then(() => null)]);
-  if (started) fail('seat hoarding: repeat joins from ONE socket auto-started the match');
+  await sleep(400);
+  host.off('message', startWatch); guest.off('message', startWatch);
+  if (sawStart) fail('seat hoarding: repeat joins from ONE socket auto-started the match');
   else step('seat hoarding: a 4-seat lobby is not filled by one socket rejoining');
 
   // And a guest moving to another lobby must not destroy the host's room —
@@ -387,7 +397,14 @@ async function seatHoarding() {
   const probe = await open();
   send(probe, { type: 'join', code: made.code, name: 'Probe', skin: 'desert' });
   const alive = await Promise.race([wait(probe, 'lobby', 4000), wait(probe, 'start', 4000), wait(probe, 'joinError', 4000)]);
-  if (!alive || alive.type === 'joinError') fail("seat hoarding: a guest leaving DESTROYED the host's lobby");
+  // Distinguish the two reasons a probe cannot join. "That game is full" or
+  // "already started" means the lobby is ALIVE — the opposite of what this
+  // assertion tests — and reporting that as "the host's lobby was DESTROYED"
+  // points the reader at the wrong subsystem entirely.
+  const gone = alive && alive.type === 'joinError'
+    && /no game with that code/i.test(alive.reason || '');
+  if (!alive) fail("seat hoarding: no reply at all when probing the host's lobby");
+  else if (gone) fail("seat hoarding: a guest leaving DESTROYED the host's lobby");
   else step("seat hoarding: a guest moving to another room leaves the host's lobby intact");
 
   try { host.close(); guest.close(); probe.close(); } catch {}

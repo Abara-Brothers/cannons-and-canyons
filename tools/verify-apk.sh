@@ -58,6 +58,23 @@ while IFS= read -r rel; do
 done < <(cd "$ROOT/public" && find . -type f ! -name '.DS_Store' | sed 's|^\./||' | sort)
 echo "  checked $checked file(s) under public/ (exempt: $EXEMPT)"
 
+# REVERSE PASS. The loop above is driven by `find public -type f`, so a file
+# DELETED from public/ but still bundled in the APK is invisible to it — the
+# binary would carry code the tree no longer has, and the check would say "safe
+# to test on a device". Capacitor legitimately injects its own files, so those
+# are exempt by name rather than by guesswork.
+extra=0
+while IFS= read -r rel; do
+  case "$rel" in
+    cordova.js|cordova_plugins.js|cordova-js-src/*|index.html) continue ;;
+  esac
+  if [ ! -f "$ROOT/public/$rel" ]; then
+    printf '  %-28s IN APK BUT NOT IN public/\n' "$rel"; extra=$((extra + 1))
+  fi
+done < <(unzip -Z1 "$APK" 'assets/public/*' 2>/dev/null | sed 's|^assets/public/||' | grep -v '/$' | sort)
+[ "$extra" -gt 0 ] && stale=$((stale + extra))
+echo "  checked $extra unexpected extra file(s) in the APK"
+
 echo
 if [ "$stale" -eq 0 ]; then
   echo "APK matches the working tree — safe to test on a device."

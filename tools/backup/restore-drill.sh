@@ -86,7 +86,10 @@ psql -h 127.0.0.1 -p $PORT -U postgres -q -c "create database drill" >/dev/null 
 step() {
   local out all real benign
   out="$(pd -q -f "$2")"
-  all="$(printf '%s\n' "$out" | grep 'ERROR:' || true)"
+  # Match BOTH shapes. `ERROR:` is what the SERVER says; `psql: error:` (lowercase,
+  # client-side) is what a connection failure, a missing file or a bad flag says —
+  # and grepping only the first reported "clean" for a step that never ran at all.
+  all="$(printf '%s\n' "$out" | grep -E 'ERROR:|psql: error:|FATAL:' || true)"
   if [ -z "$all" ]; then
     printf '  %-34s %s\n' "$1" "clean"; return
   fi
@@ -97,7 +100,7 @@ step() {
     real="$all"; benign=0
   fi
   local rn=0
-  [ -n "$real" ] && rn="$(printf '%s\n' "$real" | grep -c 'ERROR:' || true)"
+  [ -n "$real" ] && rn="$(printf '%s\n' "$real" | grep -cE 'ERROR:|psql: error:|FATAL:' || true)"
   if [ "$rn" -eq 0 ]; then
     printf '  %-34s %s\n' "$1" "clean ($benign expected refusals, see note)"
   else
