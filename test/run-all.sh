@@ -14,14 +14,27 @@ set -u
 cd "$(dirname "$0")/.."
 
 PORT="${PORT:-3000}"
+# The tests default to ws://localhost:3000/ws individually, so overriding PORT
+# alone started the server somewhere else and left eleven suites connecting to
+# 3000 — 7 passed / 11 ECONNREFUSED. This header exists to prevent exactly that
+# class of misleading failure. The ${WS:-…} form leaves --remote untouched.
+export WS="${WS:-ws://localhost:$PORT/ws}"
 REMOTE=0
 [ "${1:-}" = "--remote" ] && REMOTE=1
 
-pass=0; fail=0
+pass=0; fail=0; skip=0
 run() {                      # run <name> <cmd...>
   local name="$1"; shift
-  if "$@" > /tmp/cc_$name.log 2>&1; then
+  "$@" > /tmp/cc_$name.log 2>&1
+  local rc=$?
+  if [ "$rc" -eq 0 ]; then
     printf '  %-16s PASS\n' "$name"; pass=$((pass+1))
+  elif [ "$rc" -eq 3 ]; then
+    # EXIT 3 = SKIPPED, not passed. merge.mjs exits when Chrome is absent, and
+    # scoring that as PASS meant the only client-side coverage in the tree
+    # reported success on every CI run without ever executing — CI is
+    # ubuntu-latest and never sets CHROME_PATH. A skip must be VISIBLE.
+    printf '  %-16s SKIP  %s\n' "$name" "$(tail -1 /tmp/cc_$name.log)"; skip=$((skip+1))
   else
     printf '  %-16s FAIL\n' "$name"; fail=$((fail+1))
     sed 's/^/      /' /tmp/cc_$name.log | tail -14
@@ -56,6 +69,8 @@ start_server() {             # start_server [extra env assignments...]
 
 echo "== headless (no server needed) =="
 run house_rules node test/house-rules.mjs
+run timer_safety node test/timer_safety.mjs
+run validate    bash tools/backup/test-validate.sh
 run hitbox node test/hitbox.mjs
 run golf_hazards node test/golf_hazards.mjs
 
@@ -104,5 +119,5 @@ else
 fi
 
 echo
-echo "$pass passed, $fail failed"
+echo "$pass passed, $fail failed$([ "$skip" -gt 0 ] && echo ", $skip SKIPPED — not run, not proven")"
 exit $([ "$fail" -eq 0 ] && echo 0 || echo 1)

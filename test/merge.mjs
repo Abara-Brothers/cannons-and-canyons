@@ -27,7 +27,9 @@ const CHROME = process.env.CHROME_PATH
 if (!existsSync(CHROME)) {
   console.log(`SKIP  merge tests — no Chrome at ${CHROME}`);
   console.log('      (set CHROME_PATH to run them)');
-  process.exit(0);
+  process.exit(3)   // 3 = SKIPPED. Exiting 0 made run-all.sh score this as PASS,
+                    // so the only client-side coverage reported success on every CI
+                    // run without ever executing (CI is ubuntu-latest, no CHROME_PATH).;
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

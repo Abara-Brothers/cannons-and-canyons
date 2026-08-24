@@ -115,7 +115,7 @@ const root = await get('/');
 // so this runs its own. The values are fake on purpose: a request with no Bearer
 // token is refused before any network call, so nothing is ever contacted.
 let delAllStatuses = [];
-let concurrent401s = -1;
+let concurrentSpent = -1;
 let csp2 = '';
 let mockOrigin = '';
 {
@@ -151,7 +151,12 @@ let mockOrigin = '';
       fetch(`http://127.0.0.1:${port2}/account/delete`, {
         method: 'POST', headers: { Authorization: 'Bearer junk-' + i },
       }).then(async (r) => { await r.arrayBuffer(); return r.status; })));
-    concurrent401s = burst.filter((s) => s === 401).length;
+    // Count what was SPENT, not what returned 401. Counting a specific status
+    // meant any other status scored zero — and zero passes the <= 10 test, so
+    // restoring the race AND changing the rejection status to 403 left this
+    // assertion green with the bug live. Anything that is not a 429 consumed a
+    // token, whatever status it ended with.
+    concurrentSpent = burst.filter((s) => s !== 429).length;
 
     // Well past the bucket size of 10.
     for (let i = 0; i < 15; i++) {
@@ -198,10 +203,17 @@ const results = [
   ['(e) nosniff present', sec.nosniff === 'nosniff'],
   ['(e) Referrer-Policy present', sec.referrer === 'no-referrer'],
   ['(e) CSP blocks framing', /frame-ancestors 'none'/.test(sec.csp)],
-  ['(e) CSP restricts scripts to self', /script-src 'self'/.test(sec.csp)],
-  ['(e) CSP has no unsafe-inline for SCRIPT', !/script-src[^;]*unsafe-inline/.test(sec.csp)],
+  // Anchored, not a substring. `/script-src 'self'/` matches a PREFIX, so
+  // `script-src 'self' https://cdn.example.com 'unsafe-eval' data: blob:` passed
+  // both of these — arbitrary remote script and eval() on the origin whose
+  // localStorage holds the Supabase refresh token. The sibling negation is also
+  // vacuously true when the header is missing entirely; anchoring fixes both.
+  ['(e) CSP restricts scripts to EXACTLY self',
+    /(?:^|;)\s*script-src 'self'\s*(?:;|$)/.test(sec.csp)],
+  ['(e) CSP has no unsafe-inline for SCRIPT',
+    /script-src/.test(sec.csp) && !/script-src[^;]*unsafe-inline/.test(sec.csp)],
   ['(f) 40 CONCURRENT junk deletes cannot exceed the budget of 10',
-    concurrent401s >= 0 && concurrent401s <= 10],
+    concurrentSpent >= 1 && concurrentSpent <= 10],
   // The (e) block asserted five directives and never the one that decides whether
   // the game can talk to anything. A scratch build set to `connect-src 'none'`
   // passed every (e) assertion and printed "all checks passed" while real Chrome

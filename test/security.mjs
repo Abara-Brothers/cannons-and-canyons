@@ -12,7 +12,7 @@
 //      `fuel < MOVE_STEP` is false for NaN). The old `moved <= 0` guard did not
 //      catch it — NaN <= 0 is false.
 //   3. Frame size — the socket now caps a single frame (maxPayload).
-//   4. Seat hoarding — `join` checked room state and fullness but never whether
+//   9. Seat hoarding — `join` checked room state and fullness but never whether
 //      the socket ALREADY held a seat, so one socket could take several. Filling
 //      an FFA lobby that way auto-started the match; a single disconnect then
 //      freed only ws.seat and left the rest `connected` behind a dead socket.
@@ -344,7 +344,7 @@ async function survivesHostileInput() {
 }
 
 
-// ---- 4. One socket cannot hold more than one seat ---------------------------
+// ---- 9. One socket cannot hold more than one seat ---------------------------
 // Regression for the 2026-08-18 ghost-seat defect. Reproduced before the fix:
 // five joins from one socket took three seats in a 4-player lobby, auto-started
 // the match, and left two seats marked `connected` behind a dead socket.
@@ -394,7 +394,7 @@ async function seatHoarding() {
 }
 
 
-// ---- 5. Abandoning a match must not strand the room ------------------------
+// ---- 10. Abandoning a match must not strand the room -----------------------
 // releasePriorRoom used to skip a room that was already 'playing', which also
 // skipped clearing ws.roomCode — so the caller overwrote it and the old room was
 // orphaned with a seat still flagged `connected` behind a socket that had moved
@@ -408,8 +408,18 @@ async function abandonedRooms() {
       return (await r.json()).rooms;
     } catch { return null; }
   };
+  // An UNMEASURABLE run must be RED, not green. roomsNow() returns null on any
+  // failure — including a 200 whose body is not JSON, which is exactly what a
+  // WAF, CDN or proxy error page returns — and this used to call step(), which
+  // prints "ok —" and never touches the error list. Verified: with the historical
+  // room-orphan bug live and /health serving an HTML body, the suite reported ALL
+  // GOOD and exited 0. This test is explicitly built to run against production
+  // via --remote, which is precisely where such a body is served.
   const before = await roomsNow();
-  if (before === null) { step('abandoned rooms: /health unreachable, skipped'); return; }
+  if (typeof before !== 'number') {
+    fail('abandoned rooms: /health did not return JSON — cannot measure, so this is NOT a pass');
+    return;
+  }
 
   const ws = await open();
   for (let i = 0; i < 6; i++) {
@@ -418,6 +428,11 @@ async function abandonedRooms() {
     await wait(ws, 'start', 8000);
   }
   const after = await roomsNow();
+  if (typeof after !== 'number') {
+    fail('abandoned rooms: /health stopped returning JSON mid-test — cannot measure');
+    try { ws.close(); } catch {}
+    return;
+  }
   const leaked = after - before;
   // One live room is correct — the game currently in progress. Six is the bug.
   if (leaked > 2) fail(`abandoned rooms: 6 successive games from one socket left ${leaked} extra rooms (expected ~1) — they are orphaned`);
@@ -425,7 +440,7 @@ async function abandonedRooms() {
   try { ws.close(); } catch {}
 }
 
-// ---- 6. A native push subscription is size-bounded too ---------------------
+// ---- 11. A native push subscription is size-bounded too --------------------
 // The cap was added to the WEB branch only, leaving the native shape an open door
 // to the same abuse: {platform:'android', token:<unique>, junk:<60KB>} wrote
 // unbounded rows, and because `endpoint` is UNIQUE a varying token INSERTs rather
