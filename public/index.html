@@ -12,203 +12,67 @@
 <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png" />
 <link rel="apple-touch-icon" href="icons/icon-180.png" />
 <link rel="apple-touch-icon" sizes="180x180" href="icons/icon-180.png" />
+<link rel="preload" href="fonts/rajdhani-700.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="preload" href="fonts/barlow-500.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="preload" href="fonts/jetbrains-mono-var.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="stylesheet" href="styles.css" />
 
 <div id="app">
-  <!-- Animated canyon backdrop for the menu screens. Sits BEFORE the screens so
-       it paints underneath them, is pointer-transparent, and is display:none'd
-       via body.in-game (see showScreen) so #hud-top / #dock backdrop-filter has
-       nothing to blur mid-match and the GPU stays idle. Pure inline SVG + CSS
-       keyframes — no images, no fonts. viewBox units are the drift units, so the
-       parallax amplitude is identical on every screen size. -->
-  <div class="bg-canyon" aria-hidden="true">
-    <svg viewBox="0 0 1200 620" preserveAspectRatio="xMidYMax slice">
-      <defs>
-        <linearGradient id="ccSky" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0"    stop-color="#080d1e"/>
-          <stop offset=".46"  stop-color="#16204a"/>
-          <stop offset=".74"  stop-color="#3a2a48"/>
-          <stop offset="1"    stop-color="#7a3f26"/>
-        </linearGradient>
-        <linearGradient id="ccHaze" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stop-color="#ff7a2e" stop-opacity="0"/>
-          <stop offset="1" stop-color="#ff7a2e" stop-opacity=".34"/>
-        </linearGradient>
-      </defs>
-
-      <rect width="1200" height="620" fill="url(#ccSky)"/>
-      <rect y="340" width="1200" height="280" fill="url(#ccHaze)"/>
-
-      <!-- Posterized sun slabs — flat bands, same trick as drawSky(). -->
-      <g fill="#ffb45a">
-        <rect x="852" y="430" width="176" height="7" opacity=".50"/>
-        <rect x="872" y="446" width="136" height="6" opacity=".38"/>
-        <rect x="892" y="460" width="96"  height="5" opacity=".26"/>
-      </g>
-
-      <!-- Three mesa ridges, drawn from -160 to 1360 so the drift never
-           uncovers an edge. Darkest layer matches --bg so it fuses with the page. -->
-      <g class="ridge r3" fill="#1b2647">
-        <path d="M-160 620V430h180l40-70h90l40 70h140l50-130h90l50 130h180l40-80h100l40 80h180l40-50h100l40 50h120v190z"/>
-      </g>
-      <g class="ridge r2" fill="#131c38">
-        <path d="M-160 620V500h250l50-70h120l40 70h220l40-50h100l40 50h200l50-80h130l40 80h280v120z"/>
-      </g>
-      <g class="ridge r1" fill="#0b1020">
-        <path d="M-160 620V562h360l40-42h160l40 42h320l40-56h160l40 56h360v58z"/>
-        <!-- lone dead tree on the near rim -->
-        <path d="M243 562v-40M243 536l-13-12M243 542l14-13M243 528l-9-14" stroke="#0b1020" stroke-width="4" stroke-linecap="round" fill="none"/>
-      </g>
-
-      <!-- Tracer streaks: a short dash travelling a ballistic path. Lines, not
-           discs — same house rule as drawParticles / drawMuzzleFlashes. -->
-      <path class="tracer t1" d="M-40 560 Q 400 150 900 500"/>
-      <path class="tracer t2" d="M1240 540 Q 800 210 260 520"/>
-    </svg>
-  </div>
+  
 
   <!-- ============ HOME ============ -->
   <!-- The dashboard is a fixed three-band layout (head / main / foot) sized in
        viewport units and clamp()s so it ALWAYS fits: #home never scrolls, on
        any screen, either orientation. All icons are hand-drawn inline SVG —
        no emojis anywhere in this game's UI (house rule). -->
-  <section id="home" class="screen active">
-    <div class="hs">
+  <!-- LAUNCH BAY (concept 10): the menu. Rendered by bay.js. -->
+  <section id="bay" class="screen active"></section>
 
-      <header class="hs-head">
-        <div class="hs-brand">
-          <h1 class="gtitle hs-title"><span class="w">Cannons</span><span class="amp">&amp;</span><span class="w">Canyons</span></h1>
-          <p class="hs-by">Made by the <b>Abara Brothers</b></p>
-        </div>
-        <div class="hs-id">
-          <label class="hs-cs">
-            <span class="hs-cs-label">Callsign</span>
-            <!-- readonly, not editable: callsigns are rolled, never typed (ISSUE-015).
-                 Still an <input> so the reroll button and every existing
-                 $('nameInput').value read keep working unchanged. -->
-            <input id="nameInput" maxlength="14" autocomplete="off" readonly
-                   spellcheck="false" aria-label="Your callsign — use the roll button to change it" />
-            <button id="rerollBtn" type="button" class="hs-reroll" title="Roll a new callsign" aria-label="Roll a new callsign">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M3 7h3.4a4 4 0 0 1 3.3 1.8l4.6 6.4A4 4 0 0 0 17.6 17H21"/>
-                <path d="M3 17h3.4a4 4 0 0 0 3.3-1.8l4.6-6.4A4 4 0 0 1 17.6 7H21"/>
-                <path d="M18.4 4.4L21 7l-2.6 2.6"/><path d="M18.4 14.4L21 17l-2.6 2.6"/>
-              </svg>
-            </button>
-          </label>
-          <button id="helpHomeBtn" type="button" class="hs-help" aria-label="How to play">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8.6 9a3.4 3.4 0 1 1 4.6 3.2c-1 .4-1.2 1-1.2 2.1"/><path d="M12 17.6v.2"/></svg>
-            <span>How to play</span>
-          </button>
-        </div>
-      </header>
-
-      <div class="hs-main">
-
-        <div class="hs-col hs-col-join">
-          <div class="hs-panel">
-            <div class="hs-panel-head">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12.2 12h9.2M17.6 12v3.6M21 12v2.6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" fill="none"/></svg>
-              <span>Join a code</span>
-            </div>
-            <div class="hs-row">
-              <input id="codeInput" class="code-input" maxlength="4" placeholder="CODE" autocomplete="off" />
-              <button id="joinBtn" type="button" class="hs-go">Join</button>
-            </div>
-          </div>
-        </div>
-
-        <div class="hs-col">
-          <div class="hs-panel hs-create">
-            <div class="hs-panel-head">
-              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 2.6a1 1 0 0 1 1.6-.8l9 5.2a1 1 0 0 1 0 1.7l-9 5.2A1 1 0 0 1 6 13z"/><rect x="3.2" y="2" width="2.2" height="20" rx="1.1"/></svg>
-              <span>Create a game</span><i>4-letter code for your friends</i>
-            </div>
-            <div class="modegrid" id="modeRow" role="group" aria-label="Game mode">
-              <button type="button" class="mode active" data-mode="duel">
-                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4.4 3.2l13.9 13.9-1.8 1.8L2.6 5z"/><path d="M19.6 3.2L5.7 17.1l1.8 1.8L21.4 5z"/><rect x="2.2" y="19.6" width="8.2" height="2.3" rx="1.1"/><rect x="13.6" y="19.6" width="8.2" height="2.3" rx="1.1"/></svg>
-                <span>Duel</span>
-              </button>
-              <button type="button" class="mode" data-mode="ffa">
-                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1.4l1.9 6.4 6.4-4-4 6.4 6.3 1.8-6.3 1.8 4 6.4-6.4-4-1.9 6.4-1.8-6.4-6.4 4 4-6.4L1.4 12l6.3-1.8-4-6.4 6.4 4z"/></svg>
-                <span>Free-for-all</span>
-              </button>
-              <button type="button" class="mode" data-mode="boss">
-                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 7.6L12 3l7 4.6v8L12 20l-7-4.4z"/><rect x="7.2" y="10.2" width="9.6" height="2.8" fill="#0b1020"/><path d="M9 3.8L7.6 1.4M15 3.8l1.4-2.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-                <span>Boss Fight</span>
-              </button>
-              <button type="button" class="mode" data-mode="golf">
-                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="10.9" y="2.6" width="1.9" height="15.4"/><path d="M12.8 3l7.2 2.7-7.2 2.7z"/><path d="M3.6 21.4c3.2-2.6 13.6-2.6 16.8 0z"/></svg>
-                <span>Golf</span>
-              </button>
-              <button type="button" class="mode" data-mode="aliens">
-                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M1.8 13.4l10.2-3.6 10.2 3.6-10.2 3.6z"/><path d="M8.4 10.6C8.9 7.9 10.3 6 12 6s3.1 1.9 3.6 4.6L12 11.9z"/><rect x="3.8" y="18.8" width="2" height="2.6"/><rect x="11" y="19.8" width="2" height="2.6"/><rect x="18.2" y="18.8" width="2" height="2.6"/></svg>
-                <span>Aliens</span>
-              </button>
-            </div>
-            <div class="hs-oppbtns hidden" id="oppBtns" role="group" aria-label="Opponent">
-              <button type="button" class="opp active" data-opp="friend">Friend / online (code)</button>
-              <button type="button" class="opp" data-opp="cpu">Vs. Computer</button>
-            </div>
-            <div class="hs-row" id="optRow">
-              <label class="hs-selwrap hidden" id="diffWrap"><span>Difficulty</span>
-                <select id="diffSel" class="hs-select" aria-label="CPU difficulty">
+  <!-- LEGACY CONTROL RACK -- never shown. The game's create / join / lobby wiring
+       attaches to these ids at boot (app.js) and renders lobby state into them;
+       the Launch Bay (bay.js) drives them by calling their handlers and reads
+       that state back. The old menus' layout, copy, art and CSS are gone. Bare
+       controls stay because removing one means removing every reference in
+       app.js first -- the client DOM has no test coverage, so that is a
+       deliberate second step, not a byproduct of this one. -->
+  <div id="legacy" class="hidden" aria-hidden="true">
+    <input id="nameInput" maxlength="14" readonly><button id="rerollBtn" type="button"></button>
+    <button id="helpHomeBtn" type="button"></button>
+    <input id="codeInput" maxlength="4"><button id="joinBtn" type="button"></button>
+    <div id="modeRow"></div><div id="oppBtns"></div>
+    <label id="diffWrap"><select id="diffSel" class="hs-select" aria-label="CPU difficulty">
                   <option value="easy">Easy</option>
                   <option value="medium" selected>Medium</option>
                   <option value="hard">Hard</option>
-                </select>
-              </label>
-              <label class="hs-selwrap hidden" id="countWrap"><span>Players</span>
-                <select id="countSel" class="hs-select" aria-label="Players">
+                </select></label>
+    <label id="countWrap"><select id="countSel" class="hs-select" aria-label="Players">
                   <option value="3">3 players</option>
                   <option value="4" selected>4 players</option>
-                </select>
-              </label>
-              <label class="hs-selwrap hidden" id="teeWrap"><span>Tees</span>
-                <select id="teeSel" class="hs-select" aria-label="Tee set">
+                </select></label>
+    <label id="teeWrap"><select id="teeSel" class="hs-select" aria-label="Tee set">
                   <option value="champ">Championship</option>
                   <option value="mens" selected>Men's</option>
                   <option value="womens">Women's</option>
                   <option value="junior">Junior</option>
-                </select>
-              </label>
-            </div>
-            <button id="createBtn" type="button" class="hs-go primary">CREATE GAME</button>
-          </div>
-        </div>
+                </select></label>
+    <button id="createBtn" type="button"></button>
+    <button id="careerBtn" type="button"></button><b id="careerWins"></b>
+    <div id="skinRow"></div>
+    <button id="accountBtn" type="button" class="hidden"><span id="accountLabel"></span></button>
+    <p id="homeError"></p>
+    <a id="privacyLink" href="privacy.html" target="_blank" rel="noopener">Privacy policy</a>
+    <h2 id="lobbyHeading"></h2><p id="lobbyHint"></p><div id="lobbyCode"></div>
+    <button id="copyLinkBtn" type="button"></button><button id="copyCodeBtn" type="button"></button>
+    <div id="roster"></div>
+    <button id="startMatchBtn" type="button" class="hidden"></button>
+    <button id="notifyBtn" class="btn">
+            <svg viewBox="0 0 24 24" fill="currentColor" style="width:15px;height:15px;vertical-align:-2px;margin-right:5px"><path d="M12 22a2.4 2.4 0 0 0 2.4-2.4H9.6A2.4 2.4 0 0 0 12 22zM19 16.4V11a7 7 0 0 0-5-6.7V3.6a2 2 0 1 0-4 0v.7A7 7 0 0 0 5 11v5.4L3 18.4v1h18v-1z"/></svg>
+            Nudge me when it's my turn
+          </button>
+    <button id="cancelBtn" type="button"></button>
+  </div>
 
-      </div>
-
-      <footer class="hs-foot">
-        <button id="careerBtn" type="button" class="hs-chip hs-armoury">
-          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="9" r="5.4"/><circle cx="12" cy="9" r="2.6" fill="#0b1020"/><path d="M8.2 13.4L6 21l6-2.6L18 21l-2.2-7.6z"/></svg>
-          <span>Career</span><b id="careerWins"></b>
-        </button>
-        <div class="hs-chip">
-          <span>Tank paint</span>
-          <div class="skinrow" id="skinRow"></div>
-        </div>
-        <!-- Account strip (8.47): guest-by-default, Google to keep progress
-             across devices. Hidden until cloud.js confirms it is configured;
-             text set by refreshAccountChip in app.js. -->
-        <button id="accountBtn" type="button" class="hs-chip hs-account hidden">
-          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7z"/></svg>
-          <span id="accountLabel">Sign in</span>
-        </button>
-
-        <p id="homeError" class="error hs-error"></p>
-        <!-- App Store 5.1.1(i) requires the privacy policy to be reachable
-             INSIDE the app, not only from the store listing. This was the
-             app's only anchor element. `target=_blank` opens the system
-             browser from a packaged build rather than navigating the WebView
-             away from the game. -->
-        <p class="hs-legal">
-          <a id="privacyLink" href="privacy.html" target="_blank" rel="noopener">Privacy policy</a>
-        </p>
-      </footer>
-
-    </div>
-  </section>
+  
 
   <!-- ============ ARMOURY ============ -->
   <!-- Duel / free-for-all loadout: pick exactly five weapons; the Tactical Nuke
@@ -231,42 +95,7 @@
   </div>
 
   <!-- ============ LOBBY / WAITING ============ -->
-  <section id="lobby" class="screen">
-    <!-- The waiting room must FIT a landscape phone with zero scrolling: a slim
-         brand/status head, then invite (code + copy) beside the roster/actions.
-         On tall screens the two columns stack back into the classic card. -->
-    <div class="home-card lobby-card">
-      <header class="lb-head">
-        <div class="lb-brand">
-          <div class="logo small">CANNONS <em>&amp;</em> CANYONS</div>
-          <p class="byline">made by <b>Abara Brothers</b></p>
-        </div>
-        <div class="lb-status">
-          <div class="spinner" aria-hidden="true"></div>
-          <h2 id="lobbyHeading">Waiting for your opponent…</h2>
-        </div>
-      </header>
-      <div class="lb-grid">
-        <div class="lb-invite">
-          <p class="muted" id="lobbyHint">Send this link or code. The battle starts the moment they join.</p>
-          <div class="code-display" id="lobbyCode">----</div>
-          <div class="lb-btnrow">
-            <button id="copyLinkBtn" class="btn primary">Copy invite link</button>
-            <button id="copyCodeBtn" class="btn">Copy code</button>
-          </div>
-        </div>
-        <div class="lb-side">
-          <div class="roster" id="roster"></div>
-          <button id="startMatchBtn" class="btn big primary hidden">Start battle</button>
-          <button id="notifyBtn" class="btn">
-            <svg viewBox="0 0 24 24" fill="currentColor" style="width:15px;height:15px;vertical-align:-2px;margin-right:5px"><path d="M12 22a2.4 2.4 0 0 0 2.4-2.4H9.6A2.4 2.4 0 0 0 12 22zM19 16.4V11a7 7 0 0 0-5-6.7V3.6a2 2 0 1 0-4 0v.7A7 7 0 0 0 5 11v5.4L3 18.4v1h18v-1z"/></svg>
-            Nudge me when it's my turn
-          </button>
-          <button id="cancelBtn" class="btn ghost">Cancel</button>
-        </div>
-      </div>
-    </div>
-  </section>
+  
 
   <!-- ============ GAME ============ -->
   <section id="game" class="screen">
@@ -736,3 +565,4 @@
 <script src="errors.js"></script>
 <script src="cloud.js"></script>
 <script src="app.js"></script>
+<script src="bay.js"></script>

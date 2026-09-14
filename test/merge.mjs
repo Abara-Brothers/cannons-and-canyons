@@ -278,7 +278,8 @@ async function bootWith(raw) {
     let cloudBootSafe = true;
     try { void (PROF.shots > 0 || Object.keys(PROF.ach).length); } catch (e) { cloudBootSafe = false; }
     // And the app must actually be usable, not merely have a PROF.
-    const menuUp = !!document.querySelector('[data-mode="duel"]');
+    // The menu is the Launch Bay now: its Duel board is the "menu came up" canary.
+    const menuUp = !!document.querySelector('#bay .board[data-set="mode=duel"]');
     return { shapeOk, cloudBootSafe, menuUp, shots: PROF.shots };
   })()`);
 }
@@ -306,6 +307,7 @@ for (const [label, raw] of [
     v: 1, shots: 1234, hits: 890, maxDmg: 97, longest: 4210, kills: 33, aces: 4,
     golfBest: 28, modes: { duel: { w: 12, l: 5 }, golf: { w: 3, l: 0 } },
     weapons: { cannon: 400, nuke: 7 }, hordeBest: { aliens: 14 },
+    streak: 3, bestStreak: 7,   // Launch Bay fields: a complete career carries them too
     ach: { firstBlood: '2026-01-02', sniper: '2026-02-11' },
   };
   await evalJs(`try { localStorage.setItem('cc_career', ${JSON.stringify(JSON.stringify(real))}) } catch (e) {} 1`);

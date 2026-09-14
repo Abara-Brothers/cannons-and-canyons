@@ -69,8 +69,9 @@ const MOVE_MIN = 60;
 let MOTION_OK = true;
 try {
   const mq = matchMedia('(prefers-reduced-motion: reduce)');
-  MOTION_OK = !mq.matches;
-  mq.addEventListener('change', (e) => { MOTION_OK = !e.matches; });
+  const inApp = () => { try { return localStorage.getItem('cc_motion') === '1'; } catch { return false; } };
+  MOTION_OK = !mq.matches && !inApp();
+  mq.addEventListener('change', (e) => { MOTION_OK = !e.matches && !inApp(); });
 } catch {}
 
 // WCAG 2.3.1 general flash threshold: more than three flashes a second, above
@@ -749,11 +750,12 @@ const ACHS = [
 // partial value behind. Take the VALUES, never the shape.
 const PROF = (() => {
   const prof = { v: 1, modes: {}, weapons: {}, shots: 0, hits: 0, maxDmg: 0, longest: 0,
-                 kills: 0, aces: 0, golfBest: null, hordeBest: { aliens: 0 }, ach: {} };
+                 kills: 0, aces: 0, golfBest: null, hordeBest: { aliens: 0 }, ach: {},
+                 streak: 0, bestStreak: 0 };          // Launch Bay: current + best win streak
   try {
     const p = JSON.parse(localStorage.getItem('cc_career') || 'null');
     if (p && typeof p === 'object' && !Array.isArray(p) && p.v === 1) {
-      for (const k of ['shots', 'hits', 'maxDmg', 'longest', 'kills', 'aces']) {
+      for (const k of ['shots', 'hits', 'maxDmg', 'longest', 'kills', 'aces', 'streak', 'bestStreak']) {
         if (typeof p[k] === 'number' && Number.isFinite(p[k])) prof[k] = p[k];
       }
       if (typeof p.golfBest === 'number' && Number.isFinite(p.golfBest)) prof.golfBest = p.golfBest;
@@ -825,6 +827,9 @@ function trackGameOver(m) {
     won = m.winner === S.you;
   }
   ms[won ? 'w' : 'l']++;
+  PROF.streak = won ? (PROF.streak || 0) + 1 : 0;
+  if (PROF.streak > (PROF.bestStreak || 0)) PROF.bestStreak = PROF.streak;
+  saveProf();
   refreshCareerChip();
   if (won) {
     award('first_blood');
@@ -874,7 +879,9 @@ function mergeCloudProgression(cloud) {
   if (!PROF.ach) PROF.ach = {};
   if (!PROF.hordeBest) PROF.hordeBest = {};
 
-  for (const k of ['shots', 'hits', 'maxDmg', 'longest', 'kills', 'aces']) {
+  // `streak` is deliberately absent: a max-merge would resurrect a streak that a
+  // loss on this device already ended. bestStreak is a high-water mark, so it merges.
+  for (const k of ['shots', 'hits', 'maxDmg', 'longest', 'kills', 'aces', 'bestStreak']) {
     PROF[k] = Math.max(num(PROF[k]), num(c[k]));
   }
   const cModes = obj(c.modes);
@@ -2030,11 +2037,13 @@ $('copyCodeBtn').onclick = async () => {
 function flashBtn(btn, txt) { const o = btn.textContent; btn.textContent = txt; setTimeout(() => (btn.textContent = o), 1300); }
 
 function showScreen(name) {
-  for (const s of ['home', 'lobby', 'game']) $(s).classList.toggle('active', s === name);
-  // body.in-game drives two pure-CSS behaviours: the animated canyon backdrop is
-  // display:none'd in-match (so #hud-top / #dock backdrop-filter blurs nothing,
-  // exactly as before, and the GPU idles), and the rotate prompt is only ever
-  // eligible on the game screen — the menus are fine in portrait.
+  // The Launch Bay IS the menu: home and the lobby render inside #bay. bay.js
+  // reads the same state the old menu wired (ccMode, mySkin, PROF, the rack) and
+  // drives the same handlers, so every intent below is unchanged.
+  if ((name === 'home' || name === 'lobby') && window.Bay) { window.Bay.show(name); name = 'bay'; }
+  for (const s of ['game', 'bay']) $(s).classList.toggle('active', s === name);
+  // body.in-game drives one pure-CSS behaviour: the rotate prompt is only ever
+  // eligible on the game screen — the menu is fine in portrait.
   document.body.classList.toggle('in-game', name === 'game');
 }
 function showLobby(mode) {
@@ -2142,7 +2151,20 @@ function applySnapshot(m) {
   S.kinds = (m.kinds || []).slice();
   S.loadout = (m.loadouts && m.loadouts[m.you]) || null;
   S.picking = !!m.pick;
-  if (m.pick && !S.loadout) setTimeout(() => openDraft(m.pick.n), 60);
+  if (m.pick && !S.loadout) {
+    // The rack is drafted in the bay before the doors open, so a full saved
+    // loadout is submitted straight away instead of raising the draft modal.
+    let pre = null;
+    try {
+      const p = JSON.parse(localStorage.getItem('cc_loadout') || 'null');
+      if (Array.isArray(p)) pre = p.filter((id) => ARM_POOL.includes(id)).slice(0, m.pick.n);
+    } catch {}
+    if (pre && pre.length === m.pick.n) {
+      armNeed = m.pick.n; armPicks = pre;
+      sendMsg({ type: 'loadout', picks: pre.slice() });
+      showToast('Rack loaded — waiting for the others…');
+    } else setTimeout(() => openDraft(m.pick.n), 60);
+  }
   else $('armouryModal').classList.add('hidden');
   if (S.loadout && !S.loadout.includes(S.selected) && S.selected !== 'railgun') S.selected = null;
   S.horde = m.horde || null;
@@ -2763,8 +2785,12 @@ function coachShowable() {
   if (S.turn !== S.you || S.anim) return false;
   return !HUD_OVERLAYS.some(id => { const el = $(id); return el && !el.classList.contains('hidden'); });
 }
+// Launch Bay's "Aim guide" toggle: show the first-battle coaching again, once.
+// The pref is consumed when the sequence completes, so it is a request, not a
+// permanent mode -- "again" means again.
+const coachAgain = () => { try { return localStorage.getItem('cc_aimguide') === '1'; } catch { return false; } };
 function coachMaybeStart() {
-  if (coachDone || coachLive) return;
+  if ((coachDone && !coachAgain()) || coachLive) return;
   if (!S.playing || S.picking || S.turn !== S.you) return;   // combat drafts first; golf lands straight here
   coachLive = true;
   renderCoach();
@@ -2779,6 +2805,7 @@ function coachEnd(persist) {
   coachLive = false;
   if (persist) {
     coachDone = true;
+    try { localStorage.removeItem('cc_aimguide'); } catch {}   // the request has been honoured
     try { localStorage.setItem(COACH_KEY, '1'); } catch {}
   }
   renderCoach();
@@ -3495,6 +3522,7 @@ function detonate(det, beacon) {
     return;
   }
   addFlash((det.r / 500) * 0.35);
+  if (window.Bay && window.Bay.haptic) window.Bay.haptic(det.r);   // Launch Bay: haptics pref
   S.shake = Math.min(8, S.shake + det.r / 130);   // just a little kick on impact
   S.rings.push({ x: det.x, y: det.y, r: det.r * 0.3, rMax: det.r * 2.2, age: 0, life: 0.5, color: det.color });
   S.rings.push({ x: det.x, y: det.y, r: det.r * 0.15, rMax: det.r * 1.4, age: 0, life: 0.32, color: '#fff2c0' });
