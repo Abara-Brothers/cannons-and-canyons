@@ -194,8 +194,46 @@ async function armoury() {
   }
   await tap('#armouryCloseBtn', { optional: true });
   // The first turn plays a canvas-drawn aim demo (hand + "LONGER PULL = MORE
-  // POWER"). It is not DOM, so it cannot be hidden — just let it finish.
+  // POWER") and, on a first battle, the three coach marks over it. Neither is
+  // dismissable, so later frames simply wait them out; 00-coach is the one
+  // frame that wants them, and it is taken before this settles.
   await sleep(4200);
+}
+
+/**
+ * Park the canvas aim demo at a chosen point in its 3.8s loop.
+ *
+ * The demo is a timed loop, so an untimed capture lands wherever it lands —
+ * often on the fade-out, where there is no hand at all. guideT0 is the loop's
+ * origin, so moving it backwards moves the phase forwards.
+ *
+ * MUST be called only once the demo is already running: drawAimGuide resets
+ * guideT0 itself on the first frame after it turns on (`if (!guideWasOn)`),
+ * which would discard anything set before that.
+ *
+ * t=2.05 is mid-hold — the pull is at full extension (k=1), the hand is
+ * pressed, and the coach ring and pull arrow are both drawn. `pressed` stays
+ * true until t=2.6, so there is ~550ms of headroom for the capture.
+ */
+async function parkDemo(t = 2.05) {
+  return evalJs(`(() => {
+    if (typeof guideWasOn === 'undefined' || !guideWasOn) return false;
+    guideT0 = performance.now() - ${Math.round(t * 1000)};
+    return true;
+  })()`).catch(() => false);
+}
+
+/** Wait for the first-battle coach card to actually be on screen. */
+async function waitCoach(timeout = 12000) {
+  for (let waited = 0; waited <= timeout; waited += 250) {
+    const up = await evalJs(`(() => {
+      const c = document.getElementById('coach');
+      return !!c && !c.classList.contains('hidden');
+    })()`).catch(() => false);
+    if (up) return true;
+    await sleep(250);
+  }
+  return false;
 }
 
 const log = (s) => console.log(`[${W}x${H}] ${s}`);
@@ -214,6 +252,19 @@ await tap('[data-opp="cpu"]');
 await tap('#createBtn');
 await sleep(1400);
 await armoury();
+
+// The very first thing a new player sees: step 1 of the coach marks over the
+// live board, dock still tucked away, the game's own ghost hand ringed beneath
+// it. This MUST come before the shot below — firing sets PROF.shots, which
+// retires both the demo and the coach for the rest of the run.
+if (await waitCoach()) {
+  await parkDemo(2.05);
+  await sleep(90);                                   // one frame at the parked phase
+  await shot('00-coach');
+} else {
+  log('WARNING: coach card never appeared — 00-coach not captured');
+}
+
 await tap('#dockTab', { optional: true });          // open angle/power/weapons
 await sleep(600);
 await step(3, 1400);                                 // wind the power up for a long arc
@@ -273,6 +324,18 @@ await sleep(900);
 await tap('#startMatchBtn', { optional: true });
 await sleep(5200);                                   // let the aim demo clear
 await shot('06-golf');
+
+// ---------------------------------------------------------------- field manual
+log('manual');
+await go();
+await tap('#helpHomeBtn');
+await sleep(700);
+// Weapons is the chapter worth showing: sixteen rounds with their icons, ammo
+// counts and flight-shape badges. Driven through the app's own chapter switch
+// rather than a tap, so it cannot land on the wrong rail row at a narrow width.
+await evalJs(`(() => { if (typeof showChapter === 'function') { showChapter('weapons'); return true; } return false; })()`).catch(() => false);
+await sleep(600);
+await shot('08-manual');
 
 ws.close();
 chrome.kill();

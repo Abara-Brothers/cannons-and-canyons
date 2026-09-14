@@ -343,11 +343,16 @@
           <div class="coach-step" id="coachStep">Step 1 of 3</div>
           <h2 class="coach-title" id="coachTitle">Touch anywhere. Pull back.</h2>
           <p class="coach-body" id="coachBody">The shell flies the opposite way &mdash; like a slingshot. Pull further for more power.</p>
-          <div class="coach-dots" id="coachDots" aria-hidden="true">
-            <i class="on"></i><i></i><i></i>
+          <div class="coach-foot">
+            <div class="coach-dots" id="coachDots" aria-hidden="true">
+              <i class="on"></i><i></i><i></i>
+            </div>
+            <!-- Inside the card, not beside it: as a sibling the pill ran past
+                 the centre line on a 640px-wide phone and sat on top of the
+                 CONTROLS tab. -->
+            <button id="coachSkip" class="coach-skip" type="button">Skip</button>
           </div>
         </div>
-        <button id="coachSkip" class="coach-skip" type="button">Skip</button>
       </div>
     </div>
 

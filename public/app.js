@@ -2728,7 +2728,10 @@ function drawAimGuide() {
   // way. Anchor sits toward the target side and high enough that the hand,
   // pulling down from it, stays clear of the dock even when the player has
   // raised it.
-  const ax = cssW * 0.5 + dir * msz * 0.16, ay = cssH * 0.40;
+  // The coach card sits across the top while a step is showing, so the demo
+  // drops a little to keep its live % readout (drawn at ay - 24) clear of it.
+  const coachUp = !!coachCurrent();
+  const ax = cssW * 0.5 + dir * msz * 0.16, ay = cssH * (coachUp ? 0.52 : 0.40);
   const fxv = dir * Math.cos(ANG), fyv = -Math.sin(ANG);   // FIRE direction: toward the enemy, up
   const ux = -fxv, uy = -fyv;                              // pull direction: opposite (slingshot)
   const ss = (x) => x * x * (3 - 2 * x);
@@ -2844,14 +2847,18 @@ function drawAimGuide() {
       // bright sky and over snow.
       if (k > 0.25) {
         const px4 = -uy, py4 = ux;
-        const tipX = fx + ux * 36, tipY = fy + uy * 36;
-        const baX = fx + ux * 15, baY = fy + uy * 15;
+        // Proportional to the hand: a fixed pixel size read as a smudge beside
+        // a 52px hand on a small phone and as a pinprick beside a 96px one on
+        // a tablet.
+        const tipX = fx + ux * hs * 0.52, tipY = fy + uy * hs * 0.52;
+        const baX = fx + ux * hs * 0.24, baY = fy + uy * hs * 0.24;
+        const aw = hs * 0.13;
         ctx.globalAlpha = env;
         for (const [w5, st] of [[6, 'rgba(10,12,16,.55)'], [0, '#ff7a2e']]) {
           ctx.beginPath();
           ctx.moveTo(tipX, tipY);
-          ctx.lineTo(baX + px4 * 9, baY + py4 * 9);
-          ctx.lineTo(baX - px4 * 9, baY - py4 * 9);
+          ctx.lineTo(baX + px4 * aw, baY + py4 * aw);
+          ctx.lineTo(baX - px4 * aw, baY - py4 * aw);
           ctx.closePath();
           if (w5) { ctx.strokeStyle = st; ctx.lineWidth = w5; ctx.lineJoin = 'round'; ctx.stroke(); }
           else { ctx.fillStyle = st; ctx.fill(); }
@@ -2861,6 +2868,9 @@ function drawAimGuide() {
     }
 
     // Caption — plain-text house voice, dark under-print for legibility.
+    // Suppressed under the coach card: it occupies this exact band, and two
+    // phrasings of one instruction is worse than either alone.
+    if (coachUp) return;
     const line = t < DRAG ? 'PULL BACK LIKE A SLINGSHOT' : 'LONGER PULL = MORE POWER';
     const cy3 = Math.max(cssH * 0.16, ay - msz * 0.42);   // proportional floor clears the scoreboard
     ctx.font = '900 14px system-ui, sans-serif'; ctx.textAlign = 'center';
