@@ -278,7 +278,8 @@ async function bootWith(raw) {
     let cloudBootSafe = true;
     try { void (PROF.shots > 0 || Object.keys(PROF.ach).length); } catch (e) { cloudBootSafe = false; }
     // And the app must actually be usable, not merely have a PROF.
-    const menuUp = !!document.querySelector('[data-mode="duel"]');
+    // The menu is the Launch Bay now: its Duel board is the "menu came up" canary.
+    const menuUp = !!document.querySelector('#bay .board[data-set="mode=duel"]');
     return { shapeOk, cloudBootSafe, menuUp, shots: PROF.shots };
   })()`);
 }

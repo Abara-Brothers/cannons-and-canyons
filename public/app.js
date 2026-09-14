@@ -2037,16 +2037,13 @@ $('copyCodeBtn').onclick = async () => {
 function flashBtn(btn, txt) { const o = btn.textContent; btn.textContent = txt; setTimeout(() => (btn.textContent = o), 1300); }
 
 function showScreen(name) {
-  // LAUNCH BAY: while the flag is on, the home screen IS the bay. bay.js renders
-  // into #bay and reads the same state (ccMode, mySkin, PROF, armPicks) that the
-  // old #home wired, so every intent below is unchanged.
-  if ((name === 'home' || name === 'lobby') && window.CC_LAUNCH_BAY && window.Bay) { window.Bay.show(name); name = 'bay'; }
-  for (const s of ['home', 'lobby', 'game', 'bay']) $(s).classList.toggle('active', s === name);
-  document.body.classList.toggle('in-bay', name === 'bay');
-  // body.in-game drives two pure-CSS behaviours: the animated canyon backdrop is
-  // display:none'd in-match (so #hud-top / #dock backdrop-filter blurs nothing,
-  // exactly as before, and the GPU idles), and the rotate prompt is only ever
-  // eligible on the game screen — the menus are fine in portrait.
+  // The Launch Bay IS the menu: home and the lobby render inside #bay. bay.js
+  // reads the same state the old menu wired (ccMode, mySkin, PROF, the rack) and
+  // drives the same handlers, so every intent below is unchanged.
+  if ((name === 'home' || name === 'lobby') && window.Bay) { window.Bay.show(name); name = 'bay'; }
+  for (const s of ['game', 'bay']) $(s).classList.toggle('active', s === name);
+  // body.in-game drives one pure-CSS behaviour: the rotate prompt is only ever
+  // eligible on the game screen — the menu is fine in portrait.
   document.body.classList.toggle('in-game', name === 'game');
 }
 function showLobby(mode) {
@@ -2155,12 +2152,12 @@ function applySnapshot(m) {
   S.loadout = (m.loadouts && m.loadouts[m.you]) || null;
   S.picking = !!m.pick;
   if (m.pick && !S.loadout) {
-    // LAUNCH BAY: the rack is drafted before the doors open, so a full saved
-    // loadout is submitted straight away instead of raising the old modal.
+    // The rack is drafted in the bay before the doors open, so a full saved
+    // loadout is submitted straight away instead of raising the draft modal.
     let pre = null;
     try {
       const p = JSON.parse(localStorage.getItem('cc_loadout') || 'null');
-      if (window.CC_LAUNCH_BAY && Array.isArray(p)) pre = p.filter((id) => ARM_POOL.includes(id)).slice(0, m.pick.n);
+      if (Array.isArray(p)) pre = p.filter((id) => ARM_POOL.includes(id)).slice(0, m.pick.n);
     } catch {}
     if (pre && pre.length === m.pick.n) {
       armNeed = m.pick.n; armPicks = pre;

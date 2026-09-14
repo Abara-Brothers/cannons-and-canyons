@@ -81,16 +81,8 @@ input:focus { outline: 2px solid var(--accent); border-color: transparent; }
            max(22px, env(safe-area-inset-bottom)) max(22px, env(safe-area-inset-left));
   text-align: center;
 }
-.home-card {
-  width: 100%; max-width: 420px; background: var(--panel); border: 1px solid var(--line);
-  border-radius: 22px; padding: 26px 22px; box-shadow: var(--shadow);
-  display: flex; flex-direction: column; gap: 12px;
-}
-.logo { font-size: 29px; font-weight: 900; line-height: 1.08; letter-spacing: .012em; }
-.logo em { font-style: normal; color: var(--primary); padding: 0 .1em; }
-.logo.small { font-size: 18px; }
-.byline { margin: -4px 0 0; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .28em; }
-.byline b { color: var(--primary); font-weight: 800; }
+
+
 .tagline { color: var(--muted); margin: 2px 0 8px; font-size: 15px; }
 .or { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 12px; margin: 6px 0; text-transform: uppercase; letter-spacing: .1em; }
 .or::before, .or::after { content: ""; height: 1px; background: var(--line); flex: 1; }
@@ -144,27 +136,13 @@ input:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .error { color: var(--p1); min-height: 18px; font-size: 14px; margin: 2px 0 0; }
 .footnote { color: var(--muted); font-size: 12.5px; margin-top: 18px; opacity: .8; }
 .muted { color: var(--muted); font-size: 14px; }
-.home-card h2 { margin: 4px 0; font-size: 20px; }
-.code-display {
-  font-size: 46px; font-weight: 900; letter-spacing: .3em; color: var(--primary);
-  background: #0e142b; border: 1px dashed var(--line); border-radius: 14px; padding: 14px; padding-left: calc(14px + .3em);
-}
-.spinner { width: 30px; height: 30px; border: 3px solid var(--line); border-top-color: var(--primary); border-radius: 50%; margin: 8px auto 0; animation: spin 1s linear infinite; }
+
+
 @keyframes spin { to { transform: rotate(360deg); } }
 /* Lobby composition: slim brand/status head, then invite | roster+actions.
    Tall screens stack the two; the landscape block further down puts them side
    by side so the whole waiting room fits a phone with ZERO scrolling. */
-.lobby-card { gap: 10px; }
-.lb-head { display: flex; flex-direction: column; gap: 8px; align-items: center; }
-.lb-status { display: flex; align-items: center; justify-content: center; gap: 10px; min-width: 0; }
-.lb-status .spinner { margin: 0; flex: 0 0 auto; width: 20px; height: 20px; border-width: 3px; }
-.lb-status h2 { margin: 0; font-size: 18px; }
-.lb-grid { display: flex; flex-direction: column; gap: 12px; }
-.lb-invite { display: flex; flex-direction: column; gap: 10px; }
-.lb-invite .muted { margin: 0; }
-.lb-btnrow { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.lb-side { display: flex; flex-direction: column; gap: 8px; }
-.lb-side .roster:empty { display: none; }
+
 
 /* ==========================================================================
    TITLE SCREEN
@@ -175,60 +153,26 @@ input:focus { outline: 2px solid var(--accent); border-color: transparent; }
    ========================================================================== */
 
 /* ---- Animated backdrop --------------------------------------------------- */
-.bg-canyon { position: absolute; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
-.bg-canyon svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+
 /* Dropped entirely in-match: #hud-top / #dock use backdrop-filter and would
    otherwise blur the canyon art instead of nothing. Also saves the GPU. */
-body.in-game .bg-canyon { display: none; }
+
 /* Vignette so the card always has contrast, whatever the ridges are doing. */
-.bg-canyon::after {
-  content: ""; position: absolute; inset: 0;
-  background: radial-gradient(110% 78% at 50% 42%, rgba(8,12,26,0) 0%, rgba(8,12,26,.55) 62%, rgba(8,12,26,.86) 100%);
-}
+
 /* Parallax. Transform units on an SVG <g> are viewBox user units, so the drift
    is the same proportion of the artwork on every device. */
-.bg-canyon .ridge { will-change: transform; }
-@keyframes driftFar  { from { transform: translate3d(-9px, 0, 0);  } to { transform: translate3d(9px, 0, 0);  } }
-@keyframes driftMid  { from { transform: translate3d(-20px, 0, 0); } to { transform: translate3d(20px, 0, 0); } }
-@keyframes driftNear { from { transform: translate3d(-34px, 0, 0); } to { transform: translate3d(34px, 0, 0); } }
-.bg-canyon .r3 { animation: driftFar  86s ease-in-out infinite alternate; }
-.bg-canyon .r2 { animation: driftMid  61s ease-in-out infinite alternate-reverse; }
-.bg-canyon .r1 { animation: driftNear 44s ease-in-out infinite alternate; }
+
 /* A short dash running a ballistic path — a streak, never a blob. */
-.bg-canyon .tracer {
-  fill: none; stroke-linecap: round; stroke-dasharray: 84 1600;
-}
-.bg-canyon .t1 { stroke: #ffb45a; stroke-width: 3.4; animation: tracer 11s cubic-bezier(.32,0,.66,1) infinite; }
-.bg-canyon .t2 { stroke: #54c8ff; stroke-width: 2.4; opacity: .55; animation: tracer 15s cubic-bezier(.32,0,.66,1) 5.5s infinite; }
-@keyframes tracer {
-  0%        { stroke-dashoffset: 84;    opacity: 0; }
-  5%        { opacity: 1; }
-  62%       { opacity: 1; }
-  76%, 100% { stroke-dashoffset: -1560; opacity: 0; }
-}
+
 
 /* ---- Title treatment ----------------------------------------------------- */
 /* NOTE: .logo / .logo.small still belong to #lobby — do not fold these in. */
-.gtitle {
-  margin: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
-  gap: 0 .1em; line-height: .94; text-transform: uppercase;
-  font-size: clamp(30px, calc(8.4 * var(--vwu)), 48px); font-weight: 900; letter-spacing: .015em;
-}
+
 /* Extruded gradient lettering: background-clip paints the face, two hard
    drop-shadows are the bevel, the third is the cast shadow. */
-.gtitle .w {
-  background: linear-gradient(180deg, #ffffff 0%, #ffe2c6 38%, #ff9a4a 74%, #d9500f 100%);
-  -webkit-background-clip: text; background-clip: text;
-  color: transparent; -webkit-text-fill-color: transparent;
-  filter: drop-shadow(0 2px 0 #8d3208) drop-shadow(0 4px 0 #4d1a03) drop-shadow(0 12px 20px rgba(0,0,0,.6));
-}
-.gtitle .amp {
-  font-size: .38em; font-weight: 900; color: #2a0d00;
-  width: 1.55em; height: 1.55em; line-height: 1.55em; text-align: center;
-  border-radius: .32em; transform: rotate(-7deg);
-  background: linear-gradient(180deg, #ffb45a, var(--primary));
-  box-shadow: 0 3px 0 #8b3708, 0 8px 18px rgba(0,0,0,.5);
-}
+
+
 .title-rule {
   height: 3px; width: min(280px, 72%); margin: 9px auto 0; border-radius: 2px;
   background: linear-gradient(90deg, transparent, var(--primary) 20%, #ffd9a8 50%, var(--primary) 80%, transparent);
@@ -341,9 +285,9 @@ html { background: var(--bg); }
 @media (prefers-reduced-motion: reduce) {
   /* `.spinner` was named by none of the five reduced-motion blocks, so the
      lobby's wait indicator span for the whole time a player waits. */
-  .bg-canyon .ridge, .bg-canyon .tracer, .rh-phone, .spinner { animation: none !important; }
-  .bg-canyon .t1 { stroke-dashoffset: -760; opacity: .8; }
-  .bg-canyon .t2 { stroke-dashoffset: -900; opacity: .4; }
+  .rh-phone { animation: none !important; }
+  
+  
   .rh-phone { transform: rotate(-90deg); }
 }
 
@@ -574,7 +518,7 @@ body.golf .golf-only { display: flex; }
 
 /* Skin picker (home screen) */
 .skinlabel { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .18em; margin-top: 4px; text-align: left; }
-.skinrow { display: flex; gap: 8px; justify-content: flex-start; }
+
 .swatch { width: 34px; height: 34px; border-radius: 10px; border: 2px solid var(--line); cursor: pointer; position: relative; padding: 0; }
 .swatch.sel { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(255,122,46,.35); }
 .swatch .lock { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 14px; background: rgba(8,10,20,.45); border-radius: 8px; }
@@ -721,27 +665,20 @@ body.golf .golf-only { display: flex; }
     padding: max(8px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right))
              max(8px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
   }
-  .home-card.lobby-card {
-    max-width: min(calc(94 * var(--vwu)), 720px);
-    padding: calc(2.2 * var(--vhu)) calc(2.4 * var(--vwu));
-    gap: calc(1.8 * var(--vhu));
-  }
-  .lb-head { flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; }
-  .lb-brand { text-align: left; }
-  .lb-brand .logo.small { font-size: clamp(13px, calc(4 * var(--vhu)), 17px); }
-  .lb-brand .byline { font-size: clamp(7.5px, calc(2.2 * var(--vhu)), 10px); }
-  .lb-status h2 { font-size: clamp(13px, calc(3.8 * var(--vhu)), 17px); white-space: nowrap; }
-  .lb-status .spinner { width: 17px; height: 17px; }
-  .lb-grid { display: grid; grid-template-columns: 1.1fr 1fr; gap: calc(2.6 * var(--vwu)); align-items: start; }
-  .lb-invite { gap: calc(1.6 * var(--vhu)); }
+  
+  
+  
+  
+  
+  
+  
+  
+  
   #lobbyHint { font-size: clamp(10px, calc(2.6 * var(--vhu)), 12.5px); }
-  #lobby .code-display {
-    font-size: clamp(24px, calc(9 * var(--vhu)), 40px);
-    padding: calc(1.6 * var(--vhu)) 10px; padding-left: calc(10px + .3em);
-  }
-  .lobby-card .btn { padding: calc(1.8 * var(--vhu)) 10px; font-size: clamp(11px, calc(2.8 * var(--vhu)), 13.5px); }
-  .lobby-card .btn.big { padding: calc(2.1 * var(--vhu)) 12px; font-size: clamp(12px, calc(3 * var(--vhu)), 15px); }
-  .lobby-card .rp { padding: calc(1.3 * var(--vhu)) 10px; font-size: clamp(11px, calc(2.7 * var(--vhu)), 13px); }
+  
+  
+  
+  
 }
 
 /* ---------- Artillery Golf ---------- */
@@ -819,37 +756,12 @@ body.golf .fuel { display: none; }
 
 /* Band 1: brand + identity */
 .hs-head { display: flex; align-items: center; justify-content: space-between; gap: 10px 18px; flex-wrap: wrap; }
-.hs-title { font-size: clamp(20px, calc(5.2 * var(--vhu)), 40px); justify-content: flex-start; }
-.hs-by { margin: 2px 0 0; font-size: clamp(8px, calc(1.3 * var(--vhu)), 11px); color: var(--muted); text-transform: uppercase; letter-spacing: .26em; }
-.hs-by b { color: var(--primary); font-weight: 800; }
-.hs-id { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.hs-cs {
-  display: flex; align-items: center; gap: 8px;
-  background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px;
-  padding: clamp(4px, calc(0.9 * var(--vhu)), 8px) 10px;
-}
-.hs-cs:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(84,200,255,.22); }
-.hs-cs-label { font-size: 10px; text-transform: uppercase; letter-spacing: .18em; color: var(--muted); }
-.hs-cs input { border: 0; background: transparent; padding: 2px 0; width: clamp(110px, calc(16 * var(--vwu)), 170px); font-weight: 700; font-size: clamp(13px, calc(1.9 * var(--vhu)), 16px); }
-.hs-cs input:focus { outline: none; }
-.hs-reroll { border: 0; background: transparent; color: var(--accent); width: 26px; height: 26px; padding: 2px; cursor: pointer; }
-.hs-reroll svg { width: 100%; height: 100%; }
-.hs-help {
-  display: flex; align-items: center; gap: 7px;
-  border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
-  border-radius: 12px; padding: clamp(5px, calc(1 * var(--vhu)), 9px) 12px; font-weight: 700;
-  font-size: clamp(11px, calc(1.7 * var(--vhu)), 14px); cursor: pointer;
-}
-.hs-help svg { width: 17px; height: 17px; color: var(--accent); }
+
 
 /* Band 2: the two action columns */
-.hs-main {
-  flex: 1; min-height: 0;
-  display: grid; grid-template-columns: 1fr 1fr; gap: clamp(8px, calc(1.6 * var(--vwu)), 16px);
-  align-content: stretch;
-}
-.hs-col { display: flex; flex-direction: column; gap: clamp(6px, calc(1.4 * var(--vhu)), 12px); min-height: 0; min-width: 0; }
-.hs-col-join { justify-content: center; }   /* the lone Join panel sits centred, not stranded at the top */
+
+
+   /* the lone Join panel sits centred, not stranded at the top */
 .hs-quick {
   display: flex; align-items: center; gap: 12px; text-align: left;
   border: 0; border-radius: 16px; cursor: pointer; color: #2b1002;
@@ -862,60 +774,21 @@ body.golf .fuel { display: none; }
 .hs-quick-ico svg { width: 70%; height: 70%; }
 .hs-quick-txt b { display: block; font-size: clamp(14px, calc(2.6 * var(--vhu)), 20px); font-weight: 900; letter-spacing: .02em; }
 .hs-quick-txt i { display: block; font-style: normal; font-size: clamp(10px, calc(1.6 * var(--vhu)), 12.5px); opacity: .85; }
-.hs-panel {
-  background: rgba(20, 27, 51, .78); border: 1px solid var(--line); border-radius: 16px;
-  padding: clamp(8px, calc(1.6 * var(--vhu)), 14px); display: flex; flex-direction: column; gap: clamp(6px, calc(1.2 * var(--vhu)), 10px);
-  min-height: 0;
-}
-.hs-panel-head { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: clamp(12px, calc(1.9 * var(--vhu)), 15px); }
-.hs-panel-head svg { width: clamp(15px, calc(2.4 * var(--vhu)), 19px); height: clamp(15px, calc(2.4 * var(--vhu)), 19px); color: var(--accent); flex: 0 0 auto; }
-.hs-panel-head i { font-style: normal; font-weight: 500; font-size: clamp(9px, calc(1.4 * var(--vhu)), 11.5px); color: var(--muted); margin-left: auto; }
+
+
 .hs-row { display: flex; align-items: center; gap: 8px; }
 .hs-row .diffrow { flex: 1; display: flex; gap: 6px; }
 .hs-row .diff { flex: 1; }
-.hs-go {
-  border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
-  font-weight: 800; font-size: clamp(12px, calc(1.8 * var(--vhu)), 14px);
-  border-radius: 11px; padding: clamp(6px, calc(1.3 * var(--vhu)), 10px) 16px; cursor: pointer;
-}
-.hs-go.primary { background: var(--accent); border-color: var(--accent); color: #0a1020; }
-.hs-go:active { transform: translateY(1px); }
-.hs-create { flex: 1; }
-.modegrid {
-  /* Flex-wrap (not a fixed grid) so the final row of modes CENTRES under the
-     first — with 5 modes that keeps the layout balanced instead of leaving an
-     empty grid cell. Three per row via a 1/3 basis; grow disabled so the last
-     row stays the same tile size, just centred. */
-  display: flex; flex-wrap: wrap; justify-content: center; align-content: start;
-  gap: clamp(5px, calc(1 * var(--vhu)), 8px);
-  min-height: 0;
-}
-.modegrid .mode { flex: 0 0 calc(33.333% - 8px); }
-.modegrid .mode {
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: clamp(2px, calc(0.7 * var(--vhu)), 6px);
-  padding: clamp(5px, calc(1.3 * var(--vhu)), 11px) 4px; border-radius: 12px;
-  border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
-  font-weight: 700; font-size: clamp(9.5px, calc(1.5 * var(--vhu)), 12.5px); cursor: pointer;
-}
-.modegrid .mode svg { width: clamp(16px, calc(3 * var(--vhu)), 24px); height: clamp(16px, calc(3 * var(--vhu)), 24px); }
-.modegrid .mode.active { color: #0a1020; background: var(--accent); border-color: var(--accent); }
+
+
 #countRow { display: flex; gap: 6px; }
 #countRow.hidden { display: none; }
 #countRow .cnt { flex: 1; }
 #codeInput.code-input { flex: 1; min-width: 0; text-align: center; letter-spacing: .4em; font-weight: 800; }
 
 /* Band 3: kit strip */
-.hs-foot { display: flex; align-items: center; gap: clamp(6px, calc(1 * var(--vwu)), 12px); flex-wrap: wrap; }
-.hs-chip {
-  display: flex; align-items: center; gap: 8px;
-  background: rgba(20, 27, 51, .78); border: 1px solid var(--line); border-radius: 999px;
-  padding: clamp(4px, calc(0.9 * var(--vhu)), 7px) 12px; color: var(--text);
-  font-size: clamp(10px, calc(1.5 * var(--vhu)), 12px); min-height: clamp(28px, calc(4.6 * var(--vhu)), 38px);
-}
-.hs-chip > span { color: var(--muted); text-transform: uppercase; letter-spacing: .14em; font-size: clamp(8.5px, calc(1.3 * var(--vhu)), 10px); }
-.hs-armoury { cursor: pointer; font-weight: 800; }
-.hs-armoury svg { width: 17px; height: 17px; color: var(--primary); }
-.hs-armoury b { color: var(--accent); font-weight: 800; }
+
+
 /* Age check (8.55). Reuses the code-input look; the number spinners are hidden
    so it reads as a field to type in, not a control to nudge upward. */
 .age-input { width: 160px; margin: 4px auto 2px; display: block; padding: 10px 12px;
@@ -924,48 +797,40 @@ body.golf .fuel { display: none; }
 .age-input::-webkit-outer-spin-button, .age-input::-webkit-inner-spin-button {
   -webkit-appearance: none; margin: 0; }
 .age-input { -moz-appearance: textfield; appearance: textfield; }
-.hs-account { cursor: pointer; font-weight: 800; }
-.hs-account svg { width: 15px; height: 15px; color: var(--primary); flex: 0 0 auto; }
+
+
 /* An email address can be arbitrarily long; the chip must not push the error
    line or the legal link off the footer. Wide enough that every fixed label
    fits — only long emails ever truncate. */
-.hs-account span { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hs-error { margin: 0 0 0 auto; }
+
+
 /* The privacy link — the app's only anchor, required in-app by App Store
    5.1.1(i). Pushed to the end of the footer row so it reads as fine print
    without competing with Career or the paint picker. The 44px min tap target
    is the platform minimum; the text itself is smaller than that. */
-.hs-legal { margin-left: auto; }
-.hs-legal a {
-  display: inline-flex; align-items: center; min-height: 44px; padding: 0 4px;
-  color: var(--muted); font-size: clamp(10px, calc(1.5 * var(--vhu)), 12px);
-  font-weight: 600; text-decoration: underline; text-underline-offset: 3px;
-}
-.hs-legal a:hover, .hs-legal a:focus-visible { color: var(--text); }
-.hs-foot .skinrow { display: flex; gap: 5px; }
-.hs-foot .skinrow .skin { width: clamp(18px, calc(3.4 * var(--vhu)), 26px); height: clamp(18px, calc(3.4 * var(--vhu)), 26px); }
+
 
 /* Narrow / portrait: stack the columns; everything stays inside the viewport
    because the bands share the height budget and panels compress via clamps.
    That assumption holds only while there is height to compress INTO — see the
    very-short rules below, which take the columns back off the stack. */
 @media (orientation: landscape) and (max-width: 640px), (orientation: portrait) and (max-height: 640px) {
-  .hs-main { grid-template-columns: 1fr; overflow: hidden; }
-  .hs-title { font-size: clamp(19px, calc(3.4 * var(--vhu)), 30px); }
+  
+  
   .hs-quick-txt i { display: none; }
-  .modegrid .mode { flex-direction: row; justify-content: flex-start; padding-left: 9px; gap: 7px; }
-  .hs-foot { gap: 5px; }
+  
+  
 }
 /* Very short landscape phones: tighten the brand row so the panels get room. */
 @media (orientation: landscape) and (max-height: 430px), (orientation: portrait) and (max-width: 430px) {
-  .hs-title { font-size: clamp(17px, calc(4.6 * var(--vhu)), 24px); }
+  
   /* The byline used to be display:none here to buy vertical room. It is the
      studio credit and the owner wants it on every device, so it SHRINKS
      instead of vanishing: smaller type and tighter tracking cost about 4px of
      height, which #home can afford, where hiding it cost the credit entirely. */
-  .hs-by { font-size: clamp(7px, calc(1.1 * var(--vhu)), 9px); letter-spacing: .16em; margin-top: 1px; }
+  
   .hs-quick-txt i { display: none; }
-  .hs-panel-head i { display: none; }
+  
 }
 
 /* SMALLEST supported landscape — iPhone SE 1st gen is 568x320 and iOS 15 still
@@ -983,12 +848,12 @@ body.golf .fuel { display: none; }
    as ONE unit: the modes are visible immediately and the button is 58px down,
    which beats a sticky button over an invisible, un-hinted scroll region. */
 @media (orientation: landscape) and (max-width: 640px) and (max-height: 400px) {
-  .hs-main { grid-template-columns: 1fr 1fr; overflow-y: auto; }
-  .modegrid { flex: 0 0 auto; gap: 4px; }
-  .modegrid .mode { padding: 5px 3px; font-size: 9px; gap: 2px; }
-  .modegrid .mode svg { width: 14px; height: 14px; }
-  .hs-panel { padding: 7px; gap: 5px; }
-  .hs-panel-head { font-size: 11.5px; }
+  
+  
+  
+  
+  
+  
   #createBtn { padding: 9px; font-size: 13px; }
   #oppBtns .opp { padding: 5px 6px; font-size: 10px; }
 }
@@ -1346,9 +1211,8 @@ body.golf .fuel { display: none; }
 .share-row .btn.hidden { display: none; }
 
 /* Native selects, dashboard-styled */
-.hs-selwrap { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; }
-.hs-selwrap.hidden { display: none; }
-.hs-selwrap > span { font-size: clamp(8.5px, calc(1.3 * var(--vhu)), 10px); text-transform: uppercase; letter-spacing: .14em; color: var(--muted); flex: 0 0 auto; }
+
+
 .hs-select {
   flex: 1; min-width: 0; appearance: none; -webkit-appearance: none;
   border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
@@ -1361,16 +1225,7 @@ body.golf .fuel { display: none; }
 .hs-select:focus { outline: 2px solid var(--accent); }
 
 /* Opponent = two real buttons (a segmented toggle), not a dropdown. */
-.hs-oppbtns { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.hs-oppbtns.hidden { display: none; }
-.hs-oppbtns .opp {
-  border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
-  font-weight: 700; font-size: clamp(10px, calc(1.55 * var(--vhu)), 13px);
-  border-radius: 11px; padding: clamp(6px, calc(1.3 * var(--vhu)), 10px) 8px; cursor: pointer;
-  min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.hs-oppbtns .opp.active { color: #0a1020; background: var(--accent); border-color: var(--accent); }
-.hs-oppbtns .opp:active { transform: translateY(1px); }
+
 
 /* Custom in-game dropdown — a game-styled menu built over a hidden native
    <select> (the select stays the source of truth, so every existing .value /
@@ -1409,7 +1264,7 @@ body.golf .fuel { display: none; }
 .gsel-opt:focus-visible { background: var(--panel-2); outline: 2px solid var(--accent); outline-offset: -2px; }
 .gsel-opt.sel { color: var(--accent); font-weight: 800; }
 /* An open dropdown must escape the narrow-mode overflow clip on .hs-main. */
-body.dd-open .hs-main { overflow: visible; }
+
 
 /* ---- Drum sliders (angle / power) ----------------------------------------- */
 .drum-wrap { min-width: 0; flex: 1 1 auto; }
@@ -1859,8 +1714,8 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
 #bay .stage{ position:absolute; left:50%; top:50%; width:calc(932 * var(--u)); height:calc(430 * var(--u));
              transform:translate(-50%,-50%); }
 /* The SVG canyon behind the old menu would burn GPU under an opaque bay. */
-body.in-bay .bg-canyon{ display:none; }
-@media (prefers-reduced-motion: reduce){ #bay *{ animation-duration:.01ms!important; animation-iteration-count:1!important; transition-duration:.01ms!important; } }
+
+@media (prefers-reduced-motion: reduce) { #bay *{ animation-duration:.01ms!important; animation-iteration-count:1!important; transition-duration:.01ms!important; } }
 
 /* ---- concept 10 rules, scoped and scaled (generated from the spec) ---- */
 
@@ -2323,9 +2178,9 @@ body.in-bay .bg-canyon{ display:none; }
 
 /* ---- reduced motion, IN-APP override: exact mirrors of the OS-driven blocks above.
    Generated from them; the toggle in Bay controls sets body.reduce-motion. ---- */
-body.reduce-motion .bg-canyon .ridge, body.reduce-motion .bg-canyon .tracer, body.reduce-motion .rh-phone, body.reduce-motion .spinner { animation: none !important; }
-body.reduce-motion .bg-canyon .t1 { stroke-dashoffset: -760; opacity: .8; }
-body.reduce-motion .bg-canyon .t2 { stroke-dashoffset: -900; opacity: .4; }
+body.reduce-motion .rh-phone { animation: none !important; }
+
+
 body.reduce-motion .rh-phone { transform: rotate(-90deg); }
 body.reduce-motion .wpop.show { animation: wpopFade 1.2s linear forwards; }
 body.reduce-motion #dock .dock-tab svg { animation: none; }

@@ -179,7 +179,7 @@ async function go() {
   await evalJs(`try { localStorage.removeItem('cc_resume'); } catch(e) {} 1`).catch(() => {});
   await send('Page.navigate', { url: ORIGIN });
   await sleep(3500);
-  const ok = await evalJs(`!!document.querySelector('[data-mode="duel"]')`).catch(() => false);
+  const ok = await evalJs(`!!document.querySelector('#bay .board[data-set="mode=duel"]')`).catch(() => false);
   if (!ok) { await sleep(2500); }
 }
 
@@ -253,9 +253,12 @@ await shot('07-home');
 
 // ---------------------------------------------------------------- duel vs CPU
 log('duel');
-await tap('[data-mode="duel"]');
-await tap('[data-opp="cpu"]');
-await tap('#createBtn');
+await tap('#bay .board[data-set="mode=duel"]');
+// Opponent lives in Setup now: the launch bar's readouts open it.
+await tap('#bay .ros');
+await tap('#bay .seg[data-set="opp=cpu"]');
+await tap('#bay .pfoot .go[data-go="armoury"]');
+await tap('#bay .pfoot .go[data-launch]');            // "Open the bay doors" = launch
 await sleep(1400);
 await armoury();
 
@@ -290,10 +293,10 @@ await shotBusiest('03-impact', 14, 320, true);       // ~4.5s window over the bl
 // ---------------------------------------------------------------- boss
 log('boss');
 await go();                                          // a reload lands on the menu, no forfeit dance
-await tap('[data-mode="boss"]');
-await tap('#createBtn');
+await tap('#bay .board[data-set="mode=boss"]');
+await tap('#bay [data-launch]');
 await sleep(900);
-await tap('#startMatchBtn', { optional: true });
+await tap('#bay [data-old="startMatchBtn"]', { optional: true });
 await sleep(1400);
 await armoury();
 await sleep(800);
@@ -308,10 +311,10 @@ await shot('04-boss');
 // ---------------------------------------------------------------- aliens
 log('aliens');
 await go();
-await tap('[data-mode="aliens"]');
-await tap('#createBtn');
+await tap('#bay .board[data-set="mode=aliens"]');
+await tap('#bay [data-launch]');
 await sleep(900);
-await tap('#startMatchBtn', { optional: true });
+await tap('#bay [data-old="startMatchBtn"]', { optional: true });
 await sleep(1400);
 await armoury();
 await sleep(900);
@@ -324,17 +327,18 @@ await shot('05-aliens');
 // ---------------------------------------------------------------- golf
 log('golf');
 await go();
-await tap('[data-mode="golf"]');
-await tap('#createBtn');
+await tap('#bay .board[data-set="mode=golf"]');
+await tap('#bay [data-launch]');
 await sleep(900);
-await tap('#startMatchBtn', { optional: true });
+await tap('#bay [data-old="startMatchBtn"]', { optional: true });
 await sleep(5200);                                   // let the aim demo clear
 await shot('06-golf');
 
 // ---------------------------------------------------------------- field manual
 log('manual');
 await go();
-await tap('#helpHomeBtn');
+await tap('#bay [data-go="settings"]');
+await tap('#bay [data-old="helpHomeBtn"]');
 await sleep(700);
 // Weapons is the chapter worth showing: sixteen rounds with their icons, ammo
 // counts and flight-shape badges. Driven through the app's own chapter switch

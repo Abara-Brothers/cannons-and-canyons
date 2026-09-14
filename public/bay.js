@@ -1,7 +1,8 @@
 // bay.js — LAUNCH BAY, the front end (concept 10). Classic script, no imports,
 // loaded AFTER app.js: it reads the game's own top-level state by name (ccMode,
-// mySkin, PROF, armPicks…) and drives the same intents the old #home wired, so
-// nothing about how a match starts has changed — only the room it starts from.
+// mySkin, PROF, armPicks…) and drives the handlers on the legacy control rack in
+// index.html, so nothing about how a match starts has changed — only the room
+// it starts from.
 //
 // The design was drawn on a fixed 932x430 frame. Every dimension here is in
 // design units via u(n) = calc(n * var(--u)); see styles.css for why.
@@ -756,11 +757,6 @@ applyMotion();
 if (fn('renderLobby')) { const orig = renderLobby; renderLobby = function (m) { lobby.m = m; lobby.mode = 'host'; return orig.apply(this, arguments); }; }
 if (fn('showLobby'))   { const orig = showLobby;   showLobby   = function (mode) { lobby.mode = mode; if (mode === 'search') lobby.m = null; return orig.apply(this, arguments); }; }
 
-// BOOT. showScreen() routes 'home' to the bay, but it only runs on a TRANSITION
-// to home — on first load #home is simply already `active` in the markup and
-// nothing calls it. So take the one route in, once, if the flag says to.
-if (window.CC_LAUNCH_BAY && has('showScreen')) {
-  const home = $('home');
-  if (home && home.classList.contains('active')) showScreen('home');
-}
+// BOOT. The bay is the menu: take the route in, once.
+if (has('showScreen')) showScreen('home');
 })();
