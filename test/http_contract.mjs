@@ -186,6 +186,51 @@ const sec = await fetch(`http://127.0.0.1:${port}/`).then(async (r) => {
   };
 });
 
+// ---- (h) Universal Links / App Links association files ----------------------
+// The whole security argument for the domain-bound OAuth return rests on these
+// two files being served CORRECTLY, and every way of getting them wrong is
+// silent: Apple ignores a wrong Content-Type without a diagnostic, and Android
+// verification failure just means links open in Chrome. Nothing surfaces.
+const aasaPath = '/.well-known/apple-app-site-association';
+const alinkPath = '/.well-known/assetlinks.json';
+
+// Unconfigured server: absence, not a placeholder. Apple's CDN caches what it
+// fetches, so a file naming the wrong team would outlive the fix.
+const aasaUnset = await fetch(`http://127.0.0.1:${port}${aasaPath}`).then(async (r) => { await r.arrayBuffer(); return r.status; });
+const alinkUnset = await fetch(`http://127.0.0.1:${port}${alinkPath}`).then(async (r) => { await r.arrayBuffer(); return r.status; });
+
+let aasaType = '', aasa = null, alinks = null, deleteStillWeb = 0;
+{
+  const port3 = await freePort();
+  const srv3 = spawn('node', ['server.js'], {
+    env: { ...process.env, PORT: String(port3),
+           APPLE_TEAM_ID: 'ABCDE12345',
+           ANDROID_CERT_SHA256: 'AA:BB:CC:DD, EE:FF:00:11' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  try {
+    for (let i = 0; i < 80; i++) {
+      try { await fetch(`http://127.0.0.1:${port3}/health`); break; } catch {}
+      await sleep(150);
+    }
+    const r = await fetch(`http://127.0.0.1:${port3}${aasaPath}`);
+    aasaType = r.headers.get('content-type') || '';
+    aasa = await r.json();
+    alinks = await fetch(`http://127.0.0.1:${port3}${alinkPath}`).then((x) => x.json());
+    // The page Play's policy requires to work for someone who UNINSTALLED the
+    // app must still be an ordinary web page.
+    deleteStillWeb = await fetch(`http://127.0.0.1:${port3}/delete-account.html`)
+      .then(async (x) => { await x.arrayBuffer(); return x.status; });
+  } finally { srv3.kill(); }
+}
+
+const details = (aasa && aasa.applinks && aasa.applinks.details) || [];
+const comps = details.flatMap((d) => d.components || []);
+// A component claiming the whole domain is the failure that breaks the two
+// pages both stores require to open in a browser.
+const claimsEverything = comps.some((c) => ['/', '*', '/*'].includes(c['/']));
+const target = (alinks && alinks[0] && alinks[0].target) || {};
+
 srv.kill();
 
 const results = [
@@ -227,6 +272,23 @@ const results = [
     /connect-src[^;]*https:\/\/[a-z0-9]+\.supabase\.co/.test(sec.csp)],
   ['(g) CSP carries the SERVER env origin when one is set',
     csp2.includes(mockOrigin)],
+  // (h) — see the block above.
+  ['(h) unconfigured team id -> AASA 404, never a placeholder', aasaUnset === 404],
+  ['(h) unconfigured fingerprint -> assetlinks 404', alinkUnset === 404],
+  // THE one that the static handler would have failed. `apple-app-site-association`
+  // has no file extension, so served from public/ it went out as
+  // application/octet-stream and Apple would have ignored it in silence.
+  ['(h) AASA served as application/json', aasaType.includes('application/json')],
+  ['(h) AASA appID is TEAMID.bundleid',
+    details.some((d) => (d.appIDs || []).includes('ABCDE12345.com.abarabrothers.cannonsandcanyons'))],
+  ['(h) AASA scoped to the OAuth callback', comps.some((c) => c['/'] === '/auth/callback')],
+  ['(h) AASA does NOT claim the whole domain', claimsEverything === false],
+  ['(h) delete-account.html is still an ordinary web page', deleteStillWeb === 200],
+  ['(h) assetlinks names the package', target.package_name === 'com.abarabrothers.cannonsandcanyons'],
+  ['(h) assetlinks carries every fingerprint, trimmed',
+    JSON.stringify(target.sha256_cert_fingerprints) === JSON.stringify(['AA:BB:CC:DD', 'EE:FF:00:11'])],
+  ['(h) assetlinks uses the handle_all_urls relation',
+    !!(alinks && alinks[0] && (alinks[0].relation || []).includes('delegate_permission/common.handle_all_urls'))],
 ];
 
 let bad = 0;

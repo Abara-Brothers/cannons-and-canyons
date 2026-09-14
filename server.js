@@ -72,6 +72,16 @@ const SB_URL = process.env.SUPABASE_URL || '';
 const SB_PUB = process.env.SUPABASE_PUBLISHABLE_KEY || '';
 const SB_SECRET = process.env.SUPABASE_SECRET_KEY || '';
 
+// ---- Native app identity (Universal Links / App Links) ----------------------
+// The bundle/package id is the same string on both platforms and is FIXED: it
+// is already registered with Apple and Google and cannot be changed after the
+// first submission. Kept in step with capacitor.config.json appId, iOS
+// PRODUCT_BUNDLE_IDENTIFIER and Android applicationId by house-rules §8.
+const NATIVE_APP_ID = 'com.abarabrothers.cannonsandcanyons';
+const APPLE_TEAM_ID = (process.env.APPLE_TEAM_ID || '').trim();
+// Comma-separated; Play App Signing and an upload key can both be listed.
+const ANDROID_CERT_SHA256 = (process.env.ANDROID_CERT_SHA256 || '').trim();
+
 // Who does this access token belong to? null on any failure — a garbage or
 // expired token must cost the sender nothing but the feature.
 async function sbUserFromToken(token) {
@@ -851,6 +861,68 @@ function handleRequest(req, res) {
     // that returns player or match data.
     res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
     return res.end(JSON.stringify({ key: vapidPublicKey }));
+  }
+  // ---- Universal Links / App Links association files ------------------------
+  // These are how the OS proves this app owns this domain, and they are the
+  // whole reason the OAuth callback cannot be stolen by another app. A
+  // private-use scheme (com.abarabrothers.…://) can be registered by ANY app on
+  // the device, and this client uses the IMPLICIT flow (see cloud.js §Google
+  // sign-in) — so what comes back in the fragment is a live ACCESS TOKEN, not a
+  // code that is useless without a verifier. Hijacking a scheme here would be
+  // account takeover, not interception. That is why the domain-bound route was
+  // chosen over the cheaper one.
+  //
+  // SERVED FROM A ROUTE, NOT public/. Two independent reasons:
+  //   1. The static handler types a file by its extension, and
+  //      `apple-app-site-association` HAS none — it would have gone out as
+  //      application/octet-stream, and Apple ignores anything that is not
+  //      application/json, silently, with no diagnostic anywhere.
+  //   2. webDir is public/, so a file there is copied into BOTH native bundles
+  //      by `npx cap sync` — shipping a domain-verification file inside the very
+  //      app it verifies.
+  //
+  // UNSET ENV => 404, deliberately. Apple fetches this through their CDN and
+  // CACHES it; serving a placeholder team id would cache a WRONG association
+  // that outlives the fix. An absent file is retried, a wrong one is believed.
+  if (urlPath === '/.well-known/apple-app-site-association') {
+    if (!APPLE_TEAM_ID) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('Not found'); }
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=3600' });
+    return res.end(JSON.stringify({
+      applinks: {
+        details: [{
+          appIDs: [APPLE_TEAM_ID + '.' + NATIVE_APP_ID],
+          // SCOPED TO THE CALLBACK, NEVER "/". An unscoped association makes the
+          // OS open the app for EVERY link to this domain — including
+          // /delete-account.html, which Play requires to work IN A BROWSER for
+          // someone who has already uninstalled the app, and /privacy.html,
+          // which a store reviewer opens from the listing. Both would bounce
+          // into the app instead, and the deletion path would appear broken to
+          // exactly the person the policy exists to protect.
+          components: [{ '/': '/auth/callback', comment: 'OAuth return only' }],
+        }],
+      },
+    }));
+  }
+  if (urlPath === '/.well-known/assetlinks.json') {
+    if (!ANDROID_CERT_SHA256) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('Not found'); }
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=3600' });
+    return res.end(JSON.stringify([{
+      relation: ['delegate_permission/common.handle_all_urls'],
+      target: {
+        namespace: 'android_app',
+        package_name: NATIVE_APP_ID,
+        // The PLAY APP SIGNING fingerprint, not the upload key's. Play re-signs
+        // every build with a key Google holds, so the certificate that reaches a
+        // user's device is NOT the one that left this machine. Verified against
+        // the upload key, App Links fail silently: links just open in Chrome and
+        // the OAuth return never reaches the app.
+        sha256_cert_fingerprints: ANDROID_CERT_SHA256.split(',').map((v) => v.trim()).filter(Boolean),
+      },
+      // Android has no path scoping HERE — handle_all_urls is the only relation
+      // that exists. The narrowing lives in AndroidManifest's intent-filter,
+      // which must carry android:path="/auth/callback" for the same reason the
+      // Apple components array is scoped above.
+    }]));
   }
   if (urlPath === '/') urlPath = '/index.html';
   const filePath = path.join(PUBLIC, path.normalize(urlPath));
