@@ -15,7 +15,7 @@ and was strictly worse. Run 3 is kept as history.
 | 00 | `00-coach` | **First battle — step 1 of 3** over a volcanic map: the ghost hand ringed, the pull arrow, the trajectory arrowhead, the live 42% readout, dock still tucked away |
 | 01 | `01-aim` | Duel — controls open: weapon strip with round counts, ANGLE 45&deg; / POWER 79 drums, fuel, FIRE |
 | 02 | `02-strike` | Duel — the shell leaving the muzzle with flash and smoke trail, tracer arc ahead, both tanks at full health |
-| 03 | `03-impact` | Duel — **a cluster bomb's five detonations** walking across the ridge, debris and a damage numeral |
+| 03 | `03-impact` | Duel — **a cluster bomb detonating**, smoke plumes and a debris fountain, HUD at full brightness (see below) |
 | 04 | `04-boss` | Boss Fight — WARLORD-7 with its own 400/400 bar in the HUD |
 | 05 | `05-aliens` | Alien Invasion — three xeno units on the HUD, `0/8 down &middot; Wave 1` |
 | 06 | `06-golf` | Artillery Golf — `Hole 1/9 &middot; Par 3 &middot; 15,180 to the pin`, flag on the green, scorecard button |
@@ -69,12 +69,25 @@ Three things cost real time and are worth knowing before the next run:
    turn immediately before tapping FIRE — a tap during the opponent's turn is
    silently ignored, which looks exactly like a missed tap.
 
-## Known softness
+## The impact frame is bright, and how
 
-`03-impact` is dimmed relative to the rest. That is the game's genuine
-`watching` state: firing passes the turn, and the HUD dims while you watch the
-shell land, so any frame of your own shot landing is dimmed. It is real, not a
-capture artefact.
+Firing passes the turn, so `#game.watching` drops the HUD to **16% opacity** for
+the whole flight — which means *every* frame of your own shot landing carries a
+ghost of a readout instead of a readout. Worth knowing: the battlefield is never
+dimmed. Only `#hud-top`, `#dock` and the corner buttons are.
+
+No game change was needed. `wakeHud()` already restores full opacity for 2.2s on
+any touch of the HUD or dock, so the fix is to keep the HUD awake across the
+capture window:
+
+- **Web classes** — `render.mjs`'s `shotBusiest()` now takes a `keepHudAwake`
+  flag and calls `wakeHud()` before each of its 14 samples. Repeatable, no
+  manual timing. The android-phone frame that came out of this carries a live
+  `-25` damage numeral on the enemy.
+- **iPhone** — tap `#hud-top` (the health-bar strip; it holds no buttons)
+  several times right after FIRE. One tap is not enough: the wake lasts 2.2s
+  and the shell is still in the air. That strip is around `(433, 467)` in
+  portrait points.
 
 ## Rebuilding
 

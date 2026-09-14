@@ -153,9 +153,15 @@ async function shot(name) {
  * Sample the window and keep the busiest frame — PNG size tracks detail, so the
  * blast is reliably the largest buffer in the set.
  */
-async function shotBusiest(name, count, gapMs) {
+async function shotBusiest(name, count, gapMs, keepHudAwake = false) {
   let best = null;
   for (let i = 0; i < count; i++) {
+    // Firing passes the turn, so the HUD dims to 16% (#game.watching) for the
+    // whole flight — every frame of your own shot landing is dimmed. The game
+    // already restores it on any HUD touch, for 2.2s; wake it before each
+    // sample so the impact frame shows the real readout instead of a ghost of
+    // it. Visual only: wakeHud() sets a timestamp and a class, nothing else.
+    if (keepHudAwake) await evalJs('typeof wakeHud === "function" && (wakeHud(), 1)').catch(() => 0);
     const buf = await grab();
     if (!best || buf.length > best.length) best = buf;
     if (i < count - 1) await sleep(gapMs);
@@ -279,7 +285,7 @@ await sleep(400);
 await tap('#fireBtn', { hold: 260 });
 await sleep(700);
 await shot('02-strike');                             // salvo still in the air
-await shotBusiest('03-impact', 14, 320);             // ~4.5s window over the blast
+await shotBusiest('03-impact', 14, 320, true);       // ~4.5s window over the blast, HUD kept awake
 
 // ---------------------------------------------------------------- boss
 log('boss');
