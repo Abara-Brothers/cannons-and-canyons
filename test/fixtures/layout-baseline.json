@@ -1,0 +1,4650 @@
+{
+  "932x430": {
+    "note": "iPhone 16/17 Pro Max landscape",
+    "screens": {
+      "home": {
+        "screen": "home",
+        "bodyTransform": "none",
+        "bodyBox": [
+          932,
+          430
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 1,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            932,
+            430
+          ],
+          "stage": [
+            0,
+            0,
+            932,
+            430
+          ],
+          "top": [
+            18,
+            8,
+            896,
+            32
+          ],
+          "boards": [
+            18,
+            48,
+            896,
+            104
+          ],
+          "lbar": [
+            18,
+            362,
+            896,
+            56
+          ],
+          "pnl": [
+            718,
+            162,
+            196,
+            192
+          ],
+          "tankw": [
+            364,
+            150,
+            204,
+            0
+          ],
+          "launch": [
+            750,
+            369,
+            151,
+            42
+          ]
+        },
+        "type": {
+          "title": 16,
+          "boardName": 14.5,
+          "boardTag": 8,
+          "lbarName": 23,
+          "lbarTag": 8.5
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "modes": {
+        "screen": "modes",
+        "bodyTransform": "none",
+        "bodyBox": [
+          932,
+          430
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 1,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            932,
+            430
+          ],
+          "stage": [
+            0,
+            0,
+            932,
+            430
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "armoury": {
+        "screen": "armoury",
+        "bodyTransform": "none",
+        "bodyBox": [
+          932,
+          430
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 1,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            932,
+            430
+          ],
+          "stage": [
+            0,
+            0,
+            932,
+            430
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            68,
+            156,
+            164,
+            0
+          ],
+          "launch": [
+            669,
+            376,
+            245,
+            40
+          ]
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "career": {
+        "screen": "career",
+        "bodyTransform": "none",
+        "bodyBox": [
+          932,
+          430
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 1,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            932,
+            430
+          ],
+          "stage": [
+            0,
+            0,
+            932,
+            430
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "paint": {
+        "screen": "paint",
+        "bodyTransform": "none",
+        "bodyBox": [
+          932,
+          430
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 1,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            932,
+            430
+          ],
+          "stage": [
+            0,
+            0,
+            932,
+            430
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            183,
+            106,
+            286,
+            0
+          ],
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "settings": {
+        "screen": "settings",
+        "bodyTransform": "none",
+        "bodyBox": [
+          932,
+          430
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 1,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            932,
+            430
+          ],
+          "stage": [
+            0,
+            0,
+            932,
+            430
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      }
+    }
+  },
+  "844x390": {
+    "note": "iPhone 14/15 landscape",
+    "screens": {
+      "home": {
+        "screen": "home",
+        "bodyTransform": "none",
+        "bodyBox": [
+          844,
+          390
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 0.906,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            844,
+            390
+          ],
+          "stage": [
+            0,
+            0,
+            844,
+            389
+          ],
+          "top": [
+            16,
+            8,
+            811,
+            29
+          ],
+          "boards": [
+            16,
+            44,
+            811,
+            94
+          ],
+          "lbar": [
+            16,
+            328,
+            811,
+            51
+          ],
+          "pnl": [
+            650,
+            147,
+            177,
+            174
+          ],
+          "tankw": [
+            330,
+            136,
+            185,
+            0
+          ],
+          "launch": [
+            679,
+            334,
+            137,
+            38
+          ]
+        },
+        "type": {
+          "title": 16,
+          "boardName": 13.1,
+          "boardTag": 7.2,
+          "lbarName": 20.8,
+          "lbarTag": 7.7
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "modes": {
+        "screen": "modes",
+        "bodyTransform": "none",
+        "bodyBox": [
+          844,
+          390
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 0.906,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            844,
+            390
+          ],
+          "stage": [
+            0,
+            0,
+            844,
+            389
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "armoury": {
+        "screen": "armoury",
+        "bodyTransform": "none",
+        "bodyBox": [
+          844,
+          390
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 0.906,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            844,
+            390
+          ],
+          "stage": [
+            0,
+            0,
+            844,
+            389
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            62,
+            142,
+            149,
+            0
+          ],
+          "launch": [
+            606,
+            340,
+            222,
+            36
+          ]
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "career": {
+        "screen": "career",
+        "bodyTransform": "none",
+        "bodyBox": [
+          844,
+          390
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 0.906,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            844,
+            390
+          ],
+          "stage": [
+            0,
+            0,
+            844,
+            389
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "paint": {
+        "screen": "paint",
+        "bodyTransform": "none",
+        "bodyBox": [
+          844,
+          390
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 0.906,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            844,
+            390
+          ],
+          "stage": [
+            0,
+            0,
+            844,
+            389
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            166,
+            96,
+            259,
+            0
+          ],
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "settings": {
+        "screen": "settings",
+        "bodyTransform": "none",
+        "bodyBox": [
+          844,
+          390
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 0.906,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            844,
+            390
+          ],
+          "stage": [
+            0,
+            0,
+            844,
+            389
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      }
+    }
+  },
+  "667x375": {
+    "note": "iPhone SE landscape — tightest shipped",
+    "screens": {
+      "home": {
+        "screen": "home",
+        "bodyTransform": "none",
+        "bodyBox": [
+          667,
+          375
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 0.716,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            667,
+            375
+          ],
+          "stage": [
+            0,
+            34,
+            667,
+            308
+          ],
+          "top": [
+            13,
+            39,
+            641,
+            23
+          ],
+          "boards": [
+            13,
+            68,
+            641,
+            74
+          ],
+          "lbar": [
+            13,
+            293,
+            641,
+            40
+          ],
+          "pnl": [
+            514,
+            150,
+            140,
+            137
+          ],
+          "tankw": [
+            261,
+            141,
+            146,
+            0
+          ],
+          "launch": [
+            536,
+            298,
+            108,
+            30
+          ]
+        },
+        "type": {
+          "title": 16,
+          "boardName": 10.4,
+          "boardTag": 5.7,
+          "lbarName": 16.5,
+          "lbarTag": 6.1
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "modes": {
+        "screen": "modes",
+        "bodyTransform": "none",
+        "bodyBox": [
+          667,
+          375
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 0.716,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            667,
+            375
+          ],
+          "stage": [
+            0,
+            34,
+            667,
+            308
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "armoury": {
+        "screen": "armoury",
+        "bodyTransform": "none",
+        "bodyBox": [
+          667,
+          375
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 0.716,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            667,
+            375
+          ],
+          "stage": [
+            0,
+            34,
+            667,
+            308
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            49,
+            146,
+            117,
+            0
+          ],
+          "launch": [
+            479,
+            303,
+            175,
+            29
+          ]
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "career": {
+        "screen": "career",
+        "bodyTransform": "none",
+        "bodyBox": [
+          667,
+          375
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 0.716,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            667,
+            375
+          ],
+          "stage": [
+            0,
+            34,
+            667,
+            308
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "paint": {
+        "screen": "paint",
+        "bodyTransform": "none",
+        "bodyBox": [
+          667,
+          375
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 0.716,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            667,
+            375
+          ],
+          "stage": [
+            0,
+            34,
+            667,
+            308
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            131,
+            109,
+            205,
+            0
+          ],
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "settings": {
+        "screen": "settings",
+        "bodyTransform": "none",
+        "bodyBox": [
+          667,
+          375
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 0.716,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            667,
+            375
+          ],
+          "stage": [
+            0,
+            34,
+            667,
+            308
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      }
+    }
+  },
+  "568x320": {
+    "note": "smallest tier the CSS still targets",
+    "screens": {
+      "home": {
+        "screen": "home",
+        "bodyTransform": "none",
+        "bodyBox": [
+          568,
+          320
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 0.609,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            568,
+            320
+          ],
+          "stage": [
+            0,
+            29,
+            568,
+            262
+          ],
+          "top": [
+            11,
+            34,
+            546,
+            20
+          ],
+          "boards": [
+            11,
+            58,
+            546,
+            63
+          ],
+          "lbar": [
+            11,
+            250,
+            546,
+            34
+          ],
+          "pnl": [
+            438,
+            128,
+            119,
+            117
+          ],
+          "tankw": [
+            222,
+            120,
+            124,
+            0
+          ],
+          "launch": [
+            457,
+            254,
+            92,
+            26
+          ]
+        },
+        "type": {
+          "title": 16,
+          "boardName": 8.8,
+          "boardTag": 4.9,
+          "lbarName": 14,
+          "lbarTag": 5.2
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "modes": {
+        "screen": "modes",
+        "bodyTransform": "none",
+        "bodyBox": [
+          568,
+          320
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 0.609,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            568,
+            320
+          ],
+          "stage": [
+            0,
+            29,
+            568,
+            262
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "armoury": {
+        "screen": "armoury",
+        "bodyTransform": "none",
+        "bodyBox": [
+          568,
+          320
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 0.609,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            568,
+            320
+          ],
+          "stage": [
+            0,
+            29,
+            568,
+            262
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            42,
+            124,
+            100,
+            0
+          ],
+          "launch": [
+            408,
+            258,
+            149,
+            24
+          ]
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "career": {
+        "screen": "career",
+        "bodyTransform": "none",
+        "bodyBox": [
+          568,
+          320
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 0.609,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            568,
+            320
+          ],
+          "stage": [
+            0,
+            29,
+            568,
+            262
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "paint": {
+        "screen": "paint",
+        "bodyTransform": "none",
+        "bodyBox": [
+          568,
+          320
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 0.609,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            568,
+            320
+          ],
+          "stage": [
+            0,
+            29,
+            568,
+            262
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            112,
+            94,
+            174,
+            0
+          ],
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "settings": {
+        "screen": "settings",
+        "bodyTransform": "none",
+        "bodyBox": [
+          568,
+          320
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 0.609,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            568,
+            320
+          ],
+          "stage": [
+            0,
+            29,
+            568,
+            262
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      }
+    }
+  },
+  "390x844": {
+    "note": "iPhone 14/15 portrait web — shim on",
+    "screens": {
+      "home": {
+        "screen": "home",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          390,
+          844
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 0.906,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            390,
+            844
+          ],
+          "stage": [
+            0,
+            0,
+            389,
+            844
+          ],
+          "top": [
+            354,
+            16,
+            29,
+            811
+          ],
+          "boards": [
+            252,
+            16,
+            94,
+            811
+          ],
+          "lbar": [
+            11,
+            16,
+            51,
+            811
+          ],
+          "pnl": [
+            69,
+            650,
+            174,
+            177
+          ],
+          "tankw": [
+            254,
+            330,
+            0,
+            185
+          ],
+          "launch": [
+            18,
+            679,
+            38,
+            137
+          ]
+        },
+        "type": {
+          "title": 16,
+          "boardName": 13.1,
+          "boardTag": 7.2,
+          "lbarName": 20.8,
+          "lbarTag": 7.7
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "modes": {
+        "screen": "modes",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          390,
+          844
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 0.906,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            390,
+            844
+          ],
+          "stage": [
+            0,
+            0,
+            389,
+            844
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "armoury": {
+        "screen": "armoury",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          390,
+          844
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 0.906,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            390,
+            844
+          ],
+          "stage": [
+            0,
+            0,
+            389,
+            844
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            248,
+            62,
+            0,
+            149
+          ],
+          "launch": [
+            13,
+            606,
+            36,
+            222
+          ]
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "career": {
+        "screen": "career",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          390,
+          844
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 0.906,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            390,
+            844
+          ],
+          "stage": [
+            0,
+            0,
+            389,
+            844
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "paint": {
+        "screen": "paint",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          390,
+          844
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 0.906,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            390,
+            844
+          ],
+          "stage": [
+            0,
+            0,
+            389,
+            844
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            294,
+            166,
+            0,
+            259
+          ],
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "settings": {
+        "screen": "settings",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          390,
+          844
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 0.906,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            390,
+            844
+          ],
+          "stage": [
+            0,
+            0,
+            389,
+            844
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      }
+    }
+  },
+  "440x956": {
+    "note": "widest iPhone portrait — shim on",
+    "screens": {
+      "home": {
+        "screen": "home",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          440,
+          956
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.023,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            440,
+            956
+          ],
+          "stage": [
+            0,
+            1,
+            440,
+            954
+          ],
+          "top": [
+            399,
+            20,
+            33,
+            917
+          ],
+          "boards": [
+            284,
+            20,
+            106,
+            917
+          ],
+          "lbar": [
+            12,
+            20,
+            57,
+            917
+          ],
+          "pnl": [
+            78,
+            736,
+            196,
+            201
+          ],
+          "tankw": [
+            287,
+            374,
+            0,
+            209
+          ],
+          "launch": [
+            19,
+            769,
+            43,
+            155
+          ]
+        },
+        "type": {
+          "title": 16,
+          "boardName": 14.8,
+          "boardTag": 8.2,
+          "lbarName": 23.5,
+          "lbarTag": 8.7
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "modes": {
+        "screen": "modes",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          440,
+          956
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.023,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            440,
+            956
+          ],
+          "stage": [
+            0,
+            1,
+            440,
+            954
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "armoury": {
+        "screen": "armoury",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          440,
+          956
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.023,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            440,
+            956
+          ],
+          "stage": [
+            0,
+            1,
+            440,
+            954
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            280,
+            71,
+            0,
+            168
+          ],
+          "launch": [
+            15,
+            686,
+            41,
+            251
+          ]
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "career": {
+        "screen": "career",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          440,
+          956
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.023,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            440,
+            956
+          ],
+          "stage": [
+            0,
+            1,
+            440,
+            954
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "paint": {
+        "screen": "paint",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          440,
+          956
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.023,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            440,
+            956
+          ],
+          "stage": [
+            0,
+            1,
+            440,
+            954
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            332,
+            188,
+            0,
+            293
+          ],
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "settings": {
+        "screen": "settings",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          440,
+          956
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.023,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            440,
+            956
+          ],
+          "stage": [
+            0,
+            1,
+            440,
+            954
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      }
+    }
+  },
+  "834x1194": {
+    "note": "iPad Pro 11in portrait",
+    "screens": {
+      "home": {
+        "screen": "home",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          834,
+          1194
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.281,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            834,
+            1194
+          ],
+          "stage": [
+            142,
+            0,
+            551,
+            1194
+          ],
+          "top": [
+            641,
+            23,
+            41,
+            1148
+          ],
+          "boards": [
+            498,
+            23,
+            133,
+            1148
+          ],
+          "lbar": [
+            157,
+            23,
+            72,
+            1148
+          ],
+          "pnl": [
+            239,
+            920,
+            246,
+            251
+          ],
+          "tankw": [
+            500,
+            466,
+            0,
+            261
+          ],
+          "launch": [
+            166,
+            961,
+            54,
+            194
+          ]
+        },
+        "type": {
+          "title": 16,
+          "boardName": 18.6,
+          "boardTag": 10.2,
+          "lbarName": 29.5,
+          "lbarTag": 10.9
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "modes": {
+        "screen": "modes",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          834,
+          1194
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.281,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            834,
+            1194
+          ],
+          "stage": [
+            142,
+            0,
+            551,
+            1194
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "armoury": {
+        "screen": "armoury",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          834,
+          1194
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.281,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            834,
+            1194
+          ],
+          "stage": [
+            142,
+            0,
+            551,
+            1194
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            493,
+            87,
+            0,
+            210
+          ],
+          "launch": [
+            160,
+            857,
+            51,
+            314
+          ]
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "career": {
+        "screen": "career",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          834,
+          1194
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.281,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            834,
+            1194
+          ],
+          "stage": [
+            142,
+            0,
+            551,
+            1194
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "paint": {
+        "screen": "paint",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          834,
+          1194
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.281,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            834,
+            1194
+          ],
+          "stage": [
+            142,
+            0,
+            551,
+            1194
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            557,
+            234,
+            0,
+            366
+          ],
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "settings": {
+        "screen": "settings",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          834,
+          1194
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.281,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            834,
+            1194
+          ],
+          "stage": [
+            142,
+            0,
+            551,
+            1194
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      }
+    }
+  },
+  "1194x834": {
+    "note": "iPad Pro 11in landscape",
+    "screens": {
+      "home": {
+        "screen": "home",
+        "bodyTransform": "none",
+        "bodyBox": [
+          1194,
+          834
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 1.281,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            1194,
+            834
+          ],
+          "stage": [
+            0,
+            142,
+            1194,
+            551
+          ],
+          "top": [
+            23,
+            152,
+            1148,
+            41
+          ],
+          "boards": [
+            23,
+            203,
+            1148,
+            133
+          ],
+          "lbar": [
+            23,
+            605,
+            1148,
+            72
+          ],
+          "pnl": [
+            920,
+            349,
+            251,
+            246
+          ],
+          "tankw": [
+            466,
+            334,
+            261,
+            0
+          ],
+          "launch": [
+            961,
+            614,
+            194,
+            54
+          ]
+        },
+        "type": {
+          "title": 16,
+          "boardName": 18.6,
+          "boardTag": 10.2,
+          "lbarName": 29.5,
+          "lbarTag": 10.9
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "modes": {
+        "screen": "modes",
+        "bodyTransform": "none",
+        "bodyBox": [
+          1194,
+          834
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 1.281,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            1194,
+            834
+          ],
+          "stage": [
+            0,
+            142,
+            1194,
+            551
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "armoury": {
+        "screen": "armoury",
+        "bodyTransform": "none",
+        "bodyBox": [
+          1194,
+          834
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 1.281,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            1194,
+            834
+          ],
+          "stage": [
+            0,
+            142,
+            1194,
+            551
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            87,
+            341,
+            210,
+            0
+          ],
+          "launch": [
+            857,
+            622,
+            314,
+            51
+          ]
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "career": {
+        "screen": "career",
+        "bodyTransform": "none",
+        "bodyBox": [
+          1194,
+          834
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 1.281,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            1194,
+            834
+          ],
+          "stage": [
+            0,
+            142,
+            1194,
+            551
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "paint": {
+        "screen": "paint",
+        "bodyTransform": "none",
+        "bodyBox": [
+          1194,
+          834
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 1.281,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            1194,
+            834
+          ],
+          "stage": [
+            0,
+            142,
+            1194,
+            551
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            234,
+            277,
+            366,
+            0
+          ],
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "settings": {
+        "screen": "settings",
+        "bodyTransform": "none",
+        "bodyBox": [
+          1194,
+          834
+        ],
+        "vars": {
+          "vhu": "1vh",
+          "vwu": "1vw",
+          "dvhu": "1dvh",
+          "dvwu": "1dvw",
+          "u": 1.281,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            1194,
+            834
+          ],
+          "stage": [
+            0,
+            142,
+            1194,
+            551
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      }
+    }
+  },
+  "1024x1366": {
+    "note": "iPad Pro 13in portrait",
+    "screens": {
+      "home": {
+        "screen": "home",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          1024,
+          1366
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.466,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            1024,
+            1366
+          ],
+          "stage": [
+            197,
+            0,
+            630,
+            1366
+          ],
+          "top": [
+            769,
+            26,
+            47,
+            1313
+          ],
+          "boards": [
+            604,
+            26,
+            152,
+            1313
+          ],
+          "lbar": [
+            214,
+            26,
+            82,
+            1313
+          ],
+          "pnl": [
+            308,
+            1052,
+            281,
+            287
+          ],
+          "tankw": [
+            607,
+            534,
+            0,
+            299
+          ],
+          "launch": [
+            225,
+            1100,
+            62,
+            222
+          ]
+        },
+        "type": {
+          "title": 16,
+          "boardName": 21.3,
+          "boardTag": 11.7,
+          "lbarName": 33.7,
+          "lbarTag": 12.5
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "modes": {
+        "screen": "modes",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          1024,
+          1366
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.466,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            1024,
+            1366
+          ],
+          "stage": [
+            197,
+            0,
+            630,
+            1366
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "armoury": {
+        "screen": "armoury",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          1024,
+          1366
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.466,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            1024,
+            1366
+          ],
+          "stage": [
+            197,
+            0,
+            630,
+            1366
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            599,
+            99,
+            0,
+            240
+          ],
+          "launch": [
+            218,
+            980,
+            59,
+            359
+          ]
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "career": {
+        "screen": "career",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          1024,
+          1366
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.466,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            1024,
+            1366
+          ],
+          "stage": [
+            197,
+            0,
+            630,
+            1366
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "paint": {
+        "screen": "paint",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          1024,
+          1366
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.466,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            1024,
+            1366
+          ],
+          "stage": [
+            197,
+            0,
+            630,
+            1366
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            672,
+            268,
+            0,
+            419
+          ],
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "settings": {
+        "screen": "settings",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          1024,
+          1366
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.466,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            1024,
+            1366
+          ],
+          "stage": [
+            197,
+            0,
+            630,
+            1366
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      }
+    }
+  },
+  "820x1180": {
+    "note": "iPad Air / 10th gen portrait",
+    "screens": {
+      "home": {
+        "screen": "home",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          820,
+          1180
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.266,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            820,
+            1180
+          ],
+          "stage": [
+            138,
+            0,
+            544,
+            1180
+          ],
+          "top": [
+            632,
+            23,
+            41,
+            1134
+          ],
+          "boards": [
+            490,
+            23,
+            132,
+            1134
+          ],
+          "lbar": [
+            153,
+            23,
+            71,
+            1134
+          ],
+          "pnl": [
+            234,
+            909,
+            243,
+            248
+          ],
+          "tankw": [
+            492,
+            461,
+            0,
+            258
+          ],
+          "launch": [
+            162,
+            950,
+            53,
+            191
+          ]
+        },
+        "type": {
+          "title": 16,
+          "boardName": 18.4,
+          "boardTag": 10.1,
+          "lbarName": 29.1,
+          "lbarTag": 10.8
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "modes": {
+        "screen": "modes",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          820,
+          1180
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.266,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            820,
+            1180
+          ],
+          "stage": [
+            138,
+            0,
+            544,
+            1180
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "armoury": {
+        "screen": "armoury",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          820,
+          1180
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.266,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            820,
+            1180
+          ],
+          "stage": [
+            138,
+            0,
+            544,
+            1180
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            485,
+            86,
+            0,
+            208
+          ],
+          "launch": [
+            156,
+            847,
+            51,
+            310
+          ]
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "career": {
+        "screen": "career",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          820,
+          1180
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.266,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            820,
+            1180
+          ],
+          "stage": [
+            138,
+            0,
+            544,
+            1180
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "paint": {
+        "screen": "paint",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          820,
+          1180
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.266,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            820,
+            1180
+          ],
+          "stage": [
+            138,
+            0,
+            544,
+            1180
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            548,
+            232,
+            0,
+            362
+          ],
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "settings": {
+        "screen": "settings",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          820,
+          1180
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.266,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            820,
+            1180
+          ],
+          "stage": [
+            138,
+            0,
+            544,
+            1180
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      }
+    }
+  },
+  "744x1133": {
+    "note": "iPad mini portrait",
+    "screens": {
+      "home": {
+        "screen": "home",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          744,
+          1133
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.216,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            744,
+            1133
+          ],
+          "stage": [
+            111,
+            0,
+            523,
+            1133
+          ],
+          "top": [
+            585,
+            22,
+            39,
+            1089
+          ],
+          "boards": [
+            449,
+            22,
+            126,
+            1089
+          ],
+          "lbar": [
+            125,
+            22,
+            68,
+            1089
+          ],
+          "pnl": [
+            203,
+            873,
+            233,
+            238
+          ],
+          "tankw": [
+            451,
+            443,
+            0,
+            248
+          ],
+          "launch": [
+            134,
+            912,
+            51,
+            184
+          ]
+        },
+        "type": {
+          "title": 16,
+          "boardName": 17.6,
+          "boardTag": 9.7,
+          "lbarName": 28,
+          "lbarTag": 10.3
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "modes": {
+        "screen": "modes",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          744,
+          1133
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.216,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            744,
+            1133
+          ],
+          "stage": [
+            111,
+            0,
+            523,
+            1133
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "armoury": {
+        "screen": "armoury",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          744,
+          1133
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.216,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            744,
+            1133
+          ],
+          "stage": [
+            111,
+            0,
+            523,
+            1133
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            444,
+            82,
+            0,
+            199
+          ],
+          "launch": [
+            128,
+            813,
+            49,
+            298
+          ]
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "career": {
+        "screen": "career",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          744,
+          1133
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.216,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            744,
+            1133
+          ],
+          "stage": [
+            111,
+            0,
+            523,
+            1133
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "paint": {
+        "screen": "paint",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          744,
+          1133
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.216,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            744,
+            1133
+          ],
+          "stage": [
+            111,
+            0,
+            523,
+            1133
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            505,
+            222,
+            0,
+            348
+          ],
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "settings": {
+        "screen": "settings",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          744,
+          1133
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.216,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            744,
+            1133
+          ],
+          "stage": [
+            111,
+            0,
+            523,
+            1133
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      }
+    }
+  },
+  "507x1194": {
+    "note": "iPad half Split View",
+    "screens": {
+      "home": {
+        "screen": "home",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          507,
+          1194
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.179,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            507,
+            1194
+          ],
+          "stage": [
+            0,
+            48,
+            507,
+            1099
+          ],
+          "top": [
+            460,
+            69,
+            38,
+            1056
+          ],
+          "boards": [
+            328,
+            69,
+            123,
+            1056
+          ],
+          "lbar": [
+            14,
+            69,
+            66,
+            1056
+          ],
+          "pnl": [
+            90,
+            894,
+            226,
+            231
+          ],
+          "tankw": [
+            330,
+            477,
+            0,
+            241
+          ],
+          "launch": [
+            22,
+            932,
+            50,
+            178
+          ]
+        },
+        "type": {
+          "title": 16,
+          "boardName": 17.1,
+          "boardTag": 9.4,
+          "lbarName": 27.1,
+          "lbarTag": 10
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "modes": {
+        "screen": "modes",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          507,
+          1194
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.179,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            507,
+            1194
+          ],
+          "stage": [
+            0,
+            48,
+            507,
+            1099
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "armoury": {
+        "screen": "armoury",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          507,
+          1194
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.179,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            507,
+            1194
+          ],
+          "stage": [
+            0,
+            48,
+            507,
+            1099
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            323,
+            128,
+            0,
+            193
+          ],
+          "launch": [
+            17,
+            836,
+            47,
+            289
+          ]
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "career": {
+        "screen": "career",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          507,
+          1194
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.179,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            507,
+            1194
+          ],
+          "stage": [
+            0,
+            48,
+            507,
+            1099
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "paint": {
+        "screen": "paint",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          507,
+          1194
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.179,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            507,
+            1194
+          ],
+          "stage": [
+            0,
+            48,
+            507,
+            1099
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            382,
+            263,
+            0,
+            337
+          ],
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "settings": {
+        "screen": "settings",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          507,
+          1194
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 1.179,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            507,
+            1194
+          ],
+          "stage": [
+            0,
+            48,
+            507,
+            1099
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      }
+    }
+  },
+  "320x1194": {
+    "note": "iPad Slide Over — narrowest real window",
+    "screens": {
+      "home": {
+        "screen": "home",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          320,
+          1194
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 0.744,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            320,
+            1194
+          ],
+          "stage": [
+            0,
+            250,
+            320,
+            694
+          ],
+          "top": [
+            290,
+            264,
+            24,
+            667
+          ],
+          "boards": [
+            207,
+            264,
+            77,
+            667
+          ],
+          "lbar": [
+            9,
+            264,
+            42,
+            667
+          ],
+          "pnl": [
+            57,
+            785,
+            143,
+            146
+          ],
+          "tankw": [
+            208,
+            521,
+            0,
+            152
+          ],
+          "launch": [
+            14,
+            808,
+            31,
+            112
+          ]
+        },
+        "type": {
+          "title": 16,
+          "boardName": 10.8,
+          "boardTag": 6,
+          "lbarName": 17.1,
+          "lbarTag": 6.3
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "modes": {
+        "screen": "modes",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          320,
+          1194
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 0.744,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            320,
+            1194
+          ],
+          "stage": [
+            0,
+            250,
+            320,
+            694
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "armoury": {
+        "screen": "armoury",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          320,
+          1194
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 0.744,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            320,
+            1194
+          ],
+          "stage": [
+            0,
+            250,
+            320,
+            694
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            204,
+            301,
+            0,
+            122
+          ],
+          "launch": [
+            11,
+            748,
+            30,
+            182
+          ]
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "career": {
+        "screen": "career",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          320,
+          1194
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 0.744,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            320,
+            1194
+          ],
+          "stage": [
+            0,
+            250,
+            320,
+            694
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "paint": {
+        "screen": "paint",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          320,
+          1194
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 0.744,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            320,
+            1194
+          ],
+          "stage": [
+            0,
+            250,
+            320,
+            694
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            241,
+            386,
+            0,
+            213
+          ],
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "settings": {
+        "screen": "settings",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          320,
+          1194
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 0.744,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            320,
+            1194
+          ],
+          "stage": [
+            0,
+            250,
+            320,
+            694
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      }
+    }
+  },
+  "450x550": {
+    "note": "small square-ish window",
+    "screens": {
+      "home": {
+        "screen": "home",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          450,
+          550
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 0.59,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            450,
+            550
+          ],
+          "stage": [
+            98,
+            0,
+            254,
+            550
+          ],
+          "top": [
+            328,
+            11,
+            19,
+            529
+          ],
+          "boards": [
+            262,
+            11,
+            61,
+            529
+          ],
+          "lbar": [
+            105,
+            11,
+            33,
+            529
+          ],
+          "pnl": [
+            143,
+            424,
+            113,
+            116
+          ],
+          "tankw": [
+            263,
+            215,
+            0,
+            120
+          ],
+          "launch": [
+            109,
+            442,
+            25,
+            89
+          ]
+        },
+        "type": {
+          "title": 16,
+          "boardName": 8.6,
+          "boardTag": 4.7,
+          "lbarName": 13.6,
+          "lbarTag": 5
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "modes": {
+        "screen": "modes",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          450,
+          550
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 0.59,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            450,
+            550
+          ],
+          "stage": [
+            98,
+            0,
+            254,
+            550
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "armoury": {
+        "screen": "armoury",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          450,
+          550
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 0.59,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            450,
+            550
+          ],
+          "stage": [
+            98,
+            0,
+            254,
+            550
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            259,
+            41,
+            0,
+            97
+          ],
+          "launch": [
+            107,
+            395,
+            24,
+            145
+          ]
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "career": {
+        "screen": "career",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          450,
+          550
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 0.59,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            450,
+            550
+          ],
+          "stage": [
+            98,
+            0,
+            254,
+            550
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "paint": {
+        "screen": "paint",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          450,
+          550
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 0.59,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            450,
+            550
+          ],
+          "stage": [
+            98,
+            0,
+            254,
+            550
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": [
+            289,
+            108,
+            0,
+            169
+          ],
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      },
+      "settings": {
+        "screen": "settings",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "bodyBox": [
+          450,
+          550
+        ],
+        "vars": {
+          "vhu": "1vw",
+          "vwu": "1vh",
+          "dvhu": "1dvw",
+          "dvwu": "1dvh",
+          "u": 0.59,
+          "rotated": "(unset)"
+        },
+        "boxes": {
+          "bay": [
+            0,
+            0,
+            450,
+            550
+          ],
+          "stage": [
+            98,
+            0,
+            254,
+            550
+          ],
+          "top": null,
+          "boards": null,
+          "lbar": null,
+          "pnl": null,
+          "tankw": null,
+          "launch": null
+        },
+        "type": {
+          "title": null,
+          "boardName": null,
+          "boardTag": null,
+          "lbarName": null,
+          "lbarTag": null
+        },
+        "overflow": [
+          false,
+          false
+        ]
+      }
+    }
+  }
+}

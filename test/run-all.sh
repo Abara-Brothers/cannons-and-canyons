@@ -116,6 +116,14 @@ else
   # in a real page over CDP, so it cannot drift from a copy of the logic.
   # Skips cleanly when Chrome is absent, so a bare CI runner stays green.
   run merge node test/merge.mjs
+  # SECOND client-side suite, and the only one that looks at LAYOUT. Drives the
+  # real bundle in headless Chrome at 14 exact viewports and diffs the measured
+  # geometry against test/fixtures/layout-baseline.json. It is a change
+  # detector, not a correctness oracle: it cannot say the layout is good, only
+  # that it has not moved since someone last looked. That is what makes a wide
+  # media-query rewrite (ISSUE-039, the iPad reflow) survivable. Also skips
+  # cleanly without Chrome.
+  run layout node test/layout.mjs
 
   # Expected chatter: the listen banner, the readiness line (8.58 — locally it
   # always reads supabase=unconfigured, which is correct with no env), and the
