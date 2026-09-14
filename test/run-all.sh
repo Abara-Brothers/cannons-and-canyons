@@ -109,6 +109,9 @@ else
   # missing asset returning a real 404 instead of 200 + text/html.
   run http_contract node test/http_contract.mjs
   run ledger node test/ledger.mjs
+  # GET /history (Launch Bay recent sorties): the one client read path into the
+  # ledger. Mocks Supabase; asserts no uuid ever leaves, W/L derivation, auth, rate limit.
+  run history node test/history.mjs
   # First CLIENT-side coverage (RISK-012). Drives the real mergeCloudProgression
   # in a real page over CDP, so it cannot drift from a copy of the logic.
   # Skips cleanly when Chrome is absent, so a bare CI runner stays green.

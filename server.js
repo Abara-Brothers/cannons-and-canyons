@@ -933,6 +933,54 @@ function setSecurityHeaders(res) {
   res.setHeader('Content-Security-Policy', CSP);
 }
 
+// ---- /history: a player's recent ONLINE matches, from the ledger -------------
+// Bounded in every direction: one request per player every two seconds, eight
+// rows, and only the fields the panel shows. Opponents are resolved to their
+// generated callsigns -- the same names already broadcast in the match itself
+// -- so nothing here reveals anything a player did not already see.
+const HIST_MIN_MS = 2000;
+const histLast = new Map();                // user id -> last served (ms)
+setInterval(() => { const cut = Date.now() - 60000; for (const [k, t] of histLast) if (t < cut) histLast.delete(k); }, 60000).unref();
+async function matchHistory(req, res, cors) {
+  const json = (code, body) => { res.writeHead(code, { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)); };
+  const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  const uid = await sbUserFromToken(token);
+  if (!uid) return json(401, { error: 'unauthorized' });
+  if (!SB_SECRET) return json(503, { error: 'unavailable' });
+  const last = histLast.get(uid) || 0;
+  if (Date.now() - last < HIST_MIN_MS) return json(429, { error: 'slow down' });
+  histLast.set(uid, Date.now());
+  try {
+    const rows = await sbAdmin('GET',
+      `/match_results?players=cs.${encodeURIComponent('{' + uid + '}')}&order=ended_at.desc&limit=8`
+      + '&select=mode,players,winner_user,winner_seat,vs_bot,ended_at');
+    const others = new Set();
+    for (const r of rows || []) for (const p of r.players || []) if (p && p !== uid) others.add(p);
+    const names = new Map();
+    if (others.size) {
+      const prof = await sbAdmin('GET', `/profiles?id=in.(${[...others].join(',')})&select=id,callsign`);
+      for (const p of prof || []) if (p && p.id) names.set(p.id, p.callsign || null);
+    }
+    const out = (rows || []).map((r) => {
+      const opp = (r.players || []).filter((p) => p && p !== uid);
+      const opponent = r.vs_bot && !opp.length ? 'Computer'
+        : opp.length === 1 ? (names.get(opp[0]) || 'Commander')
+        : opp.length ? (opp.length + ' commanders') : 'Solo';
+      // winner_user is set only for a HUMAN winner (recordMatch). So: a human
+      // won -> W or L by identity; the computer won (vs_bot, a winning seat,
+      // no user) -> L; anything else (team modes, an unattributed end) is
+      // reported as neither rather than guessed.
+      const result = r.winner_user ? (r.winner_user === uid ? 'W' : 'L')
+        : (r.vs_bot && r.winner_seat != null) ? 'L' : '';
+      return { mode: r.mode, opponent, result, when: r.ended_at, players: (r.players || []).length };
+    });
+    json(200, { rows: out });
+  } catch (e) {
+    reportServerError('history', e);
+    json(502, { error: 'ledger unavailable' });
+  }
+}
+
 function handleRequest(req, res) {
   setSecurityHeaders(res);
   // decodeURIComponent THROWS on a malformed escape ('%', '%zz', '%e0%a4%a').
@@ -1010,6 +1058,21 @@ function handleRequest(req, res) {
     if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
     if (req.method !== 'POST') { res.writeHead(405, cors); return res.end(); }
     accountDelete(req, res, cors);
+    return;
+  }
+  if (urlPath === '/history') {
+    // LAUNCH BAY "Recent sorties". The ledger (match_results) is deny-all to
+    // clients by design; this is the one read path, service-key side, and it
+    // hands back callsigns and outcomes -- never a uuid. Same CORS story as
+    // /account/delete: the Authorization header is the whole auth.
+    const cors = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+      'Access-Control-Allow-Headers': 'Authorization',
+    };
+    if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
+    if (req.method !== 'GET') { res.writeHead(405, cors); return res.end(); }
+    matchHistory(req, res, cors);
     return;
   }
   if (urlPath === '/push/key') {

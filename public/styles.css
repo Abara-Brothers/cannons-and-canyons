@@ -2311,3 +2311,25 @@ body.in-bay .bg-canyon{ display:none; }
 #bay .b-code-in:focus{border-color:#ffb46b;box-shadow:0 0 0 calc(2 * var(--u)) rgba(255,180,107,.25)}
 #bay .jerr{min-height:calc(14 * var(--u));margin-top:calc(6 * var(--u));font-size:calc(10.5 * var(--u));color:#ff8b8b}
 #bay .jrow{display:flex;align-items:center;gap:calc(8 * var(--u));margin-top:calc(8 * var(--u))}
+/* the launch-bar readouts are a button now — the route into Setup */
+#bay .ros{display:flex;align-items:center;gap:calc(14 * var(--u));padding:0 calc(6 * var(--u));height:calc(40 * var(--u));border-radius:calc(5 * var(--u));transition:.15s;text-align:left}
+#bay .ros:hover{background:rgba(84,200,255,.09)}
+#bay .ros:hover .rk{color:#54c8ff}
+/* rack cells that cannot be picked: standard issue (cannon, nuke) and the crate-only railgun */
+#bay .wp.fixed{cursor:default;opacity:.85}
+#bay .wp.fixed:hover{transform:none;border-color:rgba(140,168,214,.2);background:rgba(16,21,31,.62)}
+#bay .wp.fixed.on{background:rgba(84,200,255,.08);border-color:rgba(84,200,255,.35);box-shadow:none}
+#bay .wp.fixed.on .b-wn{color:#9fd8ff}
+
+/* ---- reduced motion, IN-APP override: exact mirrors of the OS-driven blocks above.
+   Generated from them; the toggle in Bay controls sets body.reduce-motion. ---- */
+body.reduce-motion .bg-canyon .ridge, body.reduce-motion .bg-canyon .tracer, body.reduce-motion .rh-phone, body.reduce-motion .spinner { animation: none !important; }
+body.reduce-motion .bg-canyon .t1 { stroke-dashoffset: -760; opacity: .8; }
+body.reduce-motion .bg-canyon .t2 { stroke-dashoffset: -900; opacity: .4; }
+body.reduce-motion .rh-phone { transform: rotate(-90deg); }
+body.reduce-motion .wpop.show { animation: wpopFade 1.2s linear forwards; }
+body.reduce-motion #dock .dock-tab svg { animation: none; }
+body.reduce-motion #dock:not(.collapsed) .dock-tab svg { transform: rotate(180deg); }
+body.reduce-motion #dock.collapsed .dock-tab { animation: none; }
+body.reduce-motion .fire-btn * { animation: none !important; }
+body.reduce-motion #bay * { animation-duration:.01ms!important; animation-iteration-count:1!important; transition-duration:.01ms!important; }

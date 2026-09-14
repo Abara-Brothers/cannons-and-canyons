@@ -17,11 +17,23 @@ const u = (n) => 'calc(' + n + ' * var(--u))';
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const G = {
   get ccMode()        { return typeof ccMode        !== 'undefined' ? ccMode        : undefined; },
+  get ccOpp()         { return typeof ccOpp         !== 'undefined' ? ccOpp         : undefined; },
+  get ccMax()         { return typeof ccMax         !== 'undefined' ? ccMax         : undefined; },
+  get ccTees()        { return typeof ccTees        !== 'undefined' ? ccTees        : undefined; },
+  get cpuDifficulty() { return typeof cpuDifficulty !== 'undefined' ? cpuDifficulty : undefined; },
+  get HELP_WEAPONS()  { return typeof HELP_WEAPONS  !== 'undefined' ? HELP_WEAPONS  : undefined; },
+  get armPicks()      { return typeof armPicks      !== 'undefined' ? armPicks      : undefined; },
+  get armNeed()       { return typeof armNeed       !== 'undefined' ? armNeed       : undefined; },
   get S()             { return typeof S             !== 'undefined' ? S             : undefined; },
   get SKINS()         { return typeof SKINS         !== 'undefined' ? SKINS         : undefined; },
   get ARM_POOL()      { return typeof ARM_POOL      !== 'undefined' ? ARM_POOL      : undefined; },
   get ARM_DEFAULT()   { return typeof ARM_DEFAULT   !== 'undefined' ? ARM_DEFAULT   : undefined; },
   get UI_IC()         { return typeof UI_IC         !== 'undefined' ? UI_IC         : undefined; },
+  get ICONS()         { return typeof ICONS         !== 'undefined' ? ICONS         : undefined; },
+  get PROF()          { return typeof PROF          !== 'undefined' ? PROF          : undefined; },
+  get ACHS()          { return typeof ACHS          !== 'undefined' ? ACHS          : undefined; },
+  get SKIN_FOR_ACH()  { return typeof SKIN_FOR_ACH  !== 'undefined' ? SKIN_FOR_ACH  : undefined; },
+  get MOTION_OK()     { return typeof MOTION_OK     !== 'undefined' ? MOTION_OK     : undefined; },
   get Audio()         { return typeof Audio         !== 'undefined' ? Audio         : undefined; },
   get cam()           { return typeof cam           !== 'undefined' ? cam           : undefined; },
   get view()          { return typeof view          !== 'undefined' ? view          : undefined; },
@@ -50,6 +62,7 @@ const MODES = [
     art: 'ice-wide',      card: 'ice-mid',       draft: 5 },
 ];
 const modeOf = (id) => MODES.find((m) => m.id === id) || MODES[0];
+const SHORT = { duel: 'Duel', ffa: 'FFA', boss: 'Boss', aliens: 'Aliens', golf: 'Golf' };
 const art = (k) => 'bay/' + k + '.jpg';
 
 /* ---- hand-drawn icons (house rule: no emoji, ever) ----------------------- */
@@ -112,6 +125,10 @@ function state() {
   if (!picks.length && has('ARM_DEFAULT')) picks = ARM_DEFAULT.slice(0, m.draft);
   return {
     mode: m, skinId, skin, picks,
+    opp: has('ccOpp') ? ccOpp : 'friend',
+    diff: has('cpuDifficulty') ? cpuDifficulty : 'medium',
+    count: has('ccMax') ? ccMax : 4,
+    tees: has('ccTees') ? ccTees : 'mens',
     name: has('myName') ? myName() : 'Commander',
     wins: has('totalWins') ? totalWins() : 0,
     muted: has('Audio') ? !!Audio.muted : false,
@@ -119,7 +136,7 @@ function state() {
 }
 
 /* ---- the live tank ---------------------------------------------------------- */
-// Draws seat 9 (a seat no match uses) onto the REAL canvas with a flat floor
+// Draws seat 8 (unused by any match; 8 % 4 = 0 gives the player's own blue pennant) onto the REAL canvas with a flat floor
 // and no terrain, then copies it out. Every global drawTank reads is set and
 // restored inside this one call; the render loop cannot interleave, and the
 // next draw() re-sizes the canvas back anyway because dispW no longer matches.
@@ -147,10 +164,10 @@ function tankURL(skinId, cssW) {
     // the camera so that floor lands at 80% of the frame height.
     const floorY = S.world.h * 0.72;
     cam.cy = floorY - (0.80 * H - H / 2) / cam.zoom;
-    S.tanks[9] = { x: 0, y: floorY }; S.skins[9] = skinId;
-    S.aim[9] = { angle: 38, power: 60 }; S.hp[9] = 150; S.recoil[9] = 0;
-    if (S.lean) S.lean[9] = 0;
-    drawTank(9);
+    S.tanks[8] = { x: 0, y: floorY }; S.skins[8] = skinId;
+    S.aim[8] = { angle: 38, power: 60 }; S.hp[8] = 150; S.recoil[8] = 0;
+    if (S.lean) S.lean[8] = 0;
+    drawTank(8);
     const out = document.createElement('canvas');
     out.width = canvas.width; out.height = canvas.height;
     out.getContext('2d').drawImage(canvas, 0, 0);
@@ -193,8 +210,347 @@ function stage(skinId, o) {
     + '<div class="tankw" style="left:' + u(o.cx - w / 2) + ';top:' + u(o.cy - 3 - h) + ';width:' + u(w) + '">' + img() + '</div>';
 }
 
+/* ---- inner-page chrome: same room, different station ------------------------ */
+function chrome(title, sub, meta, body, foot) {
+  const s = state();
+  return '<div class="bay"><img class="pgart" src="' + art(s.mode.art) + '" alt="">' + deco() + beams() + dust() + '<div class="vig"></div>'
+    + '<div class="stage"><div class="horiz"></div>'
+    + '<div class="phead"><button class="bk" data-back aria-label="Back">' + IC.back + '</button>'
+    +   '<span style="display:block"><span class="pt">' + title + '</span><span class="ps">' + sub + '</span></span>'
+    +   '<span class="grow"></span><span class="pm">' + meta + '</span></div>'
+    + '<div class="pbody"' + (foot ? '' : ' style="bottom:' + u(14) + '"') + '>' + body + '</div>'
+    + (foot ? '<div class="pfoot">' + foot + '</div>' : '')
+    + '</div></div>';
+}
+// A small tank image for cards and seats — the same live render, smaller.
+const tankImg = (skinId, w, alt) => { const src = tankURL(skinId, w); return src ? '<img src="' + src + '" alt="' + (alt || '') + '" style="width:' + u(w) + '">' : ''; };
+const wicon = (id) => (G.ICONS && ICONS[id]) || (G.UI_IC && UI_IC[id]) || '';
+const cap = (t) => String(t).charAt(0).toUpperCase() + String(t).slice(1);
+function seg(label, key, opts, cur) {
+  return '<div class="b-opt"><span class="lbl">' + label + '</span><div class="segs">'
+    + opts.map((o) => '<button class="seg' + (String(cur) === String(o[0]) ? ' on' : '') + '" data-set="' + key + '=' + o[0] + '">' + o[1] + '</button>').join('')
+    + '</div></div>';
+}
+function slots(picks, n) {
+  let out = '';
+  for (let i = 0; i < n; i++) { const id = picks[i]; out += '<span class="slot' + (id ? ' f' : '') + '">' + (id ? wicon(id) : '') + '</span>'; }
+  return out;
+}
+function loadout(picks, n, label, extra) {
+  return '<div class="ldt"><div style="display:flex;align-items:center;gap:' + u(8) + '"><span class="lbl">' + label + '</span><span class="grow"></span>' + (extra || '') + '</div>'
+    + '<div class="slots" style="justify-content:flex-start;margin-top:' + u(9) + '">' + slots(picks, n) + '</div></div>';
+}
+
+/* ---- the rack: the player's PREFERRED loadout ----------------------------------
+   The real draft happens when the server asks (a `pick` message once the lobby
+   fills) and it prefills from cc_loadout. So the bay's Armoury edits that
+   preference: every change is persisted at once, and the server-prompted draft
+   opens already full. */
+const RACK_ORDER = ['cannon', 'mortar', 'volley', 'railgun', 'cluster', 'napalm', 'gas', 'airstrike', 'buster', 'wall', 'teleport', 'nuke', 'minigun'];
+function weaponInfo(id) {
+  const w = (has('HELP_WEAPONS') && HELP_WEAPONS.find((h) => h.id === id)) || { id, name: id, note: '', desc: '' };
+  const n = /unlimited/i.test(w.note || '') ? Infinity : parseInt(w.note, 10);
+  return { id, name: w.name, desc: w.desc || '', ammo: Number.isFinite(n) ? n : (id === 'railgun' ? 0 : Infinity) };
+}
+let rack = null;                 // the working copy, initialised from state().picks
+function rackPicks() { if (!rack) rack = state().picks.slice(); return rack; }
+function togglePick(id) {
+  const n = state().mode.draft, r = rackPicks(), at = r.indexOf(id);
+  if (at >= 0) r.splice(at, 1); else if (r.length < n) r.push(id);
+  try { localStorage.setItem('cc_loadout', JSON.stringify(r)); } catch {}
+  // If the game's own draft is open for this size, keep it in step too.
+  if (has('armPicks') && G.armNeed === n) { armPicks.length = 0; for (const x of r) armPicks.push(x); }
+}
+
+/* ---- preferences, rank, haptics ----------------------------------------------- */
+const pref = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : v === '1'; } catch { return d; } };
+const setPref = (k, on) => { try { localStorage.setItem(k, on ? '1' : '0'); } catch {} };
+const IS_NATIVE_BAY = !!(window.Capacitor && window.Capacitor.getPlatform && window.Capacitor.getPlatform() !== 'web');
+const IS_IOS_BAY = IS_NATIVE_BAY && window.Capacitor.getPlatform() === 'ios';
+// Rank is a title over total wins -- local, client-asserted, never cross-player
+// (owner decision 2026-09-14, consistent with the entitlement design).
+const RANKS = [[0, 'Recruit'], [1, 'Gunner I'], [5, 'Gunner II'], [12, 'Gunner III'], [25, 'Sergeant'], [50, 'Lieutenant'], [100, 'Captain'], [200, 'Major'], [400, 'Colonel']];
+const rankFor = (w) => RANKS.reduce((r, [t, n]) => (w >= t ? n : r), RANKS[0][1]);
+// Haptics: the Capacitor plugin on a phone, navigator.vibrate on the web (a
+// no-op on iOS Safari, which is exactly why the plugin exists). Off by default
+// on the web, on by default on a phone; the setting is the player's either way.
+const hapticsOn = () => pref('cc_haptics', IS_NATIVE_BAY);
+function haptic(r) {
+  if (!hapticsOn()) return;
+  const style = r > 1200 ? 'HEAVY' : r > 600 ? 'MEDIUM' : 'LIGHT';
+  const H = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Haptics;
+  try {
+    if (H && H.impact) { H.impact({ style }).catch(() => {}); return; }
+    if (navigator.vibrate) navigator.vibrate(style === 'HEAVY' ? 40 : style === 'MEDIUM' ? 25 : 12);
+  } catch {}
+}
+// Reduced motion: the OS setting is honoured already (MOTION_OK + five CSS
+// media blocks). This is the in-app override on top: a body class the stylesheet
+// mirrors, and the same JS flag the canvas effects read.
+function applyMotion() {
+  const on = pref('cc_motion', false);
+  document.body.classList.toggle('reduce-motion', on);
+  if (G.MOTION_OK !== undefined) { let os = false; try { os = matchMedia('(prefers-reduced-motion: reduce)').matches; } catch {} MOTION_OK = !on && !os; }
+}
+const km = (u) => (u >= 1000 ? (u / 1000).toFixed(1) + 'k' : String(u));
+
+/* ---- recent sorties ------------------------------------------------------------
+   Online matches only, read from the server's ledger through /history (the
+   ledger is deny-all to clients; the server resolves opponents to callsigns
+   and never hands over a uuid). Hidden when empty by decision, so a mostly
+   offline player never sees an empty box. Fetched at most once a minute. */
+const API = IS_NATIVE_BAY ? 'https://' + (window.CC_NATIVE_HOST || 'tanks.abarabrothers.com') : '';
+let sorties = { rows: [], at: 0, busy: false };
+function ago(iso) {
+  const t = Date.parse(iso); if (!Number.isFinite(t)) return '';
+  const m = Math.max(0, Math.round((Date.now() - t) / 60000));
+  if (m < 2) return 'just now'; if (m < 60) return m + 'm ago';
+  const h = Math.round(m / 60); if (h < 24) return h + 'h ago';
+  const d = Math.round(h / 24); return d === 1 ? 'yesterday' : d + ' days';
+}
+async function loadSorties() {
+  if (sorties.busy || Date.now() - sorties.at < 60000) return;
+  const C = window.Cloud; if (!C || !C.enabled || !C.enabled()) return;
+  sorties.busy = true;
+  try {
+    const tok = await C.token(false);          // never mint an account just to read history
+    if (!tok) return;
+    const r = await fetch(API + '/history', { headers: { Authorization: 'Bearer ' + tok } });
+    if (!r.ok) return;
+    const j = await r.json();
+    sorties.rows = Array.isArray(j.rows) ? j.rows.slice(0, 4) : [];
+    sorties.at = Date.now();
+    if (current === 'home') render('home');   // the panel appears once there is something in it
+  } catch {} finally { sorties.busy = false; }
+}
+function sortiesPanel() {
+  if (!sorties.rows.length) return '';
+  const rows = sorties.rows.map((r) =>
+    '<button class="sor" data-rematch="' + esc(r.mode) + '" title="Play ' + esc(modeOf(r.mode).name) + ' again">'
+    + '<span class="stx"><span class="snm">' + esc(r.opponent || 'Commander') + '</span>'
+    + '<span class="smt">' + esc(SHORT[r.mode] || r.mode) + ' &middot; ' + esc(ago(r.when)) + '</span></span>'
+    + '<span class="res ' + (r.result === 'W' ? 'w' : r.result === 'L' ? 'l' : '') + '">' + esc(r.result || '&ndash;') + '</span>'
+    + IC.again.replace('<svg', '<svg class="rag"') + '</button>').join('');
+  return '<div class="pnl" style="left:' + u(18) + ';top:' + u(162) + ';width:' + u(196) + ';height:' + u(192) + '"><div class="ph">Recent sorties<s></s></div>' + rows + '</div>';
+}
+
 /* ---- screens ---------------------------------------------------------------- */
 const SCREENS = {};
+
+// 6 -- SERVICE RECORD. Every number is the real career; rank and streak are the
+// two new fields (streak is written by app.js at game over).
+SCREENS.career = function () {
+  const s = state(), P = G.PROF || { modes: {}, ach: {} };
+  const wins = s.wins, losses = Object.values(P.modes || {}).reduce((a, x) => a + (x.l || 0), 0), played = wins + losses;
+  const acc = P.shots ? Math.round((P.hits || 0) / P.shots * 100) : 0;
+  const rank = rankFor(wins), streak = P.streak || 0;
+  const achs = G.ACHS || [], earned = achs.filter(([id]) => P.ach && P.ach[id]).length;
+  const stats = [['Shots fired', P.shots || 0], ['Direct hits', P.hits || 0], ['Accuracy', acc + '%'], ['Longest shot', P.longest ? km(P.longest) : '—'], ['Biggest hit', P.maxDmg || 0]]
+    .map((r) => '<div class="srow"><span class="lbl">' + r[0] + '</span><b>' + r[1] + '</b></div>').join('');
+  const maxW = Math.max(1, ...MODES.map((m) => ((P.modes || {})[m.id] || {}).w || 0));
+  const bars = MODES.map((m) => { const v = ((P.modes || {})[m.id] || {}).w || 0;
+    return '<div class="bar"><span class="bn">' + esc(SHORT[m.id]) + '</span><span class="bt"><i style="width:' + Math.max(4, Math.round(v / maxW * 100)) + '%"></i></span><span class="bv">' + v + '</span></div>'; }).join('');
+  const rows = achs.map(([id, name, how]) => { const got = !!(P.ach && P.ach[id]); const paint = G.SKIN_FOR_ACH && SKIN_FOR_ACH[id] && G.SKINS && SKINS[SKIN_FOR_ACH[id]];
+    return '<div class="b-ach' + (got ? ' got' : '') + '"><span class="ai">' + (got ? IC.tick : (G.UI_IC ? UI_IC.lock : '')) + '</span>'
+      + '<span class="at"><span class="an">' + esc(name) + '</span><span class="ad">' + esc(how) + (paint ? ' &middot; ' + esc(paint.name) + ' paint' : '') + '</span></span></div>'; }).join('');
+  const body = '<div class="cols" style="height:' + u(288) + '">'
+    + '<div class="card cmd" style="width:' + u(186) + '">' + tankImg(s.skinId, 120, 'Your tank') + '<span class="lbl">Rank</span><div class="rank">' + esc(rank) + '</div>'
+    +   '<div class="wl"><div class="wlc"><b>' + wins + '</b><span class="lbl">Wins</span></div><div class="wlc"><b>' + played + '</b><span class="lbl">Played</span></div>'
+    +   '<div class="wlc"><b style="color:#ffb46b">' + streak + '</b><span class="lbl">Streak</span></div></div></div>'
+    + '<div style="width:' + u(224) + ';display:flex;flex-direction:column">' + stats + '<div style="margin-top:' + u(12) + '"><span class="lbl">Wins by mode</span>' + bars + '</div>'
+    +   '<div style="flex:1"></div><button class="ghost" style="justify-content:center;height:' + u(34) + ';font-size:' + u(13) + '" data-go="paint">Paint shop</button></div>'
+    + '<div style="flex:1;min-width:0"><span class="lbl" style="margin-bottom:' + u(6) + '">Challenges</span><div class="achs">' + rows + '</div></div>'
+    + '</div>';
+  return chrome('Service record', esc(s.name) + ' &middot; ' + earned + ' of ' + achs.length + ' challenges cleared', esc(rank), body, '');
+};
+
+// 7 -- PAINT SHOP. Six paints, three earned in the field. The stage tank IS the
+// preview: choosing a paint re-renders drawTank in it.
+SCREENS.paint = function () {
+  const s = state(), SK = G.SKINS || {}, unlocked = (id) => (fn('skinUnlocked') ? skinUnlocked(id) : !SK[id].locked);
+  const cur = SK[s.skinId] || { name: 'Olive' }, lockedN = Object.keys(SK).filter((id) => !unlocked(id)).length;
+  const sws = Object.entries(SK).map(([id, sk]) => { const ok = unlocked(id), on = id === s.skinId;
+    return '<button class="sw' + (on ? ' on' : '') + (ok ? '' : ' lk') + '" data-skin="' + id + '" style="background:linear-gradient(148deg,' + sk.lite + ',' + sk.mid + ' 52%,' + sk.dark + ')" title="' + esc(ok ? sk.name : sk.name + ' — ' + (sk.how || '')) + '">'
+      + (ok ? '' : '<span class="lki">' + (G.UI_IC ? UI_IC.lock : '') + '</span>') + '<span class="swn">' + esc(sk.name) + '</span></button>'; }).join('');
+  return '<div class="bay">' + deco() + beams() + dust() + '<div class="vig"></div><div class="stage">'
+    + '<div class="glow" style="left:' + u(326) + ';top:' + u(96) + ';width:' + u(520) + ';height:' + u(290) + '"></div>'
+    + stage(s.skinId, { cx: 326, cy: 344, w: 286 })
+    + '<div class="phead"><button class="bk" data-back aria-label="Back">' + IC.back + '</button><span style="display:block"><span class="pt">Paint shop</span><span class="ps">Six paints &middot; three earned in the field</span></span><span class="grow"></span><span class="pm">' + esc(s.name) + '</span></div>'
+    + '<div style="position:absolute;left:' + u(26) + ';bottom:' + u(26) + ';z-index:14;width:' + u(300) + '"><span class="lbl">Now fitted</span><div class="b-pname">' + esc(cur.name) + '</div>'
+    +   '<div class="phow">Applied to your hull. Every commander sees this paint in the lobby and on the battlefield.</div></div>'
+    + '<div class="card" style="position:absolute;right:' + u(18) + ';top:' + u(70) + ';bottom:' + u(16) + ';width:' + u(288) + ';padding:' + u(12) + ';z-index:14"><div class="ph">Paint locker<s></s></div><div class="swg">' + sws + '</div>'
+    +   '<div style="margin-top:' + u(11) + ';padding-top:' + u(10) + ';border-top:1px solid rgba(140,168,214,.18)"><span class="lbl">' + (lockedN ? lockedN + ' still locked' : 'Every paint earned') + '</span>'
+    +   '<div style="font-size:' + u(10.5) + ';color:#8798bd;line-height:1.4;margin-top:' + u(5) + ';font-weight:500">Earned in the field, never bought.</div></div>'
+    +   '<button class="go" style="position:absolute;left:' + u(12) + ';right:' + u(12) + ';bottom:' + u(12) + ';width:auto" data-back>Back to the bay</button></div>'
+    + '</div></div>';
+};
+
+// 8 -- BAY CONTROLS. Two things the concept left out are here because the
+// stores require them in-app: account deletion and data export (via the
+// account panel) and the field manual (How to play).
+SCREENS.settings = function () {
+  const s = state();
+  const accState = ($('accountBtn') && $('accountBtn').dataset.state) || 'out';
+  const notifyHidden = !$('notifyBtn') || $('notifyBtn').classList.contains('hidden');
+  let notifyOn = false; try { notifyOn = !IS_NATIVE_BAY && 'Notification' in window && Notification.permission === 'granted'; } catch {}
+  const T = [
+    ['sound',    'Sound',          'Synthesized effects and impacts',        !s.muted, false],
+    ['aimGuide', 'Aim guide',      'Show the first-battle coaching again',   pref('cc_aimguide', false), false],
+    ['motion',   'Reduced motion', 'Calm the menu and battlefield motion',   pref('cc_motion', false), false],
+    ['haptics',  'Haptics',        IS_NATIVE_BAY ? 'Vibrate on impact' : 'Vibrate on impact (phones only)', hapticsOn(), false],
+    ['notify',   'Turn alerts',    notifyHidden ? 'Not available on this build yet' : 'Nudge me when a battle needs me', notifyOn, notifyHidden],
+  ].map((r) => '<div class="row"><span class="rt"><span class="rn2">' + r[1] + '</span><span class="rd">' + r[2] + '</span></span>'
+    + '<button class="rk2' + (r[3] ? ' on' : '') + '" data-toggle="' + r[0] + '" aria-label="' + r[1] + '"' + (r[4] ? ' disabled style="opacity:.4"' : '') + '><i></i><u>' + (r[3] ? 'On' : 'Off') + '</u></button></div>').join('');
+  const row = (n, d, btn, act) => '<div class="row"><span class="rt"><span class="rn2">' + n + '</span><span class="rd">' + d + '</span></span>' + (btn ? '<button class="sbtn" ' + act + '>' + btn + '</button>' : '') + '</div>';
+  const right = row('Account', accState === 'in' ? 'Signed in &mdash; progress syncs across devices' : accState === 'guest' ? 'Guest &mdash; sign in to keep progress across devices' : 'Sign in to keep progress across devices', accState === 'out' ? 'Sign in' : 'Manage', 'data-old="accountBtn"')
+    + row('Callsign', esc(s.name), 'Roll', 'data-roll')
+    + row('Tank paint', esc(s.skin.name) + ' is fitted', 'Open', 'data-go="paint"')
+    + row('How to play', 'The six-chapter field manual', 'Open', 'data-old="helpHomeBtn"')
+    + row('Privacy policy', 'Opens in your browser', '&rarr;', 'data-old="privacyLink"')
+    + '<div class="card" style="margin-top:' + u(10) + ';padding:' + u(10) + ' ' + u(13) + '"><span class="lbl">Built by</span>'
+    + '<div style="font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:' + u(19) + ';text-transform:uppercase;letter-spacing:.05em;margin-top:' + u(4) + ';color:#eef3ff">Abara Brothers</div>'
+    + '<div style="font-size:' + u(10.5) + ';color:#7f8fb5;margin-top:' + u(4) + ';font-weight:500">Cannons &amp; Canyons &mdash; landscape only, best with a friend.</div></div>';
+  return chrome('Bay controls', accState === 'in' ? 'Signed in &mdash; progress syncs across devices' : 'Guest &mdash; progress is stored on this device', 'Abara Brothers',
+    '<div class="set" style="height:' + u(300) + '"><div style="flex:1">' + T + '</div><div style="flex:1">' + right + '</div></div>', '');
+};
+
+// 4 — ARMOURY. Load the rack: n weapons go into the field.
+SCREENS.armoury = function () {
+  const s = state(), n = s.mode.draft, picks = rackPicks().slice(0, n), full = picks.length >= n;
+  const pool = has('ARM_POOL') ? ARM_POOL : [];
+  const cells = RACK_ORDER.map((id) => {
+    const w = weaponInfo(id), on = picks.includes(id), pickable = pool.includes(id);
+    const issued = id === 'cannon' || id === 'nuke';
+    return '<button class="wp' + (on || issued ? ' on' : '') + (pickable ? '' : ' fixed') + '"' + (pickable ? ' data-pick="' + id + '"' : ' disabled') + ' title="' + esc(w.desc) + '">'
+      + '<span class="b-wa">' + (w.ammo === Infinity ? '&#8734;' : w.ammo) + '</span>' + wicon(id) + '<span class="b-wn">' + esc(w.name) + '</span></button>';
+  }).join('');
+  const last = weaponInfo(picks[picks.length - 1] || 'cannon');
+  const info = '<span class="winfo"><span class="wt">' + wicon(last.id) + '<span class="wtn">' + esc(last.name) + '</span><span class="grow"></span>'
+    + '<span class="lbl">' + (last.ammo === Infinity ? 'Unlimited' : last.ammo + ' shots') + '</span></span><span class="wd">' + esc(last.desc) + '</span></span>';
+  const body = '<div class="cols">'
+    + '<div class="card" style="width:' + u(262) + ';position:relative;overflow:hidden">'
+    +   '<div style="position:absolute;left:' + u(12) + ';right:' + u(12) + ';top:' + u(11) + ';z-index:2"><span class="lbl">Rack loadout</span>'
+    +     '<div style="font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:' + u(19) + ';text-transform:uppercase;letter-spacing:.03em;margin-top:' + u(4) + ';color:#eef3ff">' + esc(s.mode.name) + '</div></div>'
+    +   stage(s.skinId, { cx: 131, cy: 224, w: 164 })
+    +   '<div style="position:absolute;left:0;right:0;bottom:' + u(10) + ';padding:0 ' + u(12) + ';z-index:2">'
+    +     '<div style="display:flex;align-items:flex-end;justify-content:space-between"><span class="lbl" style="padding-bottom:' + u(3) + '">Loaded</span>'
+    +       '<span class="b-cnt" style="color:' + (full ? '#3ce88f' : '#ffb46b') + '">' + picks.length + '<span style="font-size:' + u(16) + ';color:#7f8fb5"> / ' + n + '</span></span></div>'
+    +     '<div class="slots">' + slots(picks, n) + '</div></div>'
+    + '</div>'
+    + '<div class="rack">' + cells + info + '</div>'
+    + '</div>';
+  const foot = '<span class="hint">Everyone carries the Cannon &middot; the Railgun only drops in crates</span><span class="grow"></span>'
+    + '<button class="go" ' + (full ? 'data-launch' : 'disabled') + '>' + (full ? 'Open the bay doors' + IC.play : 'Pick ' + (n - picks.length) + ' more') + '</button>';
+  return chrome('Armoury', 'Load the rack &mdash; ' + n + ' weapons go into the field', 'Step 3 of 3', body, foot);
+};
+
+// 5 — LOBBY. Fed by the game's own lobby messages (see the wrappers at the
+// bottom); every button calls the existing handler so the wire is untouched.
+let lobby = { m: null, mode: 'host' };
+SCREENS.lobby = function () {
+  const s = state(), m = lobby.m, searching = lobby.mode === 'search';
+  const solo = !!(G.S && S.local);
+  const code = (m && m.code) || (G.S && S.code) || '';
+  const isHost = m ? m.you === m.host : true;
+  const filled = m ? m.players.filter(Boolean).length : 1;
+  const max = m ? m.max : 2;
+  const mode = m ? modeOf(m.mode) : s.mode;
+  const roster = (() => {
+    if (searching) return '<div class="seat wait"><span class="b-dot" style="background:#6f7fa6;margin-left:' + u(16) + '"></span><span class="sn">Searching for an opponent</span><span class="spin"></span></div>';
+    let out = '';
+    for (let i = 0; i < max; i++) {
+      const p = m && m.players[i], you = m && i === m.you, host = m && i === m.host;
+      const col = fn('seatColor') ? seatColor(i) : '#54c8ff';
+      if (p) out += '<div class="seat">' + (you ? tankImg(s.skinId, 44) : '') + '<span class="b-dot" style="background:' + col + (you ? '' : ';margin-left:' + u(16)) + '"></span>'
+        + '<span class="sn">' + esc(p.name) + '</span><span class="lbl" style="margin-left:auto">' + (host ? 'Host' : '') + (you ? (host ? ' &middot; you' : 'You') : '') + '</span></div>';
+      else out += '<div class="seat wait"><span class="b-dot" style="background:#6f7fa6;margin-left:' + u(16) + '"></span><span class="sn">' + (mode.id === 'duel' ? 'Waiting for a commander' : 'Open slot') + '</span><span class="spin"></span></div>';
+    }
+    return out;
+  })();
+  const hostStarts = mode.id !== 'duel';
+  const minSeats = mode.id === 'ffa' ? 2 : 1;
+  const canStart = isHost && hostStarts && !searching;
+  const nudgeHidden = !$('notifyBtn') || $('notifyBtn').classList.contains('hidden');
+  const left = solo
+    ? '<span class="lbl">Solo round</span><div class="b-code" style="font-size:' + u(44) + ';letter-spacing:.05em;color:#3ce88f;text-shadow:0 0 ' + u(40) + ' rgba(60,232,143,.4)">OFFLINE</div>'
+      + '<div style="margin-top:' + u(14) + ';font-size:' + u(11.5) + ';color:#8798bd;line-height:1.45;max-width:' + u(270) + ';font-weight:500">No connection needed for a solo round. Tee off when ready.</div>'
+    : searching
+    ? '<span class="lbl">Quick match</span><div class="b-code" style="font-size:' + u(44) + ';letter-spacing:.05em">SEARCHING</div>'
+      + '<div style="margin-top:' + u(14) + ';font-size:' + u(11.5) + ';color:#8798bd;line-height:1.45;max-width:' + u(270) + ';font-weight:500">We&rsquo;ll drop you into a battle the moment someone else is looking too.</div>'
+    : '<span class="lbl">Share this code</span><div class="b-code">' + esc(code) + '</div>'
+      + '<div style="display:flex;gap:' + u(8) + ';margin-top:' + u(16) + '"><button class="go cy" style="height:' + u(36) + ';font-size:' + u(15) + ';padding:0 ' + u(16) + '" data-old="copyLinkBtn">' + IC.copy + 'Copy link</button>'
+      + '<button class="ghost" style="height:' + u(36) + ';font-size:' + u(13) + '" data-old="copyCodeBtn">Copy code</button></div>'
+      + '<div style="margin-top:' + u(14) + ';font-size:' + u(11.5) + ';color:#8798bd;line-height:1.45;max-width:' + u(270) + ';font-weight:500">'
+      + (mode.id === 'ffa' && isHost ? 'Send the link. Start whenever you have enough players &mdash; you don&rsquo;t have to wait for a full lobby.' : hostStarts && !isHost ? 'Waiting for the host to start the battle&hellip;' : 'The battle starts the moment they join &mdash; no lobby countdown.') + '</div>';
+  const summary = '<div style="display:flex;gap:' + u(26) + ';margin-top:' + u(16) + ';padding-top:' + u(13) + ';border-top:1px solid rgba(140,168,214,.2)">'
+    + '<span class="ro"><span class="rk">Mode</span><span class="rv">' + esc(mode.name) + '</span></span>'
+    + '<span class="ro"><span class="rk">Players</span><span class="rv">' + filled + ' / ' + max + '</span></span>'
+    + '<span class="ro"><span class="rk">Paint</span><span class="rv">' + esc(s.skin.name) + '</span></span></div>';
+  const right = '<span class="lbl">' + (solo ? 'Deploying' : 'Roster') + '</span>' + roster
+    + (nudgeHidden || solo || searching ? '' : '<button class="ghost" style="width:100%;margin-top:' + u(10) + ';height:' + u(34) + ';font-size:' + u(13) + ';justify-content:center" data-old="notifyBtn">Nudge me when they join</button>')
+    + '<div style="margin-top:' + u(12) + '">' + loadout(rackPicks().slice(0, mode.draft), mode.draft, 'Rack loaded', '<button class="ghost" style="height:' + u(28) + ';font-size:' + u(12) + ';padding:0 ' + u(11) + '" data-go="armoury">Change</button>') + '</div>';
+  const title = solo ? 'Offline solo round' : searching ? 'Searching' : filled >= max ? 'Bay doors opening' : 'Bay doors sealed';
+  const startLabel = filled < minSeats ? 'Start (need ' + minSeats + ')' : mode.id === 'boss' ? 'Engage the WARLORD (' + filled + ')' : mode.id === 'golf' ? 'Tee off (' + filled + ')' : 'Start battle (' + filled + ')';
+  const foot = '<button class="ghost" data-old="cancelBtn">Cancel</button><span class="grow"></span>'
+    + (canStart ? '<button class="go" ' + (filled < minSeats ? 'disabled' : 'data-old="startMatchBtn"') + '>' + startLabel + IC.play + '</button>' : '');
+  return chrome(title, esc(mode.name) + ' &middot; ' + rackPicks().slice(0, mode.draft).length + ' weapons loaded', solo ? 'Solo drop' : searching ? 'Quick match' : 'Waiting room',
+    '<div class="doors"><span class="door" style="left:0"></span><span class="door" style="right:0"></span></div>'
+    + '<div class="cols" style="align-items:center;padding:0 ' + u(34) + '"><div style="width:' + u(420) + '">' + left + summary + '</div><div style="flex:1">' + right + '</div></div>', foot);
+};
+
+// 2 — MISSION BOARD. Five ways to bring down a mountain; a card both selects
+// the mode and steps into its setup.
+SCREENS.modes = function () {
+  const s = state();
+  const cards = MODES.map((x) => {
+    const on = x.id === s.mode.id;
+    return '<button class="mb' + (on ? ' on' : '') + '" data-set="mode=' + x.id + '" data-go="setup">'
+      + '<span class="mbi"><img src="' + art(x.card) + '" alt=""><span class="g"></span><span class="lip"></span>'
+      +   '<span class="mbicn">' + MODE_IC[x.id] + '</span><span class="mbn">' + esc(x.name) + '</span></span>'
+      + '<span class="mbc"><span class="mbt' + (on ? '' : ' mbt2') + '">' + (on ? 'Armed &middot; ' : '') + esc(x.tag) + '</span>'
+      +   '<span class="mbb">' + esc(x.blurb) + '</span>'
+      +   '<span class="mbf"><span class="tagm">' + esc(x.players) + ' players</span><span class="tagm">' + x.draft + ' weapons</span></span></span></button>';
+  }).join('');
+  return chrome('Mission board', 'Five ways to bring down a mountain', 'Step 1 of 3', '<div class="mrow">' + cards + '</div>', '');
+};
+
+// 3 — MATCH SETUP. Opponent, the per-mode option, who you are rolling out as,
+// and the rack. Drives the same variables the old create row did.
+SCREENS.setup = function () {
+  const s = state(), m = s.mode, online = s.opp === 'friend';
+  let extra = '';
+  if (m.id === 'ffa') extra = seg('Commanders on the ridge', 'count', [[3, '3'], [4, '4']], s.count);
+  else if (m.id === 'golf') extra = seg('Tee set', 'tees', [['champ', 'Champ'], ['mens', 'Men&rsquo;s'], ['womens', 'Women&rsquo;s'], ['junior', 'Junior']], s.tees);
+  else if (m.id === 'duel' && !online) extra = seg('Difficulty', 'diff', [['easy', 'Easy'], ['medium', 'Medium'], ['hard', 'Hard']], s.diff);
+  // Only Duel offers the computer today (that is what the old create row did).
+  const oppSeg = m.id === 'duel' ? seg('Opponent', 'opp', [['friend', 'Friend by code'], ['cpu', 'Computer']], s.opp) : '';
+  const oppText = m.id === 'duel' && !online ? 'Computer &middot; ' + esc(cap(s.diff)) : 'Friend by code';
+
+  const body = '<div class="cols">'
+    + '<div style="width:' + u(430) + ';display:flex;flex-direction:column;gap:' + u(12) + '">' + oppSeg + extra
+    +   '<div class="card" style="flex:1;min-height:0;padding:0 ' + u(13) + ';display:flex;flex-direction:column;justify-content:space-evenly">'
+    +     '<div class="crew" style="border:0;background:none;padding:0">' + tankImg(s.skinId, 56, 'Your tank')
+    +       '<span class="ct"><span class="lbl">Rolling out as</span>'
+    +       '<span style="display:block;font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:' + u(19) + ';text-transform:uppercase;letter-spacing:.03em;margin-top:' + u(4) + ';color:#eef3ff">' + esc(s.name) + '</span>'
+    +       '<span style="display:block;font-family:\'JetBrains Mono\',monospace;font-size:' + u(8.5) + ';font-weight:500;letter-spacing:.12em;text-transform:uppercase;color:#ffb46b;margin-top:' + u(4) + '">' + esc(s.skin.name) + ' paint</span></span>'
+    +       '<button class="ghost" style="height:' + u(32) + ';font-size:' + u(13) + '" data-go="paint">Repaint</button></div>'
+    +     '<div style="height:1px;background:rgba(140,168,214,.18)"></div>'
+    +     '<div><div style="display:flex;align-items:center;gap:' + u(8) + '"><span class="lbl">Weapon rack &middot; ' + s.picks.length + ' of ' + m.draft + ' drafted</span><span class="grow"></span>'
+    +       '<button class="ghost" style="height:' + u(28) + ';font-size:' + u(12) + ';padding:0 ' + u(11) + '" data-go="armoury">Edit</button></div>'
+    +       '<div class="slots" style="justify-content:flex-start;margin-top:' + u(9) + '">' + slots(s.picks, m.draft) + '</div></div>'
+    +   '</div>'
+    + '</div>'
+    + '<div class="brief" style="flex:1"><div class="bi"><img src="' + art(m.card) + '" alt=""><span class="g"></span><span>' + esc(m.name) + '</span></div>'
+    +   '<div class="bb">' + esc(m.blurb) + '</div>'
+    +   '<div class="brow"><span class="lbl">Players</span><b>' + esc(m.players) + '</b></div>'
+    +   '<div class="brow"><span class="lbl">Weapons to draft</span><b class="cy">' + m.draft + '</b></div>'
+    +   '<div class="brow"><span class="lbl">Opponent</span><b>' + oppText + '</b></div></div>'
+    + '</div>';
+  const foot = '<button class="ghost" data-go="modes">Change mode</button>'
+    + '<span class="hint">The bay doors stay shut until your loadout is drafted</span><span class="grow"></span>'
+    + '<button class="go" data-go="armoury">To the armoury' + IC.play + '</button>';
+  return chrome(esc(m.name), 'Match setup', 'Step 2 of 3', body, foot);
+};
 
 SCREENS.home = function () {
   const s = state(), m = s.mode;
@@ -206,9 +562,6 @@ SCREENS.home = function () {
     + '<span class="bic">' + MODE_IC[x.id] + '</span><span class="bpl">' + esc(x.players) + '</span>'
     + '<span class="blab"><span class="bnm">' + esc(x.name) + '</span><span class="btg">' + esc(x.tag) + '</span></span></span></button>').join('');
 
-  // Recent sorties: online-only, from the ledger, and HIDDEN when empty (owner
-  // decision 2026-09-14). No read path exists yet, so today it is always empty.
-  const sorties = '';
 
   const stations = [
     ['paint',   IC.roller, 'Paint shop',     esc(s.skin.name) + ' fitted'],
@@ -234,15 +587,19 @@ SCREENS.home = function () {
     +   '<button class="chip sq" data-go="settings" title="Settings">' + IC.gear + '</button>'
     + '</div>'
     + '<div class="boards">' + boards + '</div>'
-    + (sorties ? '<div class="pnl" style="left:' + u(18) + ';top:' + u(162) + ';width:' + u(196) + ';height:' + u(192) + '"><div class="ph">Recent sorties<s></s></div>' + sorties + '</div>' : '')
+    + sortiesPanel()
     + '<div class="pnl" style="right:' + u(18) + ';top:' + u(162) + ';width:' + u(196) + ';height:' + u(192) + '"><div class="ph">Bay stations<s></s></div>' + stations + '</div>'
     + '<div class="lbar">'
     +   '<span class="lic">' + MODE_IC[m.id] + '</span>'
     +   '<span style="display:block"><span class="lnm">' + esc(m.name) + '</span><span class="ltg">' + esc(m.tag) + '</span></span>'
     +   '<span class="lsep"></span>'
+    // One-tap LAUNCH removed the concept's only route into Setup, so the
+    // readouts are that route: tap what you want to change.
+    +   '<button class="ros" data-go="setup" title="Match setup">'
     +   '<span class="ro"><span class="rk">Players</span><span class="rv">' + esc(m.players) + '</span></span>'
     +   '<span class="ro"><span class="rk">Weapon draft</span><span class="rv"><em>' + m.draft + '</em> picks</span></span>'
     +   '<span class="ro"><span class="rk">Paint</span><span class="rv">' + esc(s.skin.name) + '</span></span>'
+    +   '</button>'
     +   '<span class="grow"></span>'
     +   '<button class="ghost" data-go="join">' + IC.keypad + 'Join code</button>'
     +   '<button class="launch" data-launch>' + IC.play + 'Launch</button>'
@@ -263,6 +620,7 @@ SCREENS.join = function () {
 
 /* ---- the module ---------------------------------------------------------------- */
 let current = 'home';
+const stack = [];
 function render(name) {
   const host = $('bay'); if (!host) return;
   current = name in SCREENS ? name : 'home';
@@ -270,33 +628,66 @@ function render(name) {
   host.classList.add('enter');
   setTimeout(() => host.classList.remove('enter'), 900);
   if (current === 'join') { const i = $('bayCode'); if (i) setTimeout(() => i.focus(), 50); }
+  if (current === 'home') loadSorties();
 }
 
 function go(name) {
   // Screens not yet built in the bay fall back to the existing surface for now,
   // so nothing is a dead end while the rest of the concept lands.
-  if (name === 'career' && has('$') && $('careerBtn')) { $('careerBtn').onclick(); return; }
-  if (name === 'settings' && $('accountBtn')) { $('accountBtn').onclick(); return; }   // delete + export live here
-  if (name === 'armoury' && has('openDraft')) { openDraft(state().mode.draft); return; }
-  if (name === 'paint' || name === 'modes' || name === 'setup' || name === 'lobby') { if (has('showToast')) showToast('Next up in the bay — for now use the home controls'); return; }
+  if (name !== current) stack.push(current);
   render(name);
+}
+function back() { render(stack.pop() || 'home'); }
+// Each setter mirrors what the old home's control did, INCLUDING keeping the
+// hidden native <select>s in step, so every existing `.value` read stays true.
+function setField(k, v) {
+  if (k === 'mode' && has('ccMode')) { ccMode = v; }
+  else if (k === 'opp' && has('ccOpp')) { ccOpp = v; }
+  else if (k === 'diff' && has('cpuDifficulty')) { cpuDifficulty = v; try { localStorage.setItem('pt_diff', v); } catch {} if ($('diffSel')) $('diffSel').value = v; }
+  else if (k === 'count' && has('ccMax')) { ccMax = +v; if ($('countSel')) $('countSel').value = String(v); }
+  else if (k === 'tees' && has('ccTees')) { ccTees = v; try { localStorage.setItem('cc_tees', v); } catch {} if ($('teeSel')) $('teeSel').value = v; }
+  if (fn('syncCreateRow')) syncCreateRow();
 }
 
 document.addEventListener('click', (e) => {
   const host = $('bay'); if (!host || !host.classList.contains('active')) return;
-  const t = e.target.closest('[data-go],[data-set],[data-roll],[data-toggle],[data-launch],[data-join]');
+  const t = e.target.closest('[data-go],[data-back],[data-set],[data-roll],[data-toggle],[data-launch],[data-join],[data-pick],[data-old],[data-skin],[data-rematch]');
   if (!t || !host.contains(t)) return;
   if (has('Audio')) Audio.ensure();
+  if ('back' in t.dataset) { back(); return; }
+  if (t.dataset.pick) { togglePick(t.dataset.pick); render(current); return; }
+  // Rematch cannot reach a named player (there is no way to invite one), so it
+  // starts the same mode with a fresh code -- honest about what it can do.
+  if (t.dataset.rematch) { setField('mode', t.dataset.rematch); const b = $('createBtn'); if (b) b.onclick(); return; }
+  if (t.dataset.old) { const b = $(t.dataset.old); if (!b) return; if (typeof b.onclick === 'function') b.onclick(); else b.click(); return; }
+  if (t.dataset.skin) {
+    const id = t.dataset.skin, ok = fn('skinUnlocked') ? skinUnlocked(id) : false;
+    if (!ok) { const sk = G.SKINS && SKINS[id]; if (fn('showToast')) showToast('LOCKED — ' + ((sk && sk.how) || 'earn it in the field') + ' to unlock this paint.'); return; }
+    try { localStorage.setItem('cc_skin', id); } catch {}
+    if (fn('buildSkinRow')) buildSkinRow();
+    render(current); return;
+  }
   if (t.dataset.set) {
     const [k, v] = t.dataset.set.split('=');
-    if (k === 'mode' && has('ccMode')) { ccMode = v; if (has('syncCreateRow')) syncCreateRow(); }
-    render(current); return;
+    // A second tap on the mode that is already armed opens its setup.
+    if (k === 'mode' && current === 'home' && t.classList.contains('on')) { go('setup'); return; }
+    setField(k, v);
+    if (t.dataset.go) go(t.dataset.go); else render(current);
+    return;
   }
   if ('roll' in t.dataset) {
     if (has('setCallsign') && has('rollCallsign')) setCallsign(rollCallsign(state().name));
     render(current); return;
   }
-  if (t.dataset.toggle === 'sound') { const b = $('muteBtn'); if (b) b.click(); render(current); return; }
+  if (t.dataset.toggle) {
+    const k = t.dataset.toggle;
+    if (k === 'sound') { const b = $('muteBtn'); if (b) b.click(); }
+    else if (k === 'aimGuide') setPref('cc_aimguide', !pref('cc_aimguide', false));
+    else if (k === 'motion') { setPref('cc_motion', !pref('cc_motion', false)); applyMotion(); }
+    else if (k === 'haptics') { setPref('cc_haptics', !hapticsOn()); if (hapticsOn()) haptic(900); }
+    else if (k === 'notify') { const b = $('notifyBtn'); if (b && !b.classList.contains('hidden')) b.onclick(); }
+    render(current); return;
+  }
   if ('launch' in t.dataset) { const b = $('createBtn'); if (b) b.onclick(); return; }   // one tap: the exact old path
   if ('join' in t.dataset) {
     const code = ($('bayCode') && $('bayCode').value || '').trim().toUpperCase();
@@ -308,7 +699,14 @@ document.addEventListener('click', (e) => {
   if (t.dataset.go) go(t.dataset.go);
 });
 
-window.Bay = { show: render, go, state, tankURL, MODES };
+window.Bay = { show: render, go, back, state, tankURL, MODES, haptic, rankFor, applyMotion };
+applyMotion();
+
+// LOBBY FEED. renderLobby/showLobby are the game's own; wrap them so the bay
+// sees every message, then let them run unchanged (they also call showScreen,
+// which routes 'lobby' to the bay under the flag).
+if (fn('renderLobby')) { const orig = renderLobby; renderLobby = function (m) { lobby.m = m; lobby.mode = 'host'; return orig.apply(this, arguments); }; }
+if (fn('showLobby'))   { const orig = showLobby;   showLobby   = function (mode) { lobby.mode = mode; if (mode === 'search') lobby.m = null; return orig.apply(this, arguments); }; }
 
 // BOOT. showScreen() routes 'home' to the bay, but it only runs on a TRANSITION
 // to home — on first load #home is simply already `active` in the markup and
