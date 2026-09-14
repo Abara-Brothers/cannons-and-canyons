@@ -1701,7 +1701,25 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
    (house rule: never raw vh/vw) and limited by whichever axis is tighter. On a
    phone that is pixel-faithful; on an iPad the content keeps its proportions
    inside a bay that still fills the whole screen, so there are no bars. */
-:root{ --u: min(calc(100 * var(--vwu) / 932), calc(100 * var(--vhu) / 430)); }
+/* SAFE-AREA INSETS ON THE APP'S OWN AXES. In portrait the whole app is rotated
+   90 degrees about its top-left (see HARD LANDSCAPE LOCK), so the app's logical
+   LEFT edge is the phone's physical TOP -- which is exactly where the Dynamic
+   Island sits when the phone is held in landscape. The game already does this
+   swap for #game and #dock; the bay must too, or the brand and the first mode
+   board sit underneath the island on every notched iPhone. */
+:root{ --sa-l: env(safe-area-inset-left);  --sa-r: env(safe-area-inset-right);
+       --sa-t: env(safe-area-inset-top);   --sa-b: env(safe-area-inset-bottom); }
+@media (orientation: portrait){
+  :root{ --sa-l: env(safe-area-inset-top);   --sa-r: env(safe-area-inset-bottom);
+         --sa-t: env(safe-area-inset-right); --sa-b: env(safe-area-inset-left); }
+}
+/* The design frame is fitted to the SAFE box, not the raw viewport, and offset
+   into it -- insets are asymmetric (one short edge carries the island, the other
+   does not), so merely shrinking a centred frame would still leave content under
+   it on the inset side. */
+:root{ --bay-aw: calc(100 * var(--vwu) - var(--sa-l) - var(--sa-r));
+       --bay-ah: calc(100 * var(--vhu) - var(--sa-t) - var(--sa-b));
+       --u: min(calc(var(--bay-aw) / 932), calc(var(--bay-ah) / 430)); }
 
 #bay{ font-family:Barlow,system-ui,sans-serif; color:#eaf0ff; background:#0b1020;
       -webkit-font-smoothing:antialiased; user-select:none; cursor:default; }
@@ -1711,8 +1729,9 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
 #bay svg{ display:block; }
 #bay [data-go],#bay [data-back],#bay [data-set],#bay [data-pick],#bay [data-skin],#bay [data-toggle],#bay [data-roll]{ cursor:pointer; }
 /* The bay fills the screen; the stage is the design frame, centred, in design units. */
-#bay .stage{ position:absolute; left:50%; top:50%; width:calc(932 * var(--u)); height:calc(430 * var(--u));
-             transform:translate(-50%,-50%); }
+#bay .stage{ position:absolute; width:calc(932 * var(--u)); height:calc(430 * var(--u));
+             left: calc(var(--sa-l) + (var(--bay-aw) - 932 * var(--u)) / 2);
+             top:  calc(var(--sa-t) + (var(--bay-ah) - 430 * var(--u)) / 2); }
 /* The SVG canyon behind the old menu would burn GPU under an opaque bay. */
 
 @media (prefers-reduced-motion: reduce) { #bay *{ animation-duration:.01ms!important; animation-iteration-count:1!important; transition-duration:.01ms!important; } }
