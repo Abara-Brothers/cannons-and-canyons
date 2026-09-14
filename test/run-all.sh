@@ -95,6 +95,10 @@ else
   # Also self-hosted: mocks Supabase locally and asserts the push-persistence
   # wire shapes (verify, upsert, nudge lookup, delivery, dead-endpoint delete).
   run push_persist node test/push_persist.mjs
+  # The Apple half of native push. Mocks Supabase AND both Apple hosts locally,
+  # so it never reaches production or APNs. Exercises HTTP/2, ES256 signing and
+  # the dead-token contract — including the one that must NOT delete a row.
+  run push_apns node test/push_apns.mjs
   # Also self-hosted, and it asks the OS for a free port rather than taking one
   # — kill_server() above only clears $PORT, so a hardcoded port left busy by a
   # crashed run would surface here as a misleading "server never came up".

@@ -12,6 +12,9 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';   // FCM JWT signing — node:crypto, NOT the WebCrypto global
+// APNs speaks HTTP/2 and nothing else. Node's global fetch() is HTTP/1.1 only,
+// so the Apple push path CANNOT be written in the shape fcmSend uses.
+import http2 from 'node:http2';
 import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import {
@@ -276,6 +279,155 @@ async function fcmSend(token, title, body, url) {
   throw new Error(`fcm send ${res.status}`);
 }
 
+// ---- Apple Push Notification service (iOS native push) -----------------------
+// DIRECT to Apple, NOT through Firebase, and that was a deliberate reversal.
+// @capacitor/push-notifications on iOS hands back a RAW APNs device token —
+// PushNotificationsPlugin.swift hex-encodes the deviceToken Data, and there is
+// not one Firebase reference anywhere in the plugin's iOS source. FCM's HTTP v1
+// API accepts only FCM registration tokens, so routing iOS through Firebase
+// would have meant adding the Firebase iOS SDK, a GoogleService-Info.plist and
+// new Swift to the native project: a brand-new native dependency riding inside
+// the first archive this project ever submits. Talking to Apple directly costs
+// one more sender here and leaves the app side completely untouched.
+//
+// APNS_KEY holds the .p8 contents. It is a SECRET — it can push to every device
+// this app is installed on. Server-side only, never in public/, never logged.
+// Absent any of the three settings, iOS push degrades to a no-op and web push
+// and Android FCM are unaffected.
+const APNS_KEY_ID = (process.env.APNS_KEY_ID || '').trim();
+const APNS_TOPIC = (process.env.APNS_TOPIC || NATIVE_APP_ID).trim();
+// Test seam, same reasoning as FCM_API_BASE: push_apns.mjs points these at a
+// local HTTP/2 mock so JWT signing, the request shape, the dead-token contract
+// and the sandbox retry are all exercised without an Apple account.
+const APNS_HOST = (process.env.APNS_HOST || 'https://api.push.apple.com').trim();
+// A token minted by a DEVELOPMENT build (installed from Xcode) is only valid on
+// the sandbox host, and production answers BadDeviceToken for it. Without this
+// retry, every push from a locally-installed build looks like a broken sender
+// and sends you hunting through the Apple portal. Set empty to disable.
+const APNS_FALLBACK_HOST = (process.env.APNS_FALLBACK_HOST === undefined
+  ? 'https://api.sandbox.push.apple.com' : process.env.APNS_FALLBACK_HOST).trim();
+
+let apns = null;
+if (process.env.APNS_KEY && APNS_KEY_ID && APPLE_TEAM_ID) {
+  apns = {
+    key: process.env.APNS_KEY.replace(/\\n/g, '\n'),   // env vars flatten newlines
+    kid: APNS_KEY_ID, iss: APPLE_TEAM_ID, jwt: null, jwtAt: 0,
+  };
+}
+
+function apnsJwt() {
+  const now = Math.floor(Date.now() / 1000);
+  // Apple REFUSES a provider token regenerated more often than once every 20
+  // minutes (TooManyProviderTokenUpdates) and expires one at 60. Refresh in the
+  // middle of that window; minting per-send would be rejected outright.
+  if (apns.jwt && now - apns.jwtAt < 2400) return apns.jwt;
+  const header = b64url(JSON.stringify({ alg: 'ES256', kid: apns.kid }));
+  const claim = b64url(JSON.stringify({ iss: apns.iss, iat: now }));
+  // `dsaEncoding: 'ieee-p1363'` IS NOT OPTIONAL. node:crypto signs an EC key
+  // into DER-wrapped ASN.1 by default; JWS ES256 requires the bare r||s pair,
+  // 64 bytes, no wrapper. Omit it and every single push returns 403
+  // InvalidProviderToken — which reads like a wrong key or a wrong team and
+  // sends you to the Apple portal, not to this line.
+  const sig = crypto.sign('sha256', Buffer.from(`${header}.${claim}`),
+    { key: apns.key, dsaEncoding: 'ieee-p1363' }).toString('base64url');
+  apns.jwt = `${header}.${claim}.${sig}`;
+  apns.jwtAt = now;
+  return apns.jwt;
+}
+
+// One HTTP/2 session per host, reused. Apple explicitly asks providers to keep
+// connections open rather than reconnecting per notification.
+const apnsSessions = new Map();
+function apnsSession(host) {
+  const live = apnsSessions.get(host);
+  if (live && !live.closed && !live.destroyed) return live;
+  const s = http2.connect(host);
+  const forget = () => { if (apnsSessions.get(host) === s) apnsSessions.delete(host); };
+  // An http2 session that emits 'error' with NO listener throws globally, which
+  // would reach uncaughtException and shut the whole process down — every live
+  // match dropped because one push failed. Same lesson as the engine timers.
+  s.on('error', () => { forget(); try { s.destroy(); } catch {} });
+  s.on('close', forget);
+  s.on('goaway', forget);   // Apple cycles connections; reconnect next send
+  s.setTimeout(600000, () => { forget(); try { s.destroy(); } catch {} });
+  apnsSessions.set(host, s);
+  return s;
+}
+
+function apnsRequest(host, token, payload, jwt) {
+  return new Promise((resolve, reject) => {
+    let req;
+    try {
+      req = apnsSession(host).request({
+        ':method': 'POST',
+        ':path': `/3/device/${token}`,
+        authorization: `bearer ${jwt}`,
+        'apns-topic': APNS_TOPIC,
+        'apns-push-type': 'alert',
+        'apns-priority': '10',
+        // Drop rather than store-and-forward. A turn nudge delivered an hour
+        // late is worse than none: the turn has moved on and the notification
+        // is a lie about the state of the match.
+        'apns-expiration': String(Math.floor(Date.now() / 1000) + 600),
+        // Same intent as the Android notification tag — one pending nudge per
+        // player, replaced rather than stacked into a column of them.
+        'apns-collapse-id': 'cc-turn',
+        'content-type': 'application/json',
+      });
+    } catch (e) { return reject(e); }
+    let status = 0, body = '';
+    req.setEncoding('utf8');
+    req.on('response', (h) => { status = Number(h[':status']) || 0; });
+    req.on('data', (c) => { if (body.length < 4096) body += c; });
+    req.on('error', reject);
+    req.on('end', () => resolve({ status, body }));
+    req.setTimeout(10000, () => {
+      try { req.close(http2.constants.NGHTTP2_CANCEL); } catch {}
+      reject(new Error('apns timeout'));
+    });
+    req.end(payload);
+  });
+}
+
+// ONLY these mean "this device is gone, delete the row". Everything else 4xx is
+// a configuration or payload fault that applies to EVERY device equally — a
+// wrong apns-topic answers 400 BadTopic for all of them — and the caller
+// DELETES the subscription on 'gone'. Treating those as dead tokens would wipe
+// every iOS subscription in the database on the first nudge after a
+// misconfiguration, silently and irreversibly. Throw instead: the next turn
+// retries and nothing is lost.
+const APNS_DEAD = /(BadDeviceToken|Unregistered|DeviceTokenNotForTopic)/;
+
+// Same contract as fcmSend: 'ok' | 'gone' | 'skip', throws on transient.
+async function apnsSend(token, title, body, url) {
+  if (!apns) return 'skip';
+  const payload = JSON.stringify({
+    aps: { alert: { title, body }, sound: 'default', 'thread-id': 'cc-turn' },
+    // TOP LEVEL, beside `aps` and not inside it. Capacitor surfaces every key
+    // outside `aps` as notification.data, which is where the client's
+    // pushNotificationActionPerformed listener reads `url` to deep-link into
+    // the room. Nested inside `aps` it is simply never delivered to the app.
+    url: String(url || '/'),
+  });
+
+  let r = await apnsRequest(APNS_HOST, token, payload, apnsJwt());
+  // The cached provider token aged out mid-flight. Mint once and retry rather
+  // than dropping a nudge every time one expires.
+  if (r.status === 403 && /ExpiredProviderToken/.test(r.body)) {
+    apns.jwt = null;
+    r = await apnsRequest(APNS_HOST, token, payload, apnsJwt());
+  }
+  if (r.status === 200) return 'ok';
+  if (r.status === 400 && /BadDeviceToken/.test(r.body) && APNS_FALLBACK_HOST) {
+    const alt = await apnsRequest(APNS_FALLBACK_HOST, token, payload, apnsJwt());
+    if (alt.status === 200) return 'ok';
+    if (alt.status === 410 || APNS_DEAD.test(alt.body)) return 'gone';
+    throw new Error(`apns send ${alt.status} ${alt.body.slice(0, 120)}`);
+  }
+  if (r.status === 410 || APNS_DEAD.test(r.body)) return 'gone';
+  throw new Error(`apns send ${r.status} ${r.body.slice(0, 120)}`);
+}
+
 // Nudge every device the player has, not just the one that subscribed in this
 // room's lifetime: the in-memory sub (if any) plus every persisted sub for
 // the account. A push endpoint answering 404/410 is dead — drop it from both
@@ -285,7 +437,7 @@ async function pushNudgeAsync(room, seat) {
   const pl = room.players[seat];
   // Either transport is enough to be worth trying: a web-only server (no FCM
   // key) still nudges browsers, and an FCM-only one still nudges phones.
-  if ((!webpush && !fcm) || !pl || pl.bot || pl.connected) return;
+  if ((!webpush && !fcm && !apns) || !pl || pl.bot || pl.connected) return;
   const targets = new Map();   // endpoint -> { sub, platform }
   if (pl.pushSub && pl.pushSub.endpoint) targets.set(pl.pushSub.endpoint, { sub: pl.pushSub, platform: 'web' });
   // The live socket first; the identity the engine carried over at disconnect
@@ -320,8 +472,15 @@ async function pushNudgeAsync(room, seat) {
       webpush.sendNotification(sub, payload).catch((err) => {
         if (err && (err.statusCode === 404 || err.statusCode === 410)) drop(endpoint);
       });
+    } else if (platform === 'ios') {
+      // The endpoint IS the raw APNs device token, and it goes straight to
+      // Apple. It is NOT an FCM registration token and FCM would reject it.
+      if (!apns) continue;
+      apnsSend(endpoint, title, body, url)
+        .then((r) => { if (r === 'gone') drop(endpoint); })
+        .catch(() => { /* transient: the next turn tries again */ });
     } else {
-      // android / ios: the endpoint IS the FCM registration token.
+      // android: the endpoint IS the FCM registration token.
       if (!fcm) continue;
       fcmSend(endpoint, title, body, url)
         .then((r) => { if (r === 'gone') drop(endpoint); })
@@ -825,6 +984,7 @@ function handleRequest(req, res) {
       supabaseAdmin: supabaseAdminHealth,  // ok | unconfigured | bad_secret_key | unreachable
       webpush: !!webpush,
       fcm: !!fcm,
+      apns: !!apns,
     }));
   }
   if (urlPath === '/errors') {
@@ -1040,6 +1200,10 @@ function shutdown(reason, code = 0) {
     try { send(client, { type: 'serverRestart' }); } catch {}
   }
   clearInterval(heartbeat);
+  // Long-lived HTTP/2 sessions to Apple would otherwise hold the event loop
+  // open past the exit path and turn a 250ms shutdown into the 4s backstop.
+  for (const [, sess] of apnsSessions) { try { sess.destroy(); } catch {} }
+  apnsSessions.clear();
   try { wss.close(); } catch {}          // stop accepting new sockets
   try { server.close(); } catch {}       // stop accepting new HTTP
   // Let the notice flush, then close sockets and go.
