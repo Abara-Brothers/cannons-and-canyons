@@ -193,7 +193,9 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   if (!block) fail('sw.js has no SHELL precache list — offline support may have been removed');
   else {
     const list = (block[1].match(/'([^']+)'/g) || []).map(s => s.slice(1, -1));
-    const missing = list.filter(p => p !== './' && !existsSync(path.join(ROOT, 'public', p)));
+    // Entries carry a ?v= cache-busting stamp (see 7b); the file on disk does not.
+    const bare = (p) => p.split('?')[0];
+    const missing = list.filter(p => p !== './' && !existsSync(path.join(ROOT, 'public', bare(p))));
     if (!list.length) fail('sw.js SHELL list is empty');
     else if (missing.length) fail(`sw.js precaches files that do not exist — offline shell is incomplete:\n      ${missing.join('\n      ')}`);
     else {
@@ -201,11 +203,45 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
       // LOADING. Name them explicitly so nobody drops one as "just an asset":
       // without either, the app opens with no network and then cannot start a
       // match, which is a worse failure than not opening at all.
-      const core = ['game-core.js', 'room-engine.js'].filter(f => !list.includes(f));
+      const core = ['game-core.js', 'room-engine.js'].filter(f => !list.map(bare).includes(f));
       if (core.length) fail(`sw.js does not precache ${core.join(' and ')} — the app would load offline but could not play`);
       else ok(`sw.js precaches ${list.length} shell entries, all present (game-core + room-engine included)`);
     }
   }
+}
+
+// ---- 7b. index.html AND sw.js MUST REQUEST THE SAME ASSET URLS --------------
+// Static assets are served stale-while-revalidate, so a returning player's
+// already-installed worker answers app.js and styles.css from ITS cache before
+// the new worker can install. The Launch Bay cutover shipped the new
+// index.html against that old cached app.js, which reached for markup the
+// cutover had deleted and threw on null.classList — a blank screen on the
+// first load after deploy, for every returning player.
+//
+// The fix is a ?v= stamp: a URL the old cache has never seen cannot be served
+// stale. That only works while the two files agree. If index.html asks for
+// 'app.js?v=3' and SHELL still precaches 'app.js?v=2', the stamp still busts
+// the stale cache but the offline shell now misses on every load — the app
+// stops working offline, silently, and nothing else would catch it.
+{
+  const html = read('public/index.html');
+  const sw = read('public/sw.js');
+  const block = sw.match(/const SHELL = \[([\s\S]*?)\]/);
+  const shell = block ? (block[1].match(/'([^']+)'/g) || []).map(s => s.slice(1, -1)) : [];
+
+  // Only same-origin css/js the PAGE pulls in: those are the ones a stale copy
+  // can break. Fonts and images are content-addressed by name and harmless.
+  const refs = [...html.matchAll(/(?:src|href)="([^"]+\.(?:js|css)(?:\?[^"]*)?)"/g)]
+    .map(m => m[1])
+    .filter(u => !/^(https?:)?\/\//.test(u) && !u.startsWith('/'));
+
+  const unstamped = refs.filter(u => !u.includes('?v='));
+  const adrift = refs.filter(u => u.includes('?v=') && !shell.includes(u));
+
+  if (!refs.length) fail('index.html references no local css/js — the asset-stamp check has gone blind');
+  else if (unstamped.length) fail(`index.html loads css/js with no ?v= stamp, so a stale cached copy can be served over it:\n      ${unstamped.join('\n      ')}`);
+  else if (adrift.length) fail(`index.html and sw.js SHELL disagree — these are requested but never precached, so offline play breaks:\n      ${adrift.join('\n      ')}`);
+  else ok(`index.html's ${refs.length} local css/js are all stamped and all precached under the same URL`);
 }
 
 // ---- 8. VERSION MUST AGREE ACROSS ALL THREE PROJECTS (ISSUE-016) ------------
