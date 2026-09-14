@@ -2333,3 +2333,8 @@ body.reduce-motion #dock:not(.collapsed) .dock-tab svg { transform: rotate(180de
 body.reduce-motion #dock.collapsed .dock-tab { animation: none; }
 body.reduce-motion .fire-btn * { animation: none !important; }
 body.reduce-motion #bay * { animation-duration:.01ms!important; animation-iteration-count:1!important; transition-duration:.01ms!important; }
+/* in-place patching: the two images that change crossfade instead of swapping */
+#bay .tankw img,#bay .refl img{position:absolute;left:0;top:0}
+#bay .ap img,#bay .tankw img,#bay .refl img{transition:opacity .35s ease}
+#bay img.xf-in{opacity:0}
+#bay img.xf-out{opacity:0!important;pointer-events:none}

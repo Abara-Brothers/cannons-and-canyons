@@ -226,8 +226,8 @@ function chrome(title, sub, meta, body, foot) {
 const tankImg = (skinId, w, alt) => { const src = tankURL(skinId, w); return src ? '<img src="' + src + '" alt="' + (alt || '') + '" style="width:' + u(w) + '">' : ''; };
 const wicon = (id) => (G.ICONS && ICONS[id]) || (G.UI_IC && UI_IC[id]) || '';
 const cap = (t) => String(t).charAt(0).toUpperCase() + String(t).slice(1);
-function seg(label, key, opts, cur) {
-  return '<div class="b-opt"><span class="lbl">' + label + '</span><div class="segs">'
+function seg(label, key, opts, cur, hidden) {
+  return '<div class="b-opt' + (hidden ? ' hidden' : '') + '"><span class="lbl">' + label + '</span><div class="segs">'
     + opts.map((o) => '<button class="seg' + (String(cur) === String(o[0]) ? ' on' : '') + '" data-set="' + key + '=' + o[0] + '">' + o[1] + '</button>').join('')
     + '</div></div>';
 }
@@ -324,14 +324,13 @@ async function loadSorties() {
   } catch {} finally { sorties.busy = false; }
 }
 function sortiesPanel() {
-  if (!sorties.rows.length) return '';
   const rows = sorties.rows.map((r) =>
     '<button class="sor" data-rematch="' + esc(r.mode) + '" title="Play ' + esc(modeOf(r.mode).name) + ' again">'
     + '<span class="stx"><span class="snm">' + esc(r.opponent || 'Commander') + '</span>'
     + '<span class="smt">' + esc(SHORT[r.mode] || r.mode) + ' &middot; ' + esc(ago(r.when)) + '</span></span>'
     + '<span class="res ' + (r.result === 'W' ? 'w' : r.result === 'L' ? 'l' : '') + '">' + esc(r.result || '&ndash;') + '</span>'
     + IC.again.replace('<svg', '<svg class="rag"') + '</button>').join('');
-  return '<div class="pnl" style="left:' + u(18) + ';top:' + u(162) + ';width:' + u(196) + ';height:' + u(192) + '"><div class="ph">Recent sorties<s></s></div>' + rows + '</div>';
+  return '<div class="pnl' + (rows ? '' : ' hidden') + '" style="left:' + u(18) + ';top:' + u(162) + ';width:' + u(196) + ';height:' + u(192) + '"><div class="ph">Recent sorties<s></s></div>' + rows + '</div>';
 }
 
 /* ---- screens ---------------------------------------------------------------- */
@@ -487,12 +486,12 @@ SCREENS.lobby = function () {
     + '<span class="ro"><span class="rk">Players</span><span class="rv">' + filled + ' / ' + max + '</span></span>'
     + '<span class="ro"><span class="rk">Paint</span><span class="rv">' + esc(s.skin.name) + '</span></span></div>';
   const right = '<span class="lbl">' + (solo ? 'Deploying' : 'Roster') + '</span>' + roster
-    + (nudgeHidden || solo || searching ? '' : '<button class="ghost" style="width:100%;margin-top:' + u(10) + ';height:' + u(34) + ';font-size:' + u(13) + ';justify-content:center" data-old="notifyBtn">Nudge me when they join</button>')
+    + '<button class="ghost' + (nudgeHidden || solo || searching ? ' hidden' : '') + '" style="width:100%;margin-top:' + u(10) + ';height:' + u(34) + ';font-size:' + u(13) + ';justify-content:center" data-old="notifyBtn">Nudge me when they join</button>'
     + '<div style="margin-top:' + u(12) + '">' + loadout(rackPicks().slice(0, mode.draft), mode.draft, 'Rack loaded', '<button class="ghost" style="height:' + u(28) + ';font-size:' + u(12) + ';padding:0 ' + u(11) + '" data-go="armoury">Change</button>') + '</div>';
   const title = solo ? 'Offline solo round' : searching ? 'Searching' : filled >= max ? 'Bay doors opening' : 'Bay doors sealed';
   const startLabel = filled < minSeats ? 'Start (need ' + minSeats + ')' : mode.id === 'boss' ? 'Engage the WARLORD (' + filled + ')' : mode.id === 'golf' ? 'Tee off (' + filled + ')' : 'Start battle (' + filled + ')';
   const foot = '<button class="ghost" data-old="cancelBtn">Cancel</button><span class="grow"></span>'
-    + (canStart ? '<button class="go" ' + (filled < minSeats ? 'disabled' : 'data-old="startMatchBtn"') + '>' + startLabel + IC.play + '</button>' : '');
+    + '<button class="go' + (canStart ? '' : ' hidden') + '" ' + (filled < minSeats ? 'disabled' : 'data-old="startMatchBtn"') + '>' + startLabel + IC.play + '</button>';
   return chrome(title, esc(mode.name) + ' &middot; ' + rackPicks().slice(0, mode.draft).length + ' weapons loaded', solo ? 'Solo drop' : searching ? 'Quick match' : 'Waiting room',
     '<div class="doors"><span class="door" style="left:0"></span><span class="door" style="right:0"></span></div>'
     + '<div class="cols" style="align-items:center;padding:0 ' + u(34) + '"><div style="width:' + u(420) + '">' + left + summary + '</div><div style="flex:1">' + right + '</div></div>', foot);
@@ -518,12 +517,13 @@ SCREENS.modes = function () {
 // and the rack. Drives the same variables the old create row did.
 SCREENS.setup = function () {
   const s = state(), m = s.mode, online = s.opp === 'friend';
-  let extra = '';
-  if (m.id === 'ffa') extra = seg('Commanders on the ridge', 'count', [[3, '3'], [4, '4']], s.count);
-  else if (m.id === 'golf') extra = seg('Tee set', 'tees', [['champ', 'Champ'], ['mens', 'Men&rsquo;s'], ['womens', 'Women&rsquo;s'], ['junior', 'Junior']], s.tees);
-  else if (m.id === 'duel' && !online) extra = seg('Difficulty', 'diff', [['easy', 'Easy'], ['medium', 'Medium'], ['hard', 'Hard']], s.diff);
+  // Every group is always in the tree, hidden when it does not apply, so a
+  // change never reshapes the siblings and the in-place patch lands cleanly.
   // Only Duel offers the computer today (that is what the old create row did).
-  const oppSeg = m.id === 'duel' ? seg('Opponent', 'opp', [['friend', 'Friend by code'], ['cpu', 'Computer']], s.opp) : '';
+  const oppSeg = seg('Opponent', 'opp', [['friend', 'Friend by code'], ['cpu', 'Computer']], s.opp, m.id !== 'duel');
+  const extra = seg('Commanders on the ridge', 'count', [[3, '3'], [4, '4']], s.count, m.id !== 'ffa')
+    + seg('Tee set', 'tees', [['champ', 'Champ'], ['mens', 'Men&rsquo;s'], ['womens', 'Women&rsquo;s'], ['junior', 'Junior']], s.tees, m.id !== 'golf')
+    + seg('Difficulty', 'diff', [['easy', 'Easy'], ['medium', 'Medium'], ['hard', 'Hard']], s.diff, !(m.id === 'duel' && !online));
   const oppText = m.id === 'duel' && !online ? 'Computer &middot; ' + esc(cap(s.diff)) : 'Friend by code';
 
   const body = '<div class="cols">'
@@ -619,14 +619,62 @@ SCREENS.join = function () {
 };
 
 /* ---- the module ---------------------------------------------------------------- */
+/* ---- patch in place ----------------------------------------------------------
+   Rebuilding a screen on every tap replaced the whole DOM: the tank and the
+   bay-door image re-decoded and the entrance animation replayed -- a flicker
+   on every mode, paint and weapon choice. So a same-screen change walks the
+   fresh markup against the live tree and changes only what differs: a class
+   here (the CSS transition carries the board lift), a text node there. The
+   entrance animation plays only when a screen is actually entered. The two
+   images that legitimately change -- the door and the tank -- crossfade. */
+const XHTML = 'http://www.w3.org/1999/xhtml';
+const XF_SCOPE = '.ap,.tankw,.refl';
+function crossfade(oldImg, tplImg) {
+  const next = tplImg.cloneNode(true);
+  next.classList.add('xf-in');
+  oldImg.after(next);
+  const go = () => {
+    requestAnimationFrame(() => { next.classList.remove('xf-in'); oldImg.classList.add('xf-out'); });
+    setTimeout(() => { if (oldImg.parentNode) oldImg.remove(); }, 500);
+  };
+  (typeof next.decode === 'function' ? next.decode().catch(() => {}) : Promise.resolve()).then(go);
+}
+function morphNode(live, tpl) {
+  if (live.nodeType === 3 && tpl.nodeType === 3) { if (live.data !== tpl.data) live.data = tpl.data; return; }
+  if (live.nodeType !== 1 || tpl.nodeType !== 1 || live.tagName !== tpl.tagName) { live.replaceWith(tpl.cloneNode(true)); return; }
+  if (live.tagName === 'IMG' && live.getAttribute('src') !== tpl.getAttribute('src') && live.closest(XF_SCOPE)) { crossfade(live, tpl); return; }
+  for (const a of tpl.attributes) if (live.getAttribute(a.name) !== a.value) live.setAttribute(a.name, a.value);
+  for (const a of [...live.attributes]) if (!tpl.hasAttribute(a.name)) live.removeAttribute(a.name);
+  if (live.tagName === 'INPUT' || live.tagName === 'TEXTAREA') return;       // the value is the player's
+  if (live.namespaceURI !== XHTML) { if (live.innerHTML !== tpl.innerHTML) live.replaceWith(tpl.cloneNode(true)); return; }
+  morphChildren(live, tpl);
+}
+function morphChildren(live, tpl) {
+  const L = [...live.childNodes].filter((n) => !(n.nodeType === 1 && n.classList && n.classList.contains('xf-out')));
+  const T = [...tpl.childNodes];
+  const n = Math.min(L.length, T.length);
+  for (let i = 0; i < n; i++) morphNode(L[i], T[i]);
+  for (let i = L.length - 1; i >= n; i--) L[i].remove();
+  for (let i = n; i < T.length; i++) live.appendChild(T[i].cloneNode(true));
+}
+
 let current = 'home';
 const stack = [];
+const base = (n) => (n === 'join' ? 'home' : n);     // the join panel is an overlay on home
 function render(name) {
   const host = $('bay'); if (!host) return;
-  current = name in SCREENS ? name : 'home';
-  host.innerHTML = SCREENS[current]();
-  host.classList.add('enter');
-  setTimeout(() => host.classList.remove('enter'), 900);
+  const next = name in SCREENS ? name : 'home';
+  const entering = !host.firstChild || base(next) !== base(current);
+  const html = SCREENS[next]();
+  current = next;
+  if (entering) {
+    host.innerHTML = html;
+    host.classList.add('enter');
+    clearTimeout(render.t); render.t = setTimeout(() => host.classList.remove('enter'), 900);
+  } else {
+    const tpl = document.createElement('div'); tpl.innerHTML = html;
+    morphChildren(host, tpl);
+  }
   if (current === 'join') { const i = $('bayCode'); if (i) setTimeout(() => i.focus(), 50); }
   if (current === 'home') loadSorties();
 }
