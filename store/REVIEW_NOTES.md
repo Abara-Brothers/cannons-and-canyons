@@ -90,9 +90,17 @@ Worth knowing before a reviewer files them:
 
 ## Known limitations we would rather disclose than have found
 
-- **iPad orientation.** The app declares landscape-only for iPad but does not set
-  `UIRequiresFullScreen`, so iPadOS treats it as resizable and will not enforce that. An
-  iPad held in portrait shows the landscape UI rotated and letterboxed until it is
-  turned. Under review before submission.
+- **iPhone only, deliberately, for this build.** `TARGETED_DEVICE_FAMILY` is `1` and the
+  binary reports `UIDeviceFamily = [1]`, so the app installs on iPad in iPhone
+  compatibility mode. This is a sequencing decision, not an omission. iPadOS 26 removed
+  the ability for an iPad-capable app to opt out of being resizable — Apple's TN3192
+  deprecates `UIRequiresFullScreen` and the system ignores it — so the landscape-only
+  iPad configuration this app previously declared is no longer a supported one, and an
+  iPad-capable bundle whose `~ipad` orientation list is not all four orientations is the
+  ITMS-90474 rejection. Rather than ship an iPad build whose UI renders rotated in a
+  portrait or Split View window, iPad support is held until the layout genuinely reflows
+  on its true axes. The stale landscape-only `UISupportedInterfaceOrientations~ipad`
+  array has been removed rather than left behind, because leaving it is exactly what
+  would re-create ITMS-90474 the day the device family goes back to `1,2`.
 - **No screen-reader support for the battlefield.** It is a canvas game; the menus and
   panels are standard DOM and are labelled.
