@@ -331,6 +331,24 @@
       <div id="kcSkip" class="kc-skip" aria-hidden="true">Tap to skip</div>
       <!-- Between golf holes: what everyone just carded (strokes + to-par). -->
       <div id="holeScore" aria-live="polite"></div>
+      <!-- FIRST BATTLE EVER: three coach marks, one per thing you must do on
+           your first turn. Deliberately NOT in HUD_OVERLAYS — that array
+           switches the canvas aim demo OFF, and this card exists to point AT
+           it. pointer-events:none on the card (the lesson is a gesture on the
+           battlefield underneath); only Skip takes a tap. Steps clear when the
+           player actually performs them — there is no timer and nothing to
+           fail. See the coach block in app.js. -->
+      <div id="coach" class="coach hidden" aria-live="polite">
+        <div class="coach-card">
+          <div class="coach-step" id="coachStep">Step 1 of 3</div>
+          <h2 class="coach-title" id="coachTitle">Touch anywhere. Pull back.</h2>
+          <p class="coach-body" id="coachBody">The shell flies the opposite way &mdash; like a slingshot. Pull further for more power.</p>
+          <div class="coach-dots" id="coachDots" aria-hidden="true">
+            <i class="on"></i><i></i><i></i>
+          </div>
+        </div>
+        <button id="coachSkip" class="coach-skip" type="button">Skip</button>
+      </div>
     </div>
 
     <footer id="dock">
@@ -397,120 +415,201 @@
     <div id="weaponPop" class="wpop" aria-hidden="true"></div>
   </section>
 
-  <!-- ============ HELP ============ -->
-  <!-- Tabbed so every pane fits the screen whole — dashboard menus never
-       scroll. The Basics pane teaches with pictures, not paragraphs. -->
+  <!-- ============ FIELD MANUAL (how to play) ============ -->
+  <!-- Six chapters in a left rail, one pane at a time — landscape-native, and
+       the only shape that holds the whole game without a wall of text. Opened
+       from the battle "?" and from the home dashboard's How to play pill; both
+       go through openHelp(). Nothing from the old three-tab modal was dropped:
+       all 16 weapon rows, all 5 mode cards and all 9 illustrated facts moved
+       into the chapters that own them. It deliberately does NOT reuse .tab /
+       .tabpane — the Career modal shares those, and restyling them there would
+       be collateral. -->
   <div id="helpModal" class="overlay hidden">
-    <div class="overlay-card menu-card">
-      <div class="result">How to play</div>
-      <div class="tabrow" id="helpTabs" role="tablist">
-        <button type="button" class="tab active" data-tab="basics">Basics</button>
-        <button type="button" class="tab" data-tab="arsenal">Arsenal</button>
-        <button type="button" class="tab" data-tab="modes">Modes</button>
+    <div class="fm-card" role="dialog" aria-modal="true" aria-labelledby="fmTitle">
+      <header class="fm-head">
+        <div>
+          <span class="fm-eyebrow">Field manual</span>
+          <h2 class="fm-name" id="fmTitle">How to play</h2>
+        </div>
+        <button id="helpCloseBtn" class="fm-x" type="button" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </header>
+      <div class="fm-body">
+        <nav class="fm-rail" id="fmRail" aria-label="Chapters">
+          <button type="button" class="fm-ch active" data-chap="aiming"><i>01</i><span>Aiming</span></button>
+          <button type="button" class="fm-ch" data-chap="power"><i>02</i><span>Power &amp; fuel</span></button>
+          <button type="button" class="fm-ch" data-chap="weapons"><i>03</i><span>Weapons</span></button>
+          <button type="button" class="fm-ch" data-chap="terrain"><i>04</i><span>Terrain</span></button>
+          <button type="button" class="fm-ch" data-chap="turns"><i>05</i><span>Turns</span></button>
+          <button type="button" class="fm-ch" data-chap="modes"><i>06</i><span>Modes</span></button>
+        </nav>
+        <div class="fm-pane" id="fmPane">
+        <section class="fm-chap active" data-chap="aiming">
+          <h3 class="fm-h">Aiming is a slingshot</h3>
+          <div class="fm-grid">
+            <div class="fm-art">
+              <figure class="hb-fig">
+                          <svg viewBox="0 0 150 100" aria-hidden="true">
+                            <path d="M8 84h134" stroke="#3a4661" stroke-width="3" stroke-linecap="round"/>
+                            <rect x="18" y="72" width="30" height="10" rx="2" fill="#5b6572"/>
+                            <rect x="26" y="64" width="14" height="8" rx="2" fill="#7c8698"/>
+                            <path d="M38 66l12-10" stroke="#7c8698" stroke-width="3.4" stroke-linecap="round"/>
+                            <path d="M50 56 C 74 22, 104 22, 126 62" stroke="#54c8ff" stroke-width="2.4" fill="none" stroke-dasharray="4 5"/>
+                            <path d="M98 56h12M104 50v12" stroke="#9fd8ff" stroke-width="2.6" stroke-linecap="round"/>
+                            <path d="M104 56l-26 24" stroke="#ff9d3d" stroke-width="3" stroke-linecap="round" stroke-dasharray="1 6"/>
+                            <path d="M78 80l8.6-2.4-4.4-7.4z" fill="#ff9d3d"/>
+                            <circle cx="126" cy="62" r="4.6" fill="#ff5a52"/>
+                          </svg>
+                          <figcaption><b>Aim from anywhere</b><span>Touch any empty spot and pull <b>back</b>, slingshot-style &mdash; the shot flies opposite your pull, and a longer pull is more power. Your finger never covers your tank.</span></figcaption>
+                        </figure>
+            </div>
+            <ul class="fm-pts">
+              <li><b>Touch any empty spot,</b> not the tank &mdash; your finger never covers what you are aiming at.</li>
+              <li><b>Drag away</b> from where you want to hit. The shell flies the opposite way.</li>
+              <li><b>Pull distance sets power,</b> shown live as a percentage while you hold.</li>
+              <li><b>Let go to lock it in.</b> Nothing is sent until you press FIRE.</li>
+            </ul>
+          </div>
+          <div class="fm-stats">
+            <div class="fm-stat"><i>Firing arc</i><b>300&#176;</b></div>
+            <div class="fm-stat"><i>Wind</i><b>None</b></div>
+            <div class="fm-stat"><i>Shot clock</i><b>None</b></div>
+          </div>
+          <button id="helpDemoBtn" class="btn fm-demo hidden" type="button">Replay the aim demo</button>
+        </section>
+        <section class="fm-chap" data-chap="power">
+          <h3 class="fm-h">Power, angle and fuel</h3>
+          <div class="fm-grid">
+            <div class="fm-art">
+              <figure class="hb-fig">
+                          <svg viewBox="0 0 150 100" aria-hidden="true">
+                            <path d="M8 74h134" stroke="#3a4661" stroke-width="3" stroke-linecap="round"/>
+                            <rect x="60" y="62" width="30" height="10" rx="2" fill="#5b6572"/>
+                            <rect x="68" y="54" width="14" height="8" rx="2" fill="#7c8698"/>
+                            <path d="M40 67h-16m4-5l-5 5 5 5" stroke="#b6ff5a" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M110 67h16m-4-5l5 5-5 5" stroke="#b6ff5a" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+                            <rect x="30" y="86" width="90" height="8" rx="4" fill="#1c2440"/>
+                            <rect x="30" y="86" width="58" height="8" rx="4" fill="#b6ff5a"/>
+                          </svg>
+                          <figcaption><b>Drive</b><span>Reposition on your turn &mdash; the fuel bar is your range, and it refills every turn.</span></figcaption>
+                        </figure>
+            </div>
+            <ul class="fm-pts">
+              <li><b>A longer pull is more power</b> &mdash; the readout never lies, it is the real number the shot uses.</li>
+              <li><b>Fine-tune with the steppers.</b> ANGLE nudges one degree at a time, POWER one point.</li>
+              <li><b>Driving costs fuel,</b> and the fuel bar is your range for this turn.</li>
+              <li><b>Fuel refills every turn,</b> so repositioning is never a permanent trade.</li>
+            </ul>
+          </div>
+          <div class="fm-stats">
+            <div class="fm-stat"><i>Your HP</i><b>150</b></div>
+            <div class="fm-stat"><i>Turret range</i><b>300&#176;</b></div>
+            <div class="fm-stat"><i>Fuel</i><b>Refills each turn</b></div>
+          </div>
+        </section>
+        <section class="fm-chap" data-chap="weapons">
+          <h3 class="fm-h">Thirteen rounds, five picks</h3>
+          <div class="fm-facts">
+            <div class="hb-fact">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="4.6" rx="2" fill="currentColor" opacity=".45"/><rect x="3" y="9.7" width="18" height="4.6" rx="2" fill="currentColor" opacity=".7"/><rect x="3" y="15.4" width="18" height="4.6" rx="2" fill="currentColor"/><path d="M6.2 17.7l1.5 1.5 2.6-2.8" stroke="#0b1020" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        <div><b>The draft</b><span>Every battle opens with a weapon draft &mdash; 5 picks, or 7 in Boss Fight and Alien Invasion. Two rounds each, four for the Heavy Mortar. Cannon and Nuke are standard issue.</span></div>
+                      </div>
+            <div class="hb-fact">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.4" y="5.4" width="13.6" height="13.2" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5.8 14.8 Q9 8.4 12.6 12.2" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M17.6 4.4h4v4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+                        <div><b>The weapon strip</b><span>The number is ammo left; the little curve beside each icon is that shot&rsquo;s flight shape.</span></div>
+                      </div>
+          </div>
+          <p class="hw-lead">Every round in the game &mdash; ammo, flight shape, and what it actually does.</p>
+          <div id="helpWeapons" class="hw-list"></div>
+        </section>
+        <section class="fm-chap" data-chap="terrain">
+          <h3 class="fm-h">The ground is a weapon</h3>
+          <div class="fm-grid">
+            <div class="fm-art">
+              <figure class="hb-fig">
+                          <svg viewBox="0 0 150 100" aria-hidden="true">
+                            <path d="M8 86h134" stroke="#3a4661" stroke-width="3" stroke-linecap="round"/>
+                            <path d="M52 18 Q75 2 98 18 L88 30 Q75 24 62 30 Z" fill="#e8e2d2"/>
+                            <path d="M56 22l12 30M94 22l-12 30M75 14v38" stroke="#e8e2d2" stroke-width="2"/>
+                            <rect x="61" y="52" width="28" height="24" rx="2" fill="#c9a468"/>
+                            <rect x="66" y="52" width="4" height="24" fill="#4c3b22"/>
+                            <rect x="80" y="52" width="4" height="24" fill="#4c3b22"/>
+                            <circle cx="122" cy="60" r="12" fill="none" stroke="#ff5a52" stroke-width="2.6"/>
+                            <path d="M122 44v8M122 68v8M106 60h8M130 60h8" stroke="#ff5a52" stroke-width="2.6"/>
+                          </svg>
+                          <figcaption><b>Supply drops</b><span>Drive into a crate to open it &mdash; or shoot it open from range and deny it.</span></figcaption>
+                        </figure>
+            </div>
+            <ul class="fm-pts">
+              <li><b>Every crater stays.</b> The map you finish on is not the map you started on.</li>
+              <li><b>Tanks fall into holes</b> you dig &mdash; including your own.</li>
+              <li><b>Barrels, bunkers and crates</b> are all destructible. Nothing on the field is safe.</li>
+              <li><b>Fire and gas linger,</b> burning through turns after the shot that started them.</li>
+              <li><b>Crates drop ammo.</b> Drive into one to open it, or shoot it open from range and deny it.</li>
+            </ul>
+          </div>
+          <div class="fm-facts">
+            <div class="hb-fact">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.4 19h19.2v2.4H2.4z" fill="currentColor"/><path d="M4 19c1.8-1.2 2.4-5.4 4.6-7.6l2.8 2.8C9.2 16.4 6.4 18.6 4 19z" fill="currentColor" opacity=".5"/><path d="M8.6 19c.2-3.4 1.9-6.4 3.4-6.4 1.5 0 3.2 3 3.4 6.4z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+                        <div><b>The ground is real</b><span>Every crater stays. Dig with busters, wall up with Earthworks, or drop a ridge on someone.</span></div>
+                      </div>
+          </div>
+        </section>
+        <section class="fm-chap" data-chap="turns">
+          <h3 class="fm-h">How a turn works</h3>
+          <div class="fm-facts">
+            <div class="hb-fact">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.6c2.6 2.8 4 5.5 4 8.4V17H8v-6c0-2.9 1.4-5.6 4-8.4z" fill="currentColor"/><rect x="7.6" y="18.4" width="8.8" height="2.6" rx="1.2" fill="currentColor" opacity=".55"/></svg>
+                        <div><b>One shot per turn</b><span>No shot clock &mdash; take your time. Firing is what passes the turn.</span></div>
+                      </div>
+            <div class="hb-fact">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="16.6" width="18" height="4.8" rx="2" fill="currentColor" opacity=".5"/><rect x="7" y="12.6" width="10" height="4" rx="2" fill="currentColor"/><path d="M9.4 10.6L12 8l2.6 2.6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        <div><b>Controls tuck away</b><span>Battles open with the dock hidden &mdash; tap the CONTROLS tab to raise it. FIRE, your aim numbers and the selected weapon stay on the sliver.</span></div>
+                      </div>
+            <div class="hb-fact">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.4" cy="10.4" r="6.4" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M15.4 15.4l5 5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/><path d="M7.6 10.4h5.6M10.4 7.6v5.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                        <div><b>The camera is yours</b><span>Pinch to zoom, two-finger drag to pan &mdash; or use the camera button&rsquo;s arrows. Shots never yank the view.</span></div>
+                      </div>
+          </div>
+          <div class="fm-stats">
+            <div class="fm-stat"><i>Shots per turn</i><b>1</b></div>
+            <div class="fm-stat"><i>Shot clock</i><b>None</b></div>
+            <div class="fm-stat"><i>Turn ends when</i><b>You fire</b></div>
+          </div>
+        </section>
+        <section class="fm-chap" data-chap="modes">
+          <h3 class="fm-h">Five ways to play</h3>
+          <div class="hm-cards">
+
+            <div class="hm-card">
+              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4.4 3.2l13.9 13.9-1.8 1.8L2.6 5z"/><path d="M19.6 3.2L5.7 17.1l1.8 1.8L21.4 5z"/><rect x="2.2" y="19.6" width="8.2" height="2.3" rx="1.1"/><rect x="13.6" y="19.6" width="8.2" height="2.3" rx="1.1"/></svg>
+              <div class="hm-txt"><div class="hm-top"><b>Duel</b><i>2 players</i></div><span>One on one. Last tank standing takes it.</span></div>
+            </div>
+            <div class="hm-card">
+              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1.4l1.9 6.4 6.4-4-4 6.4 6.3 1.8-6.3 1.8 4 6.4-6.4-4-1.9 6.4-1.8-6.4-6.4 4 4-6.4L1.4 12l6.3-1.8-4-6.4 6.4 4z"/></svg>
+              <div class="hm-txt"><div class="hm-top"><b>Free-for-all</b><i>3&ndash;4 players</i></div><span>No teams, no mercy &mdash; one survivor. Fallen commanders stay to watch.</span></div>
+            </div>
+            <div class="hm-card">
+              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 7.6L12 3l7 4.6v8L12 20l-7-4.4z"/><rect x="7.2" y="10.2" width="9.6" height="2.8" fill="#0b1020"/><path d="M9 3.8L7.6 1.4M15 3.8l1.4-2.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+              <div class="hm-txt"><div class="hm-top"><b>Boss Fight</b><i>1&ndash;2 co-op</i></div><span>Bring down WARLORD-7. No friendly fire &mdash; your shells never hurt your squad. Beat it and the Midnight paint drops.</span></div>
+            </div>
+            <div class="hm-card">
+              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="10.9" y="2.6" width="1.9" height="15.4"/><path d="M12.8 3l7.2 2.7-7.2 2.7z"/><path d="M3.6 21.4c3.2-2.6 13.6-2.6 16.8 0z"/></svg>
+              <div class="hm-txt"><div class="hm-top"><b>Artillery Golf</b><i>1&ndash;2 players</i></div><span>Nine holes, three clubs &mdash; Driver, Iron, Putter &mdash; fewest strokes wins. Pick your tee set when you create the game.</span></div>
+            </div>
+            <div class="hm-card">
+              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M1.8 13.4l10.2-3.6 10.2 3.6-10.2 3.6z"/><path d="M8.4 10.6C8.9 7.9 10.3 6 12 6s3.1 1.9 3.6 4.6L12 11.9z"/><rect x="3.8" y="18.8" width="2" height="2.6"/><rect x="11" y="19.8" width="2" height="2.6"/><rect x="18.2" y="18.8" width="2" height="2.6"/></svg>
+              <div class="hm-txt"><div class="hm-top"><b>Alien Invasion</b><i>1&ndash;2 co-op</i></div><span>Hold the line: destroy 8 saucers. Every wave comes back harder.</span></div>
+            </div>
+          </div>
+        </section>
+        </div>
       </div>
-
-      <section class="tabpane active" data-pane="basics">
-        <button id="helpDemoBtn" class="btn hidden" type="button">Replay the aim demo</button>
-        <div class="hb-figs">
-          <figure class="hb-fig">
-            <svg viewBox="0 0 150 100" aria-hidden="true">
-              <path d="M8 84h134" stroke="#3a4661" stroke-width="3" stroke-linecap="round"/>
-              <rect x="18" y="72" width="30" height="10" rx="2" fill="#5b6572"/>
-              <rect x="26" y="64" width="14" height="8" rx="2" fill="#7c8698"/>
-              <path d="M38 66l12-10" stroke="#7c8698" stroke-width="3.4" stroke-linecap="round"/>
-              <path d="M50 56 C 74 22, 104 22, 126 62" stroke="#54c8ff" stroke-width="2.4" fill="none" stroke-dasharray="4 5"/>
-              <path d="M98 56h12M104 50v12" stroke="#9fd8ff" stroke-width="2.6" stroke-linecap="round"/>
-              <path d="M104 56l-26 24" stroke="#ff9d3d" stroke-width="3" stroke-linecap="round" stroke-dasharray="1 6"/>
-              <path d="M78 80l8.6-2.4-4.4-7.4z" fill="#ff9d3d"/>
-              <circle cx="126" cy="62" r="4.6" fill="#ff5a52"/>
-            </svg>
-            <figcaption><b>Aim from anywhere</b><span>Touch any empty spot and pull <b>back</b>, slingshot-style &mdash; the shot flies opposite your pull, and a longer pull is more power. Your finger never covers your tank.</span></figcaption>
-          </figure>
-          <figure class="hb-fig">
-            <svg viewBox="0 0 150 100" aria-hidden="true">
-              <path d="M8 74h134" stroke="#3a4661" stroke-width="3" stroke-linecap="round"/>
-              <rect x="60" y="62" width="30" height="10" rx="2" fill="#5b6572"/>
-              <rect x="68" y="54" width="14" height="8" rx="2" fill="#7c8698"/>
-              <path d="M40 67h-16m4-5l-5 5 5 5" stroke="#b6ff5a" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-              <path d="M110 67h16m-4-5l5 5-5 5" stroke="#b6ff5a" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-              <rect x="30" y="86" width="90" height="8" rx="4" fill="#1c2440"/>
-              <rect x="30" y="86" width="58" height="8" rx="4" fill="#b6ff5a"/>
-            </svg>
-            <figcaption><b>Drive</b><span>Reposition on your turn &mdash; the fuel bar is your range, and it refills every turn.</span></figcaption>
-          </figure>
-          <figure class="hb-fig">
-            <svg viewBox="0 0 150 100" aria-hidden="true">
-              <path d="M8 86h134" stroke="#3a4661" stroke-width="3" stroke-linecap="round"/>
-              <path d="M52 18 Q75 2 98 18 L88 30 Q75 24 62 30 Z" fill="#e8e2d2"/>
-              <path d="M56 22l12 30M94 22l-12 30M75 14v38" stroke="#e8e2d2" stroke-width="2"/>
-              <rect x="61" y="52" width="28" height="24" rx="2" fill="#c9a468"/>
-              <rect x="66" y="52" width="4" height="24" fill="#4c3b22"/>
-              <rect x="80" y="52" width="4" height="24" fill="#4c3b22"/>
-              <circle cx="122" cy="60" r="12" fill="none" stroke="#ff5a52" stroke-width="2.6"/>
-              <path d="M122 44v8M122 68v8M106 60h8M130 60h8" stroke="#ff5a52" stroke-width="2.6"/>
-            </svg>
-            <figcaption><b>Supply drops</b><span>Drive into a crate to open it &mdash; or shoot it open from range and deny it.</span></figcaption>
-          </figure>
-        </div>
-        <div class="hb-facts">
-          <div class="hb-fact">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.6c2.6 2.8 4 5.5 4 8.4V17H8v-6c0-2.9 1.4-5.6 4-8.4z" fill="currentColor"/><rect x="7.6" y="18.4" width="8.8" height="2.6" rx="1.2" fill="currentColor" opacity=".55"/></svg>
-            <div><b>One shot per turn</b><span>No shot clock &mdash; take your time. Firing is what passes the turn.</span></div>
-          </div>
-          <div class="hb-fact">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.4" y="5.4" width="13.6" height="13.2" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5.8 14.8 Q9 8.4 12.6 12.2" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M17.6 4.4h4v4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
-            <div><b>The weapon strip</b><span>The number is ammo left; the little curve beside each icon is that shot&rsquo;s flight shape.</span></div>
-          </div>
-          <div class="hb-fact">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="4.6" rx="2" fill="currentColor" opacity=".45"/><rect x="3" y="9.7" width="18" height="4.6" rx="2" fill="currentColor" opacity=".7"/><rect x="3" y="15.4" width="18" height="4.6" rx="2" fill="currentColor"/><path d="M6.2 17.7l1.5 1.5 2.6-2.8" stroke="#0b1020" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            <div><b>The draft</b><span>Every battle opens with a weapon draft &mdash; 5 picks, or 7 in Boss Fight and Alien Invasion. Two rounds each, four for the Heavy Mortar. Cannon and Nuke are standard issue.</span></div>
-          </div>
-          <div class="hb-fact">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="16.6" width="18" height="4.8" rx="2" fill="currentColor" opacity=".5"/><rect x="7" y="12.6" width="10" height="4" rx="2" fill="currentColor"/><path d="M9.4 10.6L12 8l2.6 2.6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            <div><b>Controls tuck away</b><span>Battles open with the dock hidden &mdash; tap the CONTROLS tab to raise it. FIRE, your aim numbers and the selected weapon stay on the sliver.</span></div>
-          </div>
-          <div class="hb-fact">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.4" cy="10.4" r="6.4" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M15.4 15.4l5 5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/><path d="M7.6 10.4h5.6M10.4 7.6v5.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-            <div><b>The camera is yours</b><span>Pinch to zoom, two-finger drag to pan &mdash; or use the camera button&rsquo;s arrows. Shots never yank the view.</span></div>
-          </div>
-          <div class="hb-fact">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.4 19h19.2v2.4H2.4z" fill="currentColor"/><path d="M4 19c1.8-1.2 2.4-5.4 4.6-7.6l2.8 2.8C9.2 16.4 6.4 18.6 4 19z" fill="currentColor" opacity=".5"/><path d="M8.6 19c.2-3.4 1.9-6.4 3.4-6.4 1.5 0 3.2 3 3.4 6.4z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
-            <div><b>The ground is real</b><span>Every crater stays. Dig with busters, wall up with Earthworks, or drop a ridge on someone.</span></div>
-          </div>
-        </div>
-      </section>
-
-      <section class="tabpane" data-pane="arsenal">
-        <p class="hw-lead">Every round in the game &mdash; ammo, flight shape, and what it actually does.</p>
-        <div id="helpWeapons" class="hw-list"></div>
-      </section>
-
-      <section class="tabpane" data-pane="modes">
-        <div class="hm-cards">
-          <div class="hm-card">
-            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4.4 3.2l13.9 13.9-1.8 1.8L2.6 5z"/><path d="M19.6 3.2L5.7 17.1l1.8 1.8L21.4 5z"/><rect x="2.2" y="19.6" width="8.2" height="2.3" rx="1.1"/><rect x="13.6" y="19.6" width="8.2" height="2.3" rx="1.1"/></svg>
-            <div class="hm-txt"><div class="hm-top"><b>Duel</b><i>2 players</i></div><span>One on one. Last tank standing takes it.</span></div>
-          </div>
-          <div class="hm-card">
-            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1.4l1.9 6.4 6.4-4-4 6.4 6.3 1.8-6.3 1.8 4 6.4-6.4-4-1.9 6.4-1.8-6.4-6.4 4 4-6.4L1.4 12l6.3-1.8-4-6.4 6.4 4z"/></svg>
-            <div class="hm-txt"><div class="hm-top"><b>Free-for-all</b><i>3&ndash;4 players</i></div><span>No teams, no mercy &mdash; one survivor. Fallen commanders stay to watch.</span></div>
-          </div>
-          <div class="hm-card">
-            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 7.6L12 3l7 4.6v8L12 20l-7-4.4z"/><rect x="7.2" y="10.2" width="9.6" height="2.8" fill="#0b1020"/><path d="M9 3.8L7.6 1.4M15 3.8l1.4-2.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-            <div class="hm-txt"><div class="hm-top"><b>Boss Fight</b><i>1&ndash;2 co-op</i></div><span>Bring down WARLORD-7. No friendly fire &mdash; your shells never hurt your squad. Beat it and the Midnight paint drops.</span></div>
-          </div>
-          <div class="hm-card">
-            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="10.9" y="2.6" width="1.9" height="15.4"/><path d="M12.8 3l7.2 2.7-7.2 2.7z"/><path d="M3.6 21.4c3.2-2.6 13.6-2.6 16.8 0z"/></svg>
-            <div class="hm-txt"><div class="hm-top"><b>Artillery Golf</b><i>1&ndash;2 players</i></div><span>Nine holes, three clubs &mdash; Driver, Iron, Putter &mdash; fewest strokes wins. Pick your tee set when you create the game.</span></div>
-          </div>
-          <div class="hm-card">
-            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M1.8 13.4l10.2-3.6 10.2 3.6-10.2 3.6z"/><path d="M8.4 10.6C8.9 7.9 10.3 6 12 6s3.1 1.9 3.6 4.6L12 11.9z"/><rect x="3.8" y="18.8" width="2" height="2.6"/><rect x="11" y="19.8" width="2" height="2.6"/><rect x="18.2" y="18.8" width="2" height="2.6"/></svg>
-            <div class="hm-txt"><div class="hm-top"><b>Alien Invasion</b><i>1&ndash;2 co-op</i></div><span>Hold the line: destroy 8 saucers. Every wave comes back harder.</span></div>
-          </div>
-        </div>
-      </section>
-
-      <button id="helpCloseBtn" class="btn big primary">Got it</button>
+      <footer class="fm-foot">
+        <span class="fm-count" id="fmCount">Chapter 1 of 6</span>
+        <button id="fmNext" class="btn primary fm-next" type="button">Next</button>
+      </footer>
     </div>
   </div>
 

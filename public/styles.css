@@ -1075,7 +1075,7 @@ body.golf .fuel { display: none; }
 .hb-fig { margin: 0; background: var(--panel-2); border: 1px solid var(--line); border-radius: 13px; padding: clamp(6px, calc(1.3 * var(--vhu)), 10px); }
 .hb-fig svg { width: 100%; max-width: 190px; height: auto; margin: 0 auto; display: block; }
 .hb-fig figcaption { margin-top: clamp(4px, calc(1 * var(--vhu)), 8px); text-align: left; }
-.hb-fig figcaption b { display: block; color: var(--text); font-size: clamp(11px, calc(1.8 * var(--vhu)), 13.5px); margin-bottom: 2px; }
+.hb-fig figcaption > b { display: block; color: var(--text); font-size: clamp(11px, calc(1.8 * var(--vhu)), 13.5px); margin-bottom: 2px; }
 .hb-fig figcaption span { display: block; font-size: clamp(9.5px, calc(1.5 * var(--vhu)), 11.5px); line-height: 1.4; color: var(--muted); }
 .hb-facts { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(5px, calc(1 * var(--vwu)), 9px); }
 .hb-fact {
@@ -1126,6 +1126,161 @@ body.golf .fuel { display: none; }
   padding: 1px 7px; white-space: nowrap;
 }
 .hm-txt span { display: block; margin-top: 2px; font-size: clamp(9.5px, calc(1.5 * var(--vhu)), 11.5px); line-height: 1.4; color: var(--muted); }
+
+/* ---- FIELD MANUAL ----------------------------------------------------------
+   The how-to-play modal, rebuilt as a left rail of chapters beside one pane.
+   It does NOT reuse .overlay-card: that caps at 400px (780 on landscape
+   phones) and centres its text, and a two-pane reference wants the whole
+   screen. It does NOT reuse .tab/.tabpane either — #careerModal shares those,
+   so restyling them there would be collateral damage. Heights go through
+   --dvhu/--vhu like everything else (landscape is absolute). */
+.fm-card {
+  width: 100%; max-width: 980px; height: calc(92 * var(--dvhu)); max-height: 620px;
+  display: flex; flex-direction: column; min-height: 0; text-align: left;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 20px;
+  box-shadow: var(--shadow); overflow: hidden;
+}
+.fm-head {
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: clamp(9px, calc(1.9 * var(--vhu)), 15px) clamp(13px, calc(2.4 * var(--vwu)), 20px);
+  border-bottom: 1px solid var(--line);
+}
+.fm-eyebrow {
+  display: block; font-size: clamp(8.5px, calc(1.3 * var(--vhu)), 10px); font-weight: 800;
+  letter-spacing: .18em; text-transform: uppercase; color: var(--primary);
+}
+.fm-name { margin: 2px 0 0; font-size: clamp(15px, calc(2.8 * var(--vhu)), 22px); font-weight: 900; }
+.fm-x {
+  flex: 0 0 auto; width: 34px; height: 34px; border-radius: 11px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; padding: 0;
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--muted);
+}
+.fm-x svg { width: 17px; height: 17px; }
+.fm-x:active { transform: scale(.94); }
+
+.fm-body { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: clamp(112px, calc(21 * var(--vwu)), 176px) 1fr; }
+.fm-rail {
+  min-height: 0; overflow-y: auto; border-right: 1px solid var(--line);
+  background: rgba(11, 16, 32, .45);
+  padding: clamp(5px, calc(1.1 * var(--vhu)), 9px) 0;
+}
+.fm-ch {
+  width: 100%; display: flex; align-items: center; gap: 9px; cursor: pointer; text-align: left;
+  padding: clamp(6px, calc(1.35 * var(--vhu)), 11px) clamp(8px, calc(1.6 * var(--vwu)), 14px);
+  border: 0; border-left: 3px solid transparent; background: transparent; color: var(--muted);
+  font: inherit; font-weight: 700; font-size: clamp(10.5px, calc(1.75 * var(--vhu)), 13.5px);
+}
+.fm-ch i {
+  font-style: normal; font-weight: 800; font-size: clamp(8.5px, calc(1.3 * var(--vhu)), 10px);
+  letter-spacing: .06em; color: #6c789d; flex: 0 0 auto;
+}
+.fm-ch.active { color: var(--text); background: rgba(255, 122, 46, .12); border-left-color: var(--primary); }
+.fm-ch.active i { color: var(--primary); }
+
+.fm-pane {
+  min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  padding: clamp(10px, calc(2.1 * var(--vhu)), 18px) clamp(12px, calc(2.4 * var(--vwu)), 22px);
+}
+.fm-chap { display: none; }
+.fm-chap.active { display: block; }
+.fm-h {
+  margin: 0 0 clamp(8px, calc(1.7 * var(--vhu)), 14px);
+  font-size: clamp(15px, calc(2.9 * var(--vhu)), 24px); font-weight: 900; line-height: 1.1;
+}
+.fm-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: clamp(10px, calc(2 * var(--vwu)), 20px); align-items: start; }
+.fm-art { background: var(--panel-2); border: 1px solid var(--line); border-radius: 13px; padding: clamp(6px, calc(1.3 * var(--vhu)), 11px); }
+.fm-art .hb-fig { background: transparent; border: 0; padding: 0; }
+.fm-art figcaption { display: none; }   /* the bullets beside it say this already */
+.fm-pts { margin: 0; padding: 0; list-style: none; display: grid; gap: clamp(6px, calc(1.3 * var(--vhu)), 11px); }
+.fm-pts li {
+  position: relative; padding-left: 15px;
+  font-size: clamp(10px, calc(1.6 * var(--vhu)), 12.5px); line-height: 1.45; color: var(--muted);
+}
+/* Hand-drawn marker, not a bullet character — house rule 1 bans the geometric
+   glyph ranges outright, and a CSS square cannot drift into an emoji. */
+.fm-pts li::before {
+  content: ""; position: absolute; left: 0; top: .52em;
+  width: 6px; height: 2px; border-radius: 1px; background: var(--primary);
+}
+.fm-pts li b { color: var(--text); font-weight: 700; }
+
+.fm-facts { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(5px, calc(1 * var(--vwu)), 9px); margin-bottom: clamp(8px, calc(1.7 * var(--vhu)), 14px); }
+.fm-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(5px, calc(1 * var(--vwu)), 9px); margin-top: clamp(9px, calc(1.9 * var(--vhu)), 15px); }
+.fm-stat { background: var(--panel-2); border: 1px solid var(--line); border-radius: 11px; padding: clamp(5px, calc(1.1 * var(--vhu)), 9px) clamp(7px, calc(1.4 * var(--vwu)), 12px); }
+.fm-stat i {
+  display: block; font-style: normal; font-size: clamp(8px, calc(1.25 * var(--vhu)), 9.5px);
+  font-weight: 800; letter-spacing: .14em; text-transform: uppercase; color: var(--muted);
+}
+.fm-stat b { display: block; margin-top: 2px; font-size: clamp(13px, calc(2.3 * var(--vhu)), 18px); font-weight: 900; }
+.fm-demo { margin-top: clamp(9px, calc(1.9 * var(--vhu)), 15px); }
+
+.fm-foot {
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: clamp(8px, calc(1.7 * var(--vhu)), 14px) clamp(13px, calc(2.4 * var(--vwu)), 20px);
+  border-top: 1px solid var(--line);
+}
+.fm-count { font-size: clamp(9.5px, calc(1.5 * var(--vhu)), 11.5px); font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.fm-next { width: auto; min-width: 128px; }
+
+/* Short landscape phones: the rail loses its labels before the pane loses its
+   content — finding a chapter matters less than being able to read one. */
+@media (orientation: landscape) and (max-height: 420px), (orientation: portrait) and (max-width: 420px) {
+  .fm-card { height: calc(96 * var(--dvhu)); }
+  .fm-body { grid-template-columns: clamp(84px, calc(17 * var(--vwu)), 120px) 1fr; }
+  .fm-grid { grid-template-columns: 1fr; }
+  .fm-art { display: none; }
+  .fm-facts { grid-template-columns: 1fr 1fr; }
+  /* three small tiles still fit three-up; wrapping them left a 2+1 gap. */
+  .fm-stats { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* ---- FIRST-BATTLE COACH MARKS ----------------------------------------------
+   Three steps over the live board, one per thing a first-timer must do. Same
+   stage-overlay pattern as .kc-skip (absolute inside #stage, z 19 — above the
+   stage buttons at 4 and the scanlines at 3, below .overlay at 20), and the
+   same pointer-events:none: the lesson is a gesture on the battlefield
+   underneath, so the card must never eat it. Only Skip takes a tap.
+   Anchored bottom-LEFT because the canvas demo owns the middle and the top
+   caption line, and #stage shrinks when the dock is raised, so `bottom` tracks
+   the dock on its own. */
+.coach {
+  position: absolute; z-index: 19; pointer-events: none;
+  left: max(14px, env(safe-area-inset-left)); bottom: max(14px, env(safe-area-inset-bottom));
+  display: flex; align-items: flex-end; gap: 10px;
+  max-width: min(420px, calc(62 * var(--vwu)));
+}
+.coach.hidden { display: none; }
+.coach-card {
+  background: rgba(10, 14, 30, .88); border: 1px solid rgba(122, 150, 220, .30);
+  border-radius: 15px; box-shadow: 0 14px 34px rgba(0, 0, 0, .55);
+  backdrop-filter: blur(7px);
+  padding: clamp(9px, calc(1.9 * var(--vhu)), 15px) clamp(12px, calc(2.2 * var(--vwu)), 18px);
+}
+.coach-step {
+  font-size: clamp(8.5px, calc(1.3 * var(--vhu)), 10px); font-weight: 800;
+  letter-spacing: .18em; text-transform: uppercase; color: var(--accent);
+}
+.coach-title {
+  margin: clamp(3px, calc(0.7 * var(--vhu)), 6px) 0 0;
+  font-size: clamp(14px, calc(2.6 * var(--vhu)), 21px); font-weight: 900; line-height: 1.08;
+}
+.coach-body {
+  margin: clamp(3px, calc(0.7 * var(--vhu)), 6px) 0 0;
+  font-size: clamp(10px, calc(1.6 * var(--vhu)), 12.5px); line-height: 1.4; color: #c3cee9;
+}
+.coach-dots { display: flex; gap: 5px; margin-top: clamp(6px, calc(1.3 * var(--vhu)), 11px); }
+.coach-dots i { width: 9px; height: 4px; border-radius: 2px; background: rgba(234, 240, 255, .28); transition: width .2s ease, background .2s ease; }
+.coach-dots i.on { width: 22px; background: var(--primary); }
+.coach-skip {
+  pointer-events: auto; cursor: pointer; flex: 0 0 auto;
+  padding: 8px 14px; border-radius: 999px;
+  border: 1px solid rgba(234, 240, 255, .26); background: rgba(10, 14, 30, .7);
+  color: rgba(234, 240, 255, .72);
+  font: 800 10.5px/1 system-ui, -apple-system, sans-serif; letter-spacing: .14em; text-transform: uppercase;
+}
+.coach-skip:active { transform: scale(.95); }
+/* The killcam takes the screen; a coach mark must not argue with it. */
+#game.killcam .coach { opacity: 0; }
 
 /* Career */
 .career-wrap { margin: 6px 0 12px; min-height: 0; }

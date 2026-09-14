@@ -2139,6 +2139,7 @@ function applyTurn(m) {
     S.selected = 'putter';
   }
   updateFuel(); updateDock(); buildWeaponStrip();
+  if (m.turn === S.you) coachMaybeStart();   // combat: after the draft. Golf: straight away.
 }
 
 function applyMove(m) {
@@ -2548,7 +2549,7 @@ canvas.addEventListener('pointermove', (e) => {
     const dx = x - S.pullAnchor.x, dy = y - S.pullAnchor.y;
     const pull = Math.hypot(dx, dy);
     if (pull > AIM_DEADZONE) aimFromVector(dx, dy);
-    if (pull > 48) markAimGuideDone();       // a real pull — the gesture is learned
+    if (pull > 48) { markAimGuideDone(); coachPass('pull'); }   // a real pull — the gesture is learned
   }
 });
 const endPointer = (e) => {
@@ -2613,6 +2614,94 @@ function guideDir() {
   }
   return dx < 0 ? -1 : 1;
 }
+
+// ---- FIRST BATTLE: THREE COACH MARKS ----------------------------------------
+// The canvas demo above teaches the GESTURE. This teaches the TURN: pull, fire,
+// drive — the three things a first-timer must do and, without being told, does
+// not. It rides on top of the demo rather than replacing it (Jordan): the ring
+// and the pull arrowhead are drawn inside drawAimGuide, and the arc's cyan
+// arrowhead inside drawAim, so there is one hand, one lifecycle, one flag per
+// lesson and the Help replay button keeps working.
+//
+// THREE THINGS THAT LOOK LIKE BUGS AND ARE NOT:
+//  1. #coach is deliberately NOT in HUD_OVERLAYS. That array is what
+//     aimGuideOn() checks to switch the demo OFF, and this card exists to
+//     point AT the demo — listing it here would extinguish the hand it rings.
+//  2. The card is pointer-events:none (CSS). The lesson is a gesture on the
+//     battlefield underneath; a card that ate the tap would block the very
+//     thing it asks for. Only Skip is clickable.
+//  3. Steps are a SET, not a queue. A player who drives before firing ticks
+//     that step off early and is never told to do something they cannot —
+//     after firing, the turn is over and driving has to wait for the next one.
+// Grandfathered on PROF.shots the same way the demo is: this is for battle one.
+const COACH_KEY = 'cc_coach';
+const COACH_STEPS = [
+  { id: 'pull', title: 'Touch anywhere. Pull back.',
+    body: 'The shell flies the opposite way — like a slingshot. Pull further for more power.' },
+  { id: 'fire', title: 'Now fire.',
+    body: 'Tap the CONTROLS tab to bring the panel up, then hit FIRE. One shot each turn — no clock, take your time.' },
+  { id: 'drive', title: 'You can move, too.',
+    body: 'Drive left or right on your turn. It spends fuel, and the fuel bar refills every turn.' },
+];
+let coachDone = false;
+try {
+  coachDone = localStorage.getItem(COACH_KEY) === '1' || PROF.shots > 0;
+} catch {}
+const coachMet = { pull: false, fire: false, drive: false };
+let coachLive = false;      // the sequence is running right now
+let coachShown = null;      // step currently painted — the DOM is touched only on change
+let coachVis = null;        // last visibility written, same reason
+
+function coachCurrent() {
+  if (!coachLive) return null;
+  const st = COACH_STEPS.find(s => !coachMet[s.id]);
+  return st ? st.id : null;
+}
+// Visible only when the player could actually act on it. Mirrors aimGuideOn()'s
+// overlay test so the card and the hand appear and vanish together.
+function coachShowable() {
+  if (!coachLive || !S.playing || S.picking || S.killcam) return false;
+  if (S.turn !== S.you || S.anim) return false;
+  return !HUD_OVERLAYS.some(id => { const el = $(id); return el && !el.classList.contains('hidden'); });
+}
+function coachMaybeStart() {
+  if (coachDone || coachLive) return;
+  if (!S.playing || S.picking || S.turn !== S.you) return;   // combat drafts first; golf lands straight here
+  coachLive = true;
+  renderCoach();
+}
+function coachPass(id) {
+  if (!coachLive || coachMet[id]) return;
+  coachMet[id] = true;
+  if (!coachCurrent()) coachEnd(true);   // all three done — never again on this device
+  else renderCoach();
+}
+function coachEnd(persist) {
+  coachLive = false;
+  if (persist) {
+    coachDone = true;
+    try { localStorage.setItem(COACH_KEY, '1'); } catch {}
+  }
+  renderCoach();
+}
+function renderCoach() {
+  const el = $('coach'); if (!el) return;
+  const id = coachCurrent();
+  const show = !!id && coachShowable();
+  if (show !== coachVis) { el.classList.toggle('hidden', !show); coachVis = show; }
+  if (!show || id === coachShown) return;
+  coachShown = id;
+  const i = COACH_STEPS.findIndex(s => s.id === id);
+  $('coachStep').textContent = `Step ${i + 1} of ${COACH_STEPS.length}`;
+  $('coachTitle').textContent = COACH_STEPS[i].title;
+  $('coachBody').textContent = COACH_STEPS[i].body;
+  const dots = $('coachDots').children;
+  for (let k = 0; k < dots.length; k++) dots[k].classList.toggle('on', k === i);
+}
+// Skipping ends the demo too. Leaving the hand looping with no card explaining
+// it would be the worst of both.
+$('coachSkip').onclick = () => { markAimGuideDone(); coachEnd(true); };
+
 // The demo itself. Screen-space, drawn above the world (outside the shake
 // transform), under the flash/killcam chrome. Everything it shows is the SAME
 // visual the real gesture produces — the anchor cross, the dashed tether, the
@@ -2732,6 +2821,45 @@ function drawAimGuide() {
     const squash = pressed ? 0.94 : t >= HOLD ? 1.05 : 1.0;
     drawGuideHand(fx, fy, hs * squash, -(0.10 + 0.12 * k), dir, pressed);
 
+    // FIRST BATTLE ONLY: ring the hand and point the pull, so the card's
+    // "touch anywhere and pull back" has something on screen to refer to.
+    // Geometry mirrors drawGuideHand's own: the fingertip is the origin, the
+    // fist trails to y ~1.04H and to the dir side, so the ring centre leads
+    // right and down from (fx, fy). Everything else here is unchanged for
+    // every player past their first match.
+    if (pressed && coachCurrent() === 'pull') {
+      const pulse = MOTION_OK ? 0.62 + 0.38 * (0.5 + 0.5 * Math.sin(now / 250)) : 1;
+      ctx.globalAlpha = env * pulse;
+      ctx.strokeStyle = 'rgba(84,200,255,.95)'; ctx.lineWidth = 2.5;
+      ctx.setLineDash([9, 8]);
+      ctx.beginPath();
+      ctx.arc(fx + dir * hs * 0.13, fy + hs * 0.48, hs * 0.66, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // Arrowhead at the hand end of the tether, pointing the way to drag —
+      // the same ux/uy the demo itself pulls along, so it can never disagree.
+      // Set clear of the fingertip, not on it: overlapping the hand it is
+      // meant to annotate turned the arrow into a smudge. Dark under-stroke
+      // for the same reason the tracer dots have one — it has to read over a
+      // bright sky and over snow.
+      if (k > 0.25) {
+        const px4 = -uy, py4 = ux;
+        const tipX = fx + ux * 36, tipY = fy + uy * 36;
+        const baX = fx + ux * 15, baY = fy + uy * 15;
+        ctx.globalAlpha = env;
+        for (const [w5, st] of [[6, 'rgba(10,12,16,.55)'], [0, '#ff7a2e']]) {
+          ctx.beginPath();
+          ctx.moveTo(tipX, tipY);
+          ctx.lineTo(baX + px4 * 9, baY + py4 * 9);
+          ctx.lineTo(baX - px4 * 9, baY - py4 * 9);
+          ctx.closePath();
+          if (w5) { ctx.strokeStyle = st; ctx.lineWidth = w5; ctx.lineJoin = 'round'; ctx.stroke(); }
+          else { ctx.fillStyle = st; ctx.fill(); }
+        }
+      }
+      ctx.globalAlpha = env;
+    }
+
     // Caption — plain-text house voice, dark under-print for legibility.
     const line = t < DRAG ? 'PULL BACK LIKE A SLINGSHOT' : 'LONGER PULL = MORE POWER';
     const cy3 = Math.max(cssH * 0.16, ay - msz * 0.42);   // proportional floor clears the scoreboard
@@ -2793,7 +2921,11 @@ function drawGuideHand(x, y, H, lean, dir, pressed) {
 
 function holdMove(btn, dir) {
   let iv = null;
-  const tick = () => { if (myTurn() && S.fuel >= MOVE_MIN) sendMsg({ type: 'move', dir }); };
+  const tick = () => {
+    if (!myTurn() || S.fuel < MOVE_MIN) return;
+    sendMsg({ type: 'move', dir });
+    coachPass('drive');                        // a move actually sent, not just a press
+  };
   const start = (e) => { e.preventDefault(); tick(); iv = setInterval(tick, 45); };
   const stop = () => { clearInterval(iv); iv = null; };
   btn.addEventListener('pointerdown', start);
@@ -2823,6 +2955,7 @@ $('fireBtn').onclick = () => {
   sendMsg({ type: 'fire', weapon: S.selected, angle: a.angle, power: a.power });
   if (navigator.vibrate) navigator.vibrate(30);
   markAimGuideDone();                        // they can shoot — no more demo, ever
+  coachPass('fire');
   S.charging = false; S.pullPointer = null; S.pullAnchor = null;
   updateDock();
 };
@@ -4124,15 +4257,36 @@ function buildHelp() {
     `<div class="hw-row">${ICONS[w.id] || ''}` +
     `<div class="hw-txt"><div class="hw-top"><b class="hw-nm">${w.name}</b><i class="hw-note">${w.note}</i></div>` +
     `<p class="hw-desc">${w.desc}</p></div>${TRAJ[w.id] || ''}</div>`).join('');
-  $('helpTabs').addEventListener('click', (e) => {
-    const t = e.target.closest('.tab'); if (!t) return;
-    for (const el of $('helpTabs').children) el.classList.toggle('active', el === t);
-    for (const pane of document.querySelectorAll('#helpModal .tabpane'))
-      pane.classList.toggle('active', pane.dataset.pane === t.dataset.tab);
+  // Field manual: a rail of chapters beside one pane. Delegated, so the rail
+  // can gain a chapter without touching this. Deliberately not .tab/.tabpane —
+  // #careerModal shares those and would inherit any restyle.
+  $('fmRail').addEventListener('click', (e) => {
+    const b = e.target.closest('.fm-ch'); if (!b) return;
+    showChapter(b.dataset.chap);
   });
+  $('fmNext').onclick = () => {
+    const list = fmChapters();
+    const i = list.indexOf(fmChapter);
+    if (i >= 0 && i < list.length - 1) showChapter(list[i + 1]);
+    else closeHelp();                          // last chapter: Next becomes Done
+  };
 }
+const fmChapters = () => [...$('fmRail').children].map(b => b.dataset.chap);
+let fmChapter = 'aiming';
+function showChapter(key) {
+  const list = fmChapters();
+  const i = list.indexOf(key); if (i < 0) return;
+  fmChapter = key;
+  for (const b of $('fmRail').children) b.classList.toggle('active', b.dataset.chap === key);
+  for (const sec of document.querySelectorAll('#fmPane .fm-chap')) sec.classList.toggle('active', sec.dataset.chap === key);
+  $('fmPane').scrollTop = 0;                   // a new chapter starts at its own top
+  $('fmCount').textContent = `Chapter ${i + 1} of ${list.length}`;
+  $('fmNext').textContent = i === list.length - 1 ? 'Done' : 'Next';
+}
+function closeHelp() { $('helpModal').classList.add('hidden'); }
 const openHelp = () => {
   buildHelp();
+  showChapter('aiming');                       // always opens where a new player should start
   // The demo replay needs a live battlefield AND a player who still takes
   // turns — the home screen and an eliminated spectator don't qualify.
   const db = $('helpDemoBtn');
@@ -4250,8 +4404,17 @@ $('careerModal').onclick = (e) => { if (e.target.id === 'careerModal') $('career
 refreshCareerChip();
 $('helpBtn').onclick = () => { closeStageMenus(); openHelp(); };
 $('helpHomeBtn').onclick = openHelp;
-$('helpCloseBtn').onclick = () => $('helpModal').classList.add('hidden');
-$('helpModal').onclick = (e) => { if (e.target.id === 'helpModal') $('helpModal').classList.add('hidden'); };
+$('helpCloseBtn').onclick = closeHelp;
+$('helpModal').onclick = (e) => { if (e.target.id === 'helpModal') closeHelp(); };
+// Escape closes the manual. Scoped to this modal on purpose: there is no global
+// Escape handler in this app, and adding one would silently change behaviour
+// for the five other overlays that have never had it.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if ($('helpModal').classList.contains('hidden')) return;
+  e.preventDefault();
+  closeHelp();
+});
 
 // ---------------------------------------------------------------------------
 // Rendering
@@ -4443,6 +4606,11 @@ function draw() {
   ctx.restore();
 
   drawAimGuide();                 // first-play gesture demo — screen space, above the shake
+  // The coach card's visibility depends on turn, anim and open overlays, none
+  // of which fire a single reliable event — so it is re-evaluated here, beside
+  // the demo it accompanies. renderCoach() writes to the DOM only when
+  // something actually changed, so the steady state is a handful of reads.
+  renderCoach();
   // Scaled, not removed: with reduced motion the blast should still register,
   // just not as a full-strength wash across the whole screen.
   const flashA = MOTION_OK ? S.flash : S.flash * 0.25;
@@ -6144,9 +6312,14 @@ function drawAim() {
     for (let i = 1; i < shown; i++) arcLen += Math.hypot(dots[i][0] - dots[i - 1][0], dots[i][1] - dots[i - 1][1]);
     const want = Math.max(2, Math.min(16, Math.round(arcLen * cam.zoom / 18)));
     const stride = Math.max(1, Math.floor((shown - 1) / want) || 1);
+    // The last TWO dots that actually made it past the cull give the coach
+    // arrowhead both its position and its heading. The cull matters: a dot can
+    // be skipped off-screen, so dots[shown - 1] is not necessarily drawn.
+    let lastSX = null, lastSY = null, prevSX = null, prevSY = null;
     for (let i = 0; i < shown; i += stride) {
       const dsx = wx2s(dots[i][0]), dsy = wy2s(dots[i][1]);
       if (dsx < -20 || dsx > view.cssW + 20 || dsy < -20 || dsy > view.cssH + 20) continue;
+      prevSX = lastSX; prevSY = lastSY; lastSX = dsx; lastSY = dsy;
       const f = i / shown;
       const k = 3.6 - f * 1.6;                                 // bold near the muzzle
       ctx.globalAlpha = Math.max(0.15, 0.95 - f * 0.8);
@@ -6154,6 +6327,23 @@ function drawAim() {
       ctx.fillRect(dsx - k / 2 - 1, dsy - k / 2 - 1, k + 2, k + 2);   // sky, snow and sand
       ctx.fillStyle = hot ? 'rgba(255,90,82,.95)' : 'rgba(255,214,70,.95)';
       ctx.fillRect(dsx - k / 2, dsy - k / 2, k, k);
+    }
+    // FIRST BATTLE ONLY: cap the trace with an arrowhead, so "the shell flies
+    // the other way" is shown rather than asserted. Screen space and a fixed
+    // css size — the dots are sized that way too, so it stays legible at every
+    // zoom. Never drawn in the red self-damage state: that warning owns the
+    // arc, and decorating it would soften it.
+    if (lastSX !== null && prevSX !== null && !hot && coachCurrent() === 'pull') {
+      const ax2 = lastSX - prevSX, ay2 = lastSY - prevSY;
+      const m2 = Math.hypot(ax2, ay2) || 1;
+      const ux2 = ax2 / m2, uy2 = ay2 / m2, px2 = -uy2, py2 = ux2;
+      ctx.globalAlpha = 0.95;
+      ctx.fillStyle = 'rgba(84,200,255,.95)';
+      ctx.beginPath();
+      ctx.moveTo(lastSX + ux2 * 9, lastSY + uy2 * 9);
+      ctx.lineTo(lastSX - ux2 * 4 + px2 * 6, lastSY - uy2 * 4 + py2 * 6);
+      ctx.lineTo(lastSX - ux2 * 4 - px2 * 6, lastSY - uy2 * 4 - py2 * 6);
+      ctx.closePath(); ctx.fill();
     }
   } catch {} finally {
     ctx.globalAlpha = 1;
