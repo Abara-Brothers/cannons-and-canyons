@@ -27,6 +27,24 @@ const SHELL = [
   'game-core.js',        // the authoritative simulation — offline play needs it
   'room-engine.js',      // rooms/turns/bots — the other half of an offline match
   'styles.css',
+  'bay.js',              // the Launch Bay front end
+  'fonts/barlow-500.woff2',
+  'fonts/barlow-600.woff2',
+  'fonts/barlow-700.woff2',
+  'fonts/rajdhani-500.woff2',
+  'fonts/rajdhani-600.woff2',
+  'fonts/rajdhani-700.woff2',
+  'fonts/jetbrains-mono-var.woff2',
+  'bay/alpine-hero.jpg',
+  'bay/alpine-wide.jpg',
+  'bay/desert-hero.jpg',
+  'bay/desert-wide.jpg',
+  'bay/ice-mid.jpg',
+  'bay/ice-wide.jpg',
+  'bay/ruins-mid.jpg',
+  'bay/ruins-wide.jpg',
+  'bay/volcanic-hero.jpg',
+  'bay/volcanic-wide.jpg',
   'manifest.webmanifest',
   'privacy.html',        // reachable offline: it is a store requirement (ISSUE-013)
   'delete-account.html', // the web deletion pathway Play requires (no apostrophes here:

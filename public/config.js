@@ -25,3 +25,8 @@ window.CC_VERSION = '1.0.0+1';
 // The secret key never appears anywhere under public/.
 window.CC_SUPABASE_URL = 'https://onacdpaxcqdfxikxiecy.supabase.co';
 window.CC_SUPABASE_KEY = 'sb_publishable_vrr31p7LCyzxygy6lb0ujQ_eqrlpmmR';
+
+// LAUNCH BAY (concept 10) — the new front end. Development flag: true routes the
+// home screen to bay.js; the old #home remains in the DOM until cutover, when this
+// flag and that markup both go.
+window.CC_LAUNCH_BAY = true;

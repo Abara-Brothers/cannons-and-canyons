@@ -2030,7 +2030,12 @@ $('copyCodeBtn').onclick = async () => {
 function flashBtn(btn, txt) { const o = btn.textContent; btn.textContent = txt; setTimeout(() => (btn.textContent = o), 1300); }
 
 function showScreen(name) {
-  for (const s of ['home', 'lobby', 'game']) $(s).classList.toggle('active', s === name);
+  // LAUNCH BAY: while the flag is on, the home screen IS the bay. bay.js renders
+  // into #bay and reads the same state (ccMode, mySkin, PROF, armPicks) that the
+  // old #home wired, so every intent below is unchanged.
+  if (name === 'home' && window.CC_LAUNCH_BAY && window.Bay) { name = 'bay'; window.Bay.show('home'); }
+  for (const s of ['home', 'lobby', 'game', 'bay']) $(s).classList.toggle('active', s === name);
+  document.body.classList.toggle('in-bay', name === 'bay');
   // body.in-game drives two pure-CSS behaviours: the animated canyon backdrop is
   // display:none'd in-match (so #hud-top / #dock backdrop-filter blurs nothing,
   // exactly as before, and the GPU idles), and the rotate prompt is only ever
