@@ -328,6 +328,67 @@
           false,
           false
         ]
+      },
+      "game": {
+        "screen": "game",
+        "bodyTransform": "none",
+        "boxes": {
+          "game": [
+            0,
+            0,
+            932,
+            430
+          ],
+          "hudTop": [
+            0,
+            0,
+            932,
+            13
+          ],
+          "dock": [
+            0,
+            343,
+            932,
+            87
+          ],
+          "stage": [
+            0,
+            13,
+            932,
+            330
+          ],
+          "fire": [
+            820,
+            338,
+            104,
+            104
+          ],
+          "strip": [
+            8,
+            347,
+            916,
+            1
+          ],
+          "readout": "hidden",
+          "rows": [
+            8,
+            353,
+            916,
+            74
+          ],
+          "scoreRow": [
+            10,
+            6,
+            893,
+            0
+          ]
+        },
+        "style": {
+          "hudDir": "row",
+          "fireFs": "104px",
+          "stripJust": "safe center",
+          "readoutCols": "1fr 1fr"
+        }
       }
     }
   },
@@ -660,6 +721,67 @@
           false,
           false
         ]
+      },
+      "game": {
+        "screen": "game",
+        "bodyTransform": "none",
+        "boxes": {
+          "game": [
+            0,
+            0,
+            844,
+            390
+          ],
+          "hudTop": [
+            0,
+            0,
+            844,
+            13
+          ],
+          "dock": [
+            0,
+            303,
+            844,
+            87
+          ],
+          "stage": [
+            0,
+            13,
+            844,
+            290
+          ],
+          "fire": [
+            732,
+            298,
+            104,
+            104
+          ],
+          "strip": [
+            8,
+            307,
+            828,
+            1
+          ],
+          "readout": "hidden",
+          "rows": [
+            8,
+            313,
+            828,
+            74
+          ],
+          "scoreRow": [
+            10,
+            6,
+            805,
+            0
+          ]
+        },
+        "style": {
+          "hudDir": "row",
+          "fireFs": "104px",
+          "stripJust": "safe center",
+          "readoutCols": "1fr 1fr"
+        }
       }
     }
   },
@@ -992,6 +1114,67 @@
           false,
           false
         ]
+      },
+      "game": {
+        "screen": "game",
+        "bodyTransform": "none",
+        "boxes": {
+          "game": [
+            0,
+            0,
+            667,
+            375
+          ],
+          "hudTop": [
+            0,
+            0,
+            667,
+            13
+          ],
+          "dock": [
+            0,
+            298,
+            667,
+            77
+          ],
+          "stage": [
+            0,
+            13,
+            667,
+            284
+          ],
+          "fire": [
+            567,
+            293,
+            92,
+            92
+          ],
+          "strip": [
+            8,
+            302,
+            651,
+            1
+          ],
+          "readout": "hidden",
+          "rows": [
+            8,
+            307,
+            651,
+            65
+          ],
+          "scoreRow": [
+            10,
+            6,
+            628,
+            0
+          ]
+        },
+        "style": {
+          "hudDir": "row",
+          "fireFs": "92px",
+          "stripJust": "safe center",
+          "readoutCols": "1fr 1fr"
+        }
       }
     }
   },
@@ -1324,6 +1507,67 @@
           false,
           false
         ]
+      },
+      "game": {
+        "screen": "game",
+        "bodyTransform": "none",
+        "boxes": {
+          "game": [
+            0,
+            0,
+            568,
+            320
+          ],
+          "hudTop": [
+            0,
+            0,
+            568,
+            13
+          ],
+          "dock": [
+            0,
+            243,
+            568,
+            77
+          ],
+          "stage": [
+            0,
+            13,
+            568,
+            229
+          ],
+          "fire": [
+            468,
+            238,
+            92,
+            92
+          ],
+          "strip": [
+            8,
+            247,
+            552,
+            1
+          ],
+          "readout": "hidden",
+          "rows": [
+            8,
+            252,
+            552,
+            65
+          ],
+          "scoreRow": [
+            10,
+            6,
+            529,
+            0
+          ]
+        },
+        "style": {
+          "hudDir": "row",
+          "fireFs": "92px",
+          "stripJust": "normal",
+          "readoutCols": "1fr 1fr"
+        }
       }
     }
   },
@@ -1656,6 +1900,67 @@
           false,
           false
         ]
+      },
+      "game": {
+        "screen": "game",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "boxes": {
+          "game": [
+            0,
+            0,
+            390,
+            844
+          ],
+          "hudTop": [
+            377,
+            0,
+            13,
+            844
+          ],
+          "dock": [
+            0,
+            0,
+            87,
+            844
+          ],
+          "stage": [
+            87,
+            0,
+            290,
+            844
+          ],
+          "fire": [
+            -12,
+            732,
+            104,
+            104
+          ],
+          "strip": [
+            82,
+            8,
+            1,
+            828
+          ],
+          "readout": "hidden",
+          "rows": [
+            3,
+            8,
+            74,
+            828
+          ],
+          "scoreRow": [
+            384,
+            10,
+            0,
+            805
+          ]
+        },
+        "style": {
+          "hudDir": "row",
+          "fireFs": "104px",
+          "stripJust": "safe center",
+          "readoutCols": "1fr 1fr"
+        }
       }
     }
   },
@@ -1988,6 +2293,67 @@
           false,
           false
         ]
+      },
+      "game": {
+        "screen": "game",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "boxes": {
+          "game": [
+            0,
+            0,
+            440,
+            956
+          ],
+          "hudTop": [
+            427,
+            0,
+            13,
+            956
+          ],
+          "dock": [
+            0,
+            0,
+            87,
+            956
+          ],
+          "stage": [
+            87,
+            0,
+            340,
+            956
+          ],
+          "fire": [
+            -12,
+            844,
+            104,
+            104
+          ],
+          "strip": [
+            82,
+            8,
+            1,
+            940
+          ],
+          "readout": "hidden",
+          "rows": [
+            3,
+            8,
+            74,
+            940
+          ],
+          "scoreRow": [
+            434,
+            10,
+            0,
+            917
+          ]
+        },
+        "style": {
+          "hudDir": "row",
+          "fireFs": "104px",
+          "stripJust": "safe center",
+          "readoutCols": "1fr 1fr"
+        }
       }
     }
   },
@@ -2320,6 +2686,72 @@
           false,
           false
         ]
+      },
+      "game": {
+        "screen": "game",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "boxes": {
+          "game": [
+            0,
+            0,
+            834,
+            1194
+          ],
+          "hudTop": [
+            799,
+            0,
+            35,
+            1194
+          ],
+          "dock": [
+            0,
+            0,
+            239,
+            1194
+          ],
+          "stage": [
+            239,
+            0,
+            560,
+            1194
+          ],
+          "fire": [
+            -16,
+            277,
+            132,
+            132
+          ],
+          "strip": [
+            228,
+            12,
+            4,
+            1170
+          ],
+          "readout": [
+            158,
+            277,
+            64,
+            640
+          ],
+          "rows": [
+            3,
+            277,
+            219,
+            640
+          ],
+          "scoreRow": [
+            826,
+            12,
+            0,
+            1170
+          ]
+        },
+        "style": {
+          "hudDir": "column",
+          "fireFs": "min(clamp(104px, calc(18 * 1vh), 132px), calc(21 * 1vw))",
+          "stripJust": "safe center",
+          "readoutCols": "316px 316px"
+        }
       }
     }
   },
@@ -2652,6 +3084,72 @@
           false,
           false
         ]
+      },
+      "game": {
+        "screen": "game",
+        "bodyTransform": "none",
+        "boxes": {
+          "game": [
+            0,
+            0,
+            1194,
+            834
+          ],
+          "hudTop": [
+            0,
+            0,
+            1194,
+            35
+          ],
+          "dock": [
+            0,
+            595,
+            1194,
+            239
+          ],
+          "stage": [
+            0,
+            35,
+            1194,
+            560
+          ],
+          "fire": [
+            277,
+            718,
+            132,
+            132
+          ],
+          "strip": [
+            12,
+            602,
+            1170,
+            4
+          ],
+          "readout": [
+            277,
+            612,
+            640,
+            64
+          ],
+          "rows": [
+            277,
+            612,
+            640,
+            219
+          ],
+          "scoreRow": [
+            12,
+            8,
+            1170,
+            0
+          ]
+        },
+        "style": {
+          "hudDir": "column",
+          "fireFs": "min(clamp(104px, calc(18 * 1vw), 132px), calc(21 * 1vh))",
+          "stripJust": "safe center",
+          "readoutCols": "316px 316px"
+        }
       }
     }
   },
@@ -2984,6 +3482,72 @@
           false,
           false
         ]
+      },
+      "game": {
+        "screen": "game",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "boxes": {
+          "game": [
+            0,
+            0,
+            1024,
+            1366
+          ],
+          "hudTop": [
+            989,
+            0,
+            35,
+            1366
+          ],
+          "dock": [
+            0,
+            0,
+            239,
+            1366
+          ],
+          "stage": [
+            239,
+            0,
+            750,
+            1366
+          ],
+          "fire": [
+            -16,
+            363,
+            132,
+            132
+          ],
+          "strip": [
+            228,
+            12,
+            4,
+            1342
+          ],
+          "readout": [
+            158,
+            363,
+            64,
+            640
+          ],
+          "rows": [
+            3,
+            363,
+            219,
+            640
+          ],
+          "scoreRow": [
+            1016,
+            12,
+            0,
+            1342
+          ]
+        },
+        "style": {
+          "hudDir": "column",
+          "fireFs": "min(clamp(104px, calc(18 * 1vh), 132px), calc(21 * 1vw))",
+          "stripJust": "safe center",
+          "readoutCols": "316px 316px"
+        }
       }
     }
   },
@@ -3316,6 +3880,72 @@
           false,
           false
         ]
+      },
+      "game": {
+        "screen": "game",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "boxes": {
+          "game": [
+            0,
+            0,
+            820,
+            1180
+          ],
+          "hudTop": [
+            785,
+            0,
+            35,
+            1180
+          ],
+          "dock": [
+            0,
+            0,
+            239,
+            1180
+          ],
+          "stage": [
+            239,
+            0,
+            546,
+            1180
+          ],
+          "fire": [
+            -16,
+            270,
+            132,
+            132
+          ],
+          "strip": [
+            228,
+            12,
+            4,
+            1156
+          ],
+          "readout": [
+            158,
+            270,
+            64,
+            640
+          ],
+          "rows": [
+            3,
+            270,
+            219,
+            640
+          ],
+          "scoreRow": [
+            812,
+            12,
+            0,
+            1156
+          ]
+        },
+        "style": {
+          "hudDir": "column",
+          "fireFs": "min(clamp(104px, calc(18 * 1vh), 132px), calc(21 * 1vw))",
+          "stripJust": "safe center",
+          "readoutCols": "316px 316px"
+        }
       }
     }
   },
@@ -3648,6 +4278,72 @@
           false,
           false
         ]
+      },
+      "game": {
+        "screen": "game",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "boxes": {
+          "game": [
+            0,
+            0,
+            744,
+            1133
+          ],
+          "hudTop": [
+            709,
+            0,
+            35,
+            1133
+          ],
+          "dock": [
+            0,
+            0,
+            239,
+            1133
+          ],
+          "stage": [
+            239,
+            0,
+            470,
+            1133
+          ],
+          "fire": [
+            -16,
+            247,
+            132,
+            132
+          ],
+          "strip": [
+            228,
+            12,
+            4,
+            1109
+          ],
+          "readout": [
+            158,
+            247,
+            64,
+            640
+          ],
+          "rows": [
+            3,
+            247,
+            219,
+            640
+          ],
+          "scoreRow": [
+            736,
+            12,
+            0,
+            1109
+          ]
+        },
+        "style": {
+          "hudDir": "column",
+          "fireFs": "min(clamp(104px, calc(18 * 1vh), 132px), calc(21 * 1vw))",
+          "stripJust": "safe center",
+          "readoutCols": "316px 316px"
+        }
       }
     }
   },
@@ -3980,6 +4676,67 @@
           false,
           false
         ]
+      },
+      "game": {
+        "screen": "game",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "boxes": {
+          "game": [
+            0,
+            0,
+            507,
+            1194
+          ],
+          "hudTop": [
+            494,
+            0,
+            13,
+            1194
+          ],
+          "dock": [
+            0,
+            0,
+            87,
+            1194
+          ],
+          "stage": [
+            87,
+            0,
+            407,
+            1194
+          ],
+          "fire": [
+            -12,
+            1082,
+            104,
+            104
+          ],
+          "strip": [
+            82,
+            8,
+            1,
+            1178
+          ],
+          "readout": "hidden",
+          "rows": [
+            3,
+            8,
+            74,
+            1178
+          ],
+          "scoreRow": [
+            501,
+            10,
+            0,
+            1155
+          ]
+        },
+        "style": {
+          "hudDir": "row",
+          "fireFs": "104px",
+          "stripJust": "safe center",
+          "readoutCols": "1fr 1fr"
+        }
       }
     }
   },
@@ -4312,6 +5069,67 @@
           false,
           false
         ]
+      },
+      "game": {
+        "screen": "game",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "boxes": {
+          "game": [
+            0,
+            0,
+            320,
+            1194
+          ],
+          "hudTop": [
+            307,
+            0,
+            13,
+            1194
+          ],
+          "dock": [
+            0,
+            0,
+            87,
+            1194
+          ],
+          "stage": [
+            87,
+            0,
+            220,
+            1194
+          ],
+          "fire": [
+            -12,
+            1082,
+            104,
+            104
+          ],
+          "strip": [
+            82,
+            8,
+            1,
+            1178
+          ],
+          "readout": "hidden",
+          "rows": [
+            3,
+            8,
+            74,
+            1178
+          ],
+          "scoreRow": [
+            314,
+            10,
+            0,
+            1155
+          ]
+        },
+        "style": {
+          "hudDir": "row",
+          "fireFs": "104px",
+          "stripJust": "safe center",
+          "readoutCols": "1fr 1fr"
+        }
       }
     }
   },
@@ -4644,6 +5462,67 @@
           false,
           false
         ]
+      },
+      "game": {
+        "screen": "game",
+        "bodyTransform": "matrix(0, 1, -1, 0, 0, 0)",
+        "boxes": {
+          "game": [
+            0,
+            0,
+            450,
+            550
+          ],
+          "hudTop": [
+            437,
+            0,
+            13,
+            550
+          ],
+          "dock": [
+            0,
+            0,
+            77,
+            550
+          ],
+          "stage": [
+            77,
+            0,
+            359,
+            550
+          ],
+          "fire": [
+            -10,
+            450,
+            92,
+            92
+          ],
+          "strip": [
+            72,
+            8,
+            1,
+            534
+          ],
+          "readout": "hidden",
+          "rows": [
+            3,
+            8,
+            65,
+            534
+          ],
+          "scoreRow": [
+            444,
+            10,
+            0,
+            511
+          ]
+        },
+        "style": {
+          "hudDir": "row",
+          "fireFs": "92px",
+          "stripJust": "normal",
+          "readoutCols": "1fr 1fr"
+        }
       }
     }
   }

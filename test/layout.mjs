@@ -86,6 +86,46 @@ const VIEWPORTS = [
 
 const SCREENS = ['home', 'modes', 'armoury', 'career', 'paint', 'settings'];
 
+// The bay is only half the UI. Most of the size-sensitive tier blocks in
+// styles.css target the IN-GAME chrome — the HUD, the dock, the weapon strip,
+// the aim readout, the FIRE button — and a probe that measures only #bay is
+// blind to every one of them. showScreen('game') is app.js's own router and
+// lays the chrome out without needing a live match.
+const GAME_PROBE = `(() => {
+  const r = (sel) => {
+    const e = document.querySelector(sel);
+    if (!e) return null;
+    const b = e.getBoundingClientRect();
+    if (!b.width && !b.height) return 'hidden';
+    return [Math.round(b.x), Math.round(b.y), Math.round(b.width), Math.round(b.height)];
+  };
+  const prop = (sel, n) => {
+    const e = document.querySelector(sel);
+    return e ? getComputedStyle(e).getPropertyValue(n).trim() : null;
+  };
+  return {
+    screen: 'game',
+    bodyTransform: getComputedStyle(document.body).transform,
+    boxes: {
+      game:       r('#game'),
+      hudTop:     r('#hud-top'),
+      dock:       r('#dock'),
+      stage:      r('#stage'),
+      fire:       r('.fire-btn'),
+      strip:      r('.weapon-strip'),
+      readout:    r('.aim-readout'),
+      rows:       r('.control-rows'),
+      scoreRow:   r('.score-row'),
+    },
+    style: {
+      hudDir:   prop('#hud-top', 'flex-direction'),
+      fireFs:   prop('.fire-btn', '--fs'),
+      stripJust: prop('.weapon-strip', 'justify-content'),
+      readoutCols: prop('.aim-readout', 'grid-template-columns'),
+    },
+  };
+})()`;
+
 // ---- server ----------------------------------------------------------------
 const appPort = await freePort();
 const srv = spawn('node', ['server.js'], {
@@ -292,6 +332,23 @@ for (const vp of targets) {
     }
     perScreen[s] = settled;
   }
+
+  // ---- in-game chrome ----
+  await evalJs(`(() => { try { showScreen('game'); } catch (e) {} })()`);
+  await sleep(300);
+  let gprev = await evalJs(GAME_PROBE), gsettled = null;
+  for (let i = 0; i < 6; i++) {
+    await sleep(140);
+    const next = await evalJs(GAME_PROBE);
+    if (JSON.stringify(next) === JSON.stringify(gprev)) { gsettled = next; break; }
+    gprev = next;
+  }
+  if (!gsettled) {
+    cleanup();
+    console.error(`FAIL  ${vp.name}/game — in-game geometry never settled`);
+    process.exit(1);
+  }
+  perScreen.game = gsettled;
   snapshot[vp.name] = { note: vp.note, screens: perScreen };
   console.log(`      captured ${vp.name.padEnd(10)} ${vp.note}`);
 }
@@ -332,14 +389,20 @@ for (const vp of targets) {
   }
   const before = diffs.length;
   walk(want.screens, got.screens, vp.name);
-  if (diffs.length === before) { pass++; console.log(`PASS  ${vp.name}  ${vp.note}`); }
-  else { fail++; console.log(`FAIL  ${vp.name}  ${vp.note}`); }
+  const n = diffs.length - before;
+  // Report the COUNT on the verdict line. The detail list below is capped, and
+  // a capped list read as "no differences here" is exactly the silent-truncation
+  // trap this repo keeps re-learning — anything parsing the detail would
+  // undercount every viewport past the cap.
+  if (!n) { pass++; console.log(`PASS  ${vp.name}  ${vp.note}`); }
+  else { fail++; console.log(`FAIL  ${vp.name}  ${vp.note}  — ${n} difference${n === 1 ? '' : 's'}`); }
 }
 
 if (diffs.length) {
-  console.log('\n  differences:');
-  for (const d of diffs.slice(0, 40)) console.log('    ' + d);
-  if (diffs.length > 40) console.log(`    ... and ${diffs.length - 40} more`);
+  const CAP = Number(process.env.LAYOUT_DIFF_CAP || 40);
+  console.log(`\n  differences (${diffs.length} total${diffs.length > CAP ? `, showing ${CAP} — raise LAYOUT_DIFF_CAP to see the rest` : ''}):`);
+  for (const d of diffs.slice(0, CAP)) console.log('    ' + d);
+  if (diffs.length > CAP) console.log(`    ... and ${diffs.length - CAP} more, NOT shown`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
