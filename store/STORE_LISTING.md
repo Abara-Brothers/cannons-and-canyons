@@ -53,12 +53,20 @@ Store accounts you (Jordan) must create — these cannot be automated:
 ## 2. Store listing copy (paste-ready)
 
 **Title:** Cannons & Canyons
-**Subtitle / short description (30 chars):** `Artillery duels, huge maps`
+**Apple subtitle (≤ 30 chars):** `Artillery duels, huge maps`  
+**Google Play short description (≤ 80 chars):** `Artillery duels on colossal destructible maps. Learn it in one battle.`
+
+**Note — not copy, do not paste.** Those are two different fields with two
+different limits. They were previously written as one 30-character line, which
+spent a third of Play's field and left the rest empty. Play's extra room is the
+right place for the pick-up-and-play promise, since that is the question a store
+visitor actually has. Everything in a blockquote below IS paste-ready copy.
+
 **Full description:**
 
 > Duel a friend across colossal destructible mountains.
 >
-> Cannons & Canyons is a turn-based online artillery battle. Drag to aim, charge your shot, and arc shells over towering peaks. Crack the landscape open with bunker busters, rain down air strikes, burn ridgelines with napalm, or wall yourself in with earthworks. Every crater changes the battlefield — and the last tank standing wins.
+> Cannons & Canyons is a turn-based online artillery battle. Pull back like a slingshot to set your aim and power, then arc shells over towering peaks. Crack the landscape open with bunker busters, rain down air strikes, burn ridgelines with napalm, or wall yourself in with earthworks. Every crater changes the battlefield — and the last tank standing wins.
 >
 > ★ Real-time online play — share a 4-letter code, or take on the computer
 > ★ FIVE modes: duel, 4-player free-for-all, co-op boss fight, alien invasion, and nine holes of artillery golf
@@ -67,6 +75,7 @@ Store accounts you (Jordan) must create — these cannot be automated:
 > ★ Fire and poison that keep burning turn after turn
 > ★ Health-based battles — destroy the enemy tank to win
 > ★ Crisp HD pixel-art mountains across five biomes, phone + tablet, built for landscape
+> ★ Easy to pick up — your first battle walks you through the shot, and a six-chapter field manual is always on hand
 > ★ No sign-up needed, no ads, no in-app purchases, no tracking. Tap and play.
 >
 > Made by Abara Brothers.
