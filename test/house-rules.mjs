@@ -285,6 +285,42 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   else ok(`OAuth return host is claimed by the app (applinks:${host}) and the bundle id agrees`);
 }
 
+// ---- 8c. A PLATFORM MAY NOT OFFER SIGN-IN IT CANNOT FINISH -------------------
+// Sign-in was hidden on ALL native platforms until 2026-09-14 because the OAuth
+// reply had no route back into a packaged app. Fixing that for iOS lifted the
+// blanket check — and re-created the identical dead end on Android, where the
+// manifest still has no App Links intent-filter: a visible button that leaves
+// for a browser the player never returns from. It reached `main` before anyone
+// noticed, because on web and iOS everything looks right.
+//
+// So the rule is the invariant, not the incident: app.js may only list a
+// platform in SIGNIN_PLATFORMS once that platform can actually receive the
+// reply. For Android that means an intent-filter, marked autoVerify, carrying
+// the callback path.
+{
+  const app = read('public/app.js');
+  const m = app.match(/const SIGNIN_PLATFORMS = \[([^\]]*)\];/);
+  if (!m) {
+    fail('public/app.js has no SIGNIN_PLATFORMS list — the sign-in gate has been removed or renamed');
+  } else {
+    const listed = [...m[1].matchAll(/'([a-z]+)'/g)].map((x) => x[1]);
+    const manifest = read('android/app/src/main/AndroidManifest.xml');
+    // autoVerify AND the callback path: an intent-filter without verification
+    // just opens Chrome on Android 12+, which is the same dead end.
+    const androidReady = /android:autoVerify="true"/.test(manifest)
+      && /android:path="\/auth\/callback"/.test(manifest);
+    if (listed.includes('android') && !androidReady) {
+      fail('app.js offers sign-in on ANDROID, but AndroidManifest has no verified App Links\n'
+        + '      intent-filter for /auth/callback — the player would leave for a browser and\n'
+        + '      never come back. Land the manifest (and ANDROID_CERT_SHA256) first.');
+    } else if (!listed.includes('web')) {
+      fail('SIGNIN_PLATFORMS does not include web — browser sign-in would be hidden');
+    } else {
+      ok(`sign-in is offered only where the reply can arrive (${listed.join(', ')})`);
+    }
+  }
+}
+
 // ---- 9. THE .hidden UTILITY MUST EXIST (8.55) --------------------------------
 // `classList.add('hidden')` is the codebase's universal way to hide something,
 // used on ~30 elements. Until 8.55 the stylesheet had NO generic rule for it —

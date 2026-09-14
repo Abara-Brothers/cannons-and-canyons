@@ -994,6 +994,26 @@ const IS_IOS = !!(window.Capacitor && window.Capacitor.getPlatform
 const PROVIDERS = IS_IOS ? ['apple', 'google'] : ['google'];
 const PROVIDER_NAME = { apple: 'Apple', google: 'Google' };
 
+// Can this platform actually COMPLETE a sign-in? The answer is no longer "is it
+// native": iOS can, because its Universal Link return is claimed by an
+// `applinks:` entitlement and the association file is served and verified.
+//
+// ANDROID CANNOT YET. AndroidManifest has no App Links intent-filter for
+// /auth/callback, and adding one would not be enough on its own — Android only
+// hands a verified link to the app, and verification reads assetlinks.json for
+// the PLAY APP SIGNING certificate, which does not exist until the first upload
+// to Play. Until then the callback opens in Chrome and stays there.
+//
+// This gate exists because lifting the old blanket IS_NATIVE check re-created on
+// Android precisely the dead end that check had been added for: a visible button
+// that leaves for a browser the player never comes back from. Add 'android' here
+// in the SAME change that lands the intent-filter and ANDROID_CERT_SHA256 —
+// house rule 8c fails the build if this list claims android before the manifest
+// can back it up.
+const SIGNIN_PLATFORMS = ['web', 'ios'];
+const PLATFORM = IS_NATIVE ? window.Capacitor.getPlatform() : 'web';
+const CAN_SIGN_IN = SIGNIN_PLATFORMS.indexOf(PLATFORM) !== -1;
+
 // Three states, one small chip in the home footer:
 //   out    - no session at all: offer sign-in (their local progress will merge
 //            into whichever Google account they pick)
@@ -1009,9 +1029,13 @@ async function refreshAccountChip() {
     $('accountLabel').textContent = who.email ? `Signed in · ${who.email}` : 'Signed in';
   } else if (who) {
     btn.dataset.state = 'guest';
-    $('accountLabel').textContent = 'Guest — keep my progress';
+    // "keep my progress" is a promise about signing in. Do not make it where
+    // signing in cannot finish.
+    $('accountLabel').textContent = CAN_SIGN_IN ? 'Guest — keep my progress' : 'Account';
   } else {
     btn.dataset.state = 'out';
+    // No session AND no way to start one: the chip has nothing to offer.
+    if (!CAN_SIGN_IN) { btn.classList.add('hidden'); return; }
     $('accountLabel').textContent = 'Sign in — save your progress';
   }
 }
@@ -1019,16 +1043,23 @@ $('accountBtn').onclick = () => {
   Audio.ensure();
   const state = $('accountBtn').dataset.state;
   // Nothing to manage yet: straight to sign-in.
-  if (state === 'out') { chooseProvider('signin'); return; }
+  if (state === 'out') {
+    if (!CAN_SIGN_IN) return;                    // chip is hidden in this state
+    chooseProvider('signin'); return;
+  }
   // guest / in: the account panel — where deletion and export live, because
   // both stores require them reachable IN-APP (ADR-003).
   $('accWho').textContent = state === 'in'
     ? $('accountLabel').textContent.replace('Signed in · ', 'Signed in as ')
-    : 'Playing as a guest. Sign in and your progress survives losing this device.';
+    : (CAN_SIGN_IN
+      ? 'Playing as a guest. Sign in and your progress survives losing this device.'
+      : 'Playing as a guest. Your progress is saved on this device.');
   $('accLinkBtn').textContent = PROVIDERS.length === 1
     ? 'Keep my progress — sign in with Google'
     : 'Keep my progress — sign in';
-  $('accLinkBtn').classList.toggle('hidden', state !== 'guest');
+  // The account panel itself must stay reachable even with no sign-in: deletion
+  // and export live in here and both stores require them in-app (ADR-003).
+  $('accLinkBtn').classList.toggle('hidden', state !== 'guest' || !CAN_SIGN_IN);
   $('accSignOutBtn').classList.toggle('hidden', state !== 'in');
   $('accountModal').classList.remove('hidden');
 };
