@@ -374,6 +374,34 @@ function resize() {
 }
 window.addEventListener('resize', resize);
 
+// Is the rotation shim live? CSS owns the answer (--rotated, set by the gated
+// shim block in styles.css), so the 500px threshold and the .cc-free latch are
+// defined in exactly one place instead of being re-derived here and drifting.
+// Read on resize only: the drum drag below is the aim control's hot path and a
+// getComputedStyle call there is a synchronous style flush on every pointermove.
+let ccRotated = false;
+function syncRotated() {
+  ccRotated = getComputedStyle(document.documentElement)
+    .getPropertyValue('--rotated').trim() === '1';
+}
+syncRotated();
+window.addEventListener('resize', syncRotated);
+window.addEventListener('orientationchange', syncRotated);
+
+// A window can now be RESIZED under a running match (iPadOS 26 Split View,
+// Slide Over, Stage Manager, or just a drag of the divider). dockSlidePx()
+// refuses to measure while collapsed — correctly, since the negative margin
+// would lie — and caches dockFullH, so a resize while the dock is shut leaves
+// --dock-slide describing the OLD height and the visible sliver drifts off the
+// bottom edge. This is the same correction land() already performs after a
+// collapse, applied to the other way the height can change.
+window.addEventListener('resize', () => {
+  const d = $('dock');
+  if (!d || !d.classList.contains('collapsed')) return;
+  const h = d.getBoundingClientRect().height;
+  if (h > DOCK_SLIVER) d.style.setProperty('--dock-slide', Math.round(h - DOCK_SLIVER) + 'px');
+});
+
 const wx2s = (x) => (x - cam.cx) * cam.zoom + view.cssW / 2;
 const wy2s = (y) => (y - cam.cy) * cam.zoom + view.cssH / 2;
 const s2wx = (sx) => (sx - view.cssW / 2) / cam.zoom + cam.cx;
@@ -382,7 +410,23 @@ function fullZoom() { return view.cssW / WW(); }
 // Most zoomed-out = fill the screen WIDTH exactly, so the map's side edges (and the
 // void beyond them) never come into view. Sky fills any vertical overflow, so there's
 // no top/bottom edge either. Both tanks (near x=900 / WW-900) stay on screen.
-function minMapZoom() { return view.cssW / WW(); }
+// ...but width-only degenerates in a TALL window. iPadOS 26 makes every window
+// resizable, so the canvas can be near-square or taller than wide, and against a
+// 48000x13500 world (3.56:1) filling the width alone framed roughly 52,000 world
+// units of HEIGHT at 834 wide — the terrain became a sliver under a wall of sky.
+// So also refuse to frame more than TALL_CAP worlds of height.
+//
+// The cap, not the naive max(cssW/WW(), cssH/WH()): that version raises the
+// pinch-out floor on EVERY phone (a 932x390 canvas goes 0.0194 -> 0.0289) and
+// costs about a third of the survey range, which is a real regression to the
+// camera doctrine above. TALL_CAP 2.0 only binds above a canvas aspect of
+// 0.5625 (= 13500*2/48000). The tallest canvas a phone can produce is an
+// iPhone SE in landscape with the dock COLLAPSED to its sliver, about 667x321,
+// ratio 0.481 — so on a phone the width term always wins and nothing changes.
+const TALL_CAP = 2.0;
+function minMapZoom() {
+  return Math.max(view.cssW / WW(), view.cssH / (WH() * TALL_CAP));
+}
 const clampUserZoom = (z) => Math.max(0.25, Math.min(6, Number.isFinite(z) ? z : 1));
 // A fresh match opens WIDER than the fit-all baseline (userZoom 1) — you read
 // the whole battlefield first and pinch in when you want the detail.
@@ -2540,9 +2584,12 @@ for (const kind of ['angle', 'power']) {
   });
   el.addEventListener('pointermove', (e) => {
     if (!drag) return;
-    // Under the portrait rotation shim, "left/right" for the player runs along
-    // the device's vertical axis — read the drag on the effective axis.
-    const dx = matchMedia('(orientation: portrait)').matches ? (e.clientY - drag.y0) : (e.clientX - drag.x0);
+    // Under the rotation shim, "left/right" for the player runs along the
+    // device's vertical axis — read the drag on the effective axis. NOT
+    // matchMedia('(orientation: portrait)') any more: since ISSUE-039 a portrait
+    // window is only rotated when it is also narrow and not latched .cc-free, so
+    // orientation alone would invert the drag on every upright iPad in portrait.
+    const dx = ccRotated ? (e.clientY - drag.y0) : (e.clientX - drag.x0);
     if (Math.abs(dx) > 4) drag.moved = true;
     const [lo, hi] = drumRange(kind);
     const v = Math.max(lo, Math.min(hi, drag.v0 - Math.round(dx / 13)));   // reel: strip follows the finger
