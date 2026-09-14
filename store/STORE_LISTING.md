@@ -149,7 +149,7 @@ Full detail — concepts, sizes, and how each was produced — is in
 | Splash master (2732×2732) | `resources/splash.svg` | ✅ original art |
 | Production icon set (iOS 1024, Play 512, adaptive, PWA) | `store/export/` | ✅ rendered + verified |
 | Google feature graphic (1024×500) | `store/export/android/feature-graphic-1024x500.png` | ✅ rendered |
-| Screenshots (iPhone 6.9"/6.5", iPad 13", Play phone + tablet) | `store/screenshots/run4/` — **9 frames for the App Store, 8 for Play** (Play caps at 8; `08-manual` is the one dropped). Real captures of the shipping app with the live HUD, including the first-battle coach marks and the field manual. Supersedes run3 (7 frames, no onboarding) and run2 (5 canvas-only frames) | ✅ rendered + verified |
+| Screenshots (iPhone 6.9"/6.5", iPad 13", Play phone + tablet) | `store/screenshots/run5/` — **9 frames for the App Store, 8 for Play** (Play caps at 8; `08-manual` is the one dropped). Every iPhone frame is a fresh native simulator capture from a single session; iPad and Play sets are web-rendered at exact store sizes. Includes the first-battle coach marks and the field manual. Supersedes run3 | ✅ rendered + verified |
 | Splash screens for the Capacitor wrapper | `bash tools/splash/make-splash.sh --install` | ✅ rendered + installed in both native projects (2026-08-14) |
 | PWA manifest + icons (Android quality bar) | `public/manifest.webmanifest`, `public/icons/` | ✅ |
 
