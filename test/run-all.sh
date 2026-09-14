@@ -70,6 +70,9 @@ start_server() {             # start_server [extra env assignments...]
 echo "== headless (no server needed) =="
 run house_rules node test/house-rules.mjs
 run timer_safety node test/timer_safety.mjs
+  # The OAuth redirect contract: provider, return URL, and the anti-login-CSRF
+  # guard on BOTH carriers. Headless — cloud.js is evaluated against stubs.
+  run auth_redirect   node test/auth_redirect.mjs
 run validate    bash tools/backup/test-validate.sh
 run hitbox node test/hitbox.mjs
 run golf_hazards node test/golf_hazards.mjs

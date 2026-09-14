@@ -25,6 +25,40 @@ window.Cloud = (() => {
   const SKEY = 'cc_session';
   // Marks "this tab is expecting OAuth tokens back". See consumeRedirect.
   const PENDING = 'cc_oauth_pending';
+
+  // ---- Where the provider sends the browser back to --------------------------
+  // WEB: this origin, exactly as before.
+  //
+  // NATIVE: an https:// URL on our own domain, claimed as a Universal Link
+  // (iOS) / App Link (Android) and SCOPED to this one path. Deliberately NOT a
+  // private-use scheme like com.abarabrothers.…:// — that is a security choice,
+  // not a style one. This client uses the IMPLICIT flow (see the Google block
+  // below), so what comes back in the fragment is a LIVE ACCESS TOKEN, not an
+  // authorization code that is worthless without a verifier. Any app on the
+  // device can register a scheme, and iOS does not let the user choose which
+  // wins, so a scheme callback would hand whoever claimed it a working session
+  // — account takeover, not interception. A domain-bound link cannot be claimed
+  // by an app that cannot serve files from the domain.
+  //
+  // The host MUST match the `applinks:` entry in ios/App/App/App.entitlements;
+  // a mismatch means iOS never opens the app and the player is stranded in
+  // Safari holding a token nothing will read. house-rules keeps them in step.
+  const NATIVE = !!(window.Capacitor && window.Capacitor.getPlatform
+    && window.Capacitor.getPlatform() !== 'web');
+  const RETURN_PATH = '/auth/callback';
+  const redirectTarget = () => (NATIVE
+    ? 'https://' + (window.CC_NATIVE_HOST || 'tanks.abarabrothers.com') + RETURN_PATH
+    : location.origin + '/');
+
+  // The anti-login-CSRF flag (see consumeRedirect). On WEB it lives in
+  // sessionStorage: per-tab, dies with the tab, so a crafted #access_token link
+  // opened anywhere else carries no flag. NATIVE has no tabs, and the WebView
+  // is BACKGROUNDED for the whole provider leg while Safari runs it — iOS may
+  // discard a backgrounded WebView's sessionStorage under memory pressure,
+  // which would silently reject a legitimate return and look like a broken
+  // button. localStorage there keeps the same guarantee (a flag this app set,
+  // for a sign-in this app started) without losing it to a memory warning.
+  const pendStore = () => (NATIVE ? window.localStorage : window.sessionStorage);
   const REFRESH_SKEW_S = 60;          // refresh this long before expiry
   let session = null;                  // { access_token, refresh_token, expires_at, user_id }
   let refreshTimer = null;
@@ -220,29 +254,30 @@ window.Cloud = (() => {
     // Fresh sign-in: any prior (guest) session on this DEVICE is replaced;
     // the local progression then merges into the Google account's row on
     // return, so nothing a player can see is lost.
-    signInUrl() {
-      try { sessionStorage.setItem(PENDING, '1'); } catch {}
-      return BASE + '/auth/v1/authorize?provider=google&redirect_to='
-        + encodeURIComponent(location.origin + '/');
+    signInUrl(provider) {
+      try { pendStore().setItem(PENDING, '1'); } catch {}
+      return BASE + '/auth/v1/authorize?provider=' + encodeURIComponent(provider || 'google')
+        + '&redirect_to=' + encodeURIComponent(redirectTarget());
     },
 
     // Link Google to the CURRENT guest account, KEEPING its user id and row.
     // A plain redirect cannot carry the Authorization header this needs, so
     // skip_http_redirect asks GoTrue for the Google URL as JSON instead and
     // the caller navigates to it.
-    async linkUrl() {
+    async linkUrl(provider) {
       try {
         await ensureSession(false);
         const res = await fetch(BASE + '/auth/v1/user/identities/authorize'
-          + '?provider=google&skip_http_redirect=true&redirect_to='
-          + encodeURIComponent(location.origin + '/'), {
+          + '?provider=' + encodeURIComponent(provider || 'google')
+          + '&skip_http_redirect=true&redirect_to='
+          + encodeURIComponent(redirectTarget()), {
           headers: { apikey: KEY, Authorization: 'Bearer ' + session.access_token },
           signal: timeout(),
         });
         if (!res.ok) throw new Error('link ' + res.status);
         const j = await res.json();
         if (!j || !j.url) return null;
-        try { sessionStorage.setItem(PENDING, '1'); } catch {}
+        try { pendStore().setItem(PENDING, '1'); } catch {}
         return j.url;
       } catch { return null; }
     },
@@ -251,10 +286,26 @@ window.Cloud = (() => {
     // stores the arriving tokens as the session and scrubs them from the
     // address bar (they must not survive into history or a shared link).
     // Returns 'ok', 'error' (user cancelled / provider error), or false.
-    consumeRedirect() {
-      if (!location.hash || location.hash.length < 2) return false;
-      const p = new URLSearchParams(location.hash.slice(1));
-      const scrub = () => history.replaceState(null, '', location.pathname + location.search);
+    // `rawUrl` is the NATIVE carrier: the Universal Link the app was reopened
+    // with, handed over by the appUrlOpen listener. Same tokens and the same
+    // guard as the web path — only the carrier differs, because a packaged app
+    // has no address bar for the provider to redirect.
+    consumeRedirect(rawUrl) {
+      let frag;
+      if (rawUrl) {
+        const cut = String(rawUrl).indexOf('#');
+        frag = cut === -1 ? '' : String(rawUrl).slice(cut + 1);
+      } else {
+        frag = location.hash ? location.hash.slice(1) : '';
+      }
+      if (frag.length < 2) return false;
+      const p = new URLSearchParams(frag);
+      // Nothing to scrub on native: the URL never reached an address bar or a
+      // history entry — it arrived as an app activation and is already gone.
+      const scrub = () => {
+        if (rawUrl) return;
+        history.replaceState(null, '', location.pathname + location.search);
+      };
       // ONLY accept tokens for a sign-in THIS TAB started. Without this, any
       // link of the form https://…/#access_token=<attacker's token> silently
       // signed the visitor into the ATTACKER's account: their progress would
@@ -263,9 +314,9 @@ window.Cloud = (() => {
       // so it is per-tab and dies with it; a crafted link opened anywhere else
       // has no flag and its tokens are discarded.
       let initiated = false;
-      try { initiated = sessionStorage.getItem(PENDING) === '1'; } catch {}
+      try { initiated = pendStore().getItem(PENDING) === '1'; } catch {}
       if (!initiated) { scrub(); return false; }
-      try { sessionStorage.removeItem(PENDING); } catch {}
+      try { pendStore().removeItem(PENDING); } catch {}
       if (p.get('error')) { scrub(); return 'error'; }
       const at = p.get('access_token'), rt = p.get('refresh_token');
       if (!at || !rt) return false;
@@ -291,12 +342,23 @@ window.Cloud = (() => {
         const u = await res.json();
         if (!u || !u.id) return null;
         if (!session.user_id) { session.user_id = u.id; storeSession(session); }
-        const g = (u.identities || []).find((i) => i.provider === 'google');
+        const ident = u.identities || [];
+        const g = ident.find((i) => i.provider === 'google');
+        // Apple's "Hide My Email" returns a per-app relay address
+        // (…@privaterelay.appleid.com) rather than the real one, and Apple
+        // returns the user's NAME only on the very first authorization, never
+        // again. Both are normal, neither is an error, and nothing here should
+        // treat a relay address as less valid than any other.
+        const a = ident.find((i) => i.provider === 'apple');
         return {
           id: u.id,
           anonymous: !!u.is_anonymous,
           google: !!g,
-          email: u.email || (g && g.identity_data && g.identity_data.email) || null,
+          apple: !!a,
+          email: u.email
+            || (g && g.identity_data && g.identity_data.email)
+            || (a && a.identity_data && a.identity_data.email)
+            || null,
         };
       } catch { return null; }
     },

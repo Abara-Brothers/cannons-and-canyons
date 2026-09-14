@@ -942,12 +942,17 @@ function cloudQueue() {
 }
 window.addEventListener('online', () => { if (cloudDirty) cloudQueue(); });
 
-async function cloudBoot() {
+// `returnUrl` is the NATIVE carrier: a packaged app has no address bar, so the
+// provider's reply arrives as a Universal Link that reopens the app and is
+// handed here by the appUrlOpen listener below. Everything after the consume is
+// shared with the web path deliberately — the merge, the push and the chip
+// refresh are the part most worth NOT having two copies of.
+async function cloudBoot(returnUrl) {
   if (!window.Cloud || !Cloud.enabled()) return;
-  // An OAuth return (Google sign-in or guest-to-Google link) lands here with
+  // An OAuth return (sign-in, or linking a provider to a guest) lands here with
   // tokens in the fragment. Consume BEFORE restore, so the merge below runs
   // against the account the player just became.
-  const arrived = Cloud.consumeRedirect();
+  const arrived = Cloud.consumeRedirect(returnUrl);
   if (arrived === 'ok') showToast('Signed in — your progress follows you now');
   else if (arrived === 'error') showToast('Sign-in was cancelled');
   const row = await Cloud.restore();          // null when signed out / offline
@@ -960,24 +965,34 @@ async function cloudBoot() {
 }
 
 // ---- Account strip ----------------------------------------------------------
-// Google sign-in CANNOT COMPLETE inside the native shells (verified 2026-08-18).
-// `signInUrl()` and `linkUrl()` both set redirect_to = location.origin + '/',
-// which is capacitor://localhost on iOS and https://localhost on Android — and
-// neither project can receive it: Info.plist declares no CFBundleURLTypes and
-// AndroidManifest.xml has no BROWSABLE intent-filter or scheme, so the authorize
-// page leaves the WebView and there is no route back. Even a reply that did
-// return would be discarded, because consumeRedirect() requires the
-// cc_oauth_pending flag set in a session the WebView no longer owns.
+// Sign-in was HIDDEN on native from 2026-08-18 until now, and the reason is
+// worth keeping: `redirect_to` was location.origin + '/', which is
+// capacitor://localhost or https://localhost in a packaged build, and neither
+// project could receive it — so the authorize page left the WebView with no
+// route back. That is fixed, but NOT with the obvious fix. A private-use scheme
+// would have been cheapest and is the wrong answer here: this client uses the
+// IMPLICIT flow, so the reply carries a live ACCESS TOKEN, and any app on the
+// device can register a scheme. The return is a domain-bound Universal Link /
+// App Link instead — see redirectTarget() in cloud.js.
 //
-// So the Google actions are hidden in the packaged apps rather than shipped
-// dead. This is NOT the same as hiding the account panel: deletion and export
-// live in there and both stores require them reachable in-app (ADR-003), so the
-// chip and modal stay — only the two buttons that cannot work go.
-//
-// Making them work needs a URL scheme in both native projects AND that scheme
-// added to Supabase's redirect allow-list, which is a dashboard change.
+// The provider leg runs in the REAL Safari, not in this WebView. Capacitor's
+// WebViewDelegationHandler cancels any top-level navigation outside the app's
+// own server and hands the URL to UIApplication.open, so `location.href = url`
+// already does the right thing and no browser plugin is involved.
 const IS_NATIVE = !!(window.Capacitor && window.Capacitor.getPlatform
   && window.Capacitor.getPlatform() !== 'web');
+const IS_IOS = !!(window.Capacitor && window.Capacitor.getPlatform
+  && window.Capacitor.getPlatform() === 'ios');
+
+// Sign in with Apple is MANDATORY wherever a third-party login is offered on
+// iOS (App Store Guideline 4.8) and must ship in the SAME build as that login,
+// never as a follow-up. It is deliberately iOS-only for 1.0: 4.8 does not reach
+// web or Android, and each extra platform multiplies the linking matrix that
+// has to be tested — guest→Apple, guest→Google, and an account holding both.
+// Apple is FIRST because 4.8 requires it to be presented as an equivalent
+// option, not as an afterthought below the alternative.
+const PROVIDERS = IS_IOS ? ['apple', 'google'] : ['google'];
+const PROVIDER_NAME = { apple: 'Apple', google: 'Google' };
 
 // Three states, one small chip in the home footer:
 //   out    - no session at all: offer sign-in (their local progress will merge
@@ -994,13 +1009,9 @@ async function refreshAccountChip() {
     $('accountLabel').textContent = who.email ? `Signed in · ${who.email}` : 'Signed in';
   } else if (who) {
     btn.dataset.state = 'guest';
-    // "keep my progress" is a promise about linking Google, which the shells
-    // cannot do — do not make it there.
-    $('accountLabel').textContent = IS_NATIVE ? 'Account' : 'Guest — keep my progress';
+    $('accountLabel').textContent = 'Guest — keep my progress';
   } else {
     btn.dataset.state = 'out';
-    // No session AND no way to start one: the chip has nothing to offer here.
-    if (IS_NATIVE) { btn.classList.add('hidden'); return; }
     $('accountLabel').textContent = 'Sign in — save your progress';
   }
 }
@@ -1008,36 +1019,78 @@ $('accountBtn').onclick = () => {
   Audio.ensure();
   const state = $('accountBtn').dataset.state;
   // Nothing to manage yet: straight to sign-in.
-  if (state === 'out') {
-    if (IS_NATIVE) return;                       // chip is hidden in this state
-    startSignIn(() => Cloud.signInUrl()); return;
-  }
+  if (state === 'out') { chooseProvider('signin'); return; }
   // guest / in: the account panel — where deletion and export live, because
   // both stores require them reachable IN-APP (ADR-003).
   $('accWho').textContent = state === 'in'
     ? $('accountLabel').textContent.replace('Signed in · ', 'Signed in as ')
-    : (IS_NATIVE
-      ? 'Playing as a guest. Your progress is saved on this device.'
-      : 'Playing as a guest. Link Google and your progress survives losing this device.');
-  $('accLinkBtn').classList.toggle('hidden', state !== 'guest' || IS_NATIVE);
+    : 'Playing as a guest. Sign in and your progress survives losing this device.';
+  $('accLinkBtn').textContent = PROVIDERS.length === 1
+    ? 'Keep my progress — sign in with Google'
+    : 'Keep my progress — sign in';
+  $('accLinkBtn').classList.toggle('hidden', state !== 'guest');
   $('accSignOutBtn').classList.toggle('hidden', state !== 'in');
   $('accountModal').classList.remove('hidden');
 };
 $('accCloseBtn').onclick = () => $('accountModal').classList.add('hidden');
-$('accLinkBtn').onclick = () => {
-  startSignIn(async () => {
-    const url = await Cloud.linkUrl();          // keeps the account + row
-    if (url) return url;
-    // Do NOT fall back to a plain sign-in. This button is labelled "Keep my
-    // progress", and `signInUrl()` mints a DIFFERENT account: the guest's cloud
-    // row — and anything earned on another device under it — is orphaned where
-    // the player can never reach it again, while the UI reports success. The
-    // button is only shown to an existing guest, so a link failure is always a
-    // transient one worth retrying, never a reason to start over.
-    showToast('Could not link your account right now — check your connection and try again');
-    return null;                                 // goSignIn() only navigates on a URL
-  });
+$('accLinkBtn').onclick = () => chooseProvider('link');
+
+// A fresh sign-in mints whatever account the provider says; a LINK keeps the
+// guest's existing account and row.
+const signInFn = (prov) => () => Cloud.signInUrl(prov);
+const linkFn = (prov) => async () => {
+  const url = await Cloud.linkUrl(prov);         // keeps the account + row
+  if (url) return url;
+  // Do NOT fall back to a plain sign-in. This button is labelled "Keep my
+  // progress", and `signInUrl()` mints a DIFFERENT account: the guest's cloud
+  // row — and anything earned on another device under it — is orphaned where
+  // the player can never reach it again, while the UI reports success. The
+  // button is only shown to an existing guest, so a link failure is always a
+  // transient one worth retrying, never a reason to start over.
+  showToast('Could not link your account right now — check your connection and try again');
+  return null;                                   // goSignIn() only navigates on a URL
 };
+
+// With ONE provider there is nothing to choose, so web and Android go straight
+// through exactly as they always have — a chooser over a single option is a tap
+// for nothing, and this path is the one that already works.
+function chooseProvider(kind) {
+  const go = (prov) => startSignIn((kind === 'link' ? linkFn : signInFn)(prov), prov);
+  if (PROVIDERS.length === 1) { go(PROVIDERS[0]); return; }
+  $('accountModal').classList.add('hidden');
+  $('provTitle').textContent = kind === 'link' ? 'Keep your progress' : 'Sign in';
+  $('provAppleBtn').onclick = () => { $('providerModal').classList.add('hidden'); go('apple'); };
+  $('provGoogleBtn').onclick = () => { $('providerModal').classList.add('hidden'); go('google'); };
+  $('providerModal').classList.remove('hidden');
+}
+$('provCancelBtn').onclick = () => $('providerModal').classList.add('hidden');
+
+// ---- OAuth return on native -------------------------------------------------
+// The provider leg runs in Safari, so the reply cannot land in this WebView's
+// address bar. It arrives as a Universal Link that reopens the app, and
+// @capacitor/app turns that into an appUrlOpen event carrying the whole URL,
+// fragment included.
+//
+// Registered unconditionally, NOT only while a sign-in is pending: iOS may have
+// discarded the WebView entirely while Safari was in front, in which case this
+// line is running in a FRESH page load with no memory of having started
+// anything. What authorises the tokens is the cc_oauth_pending flag, and on
+// native that flag lives in localStorage for exactly this reason.
+if (IS_NATIVE) {
+  const capApp = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+  if (capApp && capApp.addListener) {
+    capApp.addListener('appUrlOpen', (ev) => {
+      const url = ev && ev.url;
+      // Only an OAuth reply carries a fragment. A link that reopens the app for
+      // any other reason is not ours to consume.
+      if (!url || url.indexOf('#') === -1) return;
+      // Same function the web path uses. The consume differs; the merge, the
+      // cloud push and the chip refresh after it are the part most worth NOT
+      // having a second copy of.
+      cloudBoot(url);
+    });
+  }
+}
 
 // ---- Age gate before Google sign-in -----------------------------------------
 // A guest account holds nothing personal. Linking Google does: Google returns
@@ -1054,11 +1107,22 @@ $('accLinkBtn').onclick = () => {
 // cross-device sync.
 const AGE_OK_KEY = 'cc_age_ok';
 let pendingSignIn = null;
-function startSignIn(urlFn) {
+function startSignIn(urlFn, provider) {
   let ok = false;
   try { ok = localStorage.getItem(AGE_OK_KEY) === '1'; } catch {}
   if (ok) { goSignIn(urlFn); return; }
   pendingSignIn = urlFn;
+  // The gate is asked for Apple too, not only Google: the reason it exists is
+  // that signing in attaches a real identity to a database, and that is equally
+  // true of an Apple account. What each provider actually hands over differs,
+  // though, and the copy must not claim more than is true — Apple returns an
+  // email (possibly a private relay) and no profile picture.
+  $('ageWhy').textContent = provider === 'apple'
+    ? 'Signing in links an Apple account, which shares your email address with us — '
+      + 'Apple can hide it behind a private relay if you prefer. '
+      + 'Before that, what year were you born?'
+    : 'Signing in links a Google account, which shares your email address and '
+      + 'profile with us. Before that, what year were you born?';
   $('ageYear').value = '';
   $('ageError').textContent = '';
   // Restore Continue. The under-13 branch hides it, and 8.55 never brought it
@@ -1306,17 +1370,21 @@ $('notifyBtn').onclick = () => { Audio.ensure(); (window.Capacitor ? enableNativ
 // carries `hidden`, so the old remove() was a no-op; the gate below is the
 // one that does something.)
 //
-// iOS is the exception, and it must stay hidden there. This build ships
-// WITHOUT push on iOS: there is no `aps-environment` entitlement (no
-// .entitlements file and no CODE_SIGN_ENTITLEMENTS), no UIBackgroundModes, and
-// AppDelegate.swift forwards none of the APNs callbacks the plugin needs. So
-// requestPermissions() raises a REAL iOS notification prompt, register() then
-// fails, and neither `registration` nor `registrationError` can ever fire —
-// the player gets a system permission dialog followed by silence. A prompt
-// that leads nowhere is both a dead end and an App Review risk, and it
-// contradicts what the store answers already say (STORE_LISTING §3). Unhide
-// this once APNs is configured (BQ-005 → ISSUE-033). Web push and Android FCM
-// are untouched.
+// iOS is the exception, and it must stay hidden FOR NOW — but the reason has
+// changed and the old one is no longer true. The app half is done: App.entitlements
+// declares aps-environment, CODE_SIGN_ENTITLEMENTS points at it, and
+// AppDelegate.swift now forwards both APNs registration callbacks, so the
+// plugin's `registration` and `registrationError` events do fire (verified in
+// the iOS 26.5 simulator).
+//
+// What is still missing is entirely outside this file: the App ID needs the
+// Push Notifications capability in the developer portal, and the server needs
+// APNS_KEY / APNS_KEY_ID / APPLE_TEAM_ID before it can deliver anything
+// (/health reports `apns`). Until BOTH exist, an opt-in here would take the
+// permission, store a token, and then never nudge anyone — a silent no-op
+// rather than the old dead end, but still not something to put in front of a
+// player or a reviewer. Unhide in the SAME change that sets those keys.
+// Web push and Android FCM are untouched.
 if (window.Capacitor && window.Capacitor.getPlatform && window.Capacitor.getPlatform() === 'ios') {
   $('notifyBtn').classList.add('hidden');
 }

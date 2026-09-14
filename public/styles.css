@@ -50,6 +50,14 @@ body {
 .btn.big { width: 100%; padding: 15px; font-size: 17px; }
 .btn.primary { background: linear-gradient(180deg, var(--primary), var(--primary-2)); border-color: transparent; color: #240a00; }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+/* Sign in with Apple. Apple specifies the treatment — an approved colourway,
+   their mark, and the exact wording — and Guideline 4.8 requires it to read as
+   an EQUIVALENT option to any other sign-in, never a lesser one. White-on-dark
+   is the approved colourway that stays visible against this panel; the black
+   one would sink into it. 44px is Apple's minimum touch target. */
+.btn.apple { background: #fff; color: #000; border-color: #fff; font-weight: 600;
+  min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.btn.apple svg { width: 18px; height: 18px; fill: #000; flex: none; }
 .btn:disabled { opacity: .4; cursor: not-allowed; filter: grayscale(.4); }
 
 .field { display: flex; flex-direction: column; gap: 6px; text-align: left; margin: 8px 0 4px; }

@@ -253,6 +253,38 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   else ok(`version agrees everywhere (${want.version} build ${want.build})`);
 }
 
+// ---- 8b. THE OAuth RETURN DOMAIN MUST BE CLAIMED BY THE APP ------------------
+// The native OAuth reply comes back to https://<CC_NATIVE_HOST>/auth/callback,
+// and iOS only hands that to the app if the SAME host appears as an `applinks:`
+// entry in App.entitlements. Point CC_NATIVE_HOST at a different host — staging,
+// a rename, a typo — and nothing errors anywhere: the provider redirects, Safari
+// loads a page, the app is never opened, and the player is left holding a token
+// nothing will read. Every layer reports success.
+//
+// The server side is the same story: the association file names
+// APPLE_TEAM_ID + '.' + NATIVE_APP_ID, so the bundle id must agree too.
+{
+  const grab = (src, re) => { const m = src.match(re); return m ? m[1].trim() : null; };
+  const ent = read('ios/App/App/App.entitlements');
+  const cfg = read('public/config.js');
+  const host = grab(cfg, /window\.CC_NATIVE_HOST = '([^']*)';/);
+  const links = [...ent.matchAll(/<string>applinks:([^<]+)<\/string>/g)].map((m) => m[1].trim());
+  const bad = [];
+  if (!host) bad.push('public/config.js has no CC_NATIVE_HOST');
+  else if (!links.includes(host)) {
+    bad.push(`config.js CC_NATIVE_HOST is '${host}' but App.entitlements claims ${links.length ? links.map((l) => `'${l}'`).join(', ') : 'nothing'}`);
+  }
+  const appId = grab(read('server.js'), /const NATIVE_APP_ID = '([^']*)';/);
+  const pbxIds = [...read('ios/App/App.xcodeproj/project.pbxproj')
+    .matchAll(/PRODUCT_BUNDLE_IDENTIFIER = ([^;]+);/g)].map((m) => m[1].trim());
+  if (!appId) bad.push('server.js has no NATIVE_APP_ID');
+  else if (pbxIds.length && !pbxIds.every((v) => v === appId)) {
+    bad.push(`server.js NATIVE_APP_ID is '${appId}' but the iOS project says ${[...new Set(pbxIds)].join(' / ')}`);
+  }
+  if (bad.length) fail(`the OAuth return would never reach the app:\n      ${bad.join('\n      ')}`);
+  else ok(`OAuth return host is claimed by the app (applinks:${host}) and the bundle id agrees`);
+}
+
 // ---- 9. THE .hidden UTILITY MUST EXIST (8.55) --------------------------------
 // `classList.add('hidden')` is the codebase's universal way to hide something,
 // used on ~30 elements. Until 8.55 the stylesheet had NO generic rule for it —
