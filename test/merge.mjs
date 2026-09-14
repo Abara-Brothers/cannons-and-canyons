@@ -306,6 +306,7 @@ for (const [label, raw] of [
     v: 1, shots: 1234, hits: 890, maxDmg: 97, longest: 4210, kills: 33, aces: 4,
     golfBest: 28, modes: { duel: { w: 12, l: 5 }, golf: { w: 3, l: 0 } },
     weapons: { cannon: 400, nuke: 7 }, hordeBest: { aliens: 14 },
+    streak: 3, bestStreak: 7,   // Launch Bay fields: a complete career carries them too
     ach: { firstBlood: '2026-01-02', sniper: '2026-02-11' },
   };
   await evalJs(`try { localStorage.setItem('cc_career', ${JSON.stringify(JSON.stringify(real))}) } catch (e) {} 1`);
