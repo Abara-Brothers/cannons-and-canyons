@@ -58,6 +58,13 @@ const UI_FILES = ['public/index.html', 'public/app.js', 'public/styles.css', 'se
     // Brace DEPTH, not depth+1: starting at 2 meant it never returned to zero
     // and every line after the shim was silently exempted. The self-test at the
     // bottom of this file exists because that bug passed review once already.
+    //
+    // This pattern is effectively ANCHORED: `@media` then optional whitespace
+    // then `(orientation: portrait)`, so it matches only a query whose FIRST
+    // condition is the orientation. That is load-bearing since ISSUE-039 — the
+    // 16 size tiers each carry `(orientation: portrait)` in their SECOND arm and
+    // must stay fully covered by this rule, while the four shim blocks lead with
+    // it and must stay exempt. Rule 2b below pins that invariant.
     if (/@media\s*\(\s*orientation:\s*portrait\s*\)/.test(code)) {
       shimDepth = Math.max(0, net);
       return;
@@ -207,6 +214,34 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
       if (core.length) fail(`sw.js does not precache ${core.join(' and ')} — the app would load offline but could not play`);
       else ok(`sw.js precaches ${list.length} shell entries, all present (game-core + room-engine included)`);
     }
+  }
+}
+
+// ---- 2b. ONLY THE ROTATION SHIM MAY LEAD WITH (orientation: portrait) -------
+// Rule 2 exempts raw vh/vw inside a query whose FIRST condition is
+// `(orientation: portrait)`, because that is the rotation shim and raw units are
+// its actual mechanism. The exemption is by leading position, so any OTHER block
+// that happens to lead with the same condition silently stops being checked for
+// raw viewport units — a hole that opens with no error and no output.
+//
+// Since ISSUE-039 this is one reordered arm away at all times: the 16 size tiers
+// each carry `(orientation: portrait)` in their second arm, and moving one to
+// the front would exempt that whole block. So pin the set.
+{
+  const css = read('public/styles.css');
+  const leading = css.split('\n')
+    .map((l, i) => [i + 1, l])
+    .filter(([, l]) => /^@media\s*\(\s*orientation:\s*portrait\s*\)/.test(l.split('/*')[0]));
+  // The shim is four blocks: the axis swap, the rotation itself, the #game/#dock
+  // safe-area swap, and the bay's --sa-* swap. Each is gated to the shim's own
+  // width range, and that gate is what keeps an upright iPad out of them.
+  const ungated = leading.filter(([, l]) => !/\(\s*max-width:\s*500px\s*\)/.test(l));
+  if (leading.length !== 4) {
+    fail(`expected exactly 4 @media blocks leading with (orientation: portrait) — the rotation shim — found ${leading.length}:\n      ${leading.map(([n, l]) => `${n}: ${l.trim().slice(0, 96)}`).join('\n      ')}`);
+  } else if (ungated.length) {
+    fail(`a shim block is not width-gated, so it would rotate an upright iPad:\n      ${ungated.map(([n, l]) => `${n}: ${l.trim().slice(0, 96)}`).join('\n      ')}`);
+  } else {
+    ok('only the 4 rotation-shim blocks lead with (orientation: portrait), all width-gated');
   }
 }
 

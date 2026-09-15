@@ -1,7 +1,7 @@
 {
   "name": "cannons-and-canyons",
   "version": "1.0.0",
-  "build": 1,
+  "build": 2,
   "description": "Cannons & Canyons — real-time artillery combat over colossal destructible mountains: duel, 4-player free-for-all, co-op boss fight, alien invasion and artillery golf. Mobile-first, landscape-only, join by code. Free — no ads, no in-app purchases, no tracking.",
   "author": "Abara Brothers",
   "type": "module",
@@ -24,6 +24,8 @@
     "test:security": "node test/security.mjs",
     "test:shutdown": "node test/shutdown.mjs",
     "test:house-rules": "node test/house-rules.mjs",
+    "test:layout": "node test/layout.mjs",
+    "test:layout:update": "node test/layout.mjs --update",
     "test:load": "node test/load.mjs",
     "version:sync": "node tools/sync-version.mjs",
     "version:bump": "node tools/sync-version.mjs --bump"

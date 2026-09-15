@@ -17,7 +17,7 @@ window.CC_SERVER = window.Capacitor ? window.CC_NATIVE_HOST : null;
 
 // Stamped by `npm run version:sync` from package.json — do not edit by hand.
 // Crash reports carry it so a stack trace names the build it came from.
-window.CC_VERSION = '1.0.0+1';
+window.CC_VERSION = '1.0.0+2';
 
 // Supabase (ADR-005/007): cloud saves and, later, accounts. The publishable
 // key is PUBLIC by design — like the VAPID public key, it ships to every
@@ -25,3 +25,36 @@ window.CC_VERSION = '1.0.0+1';
 // The secret key never appears anywhere under public/.
 window.CC_SUPABASE_URL = 'https://onacdpaxcqdfxikxiecy.supabase.co';
 window.CC_SUPABASE_KEY = 'sb_publishable_vrr31p7LCyzxygy6lb0ujQ_eqrlpmmR';
+
+// ---- iPad latch (ISSUE-039) ------------------------------------------------
+// The HARD LANDSCAPE LOCK in styles.css rotates the whole page 90 degrees in a
+// portrait window. That is right for a phone browser and WRONG on an iPad,
+// where iPadOS 26 makes every app resizable and a rotated UI simply reads as
+// broken. The CSS gates the shim off above 500px wide, which covers an iPad in
+// portrait — but NOT a narrow Split View or Slide Over column, which is
+// phone-width on a device that is emphatically not a phone.
+//
+// This closes that gap with the one inference the native shells make available
+// for free: iOS pins the iPhone to landscape via UISupportedInterfaceOrientations
+// and Android pins it via android:screenOrientation="sensorLandscape", so a
+// portrait-SHAPED window in a NATIVE build can only be an iPad.
+//
+// LATCHED on purpose — the class is added, never removed. Dragging a Stage
+// Manager window narrow must not flip the interface 90 degrees mid-drag, and a
+// window that was once portrait tells us the device for the rest of the session.
+//
+// No Capacitor plugin, no Swift, no npm dependency, no inline script: this file
+// is already the first script in index.html and already reads window.Capacitor.
+try {
+  var ccPlatform = (window.Capacitor && window.Capacitor.getPlatform
+    && window.Capacitor.getPlatform()) || 'web';
+  var ccNative = (ccPlatform === 'ios' || ccPlatform === 'android');
+  var ccLatch = function () {
+    if (ccNative && window.innerHeight > window.innerWidth) {
+      document.documentElement.classList.add('cc-free');
+    }
+  };
+  ccLatch();
+  window.addEventListener('resize', ccLatch);
+  window.addEventListener('orientationchange', ccLatch);
+} catch (e) { /* leave the shim available — today's behaviour */ }

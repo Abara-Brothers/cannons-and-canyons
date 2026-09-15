@@ -1,8 +1,14 @@
 /* Effective viewport units: 1 unit of app-height/width regardless of how the
-   phone is held — in portrait the app is rotated 90°, so the axes swap. */
-:root { --vhu: 1vh; --vwu: 1vw; --dvhu: 1vh; --dvwu: 1vw; --dvhu: 1dvh; --dvwu: 1dvw; }
-@media (orientation: portrait) {
-  :root { --vhu: 1vw; --vwu: 1vh; --dvhu: 1vw; --dvwu: 1vh; --dvhu: 1dvw; --dvwu: 1dvh; }
+   phone is held. The rotation shim below turns the app 90° in a NARROW portrait
+   window, and there the axes swap. Above 500px wide, or once .cc-free is
+   latched, nothing rotates and these stay the true axes.
+   --rotated is the single source of truth for which regime is live; app.js
+   reads it rather than re-deriving the 500px threshold in JS. */
+:root { --vhu: 1vh; --vwu: 1vw; --dvhu: 1vh; --dvwu: 1vw; --dvhu: 1dvh; --dvwu: 1dvw;
+        --rotated: 0; }
+@media (orientation: portrait) and (max-width: 500px) {
+  :root:not(.cc-free) { --vhu: 1vw; --vwu: 1vh; --dvhu: 1vw; --dvwu: 1vh; --dvhu: 1dvw; --dvwu: 1dvh;
+                        --rotated: 1; }
 }
 
 :root {
@@ -241,18 +247,30 @@ input:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .opt-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: .16em; color: var(--muted); }
 .optline { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 
-/* ---- Rotate prompt ------------------------------------------------------- */
-.rotate-hint { display: none; }
 /* ==========================================================================
-   HARD LANDSCAPE LOCK — a browser cannot rotate the device, so in portrait the
-   ENTIRE app is laid out at calc(100 * var(--dvhu)) x calc(100 * var(--dvwu)) and rotated 90°: whatever way the
-   phone is held, the game IS landscape. Canvas input is safe (offsetX/Y are
-   local coords; sizing reads clientWidth). Every size-sensitive media query
-   below carries a portrait twin phrased against the EFFECTIVE (rotated) axes.
+   LANDSCAPE SHIM — a phone browser cannot rotate the device, so in a NARROW
+   portrait window the entire app is laid out at landscape dimensions and rotated
+   90°: however the phone is held, the game IS landscape. Canvas input is safe
+   (offsetX/Y are local coords; sizing reads clientWidth).
+
+   IT IS NO LONGER UNCONDITIONAL (ISSUE-039). Two gates turn it off:
+     • `and (max-width: 500px)` — every iPhone portrait viewport is at most
+       440pt wide, so phones keep the shim; an iPad in portrait does not. A
+       rotated UI is right on a phone and simply reads as broken on a tablet.
+     • `html:not(.cc-free)` — config.js latches `.cc-free` when a NATIVE build
+       ever sees a portrait-shaped window. iOS pins the iPhone to landscape and
+       Android to sensorLandscape, so in a native build that can only be an iPad,
+       and this covers the case the width gate cannot: a Slide Over or narrow
+       Split View column, which is phone-width on a tablet.
+
+   `--rotated` (see the top of this file) publishes which regime is live so JS
+   reads it instead of re-deriving the threshold. Size-sensitive tiers below
+   still carry a portrait twin, and those twins are now guarded to the shim's
+   own width range so they cannot fire in an upright window.
    ========================================================================== */
 html { background: var(--bg); }
-@media (orientation: portrait) {
-  body {
+@media (orientation: portrait) and (max-width: 500px) {
+  html:not(.cc-free) body {
     position: fixed; top: 0; left: 100vw; left: 100dvw;
     width: 100vh; width: 100dvh;
     height: 100vw; height: 100dvw;
@@ -261,35 +279,12 @@ html { background: var(--bg); }
   }
 }
 
-@media (orientation: portrait) and (max-width: 0px) {   /* retired: shim replaces the rotate prompt */
-  body.in-game .rotate-hint {
-    display: flex; position: absolute; inset: 0; z-index: 18;
-    align-items: center; justify-content: center; text-align: center;
-    padding: max(24px, env(safe-area-inset-top)) 26px max(24px, env(safe-area-inset-bottom));
-    background: rgba(6,9,20,.94); backdrop-filter: blur(6px);
-  }
-}
-.rh-card { max-width: 320px; display: flex; flex-direction: column; align-items: center; gap: 12px; }
-.rh-phone { width: 104px; height: 104px; transform-origin: 50% 50%; animation: rhTurn 3.4s ease-in-out infinite; }
-.rh-body   { fill: none; stroke: var(--primary); stroke-width: 4; }
-.rh-screen { fill: rgba(255,122,46,.16); }
-@keyframes rhTurn {
-  0%, 16%   { transform: rotate(0deg); }
-  44%, 80%  { transform: rotate(-90deg); }
-  100%      { transform: rotate(0deg); }
-}
-.rh-title { font-size: 21px; font-weight: 900; }
-.rh-sub   { color: var(--muted); font-size: 14px; margin: 0; line-height: 1.4; }
-
 /* ---- Reduced motion ------------------------------------------------------ */
-@media (prefers-reduced-motion: reduce) {
-  /* `.spinner` was named by none of the five reduced-motion blocks, so the
-     lobby's wait indicator span for the whole time a player waits. */
-  .rh-phone { animation: none !important; }
-  
-  
-  .rh-phone { transform: rotate(-90deg); }
-}
+/* KNOWN GAP, carried over rather than invented here: `.spinner` is named by none
+   of the reduced-motion blocks, so the lobby's wait indicator keeps spinning for
+   the whole time a player waits even with reduced motion asked for.
+   The OS-driven block that used to live here held only rules for the retired
+   rotate prompt, so it went with it (ISSUE-039). */
 
 /* ---------- Game: top HUD ---------- */
 #game { display: none; }
@@ -306,12 +301,12 @@ html { background: var(--bg); }
    right, while the dock spent that allowance at the app's bottom where the phone
    has no inset at all. `body` prefixes keep these winning over the tier
    overrides further down the file. */
-@media (orientation: portrait) {
-  body #game.active {
+@media (orientation: portrait) and (max-width: 500px) {
+  html:not(.cc-free) body #game.active {
     padding-left: env(safe-area-inset-top);
     padding-right: env(safe-area-inset-bottom);
   }
-  body #dock { padding-bottom: calc(3px + env(safe-area-inset-left)); }
+  html:not(.cc-free) body #dock { padding-bottom: calc(3px + env(safe-area-inset-left)); }
 }
 #hud-top {
   display: flex; flex-direction: column; gap: 3px;
@@ -579,7 +574,7 @@ body.golf .golf-only { display: flex; }
    depends on animation timing is not a hint you can rely on. */
 #game.killcam-hold .kc-skip { opacity: 1; }
 
-@media (orientation: landscape) and (min-width: 620px), (orientation: portrait) and (min-height: 620px) {
+@media (min-width: 620px), (orientation: portrait) and (min-height: 620px) and (max-width: 500px) {
   .aim-readout { grid-template-columns: 1fr 1fr; max-width: 640px; margin: 0 auto; width: 100%; }
   .control-rows { max-width: 640px; margin: 0 auto; width: 100%; }
   /* `safe center` degrades to start-alignment once the chips outgrow the strip:
@@ -590,7 +585,7 @@ body.golf .golf-only { display: flex; }
 
 /* Landscape phones: ultra-compact dock — icon-only weapons + one control row
    so the battlefield keeps nearly all of the screen. */
-@media (orientation: landscape) and (max-height: 600px), (orientation: portrait) and (max-width: 600px) {
+@media (min-width: 501px) and (max-height: 600px), (orientation: portrait) and (max-width: 500px) {
   /* Slim single-row scoreboard: name · HP number · inline bar — minimal height. */
   #hud-top { flex-direction: row; align-items: center; padding: 1px 10px; gap: 10px; }
   .score-row { flex: 1 1 auto; gap: 6px; }
@@ -660,7 +655,7 @@ body.golf .golf-only { display: flex; }
    375: head ~26 + grid ~230 (worst case: 4-seat FFA roster + 3 buttons) +
    paddings ≈ 300px. #lobby keeps overflow-y:auto purely as a safety net.
    ========================================================================== */
-@media (orientation: landscape) and (max-height: 600px), (orientation: portrait) and (max-width: 600px) {
+@media (min-width: 501px) and (max-height: 600px), (orientation: portrait) and (max-width: 500px) {
   #lobby {
     padding: max(8px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right))
              max(8px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
@@ -690,7 +685,7 @@ body.golf .fuel { display: none; }
    sat well left of centre. Size the three surviving controls to their content and
    CENTRE the group. max-content tracks still shrink when the screen is tight, so
    this cannot reintroduce an overflow. */
-@media (orientation: landscape) and (max-height: 600px), (orientation: portrait) and (max-width: 600px) {
+@media (min-width: 501px) and (max-height: 600px), (orientation: portrait) and (max-width: 500px) {
   body.golf .control-rows {
     grid-template-columns: repeat(3, minmax(0, max-content));
     justify-content: center;
@@ -814,7 +809,7 @@ body.golf .fuel { display: none; }
    because the bands share the height budget and panels compress via clamps.
    That assumption holds only while there is height to compress INTO — see the
    very-short rules below, which take the columns back off the stack. */
-@media (orientation: landscape) and (max-width: 640px), (orientation: portrait) and (max-height: 640px) {
+@media (min-width: 501px) and (max-width: 640px), (orientation: portrait) and (max-height: 640px) and (max-width: 500px) {
   
   
   .hs-quick-txt i { display: none; }
@@ -822,7 +817,7 @@ body.golf .fuel { display: none; }
   
 }
 /* Very short landscape phones: tighten the brand row so the panels get room. */
-@media (orientation: landscape) and (max-height: 430px), (orientation: portrait) and (max-width: 430px) {
+@media (min-width: 501px) and (max-height: 430px), (orientation: portrait) and (max-width: 430px) {
   
   /* The byline used to be display:none here to buy vertical room. It is the
      studio credit and the owner wants it on every device, so it SHRINKS
@@ -847,7 +842,7 @@ body.golf .fuel { display: none; }
    The panel still cannot show everything at 320px tall, so `.hs-main` scrolls
    as ONE unit: the modes are visible immediately and the button is 58px down,
    which beats a sticky button over an invisible, un-hinted scroll region. */
-@media (orientation: landscape) and (max-width: 640px) and (max-height: 400px) {
+@media (min-width: 501px) and (max-width: 640px) and (max-height: 400px) {
   
   
   
@@ -898,7 +893,7 @@ body.golf .fuel { display: none; }
      - gaps and card padding                           -> tightened
    Nothing shrinks below a legible size: the blurb floors at 9px and the cells
    at 8.5px, both checked against the real 320px layout. */
-@media (orientation: landscape) and (max-height: 430px), (orientation: portrait) and (max-width: 430px) {
+@media (min-width: 501px) and (max-height: 430px), (orientation: portrait) and (max-width: 430px) {
   .arm-card { padding-top: 10px; padding-bottom: 10px; gap: 5px; }
   .arm-card .result { font-size: clamp(15px, calc(3.4 * var(--vhu)), 20px); }
   .arm-sub {
@@ -940,7 +935,7 @@ body.golf .fuel { display: none; }
 .menu-card .tabpane, .menu-card .career-wrap { min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
 /* Landscape: the help/career cards use the width a sideways phone actually has,
    so diagrams and rows breathe instead of cramping. */
-@media (orientation: landscape) and (max-height: 600px), (orientation: portrait) and (max-width: 600px) {
+@media (min-width: 501px) and (max-height: 600px), (orientation: portrait) and (max-width: 500px) {
   .menu-card { max-width: 780px; width: min(calc(96 * var(--vwu)), 780px); }
 }
 .tabrow { display: flex; gap: 6px; margin: 8px 0 10px; }
@@ -1109,7 +1104,7 @@ body.golf .fuel { display: none; }
 
 /* Short landscape phones: the rail loses its labels before the pane loses its
    content — finding a chapter matters less than being able to read one. */
-@media (orientation: landscape) and (max-height: 420px), (orientation: portrait) and (max-width: 420px) {
+@media (min-width: 501px) and (max-height: 420px), (orientation: portrait) and (max-width: 420px) {
   .fm-card { height: calc(96 * var(--dvhu)); }
   .fm-body { grid-template-columns: clamp(84px, calc(17 * var(--vwu)), 120px) 1fr; }
   .fm-grid { grid-template-columns: 1fr; }
@@ -1186,7 +1181,7 @@ body.golf .fuel { display: none; }
 .cs-row b { color: var(--text); }
 .cs-sep { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 7px; }
 .car-achs { display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(3px, calc(0.7 * var(--vhu)), 6px); align-content: start; }
-@media (orientation: landscape) and (max-width: 700px), (orientation: portrait) and (max-height: 700px) { .car-achs { grid-template-columns: repeat(2, 1fr); } }
+@media (min-width: 501px) and (max-width: 700px), (orientation: portrait) and (max-height: 700px) and (max-width: 500px) { .car-achs { grid-template-columns: repeat(2, 1fr); } }
 /* Unearned challenges used to be dimmed with `opacity: .45` on the whole row,
    which multiplied --muted down to 2.30:1 on --panel — well under the 4.5:1
    floor, and unearned rows DO render description text. Dim by colour instead
@@ -1288,7 +1283,7 @@ body.golf .fuel { display: none; }
 .drum .dc.cur {
   flex: 0 0 48px; width: 48px; font-size: clamp(15px, calc(2.6 * var(--vhu)), 18px); font-weight: 900; color: var(--text);
 }
-@media (orientation: landscape) and (max-width: 700px), (orientation: portrait) and (max-height: 700px) {
+@media (min-width: 501px) and (max-width: 700px), (orientation: portrait) and (max-height: 700px) and (max-width: 500px) {
   .drum { max-width: 128px; }
   .drum .dc { flex: 0 0 13px; width: 13px; font-size: 8.5px; }
   .drum .dc.cur { flex: 0 0 36px; width: 36px; }
@@ -1325,7 +1320,7 @@ body.golf .fuel { display: none; }
 .mini { width: 42px; height: 43px; font-size: 19px; }
 .drum { min-height: 41px; align-items: center; }
 .drum .dc.cur { font-size: clamp(17px, calc(3 * var(--vhu)), 21px); }
-@media (orientation: landscape) and (max-height: 600px), (orientation: portrait) and (max-width: 600px) {
+@media (min-width: 501px) and (max-height: 600px), (orientation: portrait) and (max-width: 500px) {
   .mini { width: 34px; height: 38px; font-size: 16px; }
   .drum { min-height: 36px; }
   /* The one-row dock is all fixed-width pieces: at ~844px wide it totalled
@@ -1336,7 +1331,7 @@ body.golf .fuel { display: none; }
 
 /* Compact dock: the FIRE button and fuel bar fill their row's full height —
    no dead strip under the controls. */
-@media (orientation: landscape) and (max-height: 600px), (orientation: portrait) and (max-width: 600px) {
+@media (min-width: 501px) and (max-height: 600px), (orientation: portrait) and (max-width: 500px) {
   .control-rows .fire { align-self: center; }   /* a fixed square must never stretch */
   .control-rows .stepper { align-self: stretch; }
 }
@@ -1345,7 +1340,7 @@ body.golf .fuel { display: none; }
    screen. Same one-row layout, each piece a notch tighter than the <=600px
    effective-height tier so the row totals ~640px, not ~760. Portrait twin
    phrased on effective axes per the rotation shim. */
-@media (orientation: landscape) and (max-width: 830px), (orientation: portrait) and (max-height: 830px) {
+@media (min-width: 501px) and (max-width: 830px), (orientation: portrait) and (max-height: 830px) and (max-width: 500px) {
   #dock { gap: 4px; padding-left: 8px; padding-right: 8px; }
   .control-rows { gap: 4px; }
   .mini { width: 28px; height: 36px; font-size: 14px; }
@@ -1671,12 +1666,21 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
    object (it is 0.708--fs tall), never from the width, and never squashed:
    the 0.62 foreshortening is the whole illusion. Portrait twins phrased on the
    effective axes, per the rotation shim. --- */
-@media (orientation: landscape) and (max-height: 600px), (orientation: portrait) and (max-width: 600px) {
+@media (min-width: 501px) and (max-height: 600px), (orientation: portrait) and (max-width: 500px) {
   .fire-btn { --fs: 104px; }
 }
-@media (orientation: landscape) and (max-width: 830px), (orientation: portrait) and (max-height: 830px) {
+@media (min-width: 501px) and (max-width: 830px), (orientation: portrait) and (max-height: 830px) and (max-width: 500px) {
   .fire-btn { --fs: 92px; }
 }
+/* An upright window with room on BOTH axes gets the reference button back.
+   The 830px tier above is about fitting the one-row dock HORIZONTALLY, which is
+   the right call on a phone — but iPad mini (744), iPad Air and 10th-gen (820)
+   are all under it in portrait, so most iPads would have taken the 92px button
+   while having more vertical room than any phone. No phone can match this rule:
+   the widest landscape phone viewport is 956x440, and below 501px wide the
+   rotation shim is still on. Flat px, consistent with the 104/92 tiers above,
+   so no raw viewport units and no rule-2 exposure. */
+@media (min-width: 700px) and (min-height: 700px) { .fire-btn { --fs: 132px; } }
 /* ===== end FIRE BUTTON ============================================== */
 
 
@@ -1709,8 +1713,8 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
    board sit underneath the island on every notched iPhone. */
 :root{ --sa-l: env(safe-area-inset-left);  --sa-r: env(safe-area-inset-right);
        --sa-t: env(safe-area-inset-top);   --sa-b: env(safe-area-inset-bottom); }
-@media (orientation: portrait){
-  :root{ --sa-l: env(safe-area-inset-top);   --sa-r: env(safe-area-inset-bottom);
+@media (orientation: portrait) and (max-width: 500px){
+  :root:not(.cc-free){ --sa-l: env(safe-area-inset-top);   --sa-r: env(safe-area-inset-bottom);
          --sa-t: env(safe-area-inset-right); --sa-b: env(safe-area-inset-left); }
 }
 /* The design frame is fitted to the SAFE box, not the raw viewport, and offset
@@ -2197,10 +2201,6 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
 
 /* ---- reduced motion, IN-APP override: exact mirrors of the OS-driven blocks above.
    Generated from them; the toggle in Bay controls sets body.reduce-motion. ---- */
-body.reduce-motion .rh-phone { animation: none !important; }
-
-
-body.reduce-motion .rh-phone { transform: rotate(-90deg); }
 body.reduce-motion .wpop.show { animation: wpopFade 1.2s linear forwards; }
 body.reduce-motion #dock .dock-tab svg { animation: none; }
 body.reduce-motion #dock:not(.collapsed) .dock-tab svg { transform: rotate(180deg); }

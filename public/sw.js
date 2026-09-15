@@ -16,21 +16,21 @@
 // NOTE for the native app: this file is irrelevant there. A Capacitor build
 // loads its assets from the bundle, so offline loading is already free. This
 // exists for the web/PWA path only.
-// Bumped from cc-v1 with the ?v=2 asset stamp, so activate() drops the old
+// Bumped from cc-v1 with the ?v=3 asset stamp, so activate() drops the old
 // cache outright instead of leaving both the stamped and unstamped copies of
 // every asset in it.
-const VERSION = 'cc-v2';
+const VERSION = 'cc-v3';
 const SHELL = [
   './',
   'index.html',
-  'app.js?v=2',
-  'cloud.js?v=2',
-  'config.js?v=2',
-  'errors.js?v=2',
+  'app.js?v=3',
+  'cloud.js?v=3',
+  'config.js?v=3',
+  'errors.js?v=3',
   'game-core.js',        // the authoritative simulation — offline play needs it
   'room-engine.js',      // rooms/turns/bots — the other half of an offline match
-  'styles.css?v=2',
-  'bay.js?v=2',          // the Launch Bay front end
+  'styles.css?v=3',
+  'bay.js?v=3',          // the Launch Bay front end
   'fonts/barlow-500.woff2',
   'fonts/barlow-600.woff2',
   'fonts/barlow-700.woff2',
