@@ -2495,7 +2495,19 @@ function buildWeaponStrip() {
     chip.setAttribute('aria-label',
       `${w.name}, ${w.ammo >= 99 ? 'unlimited rounds' : `${left} ${left === 1 ? 'round' : 'rounds'} left`}`);
     chip.onclick = () => {
-      if (left > 0 && canAim()) { S.selected = w.id; buildWeaponStrip(); flashWeaponName(w.id); }
+      if (!(left > 0 && canAim())) return;
+      // `left` is 99 for every club because room-engine seeds per-seat golf ammo
+      // as {golfball:99, driver:99, putter:99} and it is copied into S.ammo — not
+      // because of the `?? w.ammo` fallthrough above. Capture BEFORE assigning:
+      // re-tapping the club already in hand is not "picking a club", and the
+      // golf lesson must not clear on it. Own-turn gate: in online golf canAim()
+      // has no turn check, and a chip tap on the opponent's turn would tick the
+      // step while the card is hidden — and, as the last step, persist cc_coach.
+      // The auto-putter hand-off near the cup writes S.selected directly and
+      // correctly does not come through here.
+      const changed = w.id !== S.selected;
+      S.selected = w.id; buildWeaponStrip(); flashWeaponName(w.id);
+      if (changed && S.turn === S.you) coachPass('club');
     };
     strip.appendChild(chip);
   }
@@ -2803,7 +2815,15 @@ function guideDir() {
 //     after firing, the turn is over and driving has to wait for the next one.
 // Grandfathered on PROF.shots the same way the demo is: this is for battle one.
 const COACH_KEY = 'cc_coach';
-const COACH_STEPS = [
+// Two copy sets, ONE id contract. 'pull' and 'fire' are shared so the existing
+// coachPass call sites and the canvas tests (coachCurrent() === 'pull') are
+// untouched; only the third step differs. Golf has no free driving at all —
+// room-engine rejects moves in golf and the drive row is display:none there —
+// so the combat set's 'drive' step could never be passed on a golf hole: a
+// first-timer sat on "Step 3 of 3 · You can move, too." for the whole round.
+// Golf's third lesson is the bag instead. Both sets are EXACTLY three long
+// because index.html hard-codes three dots and renderCoach lights only those.
+const COACH_COMBAT = [
   { id: 'pull', title: 'Touch anywhere. Pull back.',
     body: 'The shell flies the opposite way — like a slingshot. Pull further for more power.' },
   { id: 'fire', title: 'Now fire.',
@@ -2811,18 +2831,34 @@ const COACH_STEPS = [
   { id: 'drive', title: 'You can move, too.',
     body: 'Drive left or right on your turn. It spends fuel, and the fuel bar refills every turn.' },
 ];
+// Copy checked against game-core.js: the Driver carries furthest and rolls
+// longest; the Iron bites on landing; the Putter is ground:true and never lofts.
+// No Iron number is stated on purpose — its speedMul is a 1.0038 trim, not 1.0.
+const COACH_GOLF = [
+  { id: 'pull', title: 'Touch anywhere. Pull back.',
+    body: 'The ball flies the opposite way — like a slingshot. Pull further for more power.' },
+  { id: 'fire', title: 'Now fire.',
+    body: 'Tap the CONTROLS tab to bring the panel up, then hit FIRE. One stroke each turn — no clock, take your time.' },
+  { id: 'club', title: 'Pick your club.',
+    body: 'Driver for maximum carry off the tee. Iron for a shot that bites on landing. Putter never leaves the turf — it only rolls, exactly as far as you dare.' },
+];
+// A function, not a constant: S.mode is assigned long after this script loads.
+const coachSteps = () => (S.mode === 'golf' ? COACH_GOLF : COACH_COMBAT);
 let coachDone = false;
 try {
   coachDone = localStorage.getItem(COACH_KEY) === '1' || PROF.shots > 0;
 } catch {}
-const coachMet = { pull: false, fire: false, drive: false };
+// ONE ledger for the page session (declared here, written only in coachPass):
+// a player who did pull+fire in a duel and then starts golf without a reload
+// lands straight on step 3. Accepted — those two lessons were genuinely learned.
+const coachMet = { pull: false, fire: false, drive: false, club: false };
 let coachLive = false;      // the sequence is running right now
 let coachShown = null;      // step currently painted — the DOM is touched only on change
 let coachVis = null;        // last visibility written, same reason
 
 function coachCurrent() {
   if (!coachLive) return null;
-  const st = COACH_STEPS.find(s => !coachMet[s.id]);
+  const st = coachSteps().find(s => !coachMet[s.id]);
   return st ? st.id : null;
 }
 // Visible only when the player could actually act on it. Mirrors aimGuideOn()'s
@@ -2844,8 +2880,9 @@ function coachMaybeStart() {
 }
 function coachPass(id) {
   if (!coachLive || coachMet[id]) return;
+  if (!coachSteps().some(s => s.id === id)) return;   // not a lesson in THIS mode's set
   coachMet[id] = true;
-  if (!coachCurrent()) coachEnd(true);   // all three done — never again on this device
+  if (!coachCurrent()) coachEnd(true);   // all three of this set done — never again on this device
   else renderCoach();
 }
 function coachEnd(persist) {
@@ -2862,12 +2899,14 @@ function renderCoach() {
   const id = coachCurrent();
   const show = !!id && coachShowable();
   if (show !== coachVis) { el.classList.toggle('hidden', !show); coachVis = show; }
-  if (!show || id === coachShown) return;
-  coachShown = id;
-  const i = COACH_STEPS.findIndex(s => s.id === id);
-  $('coachStep').textContent = `Step ${i + 1} of ${COACH_STEPS.length}`;
-  $('coachTitle').textContent = COACH_STEPS[i].title;
-  $('coachBody').textContent = COACH_STEPS[i].body;
+  const steps = coachSteps();
+  const step = steps.find(s => s.id === id) || null;
+  if (!show || step === coachShown) return;
+  coachShown = step;
+  const i = steps.indexOf(step);
+  $('coachStep').textContent = `Step ${i + 1} of ${steps.length}`;
+  $('coachTitle').textContent = step.title;
+  $('coachBody').textContent = step.body;
   const dots = $('coachDots').children;
   for (let k = 0; k < dots.length; k++) dots[k].classList.toggle('on', k === i);
 }
