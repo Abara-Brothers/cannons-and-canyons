@@ -392,6 +392,62 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   }
 }
 
+// ---- 8d. THE IN-APP SIGN-IN CALLBACK MUST BE THE APP'S OWN, AND WIRED --------
+// On iOS the provider leg runs in ASWebAuthenticationSession (CCWebAuthPlugin,
+// ios/App/App/SceneDelegate.swift) and the reply comes back to CC_IOS_CALLBACK,
+// a scheme URL. That is safe ONLY because the session intercepts it inside the
+// app — so the scheme must never ALSO be registered with the OS, or any app
+// could hand this one a token. And the value has to agree in places that never
+// see each other: config.js (the string Supabase's allow-list holds), cloud.js
+// (the plugin name it gates on must be the jsName Swift exports), app.js (the
+// method it calls must be one Swift declares), and the scene delegate (which
+// must install the subclass that registers the plugin — the storyboard alone
+// does nothing). A drift in any of them is invisible in every test that does
+// not run the sheet: the old Safari leg silently comes back, or the sheet opens
+// and its reply is refused.
+{
+  const grab = (src, re) => { const m = src.match(re); return m ? m[1].trim() : null; };
+  const JS_NAME = 'CCWebAuth', METHOD = 'start';
+  const cfg = read('public/config.js');
+  const cloud = read('public/cloud.js');
+  const app = read('public/app.js');
+  const swift = read('ios/App/App/SceneDelegate.swift');
+  const plist = read('ios/App/App/Info.plist');
+  const cb = grab(cfg, /window\.CC_IOS_CALLBACK = '([^']*)';/);
+  const path = grab(cloud, /const RETURN_PATH = '([^']*)';/);
+  const pbxIds = [...new Set([...read('ios/App/App.xcodeproj/project.pbxproj')
+    .matchAll(/PRODUCT_BUNDLE_IDENTIFIER = ([^;]+);/g)].map((m) => m[1].trim()))];
+  const bad = [];
+  if (!cb) bad.push('public/config.js has no CC_IOS_CALLBACK');
+  else if (!path) bad.push('public/cloud.js has no RETURN_PATH');
+  else {
+    const scheme = cb.split('://')[0];
+    if (pbxIds.length !== 1 || scheme !== pbxIds[0]) {
+      bad.push(`CC_IOS_CALLBACK scheme '${scheme}' is not the iOS bundle id (${pbxIds.join(' / ') || 'none found'})`);
+    }
+    if (cb !== scheme + '://' + path.replace(/^\//, '')) {
+      bad.push(`CC_IOS_CALLBACK is '${cb}' but the callback path cloud.js uses is '${path}'`);
+    }
+    if (new RegExp('<string>' + scheme.replace(/\./g, '\\.') + '</string>').test(plist)) {
+      bad.push(`Info.plist registers '${scheme}' as a URL scheme — the OS would route it to any app that claims it, the hole the sheet exists to close`);
+    }
+  }
+  if (!swift.includes(`public let jsName = "${JS_NAME}"`)) bad.push(`SceneDelegate.swift exports no plugin named ${JS_NAME}`);
+  if (!swift.includes(`CAPPluginMethod(name: "${METHOD}", returnType: CAPPluginReturnPromise)`)) {
+    bad.push(`SceneDelegate.swift declares no promise-returning '${METHOD}' method`);
+  }
+  if (!swift.includes(`registerPluginInstance(${JS_NAME}Plugin())`)) {
+    bad.push(`SceneDelegate.swift never registers ${JS_NAME}Plugin — JS would see no plugin and fall back to Safari`);
+  }
+  if (!/window\?\.rootViewController = CCBridgeViewController\(\)/.test(swift)) {
+    bad.push('SceneDelegate does not install CCBridgeViewController as rootViewController — the registering subclass is never used');
+  }
+  if (!cloud.includes(`Plugins.${JS_NAME}`)) bad.push(`cloud.js does not gate on Capacitor.Plugins.${JS_NAME}`);
+  if (!app.includes(`Plugins.${JS_NAME}.${METHOD}(`)) bad.push(`app.js never calls Capacitor.Plugins.${JS_NAME}.${METHOD}()`);
+  if (bad.length) fail(`the in-app sign-in sheet is mis-wired:\n      ${bad.join('\n      ')}`);
+  else ok(`in-app sign-in callback is the app's own (${cb}), unregistered with the OS, and wired Swift -> cloud.js -> app.js`);
+}
+
 // ---- 9. THE .hidden UTILITY MUST EXIST (8.55) --------------------------------
 // `classList.add('hidden')` is the codebase's universal way to hide something,
 // used on ~30 elements. Until 8.55 the stylesheet had NO generic rule for it —

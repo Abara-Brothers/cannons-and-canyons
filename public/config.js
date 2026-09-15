@@ -15,6 +15,16 @@
 window.CC_NATIVE_HOST = 'tanks.abarabrothers.com';
 window.CC_SERVER = window.Capacitor ? window.CC_NATIVE_HOST : null;
 
+// Where the IN-APP sign-in sheet on iOS hands the provider's reply back. Used
+// ONLY when the native shell has registered the CCWebAuth plugin (cloud.js
+// redirectTarget decides): the sheet is ASWebAuthenticationSession, which
+// intercepts a navigation to this scheme INSIDE the app that opened it, so no
+// other app is ever asked to open it. The scheme is the bundle id and the path
+// mirrors the Universal Link one; house rule 8d pins both. This exact string
+// must ALSO be listed under Supabase > Authentication > URL Configuration >
+// Redirect URLs, or GoTrue refuses to send the player here.
+window.CC_IOS_CALLBACK = 'com.abarabrothers.cannonsandcanyons://auth/callback';
+
 // Stamped by `npm run version:sync` from package.json — do not edit by hand.
 // Crash reports carry it so a stack trace names the build it came from.
 window.CC_VERSION = '1.0.0+2';

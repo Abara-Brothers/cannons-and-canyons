@@ -1026,10 +1026,13 @@ async function cloudBoot(returnUrl) {
 // device can register a scheme. The return is a domain-bound Universal Link /
 // App Link instead — see redirectTarget() in cloud.js.
 //
-// The provider leg runs in the REAL Safari, not in this WebView. Capacitor's
-// WebViewDelegationHandler cancels any top-level navigation outside the app's
-// own server and hands the URL to UIApplication.open, so `location.href = url`
-// already does the right thing and no browser plugin is involved.
+// On iOS the provider leg now runs in an IN-APP sheet (ASWebAuthenticationSession,
+// via the CCWebAuth plugin the shell registers) and its reply never leaves the
+// app — see goSignIn(). Everywhere else the leg runs in the REAL browser, not
+// in this WebView: Capacitor's WebViewDelegationHandler cancels any top-level
+// navigation outside the app's own server and hands the URL to
+// UIApplication.open, so `location.href = url` already does the right thing.
+// The Universal Link return below stays as the route for that case.
 const IS_NATIVE = !!(window.Capacitor && window.Capacitor.getPlatform
   && window.Capacitor.getPlatform() !== 'web');
 const IS_IOS = !!(window.Capacitor && window.Capacitor.getPlatform
@@ -1046,8 +1049,9 @@ const PROVIDERS = IS_IOS ? ['apple', 'google'] : ['google'];
 const PROVIDER_NAME = { apple: 'Apple', google: 'Google' };
 
 // Can this platform actually COMPLETE a sign-in? The answer is no longer "is it
-// native": iOS can, because its Universal Link return is claimed by an
-// `applinks:` entitlement and the association file is served and verified.
+// native": iOS can — the provider leg runs in an in-app sheet whose reply comes
+// straight back to goSignIn(), and its Universal Link return is claimed by an
+// `applinks:` entitlement as the fallback route.
 //
 // ANDROID CANNOT YET. AndroidManifest has no App Links intent-filter for
 // /auth/callback, and adding one would not be enough on its own — Android only
@@ -1147,11 +1151,13 @@ function chooseProvider(kind) {
 }
 $('provCancelBtn').onclick = () => $('providerModal').classList.add('hidden');
 
-// ---- OAuth return on native -------------------------------------------------
-// The provider leg runs in Safari, so the reply cannot land in this WebView's
-// address bar. It arrives as a Universal Link that reopens the app, and
-// @capacitor/app turns that into an appUrlOpen event carrying the whole URL,
-// fragment included.
+// ---- OAuth return on native (the Universal Link route) ----------------------
+// When the provider leg runs in the real browser — Android, or an iOS shell
+// without the in-app sheet — the reply cannot land in this WebView's address
+// bar. It arrives as a Universal Link that reopens the app, and @capacitor/app
+// turns that into an appUrlOpen event carrying the whole URL, fragment
+// included. The in-app sheet never comes through here: its reply is the
+// resolved promise in goSignIn().
 //
 // Registered unconditionally, NOT only while a sign-in is pending: iOS may have
 // discarded the WebView entirely while Safari was in front, in which case this
@@ -1215,9 +1221,39 @@ function startSignIn(urlFn, provider) {
   $('accountModal').classList.add('hidden');
   $('ageModal').classList.remove('hidden');
 }
+// Where the sign-in actually goes. WEB, and any native shell without the
+// in-app sheet: navigate, and the reply comes back as a page load or a
+// Universal Link. iOS WITH the sheet: the provider page opens in
+// ASWebAuthenticationSession over this WebView and the reply is the resolved
+// promise — no Safari, no relaunch, no Universal Link. From there it is the
+// same cloudBoot() every carrier uses, so the merge, the push and the chip
+// refresh stay single-copy. One thing the web path never needs: the socket is
+// still up and still introduced as the OLD identity (guest or nobody), so it
+// is re-introduced here — a page reload gives web that for free.
 async function goSignIn(urlFn) {
   const url = await urlFn();
-  if (url) location.href = url;
+  if (!url) return;
+  if (!Cloud.inAppAuth()) { location.href = url; return; }
+  const scheme = String(window.CC_IOS_CALLBACK).split('://')[0];
+  let res;
+  try {
+    res = await window.Capacitor.Plugins.CCWebAuth.start({ url, scheme });
+  } catch (e) {
+    // 'busy': the FIRST sheet is still up and its reply is still expected, so
+    // the flag it armed must stay armed. Anything else (bad_url, bad_scheme,
+    // no_window, failed, start_failed) means no reply is coming.
+    if (e && e.message === 'busy') return;
+    Cloud.cancelPending();
+    showToast('Could not open sign-in — try again');
+    return;
+  }
+  if (!res || !res.url) {
+    Cloud.cancelPending();
+    showToast(res && res.cancelled ? 'Sign-in was cancelled' : 'Could not open sign-in — try again');
+    return;
+  }
+  await cloudBoot(res.url);
+  if (S.ws) sendHello(S.ws);
 }
 $('ageCancelBtn').onclick = () => { pendingSignIn = null; $('ageModal').classList.add('hidden'); };
 $('ageOkBtn').onclick = () => {
