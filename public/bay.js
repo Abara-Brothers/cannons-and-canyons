@@ -215,7 +215,7 @@ function stage(skinId, o) {
 function chrome(title, sub, meta, body, foot) {
   const s = state();
   return '<div class="bay"><img class="pgart" src="' + art(s.mode.art) + '" alt="">' + deco() + beams() + dust() + '<div class="vig"></div>'
-    + '<div class="stage"><div class="horiz"></div>'
+    + '<div class="stage">'
     + '<div class="phead"><button class="bk" data-back aria-label="Back">' + IC.back + '</button>'
     +   '<span style="display:block"><span class="pt">' + title + '</span><span class="ps">' + sub + '</span></span>'
     +   '<span class="grow"></span><span class="pm">' + meta + '</span></div>'
