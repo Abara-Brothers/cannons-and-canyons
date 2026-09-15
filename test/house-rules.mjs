@@ -407,7 +407,10 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
 // and its reply is refused.
 {
   const grab = (src, re) => { const m = src.match(re); return m ? m[1].trim() : null; };
-  const JS_NAME = 'CCWebAuth', METHOD = 'start';
+  // Every native sign-in plugin the shell must export and register and the
+  // client must call. The first is also what cloud.js gates the return URL on.
+  const PLUGINS = [['CCWebAuth', 'start'], ['AppleSignIn', 'start']];
+  const JS_NAME = PLUGINS[0][0];
   const cfg = read('public/config.js');
   const cloud = read('public/cloud.js');
   const app = read('public/app.js');
@@ -432,20 +435,30 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
       bad.push(`Info.plist registers '${scheme}' as a URL scheme — the OS would route it to any app that claims it, the hole the sheet exists to close`);
     }
   }
-  if (!swift.includes(`public let jsName = "${JS_NAME}"`)) bad.push(`SceneDelegate.swift exports no plugin named ${JS_NAME}`);
-  if (!swift.includes(`CAPPluginMethod(name: "${METHOD}", returnType: CAPPluginReturnPromise)`)) {
-    bad.push(`SceneDelegate.swift declares no promise-returning '${METHOD}' method`);
+  for (const [name, method] of PLUGINS) {
+    // The method must be declared INSIDE that plugin's class, not anywhere in
+    // the file: slice from its jsName to the next @objc( class, or the end.
+    const at = swift.indexOf(`public let jsName = "${name}"`);
+    if (at === -1) { bad.push(`SceneDelegate.swift exports no plugin named ${name}`); continue; }
+    const next = swift.indexOf('@objc(', at);
+    const cls = swift.slice(at, next === -1 ? undefined : next);
+    if (!cls.includes(`CAPPluginMethod(name: "${method}", returnType: CAPPluginReturnPromise)`)) {
+      bad.push(`${name} declares no promise-returning '${method}' method`);
+    }
+    if (!swift.includes(`registerPluginInstance(${name}Plugin())`)) {
+      bad.push(`SceneDelegate.swift never registers ${name}Plugin — JS would see no plugin and fall back to the web flow`);
+    }
+    if (!app.includes(`Plugins.${name}.${method}(`)) bad.push(`app.js never calls Capacitor.Plugins.${name}.${method}()`);
   }
-  if (!swift.includes(`registerPluginInstance(${JS_NAME}Plugin())`)) {
-    bad.push(`SceneDelegate.swift never registers ${JS_NAME}Plugin — JS would see no plugin and fall back to Safari`);
+  if ((swift.match(/class CCBridgeViewController/g) || []).length !== 1) {
+    bad.push('there must be exactly ONE CCBridgeViewController — every plugin registers in its capacitorDidLoad()');
   }
   if (!/window\?\.rootViewController = CCBridgeViewController\(\)/.test(swift)) {
     bad.push('SceneDelegate does not install CCBridgeViewController as rootViewController — the registering subclass is never used');
   }
   if (!cloud.includes(`Plugins.${JS_NAME}`)) bad.push(`cloud.js does not gate on Capacitor.Plugins.${JS_NAME}`);
-  if (!app.includes(`Plugins.${JS_NAME}.${METHOD}(`)) bad.push(`app.js never calls Capacitor.Plugins.${JS_NAME}.${METHOD}()`);
   if (bad.length) fail(`the in-app sign-in sheet is mis-wired:\n      ${bad.join('\n      ')}`);
-  else ok(`in-app sign-in callback is the app's own (${cb}), unregistered with the OS, and wired Swift -> cloud.js -> app.js`);
+  else ok(`in-app sign-in callback is the app's own (${cb}), unregistered with the OS; ${PLUGINS.map((p) => p[0]).join(' + ')} exported, registered and called`);
 }
 
 // ---- 9. THE .hidden UTILITY MUST EXIST (8.55) --------------------------------

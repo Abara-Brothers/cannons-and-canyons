@@ -1121,10 +1121,45 @@ $('accountBtn').onclick = () => {
 $('accCloseBtn').onclick = () => $('accountModal').classList.add('hidden');
 $('accLinkBtn').onclick = () => chooseProvider('link');
 
+// Sign in with Apple, NATIVELY, on iOS: the system sheet (Face ID) instead of
+// any web flow, through the AppleSignIn plugin the shell registers. Apple
+// returns a signed identity token whose audience is this bundle id, and
+// Cloud.signInWithApple() posts it to GoTrue's id_token grant -- no redirect,
+// no fragment, no pending flag. Shaped as a url-thunk that resolves null so it
+// slots into the SAME age gate and goSignIn() as the web providers: goSignIn
+// only navigates on a URL. Everything after the token is the cloudBoot() every
+// carrier shares, plus the re-hello the in-app paths need.
+const NATIVE_APPLE = () => !!(IS_IOS && window.Capacitor.Plugins && window.Capacitor.Plugins.AppleSignIn);
+const appleNativeFn = (kind) => async () => {
+  let res;
+  try { res = await window.Capacitor.Plugins.AppleSignIn.start({}); }
+  catch (e) {
+    if (!(e && e.message === 'busy')) showToast('Could not open Sign in with Apple — try again');
+    return null;
+  }
+  if (!res || !res.idToken || !res.nonce) {
+    showToast(res && res.cancelled ? 'Sign-in was cancelled' : 'Could not open Sign in with Apple — try again');
+    return null;
+  }
+  const r = await Cloud.signInWithApple(res.idToken, res.nonce, kind === 'link');
+  if (!r.ok) {
+    // A link that fails is NEVER retried as a fresh sign-in -- see linkFn.
+    showToast(r.code === 'identity_already_exists'
+      ? 'That Apple ID is already linked to another account — sign out first, then sign in with it'
+      : 'Sign in with Apple did not complete — check your connection and try again');
+    return null;
+  }
+  showToast('Signed in — your progress follows you now');
+  await cloudBoot();
+  if (S.ws) sendHello(S.ws);
+  return null;
+};
+
 // A fresh sign-in mints whatever account the provider says; a LINK keeps the
 // guest's existing account and row.
-const signInFn = (prov) => () => Cloud.signInUrl(prov);
-const linkFn = (prov) => async () => {
+const signInFn = (prov) => (prov === 'apple' && NATIVE_APPLE()
+  ? appleNativeFn('signin') : () => Cloud.signInUrl(prov));
+const linkFn = (prov) => (prov === 'apple' && NATIVE_APPLE() ? appleNativeFn('link') : async () => {
   const url = await Cloud.linkUrl(prov);         // keeps the account + row
   if (url) return url;
   // Do NOT fall back to a plain sign-in. This button is labelled "Keep my
@@ -1135,7 +1170,7 @@ const linkFn = (prov) => async () => {
   // transient one worth retrying, never a reason to start over.
   showToast('Could not link your account right now — check your connection and try again');
   return null;                                   // goSignIn() only navigates on a URL
-};
+});
 
 // With ONE provider there is nothing to choose, so web and Android go straight
 // through exactly as they always have — a chooser over a single option is a tap

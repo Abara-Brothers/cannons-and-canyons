@@ -73,6 +73,9 @@ run timer_safety node test/timer_safety.mjs
   # The OAuth redirect contract: provider, return URL, and the anti-login-CSRF
   # guard on BOTH carriers. Headless — cloud.js is evaluated against stubs.
   run auth_redirect   node test/auth_redirect.mjs
+  # Sign in with Apple, natively: the id_token grant, the link variant with the
+  # guest's bearer, and every refusal. Headless — the same stub harness.
+  run apple_native    node test/apple_native.mjs
 run validate    bash tools/backup/test-validate.sh
 run hitbox node test/hitbox.mjs
 run golf_hazards node test/golf_hazards.mjs

@@ -277,6 +277,39 @@ window.Cloud = (() => {
     // is exactly what the flag exists to refuse.
     cancelPending() { try { pendStore().removeItem(PENDING); } catch {} },
 
+    // ---- Sign in with Apple, natively (iOS) --------------------------------
+    // The system sheet returns a signed identity token whose audience is the
+    // bundle id; GoTrue's id_token grant verifies it against Apple's keys and
+    // mints a session -- or, with link_identity and the guest's bearer, attaches
+    // the Apple identity to the guest's EXISTING account and returns a session
+    // for that same account (verified live: the bearer is checked only when
+    // link_identity is sent). No redirect, no fragment, no pending flag: the
+    // reply is a fetch response, and replay is refused by the nonce Apple
+    // embedded. NEVER falls back from a failed link to a fresh sign-in -- that
+    // mints a different account and orphans the guest's row, the trap linkUrl()
+    // refuses for the same reason. Resolves { ok } or { ok:false, code }.
+    async signInWithApple(idToken, nonce, link) {
+      const headers = { apikey: KEY, 'Content-Type': 'application/json' };
+      const body = { provider: 'apple', id_token: idToken, nonce };
+      if (link) {
+        try { await ensureSession(false); } catch { return { ok: false, code: 'no_session' }; }
+        headers.Authorization = 'Bearer ' + session.access_token;
+        body.link_identity = true;
+      }
+      let res, j = null;
+      try {
+        res = await fetch(BASE + '/auth/v1/token?grant_type=id_token', {
+          method: 'POST', headers, body: JSON.stringify(body), signal: timeout(),
+        });
+        try { j = await res.json(); } catch { j = null; }
+      } catch { return { ok: false, code: 'network' }; }
+      if (!res.ok || !j || !j.access_token || !j.refresh_token) {
+        return { ok: false, code: (j && (j.error_code || j.error)) || ('http_' + res.status) };
+      }
+      storeSession(fromTokenResponse(j));
+      return { ok: true };
+    },
+
     // ---- Google sign-in (8.47) ----------------------------------------------
     // The IMPLICIT flow, chosen deliberately for a zero-build classic-script
     // client: the browser goes to /authorize, Google comes back to

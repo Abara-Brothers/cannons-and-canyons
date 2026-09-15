@@ -1,6 +1,8 @@
 import UIKit
 import Capacitor
 import AuthenticationServices
+import CryptoKit
+import Security
 
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
@@ -44,6 +46,7 @@ class CCBridgeViewController: CAPBridgeViewController {
     override func capacitorDidLoad() {
         super.capacitorDidLoad()
         bridge?.registerPluginInstance(CCWebAuthPlugin())
+        bridge?.registerPluginInstance(AppleSignInPlugin())
     }
 }
 
@@ -129,5 +132,96 @@ public class CCWebAuthPlugin: CAPPlugin, CAPBridgedPlugin,
         if let r = reject { pending?.reject(r) }
         pending = nil
         session = nil
+    }
+}
+
+// MARK: - AppleSignIn: the system Sign in with Apple sheet
+
+/// ASAuthorizationController instead of any web flow: no browser, Face ID
+/// confirms, and Apple returns a signed identity token whose audience is this
+/// bundle id. JS posts that token to Supabase's id_token grant. The NONCE is
+/// the replay guard: a fresh random value per request, its SHA-256 handed to
+/// Apple (it is embedded in the token), the RAW value handed to JS for GoTrue
+/// to hash and compare. Nothing here decides what the token becomes -- a fresh
+/// account or a link to the guest's -- that is JS, with the guest's bearer.
+@objc(AppleSignInPlugin)
+public class AppleSignInPlugin: CAPPlugin, CAPBridgedPlugin,
+    ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {
+    public let identifier = "AppleSignInPlugin"
+    public let jsName = "AppleSignIn"
+    public let pluginMethods: [CAPPluginMethod] = [
+        CAPPluginMethod(name: "start", returnType: CAPPluginReturnPromise),
+    ]
+
+    // Held strongly for the same reason CCWebAuth holds its session: the
+    // system does not retain the controller, and a released one never calls
+    // its delegate -- the promise would hang with no error.
+    private var controller: ASAuthorizationController?
+    private var pending: CAPPluginCall?
+    private var rawNonce: String?
+
+    @objc func start(_ call: CAPPluginCall) {
+        if pending != nil { call.reject("busy"); return }
+        pending = call
+        DispatchQueue.main.async {
+            guard self.bridge?.viewController?.view.window != nil else {
+                self.finish(reject: "no_window"); return
+            }
+            var bytes = [UInt8](repeating: 0, count: 32)
+            guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+                self.finish(reject: "no_entropy"); return
+            }
+            let raw = bytes.map { String(format: "%02x", $0) }.joined()
+            self.rawNonce = raw
+            let hashed = SHA256.hash(data: Data(raw.utf8)).map { String(format: "%02x", $0) }.joined()
+
+            let request = ASAuthorizationAppleIDProvider().createRequest()
+            request.requestedScopes = [.email]
+            request.nonce = hashed
+            let c = ASAuthorizationController(authorizationRequests: [request])
+            c.delegate = self
+            c.presentationContextProvider = self
+            self.controller = c
+            c.performRequests()
+        }
+    }
+
+    public func authorizationController(controller: ASAuthorizationController,
+                                        didCompleteWithAuthorization authorization: ASAuthorization) {
+        guard let cred = authorization.credential as? ASAuthorizationAppleIDCredential,
+              let data = cred.identityToken,
+              let token = String(data: data, encoding: .utf8),
+              let raw = rawNonce else {
+            finish(reject: "no_token"); return
+        }
+        var out: [String: Any] = ["idToken": token, "nonce": raw]
+        // Email only, by design (docs/LEGAL_POSITION.md section 3: collect the
+        // least a sign-in needs; a name is never used anywhere). It may be a
+        // private relay address, which is as valid as any other, and it is
+        // optional: signing in needs the token, nothing else.
+        if let e = cred.email { out["email"] = e }
+        pending?.resolve(out)
+        finish(reject: nil)
+    }
+
+    public func authorizationController(controller: ASAuthorizationController,
+                                        didCompleteWithError error: Error) {
+        if (error as? ASAuthorizationError)?.code == .canceled {
+            pending?.resolve(["cancelled": true])
+            finish(reject: nil)
+        } else {
+            finish(reject: "failed")
+        }
+    }
+
+    public func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
+        return bridge?.viewController?.view.window ?? ASPresentationAnchor()
+    }
+
+    private func finish(reject: String?) {
+        if let r = reject { pending?.reject(r) }
+        pending = nil
+        controller = nil
+        rawNonce = nil
     }
 }
