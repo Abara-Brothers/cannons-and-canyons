@@ -27,7 +27,7 @@ window.CC_IOS_CALLBACK = 'com.abarabrothers.cannonsandcanyons://auth/callback';
 
 // Stamped by `npm run version:sync` from package.json — do not edit by hand.
 // Crash reports carry it so a stack trace names the build it came from.
-window.CC_VERSION = '1.0.0+3';
+window.CC_VERSION = '1.0.0+4';
 
 // Supabase (ADR-005/007): cloud saves and, later, accounts. The publishable
 // key is PUBLIC by design — like the VAPID public key, it ships to every
