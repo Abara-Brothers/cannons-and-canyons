@@ -2014,9 +2014,16 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .mb .mbt2{color:#8798bd}
   #bay .mbb{font-size:calc(11 * var(--u));color:#b3c0de;line-height:1.42;margin-top:calc(8 * var(--u));font-weight:500;
      display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden}
-  #bay .mbf{display:flex;gap:calc(6 * var(--u));margin-top:calc(9 * var(--u))}
+  /* The tag row wraps as a row, never inside a tag: '1-2 co-op players' plus
+     '7 weapons' is wider than a card, and a tag that broke mid-word used to
+     grow a second line the card then clipped. Every size scales with --u, so
+     this was true at every viewport, not only phones. */
+  /* `#bay .mbc>span{display:block}` above outranks a bare `.mbf` (id+class+
+     element beats id+class), so this row had never actually been a flex row
+     and its gap never applied. The child selector puts it back on top. */
+  #bay .mbc>.mbf{display:flex;flex-wrap:wrap;gap:calc(6 * var(--u));margin-top:calc(9 * var(--u))}
   #bay .tagm{font-family:"JetBrains Mono",monospace;font-size:calc(8 * var(--u));font-weight:700;letter-spacing:.1em;
-     text-transform:uppercase;color:#9fb0d2;border:1px solid rgba(140,168,214,.26);border-radius:calc(3 * var(--u));padding:calc(3 * var(--u)) calc(5 * var(--u))}
+     text-transform:uppercase;color:#9fb0d2;border:1px solid rgba(140,168,214,.26);border-radius:calc(3 * var(--u));padding:calc(3 * var(--u)) calc(5 * var(--u));white-space:nowrap}
   #bay .mbicn{position:absolute;top:calc(9 * var(--u));left:calc(10 * var(--u));width:calc(22 * var(--u));height:calc(22 * var(--u));fill:#fff;opacity:.9;
      filter:drop-shadow(0 calc(2 * var(--u)) calc(6 * var(--u)) rgba(0,0,0,.9))}
   #bay .mb.on .mbicn{fill:#ffc98f;opacity:1}
