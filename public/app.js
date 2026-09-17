@@ -1426,7 +1426,15 @@ function connect() {
     flushIntent();
     sendHello(ws);
   };
-  ws.onclose = () => { S.connected = false; if (S.playing) $('connErr').classList.remove('hidden'); setTimeout(connect, 1500); };
+  ws.onclose = () => {
+    S.connected = false; if (S.playing) $('connErr').classList.remove('hidden');
+    // The socket opened, flushIntent sent and nulled the create, and the socket
+    // died before 'created': without this the pending lobby's spinner (or its
+    // Play solo button, with nothing left to start) sits there for good. While
+    // the socket has never opened, pendingIntent is still set and this is inert.
+    if (lobbyWait && !pendingIntent) { showToast('Connection dropped — try again'); $('cancelBtn').onclick(); }
+    setTimeout(connect, 1500);
+  };
   ws.onerror = () => {};
   ws.onmessage = (e) => { let m; try { m = JSON.parse(e.data); } catch { return; } S.msgCount = (S.msgCount || 0) + 1; handle(m); };
 }
@@ -1608,8 +1616,33 @@ function flushIntent() { if (pendingIntent) { sendMsg(pendingIntent); pendingInt
 // three seconds after every tab-return during an offline match.
 let engineMod = null;      // cached dynamic import of room-engine.js
 let localFallback = null;  // pending server-unreachable fallback timer
-const offlineCapable = (m) =>
-  m.type === 'ai' || (m.type === 'create' && m.mode === 'golf');
+// Which taps may run on this device with no server. Two predicates, because
+// the one they replace was consulted at two sites with two meanings and
+// widening it for one site widened it for both.
+//   soloByConstruction: an 'ai' frame (Duel or Free-for-all vs Computer). No
+//   code, no invite, no lobby — nothing exists that going local could
+//   convert, so it starts at once when the device KNOWS it is offline, and
+//   after a short grace when the server merely cannot be raised (deploy
+//   restart, cold start, captive portal).
+//   soloOfferable: a 'create' for an invite room one player can still play
+//   (Boss, Aliens, Golf, Free-for-all). These NEVER go local by themselves:
+//   the lobby shows where things stand and OFFERS Play solo. Golf is an
+//   invite room too (two seats, a code, copy buttons), so the old automatic
+//   solo round is replaced by the same offer — one rule for every invite room.
+const SOLO_MODES = ['boss', 'aliens', 'golf', 'ffa'];
+const soloByConstruction = (m) => m.type === 'ai';
+const soloOfferable = (m) => m.type === 'create' && SOLO_MODES.includes(m.mode);
+// THE FRAME PLAY SOLO SENDS. Boss/Aliens/Golf: the queued create, verbatim —
+// the engine seats their NPCs itself and accepts one commander. Free-for-all:
+// the engine seats CPUs ONLY through the 'ai' case (a one-seat ffa create is
+// refused at startMatch), so the invite room is exchanged for the exact
+// vs-Computer frame Setup sends when 'Computer' is picked. One engine path,
+// one message shape, online and offline.
+const soloFrameFor = (m) => (m.mode === 'ffa'
+  ? { type: 'ai', mode: 'ffa', max: m.max, difficulty: cpuDifficulty, name: m.name, skin: m.skin }
+  : m);
+let soloAutoStart = false;   // a Play solo on a lobby-mode frame: start the round as soon as the local room exists
+let lobbyWait = null;        // 'offline' | 'connecting' | 'unreachable' while a queued create is shown on the lobby screen
 
 let localStarting = false;
 async function startLocal(m) {
@@ -1623,16 +1656,25 @@ async function startLocal(m) {
     catch {
       // Precache incomplete — the first ever visit went offline mid-install.
       localStarting = false;
+      soloAutoStart = false;
       const el = $('homeError');
       if (el) el.textContent = 'Offline play could not load — connect once and it will be ready.';
+      // #homeError lives inside the hidden legacy rack; say it where it shows.
+      showToast('Offline play could not load — connect once and it will be ready.');
       return;
     }
   }
   localStarting = false;
   // The world may have changed across that await: if the real connection came
   // back while the module loaded, honour the tap ONLINE instead of hijacking
-  // a healthy socket to play the server's own engine locally.
-  if (S.connected) { sendMsg(m); return; }
+  // a healthy socket to play the server's own engine locally. A Play solo
+  // that lands here is honoured ONLINE — the lobby flips from an offer to a
+  // share-this-code screen — so say why.
+  if (S.connected) {
+    const wasSolo = soloAutoStart; soloAutoStart = false;
+    if (wasSolo) showToast('Connection is back — your room is live');
+    sendMsg(m); return;
+  }
   // Silence any real socket first, half-open or dying: a later onopen would
   // set S.connected and push a stale resume into the LOCAL engine, and a
   // later onclose would keep scheduling reconnects underneath the stand-in.
@@ -1641,6 +1683,7 @@ async function startLocal(m) {
     try { S.ws.close(); } catch { /* never opened */ }
   }
   S.local = true;
+  lobbyWait = null;                    // from here the lobby's fate is the local engine's, not the socket's
   // The stand-in socket has TWO faces, one per direction — conflating them
   // routes the client's own messages straight back into handle():
   //   engineLink is what the ENGINE holds. Its send() is the engine talking
@@ -1702,26 +1745,36 @@ function endLocal() {
 // offline, so a player really can sit on a working home screen tapping a mode
 // that will never start. Say so plainly rather than leaving them guessing.
 //
-// Since 8.44 the dead-end is gone for the two modes that never needed a
-// server (BQ-007): those start locally instead — immediately when the device
-// KNOWS it is offline, or after a short grace when it merely cannot raise
-// the server (down, cold start, captive portal).
+// A vs-Computer frame starts locally on its own (at once when offline, after
+// four seconds when the server cannot be raised); an invite-room mode shows
+// the lobby in a pending state and OFFERS Play solo. Nothing that carries a
+// code or an invite is ever converted into a solo game by a timer.
 function intent(m) {
-  if (S.connected) { sendMsg(m); return; }
+  if (S.connected) { sendMsg(m); return; }              // UNCHANGED, first line: a connected client never reaches the rest
   const offline = navigator.onLine === false;
-  if (offline && offlineCapable(m)) { startLocal(m); return; }
+  if (offline && soloByConstruction(m)) { startLocal(m); return; }
   pendingIntent = m;
-  const msg = offline
-    ? 'You are offline. Vs. Computer and solo Golf still work — everything else needs a connection.'
-    : 'Cannot reach the server — retrying.';
-  const el = $('homeError');
-  if (el) el.textContent = msg;
-  showToast(offline ? 'No connection' : 'Reconnecting');
   connect();          // don't sit out the 1.5s retry loop after a deliberate tap
-  // The timer self-guards: if the socket opened in time, flushIntent already
-  // sent this intent online and cleared it, so the fallback does nothing.
-  if (offlineCapable(m)) {
-    clearTimeout(localFallback);
+  clearTimeout(localFallback); localFallback = null;
+  if (soloOfferable(m)) {
+    // An invite room never goes solo by itself. Show where things stand and,
+    // once the server is clearly not coming, OFFER solo. The queued create
+    // still flushes into a real room if the socket opens meanwhile (ISSUE-017).
+    if (offline) { showLobby('offline'); return; }
+    showLobby('connecting');
+    localFallback = setTimeout(() => {
+      if (S.connected || pendingIntent !== m) return;
+      showLobby('unreachable');                         // an offer, never a start
+    }, 4000);
+    return;
+  }
+  const el = $('homeError');
+  if (el) el.textContent = offline ? 'You are offline. This needs a connection.' : 'Cannot reach the server — retrying.';
+  showToast(offline ? 'No connection' : 'Reconnecting');
+  // Only a vs-Computer frame may start locally on its own: nothing about it
+  // can be converted. Self-guarding — if the socket opened in time, flushIntent
+  // already sent it online and cleared it.
+  if (soloByConstruction(m)) {
     localFallback = setTimeout(() => {
       if (S.connected || pendingIntent !== m) return;
       pendingIntent = null;
@@ -1730,12 +1783,41 @@ function intent(m) {
   }
 }
 
+// The only door into a solo invite room. Takes the queued create, nulls it
+// FIRST (a socket opening during startLocal's import await must not
+// double-send it via flushIntent — the same order the 4 s timer uses), and
+// boots the in-page engine with the frame the online path would have sent.
+// A top-level declaration on purpose: bay.js reaches it as fn('playSolo').
+function playSolo() {
+  const m = pendingIntent;
+  if (!m || !soloOfferable(m) || S.connected) return;   // flushIntent already nulls it once the socket opens
+  pendingIntent = null;
+  clearTimeout(localFallback); localFallback = null;
+  lobbyWait = null;
+  soloAutoStart = m.mode !== 'ffa';       // ffa's 'ai' frame starts the match itself; the others answer with a lobby first
+  startLocal(soloFrameFor(m));
+}
+
 function handle(m) {
   switch (m.type) {
     case 'created': S.code = m.code; $('lobbyCode').textContent = m.code; showLobby('host'); break;
-    case 'lobby': renderLobby(m); break;
+    case 'lobby':
+      renderLobby(m);
+      // Play solo is one tap for every mode: Boss/Aliens/Golf send startMatch
+      // the moment the local room exists (the engine accepts one commander for
+      // them); a free-for-all's 'ai' frame needs nothing. created -> lobby ->
+      // startMatch -> start are all delivered from queued microtasks, so the
+      // solo lobby is written to the DOM but never painted.
+      if (S.local && soloAutoStart) { soloAutoStart = false; sendMsg({ type: 'startMatch' }); }
+      break;
     case 'queued': showLobby('search'); break;
-    case 'joinError': $('homeError').textContent = m.reason; break;
+    case 'joinError':
+      $('homeError').textContent = m.reason;
+      // #homeError is inside the hidden legacy rack. A refusal (capacity) after
+      // a queued create flushed would otherwise leave 'Reaching the server' up
+      // for good: the grace timer exits early because the socket is connected.
+      if (lobbyWait) { showToast(m.reason); $('cancelBtn').onclick(); }
+      break;
     // ISSUE-031: the server used to refuse a rematch in silence, leaving a dead
     // button. Say why, and drop the button so the player is pointed at the only
     // thing that WILL work.
@@ -1998,6 +2080,11 @@ $('armouryCloseBtn').onclick = () => {
 
 let ccMode = 'duel', ccMax = 4;
 let ccOpp = 'friend';        // duel opponent: 'friend' (code/link) or 'cpu'
+// The free-for-all's own opponent memory: 'friend' (lobby + code) or 'cpu'
+// (CPUs fill the ridge and the match starts now). Separate from ccOpp on
+// purpose — a Duel 'Computer' choice must never make a Free-for-all Launch
+// start a bot match. Not persisted, as ccOpp is not.
+let ccFfaOpp = 'friend';
 (function initMode() {
   const mr = $('modeRow');
   mr.addEventListener('click', (e) => {
@@ -2015,8 +2102,15 @@ $('teeSel').value = ccTees;
 $('teeSel').onchange = () => { ccTees = $('teeSel').value; try { localStorage.setItem('cc_tees', ccTees); } catch {} };
 $('createBtn').onclick = () => {
   Audio.ensure(); $('homeError').textContent = '';
-  if (ccMode === 'duel' && ccOpp === 'cpu') {
-    intent({ type: 'ai', difficulty: cpuDifficulty, name: myName(), skin: mySkin() });
+  // A vs-Computer game is an 'ai' frame: Duel exactly as it always was
+  // (no mode, no max — key for key the frame every shipped client sends), and
+  // since item A a Free-for-all too, carrying its mode and seat count. All
+  // three launch paths reach this onclick: the bay's Launch, the sortie
+  // rematch chip and the legacy button.
+  const vsCpu = (ccMode === 'duel' && ccOpp === 'cpu') || (ccMode === 'ffa' && ccFfaOpp === 'cpu');
+  if (vsCpu) {
+    intent({ type: 'ai', difficulty: cpuDifficulty, name: myName(), skin: mySkin(),
+      ...(ccMode === 'ffa' ? { mode: 'ffa', max: ccMax } : {}) });
     return;
   }
   intent({ type: 'create', name: myName(), skin: mySkin(), mode: ccMode, max: ccMode === 'ffa' ? ccMax : 2, tees: ccTees });
@@ -2028,12 +2122,13 @@ $('diffSel').value = cpuDifficulty;
 $('diffSel').onchange = () => { cpuDifficulty = $('diffSel').value; localStorage.setItem('pt_diff', cpuDifficulty); };
 // Duel's opponent choice: a friend via code/link, or the CPU right here.
 function syncCreateRow() {
-  const duel = ccMode === 'duel';
-  $('oppBtns').classList.toggle('hidden', !duel);
-  $('diffWrap').classList.toggle('hidden', !(duel && ccOpp === 'cpu'));
+  const cpuMode = ccMode === 'duel' || ccMode === 'ffa';
+  const vsCpu = (ccMode === 'duel' && ccOpp === 'cpu') || (ccMode === 'ffa' && ccFfaOpp === 'cpu');
+  $('oppBtns').classList.toggle('hidden', !cpuMode);
+  $('diffWrap').classList.toggle('hidden', !vsCpu);
   $('countWrap').classList.toggle('hidden', ccMode !== 'ffa');
   $('teeWrap').classList.toggle('hidden', ccMode !== 'golf');
-  $('createBtn').textContent = duel && ccOpp === 'cpu' ? 'START VS COMPUTER' : 'CREATE GAME';
+  $('createBtn').textContent = vsCpu ? 'START VS COMPUTER' : 'CREATE GAME';
 }
 // Opponent is two buttons now (Friend/online vs the Computer), not a dropdown.
 $('oppBtns').addEventListener('click', (e) => {
@@ -2138,7 +2233,15 @@ $('joinBtn').onclick = () => {
   intent({ type: 'join', code, name: myName(), skin: mySkin() });
 };
 $('codeInput').addEventListener('input', (e) => { e.target.value = e.target.value.toUpperCase(); });
-$('cancelBtn').onclick = () => { sendMsg({ type: 'leave' }); sendMsg({ type: 'cancelQuick' }); S.code = null; S.quick = false; endLocal(); showScreen('home'); };
+// Cancel also drops a queued create and its grace timer, so a later reconnect
+// cannot flush a room the player walked away from. Online, pendingIntent is
+// already null and no timer is armed: a no-op there.
+$('cancelBtn').onclick = () => {
+  sendMsg({ type: 'leave' }); sendMsg({ type: 'cancelQuick' });
+  pendingIntent = null; clearTimeout(localFallback); localFallback = null;
+  soloAutoStart = false; lobbyWait = null;
+  S.code = null; S.quick = false; endLocal(); showScreen('home');
+};
 
 $('copyLinkBtn').onclick = async () => {
   const link = `${location.origin}/?room=${S.code}`;
@@ -2163,12 +2266,15 @@ function showScreen(name) {
 }
 function showLobby(mode) {
   const searching = mode === 'search';
-  $('lobbyHeading').textContent = searching ? 'Searching for an opponent…' : 'Waiting for your opponent…';
-  $('lobbyHint').textContent = searching ? "We'll drop you into a battle the moment someone else is looking too." : 'Send this link or code. The battle starts the moment they join.';
-  $('lobbyCode').style.display = searching ? 'none' : '';
-  $('copyLinkBtn').style.display = searching ? 'none' : '';
-  $('copyCodeBtn').style.display = searching ? 'none' : '';
-  if (searching) { $('roster').innerHTML = ''; $('startMatchBtn').classList.add('hidden'); }
+  const pending = mode === 'offline' || mode === 'connecting' || mode === 'unreachable';
+  lobbyWait = pending ? mode : null;              // 'host' (a real room, local or online) and 'search' clear it
+  $('lobbyHeading').textContent = searching ? 'Searching for an opponent…' : pending ? 'Waiting for a connection…' : 'Waiting for your opponent…';
+  $('lobbyHint').textContent = searching ? "We'll drop you into a battle the moment someone else is looking too." : pending ? 'Nothing has been created yet.' : 'Send this link or code. The battle starts the moment they join.';
+  const bare = searching || pending;
+  $('lobbyCode').style.display = bare ? 'none' : '';
+  $('copyLinkBtn').style.display = bare ? 'none' : '';
+  $('copyCodeBtn').style.display = bare ? 'none' : '';
+  if (bare) { $('roster').innerHTML = ''; $('startMatchBtn').classList.add('hidden'); }
   showScreen('lobby');
 }
 
@@ -2219,8 +2325,10 @@ function renderLobby(m) {
   // these three and nothing ever un-hid them on this path.
   const solo = !!S.local;
   if (solo) {
-    $('lobbyHeading').textContent = 'Artillery Golf — offline solo round';
-    $('lobbyHint').textContent = 'No connection needed for a solo round. Tee off when ready.';
+    // The heading above is already mode-aware; this rack is hidden, but it
+    // must never say 'Artillery Golf' over a Boss room again.
+    $('lobbyHeading').textContent += ' — solo, on this device';
+    $('lobbyHint').textContent = 'Nobody can join this room.';
   }
   $('lobbyCode').style.display = solo ? 'none' : '';
   $('copyLinkBtn').style.display = solo ? 'none' : '';

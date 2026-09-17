@@ -76,6 +76,9 @@ run ffa_bots node test/ffa_bots.mjs
 # Same feature, production fire hold: ffa CPUs use the 550 ms survival hold,
 # the duel CPU keeps 1500 ms. Separate because the 40 ms knob above hides it.
 run ffa_bots_pace node test/ffa_bots_pace.mjs
+# The exact offline entry points: boss/aliens/golf create+startMatch with one
+# commander, a one-seat ffa create refused, the ffa 'ai' frame starting at once.
+run solo_engine node test/solo_engine.mjs
   # The OAuth redirect contract: provider, return URL, and the anti-login-CSRF
   # guard on BOTH carriers. Headless — cloud.js is evaluated against stubs.
   run auth_redirect   node test/auth_redirect.mjs
@@ -127,6 +130,10 @@ else
   # in a real page over CDP, so it cannot drift from a copy of the logic.
   # Skips cleanly when Chrome is absent, so a bare CI runner stays green.
   run merge node test/merge.mjs
+  # THIRD client-side suite: the offline lobby, Play solo, Cancel and the Back
+  # arrow, driven in a real page with the server stopped and resumed. Also skips
+  # without Chrome — a SKIP here means the offline path shipped unproven.
+  run offline node test/offline.mjs
   # SECOND client-side suite, and the only one that looks at LAYOUT. Drives the
   # real bundle in headless Chrome at 14 exact viewports and diffs the measured
   # geometry against test/fixtures/layout-baseline.json. It is a change

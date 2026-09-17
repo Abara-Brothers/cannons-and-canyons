@@ -13,7 +13,7 @@ const ok = (m) => console.log('  ok — ' + m);
 const fail = (m) => { out.errors.push(m); console.error('FAIL ' + m); };
 const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8');
 
-const UI_FILES = ['public/index.html', 'public/app.js', 'public/styles.css', 'server.js',
+const UI_FILES = ['public/index.html', 'public/app.js', 'public/bay.js', 'public/styles.css', 'server.js',
   'public/game-core.js', 'public/room-engine.js', 'public/cloud.js', 'public/errors.js'];
 
 // ---- 1. NO EMOJI ANYWHERE IN THE UI -----------------------------------------
@@ -277,6 +277,46 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   else if (unstamped.length) fail(`index.html loads css/js with no ?v= stamp, so a stale cached copy can be served over it:\n      ${unstamped.join('\n      ')}`);
   else if (adrift.length) fail(`index.html and sw.js SHELL disagree — these are requested but never precached, so offline play breaks:\n      ${adrift.join('\n      ')}`);
   else ok(`index.html's ${refs.length} local css/js are all stamped and all precached under the same URL`);
+}
+
+// ---- 7c. THE WORKER VERSION MUST MOVE WITH THE ASSET STAMP -------------------
+// 7b keeps index.html's ?v= stamps and sw.js's SHELL list in step, but it never
+// read sw.js's VERSION — so index.html ?v=4 + SHELL ?v=4 + a forgotten 'cc-v3'
+// passed ALL GOOD, and a returning player kept the old cache under a new page
+// (ISSUE-038's exact shape). The number in VERSION must be the stamp number.
+{
+  const sw = read('public/sw.js');
+  const html = read('public/index.html');
+  const ver = (sw.match(/const VERSION = 'cc-v(\d+)'/) || [])[1];
+  const stamp = (html.match(/\.(?:js|css)\?v=(\d+)/) || [])[1];
+  if (!ver) fail("sw.js has no `const VERSION = 'cc-vN'` — the worker cannot retire old caches");
+  else if (!stamp) fail('index.html has no ?v=N stamp to compare against');
+  else if (ver !== stamp) fail(`sw.js VERSION is cc-v${ver} but index.html stamps ?v=${stamp} — bump them together or a stale worker serves the old shell`);
+  else ok(`sw.js VERSION cc-v${ver} matches the ?v=${stamp} asset stamp`);
+}
+
+// ---- 7d. OFFLINE PLAY HAS TWO PREDICATES, NEVER ONE -------------------------
+// `offlineCapable` was one predicate consulted at two sites with two meanings:
+// "the device knows it is offline, start now" and "the server merely cannot be
+// raised, silently go local after 4 s". Widening it for the first widened it for
+// the second, and that second conversion is the one the owner forbade for every
+// invite room (Boss, Aliens, Golf, Free-for-all). The replacement is
+// soloByConstruction (an 'ai' frame: nothing to convert) and soloOfferable (an
+// invite room: show the lobby, OFFER Play solo). Nobody may fold them back into
+// one, and the prose that enumerated modes — and drifted — may not return.
+{
+  const app = read('public/app.js');
+  const bad = [];
+  if (/\bofflineCapable\b/.test(app)) bad.push('app.js reintroduces `offlineCapable` — one predicate with two meanings');
+  if (app.includes('Vs. Computer and solo Golf')) bad.push('app.js reintroduces the mode-enumerating offline prose that drifted');
+  for (const id of ['soloByConstruction', 'soloOfferable', 'soloFrameFor', 'playSolo']) {
+    if (!new RegExp('\\b' + id + '\\b').test(app)) bad.push(`app.js has no ${id}`);
+  }
+  if (!app.includes("const soloByConstruction = (m) => m.type === 'ai';")) {
+    bad.push("soloByConstruction must be exactly `m.type === 'ai'` — any mode, and nothing else (a create is never solo by construction)");
+  }
+  if (bad.length) fail(`the offline predicates have drifted:\n      ${bad.join('\n      ')}`);
+  else ok('offline play keeps soloByConstruction and soloOfferable apart, and Play solo is the only door into a solo invite room');
 }
 
 // ---- 8. VERSION MUST AGREE ACROSS ALL THREE PROJECTS (ISSUE-016) ------------
