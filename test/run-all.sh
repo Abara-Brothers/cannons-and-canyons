@@ -70,6 +70,12 @@ start_server() {             # start_server [extra env assignments...]
 echo "== headless (no server needed) =="
 run house_rules node test/house-rules.mjs
 run timer_safety node test/timer_safety.mjs
+# FFA vs CPUs, in-process: the 'ai' case's duel seat stays key-for-key the
+# historical literal, and a room of plain CPUs hands the turn bot to bot.
+run ffa_bots node test/ffa_bots.mjs
+# Same feature, production fire hold: ffa CPUs use the 550 ms survival hold,
+# the duel CPU keeps 1500 ms. Separate because the 40 ms knob above hides it.
+run ffa_bots_pace node test/ffa_bots_pace.mjs
   # The OAuth redirect contract: provider, return URL, and the anti-login-CSRF
   # guard on BOTH carriers. Headless — cloud.js is evaluated against stubs.
   run auth_redirect   node test/auth_redirect.mjs
@@ -87,7 +93,9 @@ if [ "$REMOTE" = "1" ]; then
 else
   echo "== local server =="
   start_server BOT_FIRE_MS=250 PICK_MS=800
-  for t in sim resume_test resume_takeover ffa boss golf horde batch6 security rematch; do run "$t" node test/$t.mjs; done
+  # ffa_bots_live drives three real CPUs on the real event loop; local only
+  # until it has run green for a while (it is not in the --remote loop above).
+  for t in sim resume_test resume_takeover ffa boss golf horde batch6 security rematch ffa_bots_live; do run "$t" node test/$t.mjs; done
 
   echo "== local server, short resume grace =="
   start_server RESUME_GRACE_MS=1200 BOT_FIRE_MS=250 PICK_MS=800
