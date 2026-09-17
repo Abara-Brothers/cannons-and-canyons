@@ -70,9 +70,21 @@ start_server() {             # start_server [extra env assignments...]
 echo "== headless (no server needed) =="
 run house_rules node test/house-rules.mjs
 run timer_safety node test/timer_safety.mjs
+# FFA vs CPUs, in-process: the 'ai' case's duel seat stays key-for-key the
+# historical literal, and a room of plain CPUs hands the turn bot to bot.
+run ffa_bots node test/ffa_bots.mjs
+# Same feature, production fire hold: ffa CPUs use the 550 ms survival hold,
+# the duel CPU keeps 1500 ms. Separate because the 40 ms knob above hides it.
+run ffa_bots_pace node test/ffa_bots_pace.mjs
+# The exact offline entry points: boss/aliens/golf create+startMatch with one
+# commander, a one-seat ffa create refused, the ffa 'ai' frame starting at once.
+run solo_engine node test/solo_engine.mjs
   # The OAuth redirect contract: provider, return URL, and the anti-login-CSRF
   # guard on BOTH carriers. Headless — cloud.js is evaluated against stubs.
   run auth_redirect   node test/auth_redirect.mjs
+  # Sign in with Apple, natively: the id_token grant, the link variant with the
+  # guest's bearer, and every refusal. Headless — the same stub harness.
+  run apple_native    node test/apple_native.mjs
 run validate    bash tools/backup/test-validate.sh
 run hitbox node test/hitbox.mjs
 run golf_hazards node test/golf_hazards.mjs
@@ -84,7 +96,9 @@ if [ "$REMOTE" = "1" ]; then
 else
   echo "== local server =="
   start_server BOT_FIRE_MS=250 PICK_MS=800
-  for t in sim resume_test resume_takeover ffa boss golf horde batch6 security rematch; do run "$t" node test/$t.mjs; done
+  # ffa_bots_live drives three real CPUs on the real event loop; local only
+  # until it has run green for a while (it is not in the --remote loop above).
+  for t in sim resume_test resume_takeover ffa boss golf horde batch6 security rematch ffa_bots_live; do run "$t" node test/$t.mjs; done
 
   echo "== local server, short resume grace =="
   start_server RESUME_GRACE_MS=1200 BOT_FIRE_MS=250 PICK_MS=800
@@ -116,6 +130,10 @@ else
   # in a real page over CDP, so it cannot drift from a copy of the logic.
   # Skips cleanly when Chrome is absent, so a bare CI runner stays green.
   run merge node test/merge.mjs
+  # THIRD client-side suite: the offline lobby, Play solo, Cancel and the Back
+  # arrow, driven in a real page with the server stopped and resumed. Also skips
+  # without Chrome — a SKIP here means the offline path shipped unproven.
+  run offline node test/offline.mjs
   # SECOND client-side suite, and the only one that looks at LAYOUT. Drives the
   # real bundle in headless Chrome at 14 exact viewports and diffs the measured
   # geometry against test/fixtures/layout-baseline.json. It is a change

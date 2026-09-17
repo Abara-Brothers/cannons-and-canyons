@@ -19,6 +19,8 @@ const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&':
 const G = {
   get ccMode()        { return typeof ccMode        !== 'undefined' ? ccMode        : undefined; },
   get ccOpp()         { return typeof ccOpp         !== 'undefined' ? ccOpp         : undefined; },
+  get ccFfaOpp()      { return typeof ccFfaOpp      !== 'undefined' ? ccFfaOpp      : undefined; },
+  get pendingIntent() { return typeof pendingIntent !== 'undefined' ? pendingIntent : undefined; },
   get ccMax()         { return typeof ccMax         !== 'undefined' ? ccMax         : undefined; },
   get ccTees()        { return typeof ccTees        !== 'undefined' ? ccTees        : undefined; },
   get cpuDifficulty() { return typeof cpuDifficulty !== 'undefined' ? cpuDifficulty : undefined; },
@@ -63,6 +65,14 @@ const MODES = [
     art: 'ice-wide',      card: 'ice-mid',       draft: 5 },
 ];
 const modeOf = (id) => MODES.find((m) => m.id === id) || MODES[0];
+// What the pending lobby says for an invite-room mode: why it needs a
+// connection, and what one player can still do on this device.
+const SOLO_COPY = {
+  boss:   { need: 'Boss Fight needs a connection to bring in a second commander.', can: 'You can take on WARLORD-7 alone on this device.' },
+  aliens: { need: 'Alien Invasion needs a connection to bring in a second commander.', can: 'You can hold the line alone on this device.' },
+  ffa:    { need: 'Free-for-all needs a connection to invite commanders.', can: 'You can fight CPU commanders on this device.' },
+  golf:   { need: 'Artillery Golf needs a connection to invite a second player.', can: 'You can play a solo round on this device.' },
+};
 const SHORT = { duel: 'Duel', ffa: 'FFA', boss: 'Boss', aliens: 'Aliens', golf: 'Golf' };
 const art = (k) => 'bay/' + k + '.jpg';
 
@@ -104,6 +114,13 @@ const IC = {
        '<rect x="8.2" y="3.4" width="12" height="12" rx="2"/><path d="M15.8 18.2v.4a2 2 0 0 1-2 2H5.8a2 2 0 0 1-2-2V8.6a2 2 0 0 1 2-2h.4"/></svg>'
 };
 
+// The offline badge on every mode board: what this mode does with no server,
+// asked of app.js's own predicates so a board can never promise more than the
+// launch path delivers. Green is the bay's OFFLINE colour.
+const OFF_TXT = { cpu: 'Offline vs CPU', solo: 'Offline solo', online: 'Online only' };
+const offKind = (id) => (fn('offlineKind') ? offlineKind(id) : 'online');
+const offBadge = (id) => '<span class="bof">' + esc(OFF_TXT[offKind(id)] || OFF_TXT.online) + '</span>';
+
 const MOTES = [
   [118,318,9.2,0.0,2],[206,262,11.4,1.4,1.6],[332,344,8.6,2.6,2.2],[418,296,12.2,0.7,1.6],
   [498,362,10.4,3.2,2],[578,276,9.6,1.9,1.6],[658,330,11.8,4.1,2.2],[298,208,13.0,2.2,1.6],
@@ -127,6 +144,7 @@ function state() {
   return {
     mode: m, skinId, skin, picks,
     opp: has('ccOpp') ? ccOpp : 'friend',
+    ffaOpp: has('ccFfaOpp') ? ccFfaOpp : 'friend',
     diff: has('cpuDifficulty') ? cpuDifficulty : 'medium',
     count: has('ccMax') ? ccMax : 4,
     tees: has('ccTees') ? ccTees : 'mens',
@@ -215,7 +233,7 @@ function stage(skinId, o) {
 function chrome(title, sub, meta, body, foot) {
   const s = state();
   return '<div class="bay"><img class="pgart" src="' + art(s.mode.art) + '" alt="">' + deco() + beams() + dust() + '<div class="vig"></div>'
-    + '<div class="stage"><div class="horiz"></div>'
+    + '<div class="stage">'
     + '<div class="phead"><button class="bk" data-back aria-label="Back">' + IC.back + '</button>'
     +   '<span style="display:block"><span class="pt">' + title + '</span><span class="ps">' + sub + '</span></span>'
     +   '<span class="grow"></span><span class="pm">' + meta + '</span></div>'
@@ -326,7 +344,7 @@ async function loadSorties() {
 }
 function sortiesPanel() {
   const rows = sorties.rows.map((r) =>
-    '<button class="sor" data-rematch="' + esc(r.mode) + '" title="Play ' + esc(modeOf(r.mode).name) + ' again">'
+    '<button class="sor" data-rematch="' + esc(r.mode) + '" data-vs="' + (r.opponent === 'Computer' ? 'cpu' : 'friend') + '" title="Play ' + esc(modeOf(r.mode).name) + ' again">'
     + '<span class="stx"><span class="snm">' + esc(r.opponent || 'Commander') + '</span>'
     + '<span class="smt">' + esc(SHORT[r.mode] || r.mode) + ' &middot; ' + esc(ago(r.when)) + '</span></span>'
     + '<span class="res ' + (r.result === 'W' ? 'w' : r.result === 'L' ? 'l' : '') + '">' + esc(r.result || '&ndash;') + '</span>'
@@ -450,12 +468,23 @@ let lobby = { m: null, mode: 'host' };
 SCREENS.lobby = function () {
   const s = state(), m = lobby.m, searching = lobby.mode === 'search';
   const solo = !!(G.S && S.local);
+  // Three PENDING states precede a room: a queued create is shown here while
+  // the device is offline, while the server is being reached, and once it has
+  // not answered. Nothing exists yet; the copy says so and offers Play solo.
+  const st = lobby.mode;
+  const pending = st === 'offline' || st === 'connecting' || st === 'unreachable';
   const code = (m && m.code) || (G.S && S.code) || '';
   const isHost = m ? m.you === m.host : true;
   const filled = m ? m.players.filter(Boolean).length : 1;
-  const max = m ? m.max : 2;
-  const mode = m ? modeOf(m.mode) : s.mode;
+  // While pending, the QUEUED create is the truth about the mode and the seat
+  // count — not the board the bay happens to have lit, which any caller of
+  // intent() may differ from. A real room's payload wins once it exists.
+  const qi = pending && G.pendingIntent && G.pendingIntent.type === 'create' ? G.pendingIntent : null;
+  const max = m ? m.max : (qi && qi.max) || 2;
+  const mode = m ? modeOf(m.mode) : qi ? modeOf(qi.mode) : s.mode;
+  const cp = SOLO_COPY[mode.id] || SOLO_COPY.boss;
   const roster = (() => {
+    if (pending) return '';                       // nothing has been created yet
     if (searching) return '<div class="seat wait"><span class="b-dot" style="background:#6f7fa6;margin-left:' + u(16) + '"></span><span class="sn">Searching for an opponent</span><span class="spin"></span></div>';
     let out = '';
     for (let i = 0; i < max; i++) {
@@ -463,7 +492,7 @@ SCREENS.lobby = function () {
       const col = fn('seatColor') ? seatColor(i) : '#54c8ff';
       if (p) out += '<div class="seat">' + (you ? tankImg(s.skinId, 44) : '') + '<span class="b-dot" style="background:' + col + (you ? '' : ';margin-left:' + u(16)) + '"></span>'
         + '<span class="sn">' + esc(p.name) + '</span><span class="lbl" style="margin-left:auto">' + (host ? 'Host' : '') + (you ? (host ? ' &middot; you' : 'You') : '') + '</span></div>';
-      else out += '<div class="seat wait"><span class="b-dot" style="background:#6f7fa6;margin-left:' + u(16) + '"></span><span class="sn">' + (mode.id === 'duel' ? 'Waiting for a commander' : 'Open slot') + '</span><span class="spin"></span></div>';
+      else if (!solo) out += '<div class="seat wait"><span class="b-dot" style="background:#6f7fa6;margin-left:' + u(16) + '"></span><span class="sn">' + (mode.id === 'duel' ? 'Waiting for a commander' : 'Open slot') + '</span><span class="spin"></span></div>';
     }
     return out;
   })();
@@ -471,9 +500,17 @@ SCREENS.lobby = function () {
   const minSeats = mode.id === 'ffa' ? 2 : 1;
   const canStart = isHost && hostStarts && !searching;
   const nudgeHidden = !$('notifyBtn') || $('notifyBtn').classList.contains('hidden');
-  const left = solo
-    ? '<span class="lbl">Solo round</span><div class="b-code" style="font-size:' + u(44) + ';letter-spacing:.05em;color:#3ce88f;text-shadow:0 0 ' + u(40) + ' rgba(60,232,143,.4)">OFFLINE</div>'
-      + '<div style="margin-top:' + u(14) + ';font-size:' + u(11.5) + ';color:#8798bd;line-height:1.45;max-width:' + u(270) + ';font-weight:500">No connection needed for a solo round. Tee off when ready.</div>'
+  const note = (t) => '<div style="margin-top:' + u(14) + ';font-size:' + u(11.5) + ';color:#8798bd;line-height:1.45;max-width:' + u(270) + ';font-weight:500">' + t + '</div>';
+  const big = (t, green) => '<div class="b-code" style="font-size:' + u(44) + ';letter-spacing:.05em' + (green ? ';color:#3ce88f;text-shadow:0 0 ' + u(40) + ' rgba(60,232,143,.4)' : '') + '">' + t + '</div>';
+  const left = pending
+    ? '<span class="lbl">' + (st === 'offline' ? 'No connection' : st === 'connecting' ? 'One moment' : 'Server not responding') + '</span>'
+      + big(st === 'offline' ? 'OFFLINE' : st === 'connecting' ? 'LINKING' : 'NO LINK', false)
+      + note(st === 'connecting' ? 'Setting up your room. This can take a few seconds after an update.'
+        : st === 'unreachable' ? esc(cp.need) + ' We keep trying in the background. ' + esc(cp.can)
+        : esc(cp.need) + ' ' + esc(cp.can))
+    : solo
+    ? '<span class="lbl">Solo run</span>' + big('OFFLINE', true)
+      + note('Nobody can join this room. Closing the app ends the run.')
     : searching
     ? '<span class="lbl">Quick match</span><div class="b-code" style="font-size:' + u(44) + ';letter-spacing:.05em">SEARCHING</div>'
       + '<div style="margin-top:' + u(14) + ';font-size:' + u(11.5) + ';color:#8798bd;line-height:1.45;max-width:' + u(270) + ';font-weight:500">We&rsquo;ll drop you into a battle the moment someone else is looking too.</div>'
@@ -484,16 +521,23 @@ SCREENS.lobby = function () {
       + (mode.id === 'ffa' && isHost ? 'Send the link. Start whenever you have enough players &mdash; you don&rsquo;t have to wait for a full lobby.' : hostStarts && !isHost ? 'Waiting for the host to start the battle&hellip;' : 'The battle starts the moment they join &mdash; no lobby countdown.') + '</div>';
   const summary = '<div style="display:flex;gap:' + u(26) + ';margin-top:' + u(16) + ';padding-top:' + u(13) + ';border-top:1px solid rgba(140,168,214,.2)">'
     + '<span class="ro"><span class="rk">Mode</span><span class="rv">' + esc(mode.name) + '</span></span>'
-    + '<span class="ro"><span class="rk">Players</span><span class="rv">' + filled + ' / ' + max + '</span></span>'
+    + '<span class="ro"><span class="rk">Players</span><span class="rv">' + (solo ? filled : filled + ' / ' + max) + '</span></span>'
     + '<span class="ro"><span class="rk">Paint</span><span class="rv">' + esc(s.skin.name) + '</span></span></div>';
   const right = '<span class="lbl">' + (solo ? 'Deploying' : 'Roster') + '</span>' + roster
-    + '<button class="ghost' + (nudgeHidden || solo || searching ? ' hidden' : '') + '" style="width:100%;margin-top:' + u(10) + ';height:' + u(34) + ';font-size:' + u(13) + ';justify-content:center" data-old="notifyBtn">Nudge me when they join</button>'
-    + '<div style="margin-top:' + u(12) + '">' + loadout(rackPicks().slice(0, mode.draft), mode.draft, 'Rack loaded', '<button class="ghost" style="height:' + u(28) + ';font-size:' + u(12) + ';padding:0 ' + u(11) + '" data-go="armoury">Change</button>') + '</div>';
-  const title = solo ? 'Offline solo round' : searching ? 'Searching' : filled >= max ? 'Bay doors opening' : 'Bay doors sealed';
-  const startLabel = filled < minSeats ? 'Start (need ' + minSeats + ')' : mode.id === 'boss' ? 'Engage the WARLORD (' + filled + ')' : mode.id === 'golf' ? 'Tee off (' + filled + ')' : 'Start battle (' + filled + ')';
+    + '<button class="ghost' + (nudgeHidden || solo || searching || pending ? ' hidden' : '') + '" style="width:100%;margin-top:' + u(10) + ';height:' + u(34) + ';font-size:' + u(13) + ';justify-content:center" data-old="notifyBtn">Nudge me when they join</button>'
+    + '<div style="margin-top:' + u(12) + '">' + loadout(rackPicks().slice(0, mode.draft), mode.draft, 'Rack loaded', pending || solo ? '' : '<button class="ghost" style="height:' + u(28) + ';font-size:' + u(12) + ';padding:0 ' + u(11) + '" data-go="armoury">Change</button>') + '</div>';
+  const title = pending ? (st === 'offline' ? 'No connection' : st === 'connecting' ? 'Reaching the server' : 'Cannot reach the server')
+    : solo ? 'Solo run' : searching ? 'Searching' : filled >= max ? 'Bay doors opening' : 'Bay doors sealed';
+  const count = solo ? '' : ' (' + filled + ')';
+  const startLabel = filled < minSeats ? 'Start (need ' + minSeats + ')' : mode.id === 'boss' ? 'Engage the WARLORD' + count : mode.id === 'golf' ? 'Tee off' + count : 'Start battle' + count;
+  // While the server is being reached there is nothing to offer yet; once it
+  // is offline or has not answered, Play solo. Cancel is always there — and
+  // the header's Back arrow is routed through it (see the click handler).
   const foot = '<button class="ghost" data-old="cancelBtn">Cancel</button><span class="grow"></span>'
-    + '<button class="go' + (canStart ? '' : ' hidden') + '" ' + (filled < minSeats ? 'disabled' : 'data-old="startMatchBtn"') + '>' + startLabel + IC.play + '</button>';
-  return chrome(title, esc(mode.name) + ' &middot; ' + rackPicks().slice(0, mode.draft).length + ' weapons loaded', solo ? 'Solo drop' : searching ? 'Quick match' : 'Waiting room',
+    + (pending
+      ? (st === 'connecting' ? '' : '<button class="go" data-solo>Play solo' + IC.play + '</button>')
+      : '<button class="go' + (canStart ? '' : ' hidden') + '" ' + (filled < minSeats ? 'disabled' : 'data-old="startMatchBtn"') + '>' + startLabel + IC.play + '</button>');
+  return chrome(title, esc(mode.name) + ' &middot; ' + rackPicks().slice(0, mode.draft).length + ' weapons loaded', pending ? (st === 'offline' ? 'Offline' : st === 'connecting' ? 'Waiting room' : 'Retrying') : solo ? 'Solo drop' : searching ? 'Quick match' : 'Waiting room',
     '<div class="doors"><span class="door" style="left:0"></span><span class="door" style="right:0"></span></div>'
     + '<div class="cols" style="align-items:center;padding:0 ' + u(34) + '"><div style="width:' + u(420) + '">' + left + summary + '</div><div style="flex:1">' + right + '</div></div>', foot);
 };
@@ -505,7 +549,7 @@ SCREENS.modes = function () {
   const cards = MODES.map((x) => {
     const on = x.id === s.mode.id;
     return '<button class="mb' + (on ? ' on' : '') + '" data-set="mode=' + x.id + '" data-go="setup">'
-      + '<span class="mbi"><img src="' + art(x.card) + '" alt=""><span class="g"></span><span class="lip"></span>'
+      + '<span class="mbi"><img src="' + art(x.card) + '" alt=""><span class="g"></span><span class="lip"></span>' + offBadge(x.id)
       +   '<span class="mbicn">' + MODE_IC[x.id] + '</span><span class="mbn">' + esc(x.name) + '</span></span>'
       + '<span class="mbc"><span class="mbt' + (on ? '' : ' mbt2') + '">' + (on ? 'Armed &middot; ' : '') + esc(x.tag) + '</span>'
       +   '<span class="mbb">' + esc(x.blurb) + '</span>'
@@ -517,19 +561,31 @@ SCREENS.modes = function () {
 // 3 — MATCH SETUP. Opponent, the per-mode option, who you are rolling out as,
 // and the rack. Drives the same variables the old create row did.
 SCREENS.setup = function () {
-  const s = state(), m = s.mode, online = s.opp === 'friend';
+  const s = state(), m = s.mode;
+  const cpuMode = m.id === 'duel' || m.id === 'ffa';
+  const oppKey = m.id === 'ffa' ? 'ffaOpp' : 'opp';
+  const oppVal = m.id === 'ffa' ? s.ffaOpp : s.opp;
+  const vsCpu = cpuMode && oppVal === 'cpu';
   // Every group is always in the tree, hidden when it does not apply, so a
   // change never reshapes the siblings and the in-place patch lands cleanly.
-  // Only Duel offers the computer today (that is what the old create row did).
-  const oppSeg = seg('Opponent', 'opp', [['friend', 'Friend by code'], ['cpu', 'Computer']], s.opp, m.id !== 'duel');
-  const extra = seg('Commanders on the ridge', 'count', [[3, '3'], [4, '4']], s.count, m.id !== 'ffa')
+  // Duel and Free-for-all offer the computer; each remembers its own choice.
+  // With Computer picked, the count control keeps its values (ccMax 3 / 4)
+  // and only its labels change to the number of CPUs that implies.
+  const oppSeg = seg('Opponent', oppKey, [['friend', m.id === 'ffa' ? 'Friends by code' : 'Friend by code'], ['cpu', 'Computer']], oppVal, !cpuMode);
+  const extra = seg(vsCpu ? 'CPU commanders' : 'Commanders on the ridge', 'count', vsCpu ? [[3, '2'], [4, '3']] : [[3, '3'], [4, '4']], s.count, m.id !== 'ffa')
     + seg('Tee set', 'tees', [['champ', 'Champ'], ['mens', 'Men&rsquo;s'], ['womens', 'Women&rsquo;s'], ['junior', 'Junior']], s.tees, m.id !== 'golf')
-    + seg('Difficulty', 'diff', [['easy', 'Easy'], ['medium', 'Medium'], ['hard', 'Hard']], s.diff, !(m.id === 'duel' && !online));
-  const oppText = m.id === 'duel' && !online ? 'Computer &middot; ' + esc(cap(s.diff)) : 'Friend by code';
+    + seg('Difficulty', 'diff', [['easy', 'Easy'], ['medium', 'Medium'], ['hard', 'Hard']], s.diff, !vsCpu);
+  const oppText = vsCpu ? 'Computer &middot; ' + esc(cap(s.diff)) : (m.id === 'ffa' ? 'Friends by code' : 'Friend by code');
+  const tall = m.id === 'ffa' && vsCpu;       // three visible option groups
 
   const body = '<div class="cols">'
-    + '<div style="width:' + u(430) + ';display:flex;flex-direction:column;gap:' + u(12) + '">' + oppSeg + extra
-    +   '<div class="card" style="flex:1;min-height:0;padding:0 ' + u(13) + ';display:flex;flex-direction:column;justify-content:space-evenly">'
+    // The column is a fixed 274u tall (.cols). One or two option groups leave
+    // the crew card room to stretch, exactly as before. Free-for-all + Computer
+    // shows THREE, which cannot fit at any viewport: only then does the column
+    // scroll and the card keep its own height (grow, never shrink) instead of
+    // spilling over the footer. The two-group markup is byte-identical.
+    + '<div style="width:' + u(430) + ';display:flex;flex-direction:column;gap:' + u(12) + (tall ? ';min-height:0;overflow-y:auto;overflow-x:hidden' : '') + '">' + oppSeg + extra
+    +   '<div class="card" style="flex:' + (tall ? '1 0 auto' : '1') + ';min-height:0;padding:0 ' + u(13) + ';display:flex;flex-direction:column;justify-content:space-evenly">'
     +     '<div class="crew" style="border:0;background:none;padding:0">' + tankImg(s.skinId, 56, 'Your tank')
     +       '<span class="ct"><span class="lbl">Rolling out as</span>'
     +       '<span style="display:block;font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:' + u(19) + ';text-transform:uppercase;letter-spacing:.03em;margin-top:' + u(4) + ';color:#eef3ff">' + esc(s.name) + '</span>'
@@ -555,12 +611,17 @@ SCREENS.setup = function () {
 
 SCREENS.home = function () {
   const s = state(), m = s.mode;
+  // The one-tap Launch must never be a surprise: with Computer picked, the
+  // Players readout says so. In the default state (both opponents 'friend',
+  // neither persisted) this markup is byte-identical to before.
+  const vsCpu = (m.id === 'duel' && s.opp === 'cpu') || (m.id === 'ffa' && s.ffaOpp === 'cpu');
+  const players = vsCpu ? (m.id === 'ffa' ? 'You + ' + (s.count - 1) + ' CPU' : 'You vs CPU') : m.players;
   const arc = [[-6, 14], [-3, 5], [0, 0], [3, 5], [6, 14]];
   const boards = MODES.map((x, i) =>
     '<button class="board' + (x.id === m.id ? ' on' : '') + '" style="transform:rotate(' + arc[i][0] + 'deg) translateY(' + u(arc[i][1]) + ')" '
     + 'data-set="mode=' + x.id + '" title="' + esc(x.name) + '">'
     + '<span class="bcard"><img src="' + art(x.card) + '" alt=""><span class="bsc"></span><span class="barm"></span>'
-    + '<span class="bic">' + MODE_IC[x.id] + '</span><span class="bpl">' + esc(x.players) + '</span>'
+    + '<span class="bic">' + MODE_IC[x.id] + '</span><span class="bpl">' + esc(x.players) + '</span>' + offBadge(x.id)
     + '<span class="blab"><span class="bnm">' + esc(x.name) + '</span><span class="btg">' + esc(x.tag) + '</span></span></span></button>').join('');
 
 
@@ -597,7 +658,7 @@ SCREENS.home = function () {
     // One-tap LAUNCH removed the concept's only route into Setup, so the
     // readouts are that route: tap what you want to change.
     +   '<button class="ros" data-go="setup" title="Match setup">'
-    +   '<span class="ro"><span class="rk">Players</span><span class="rv">' + esc(m.players) + '</span></span>'
+    +   '<span class="ro"><span class="rk">Players</span><span class="rv">' + esc(players) + '</span></span>'
     +   '<span class="ro"><span class="rk">Weapon draft</span><span class="rv"><em>' + m.draft + '</em> picks</span></span>'
     +   '<span class="ro"><span class="rk">Paint</span><span class="rv">' + esc(s.skin.name) + '</span></span>'
     +   '</button>'
@@ -692,6 +753,7 @@ function back() { render(stack.pop() || 'home'); }
 function setField(k, v) {
   if (k === 'mode' && has('ccMode')) { ccMode = v; }
   else if (k === 'opp' && has('ccOpp')) { ccOpp = v; }
+  else if (k === 'ffaOpp' && has('ccFfaOpp')) { ccFfaOpp = v; }
   else if (k === 'diff' && has('cpuDifficulty')) { cpuDifficulty = v; try { localStorage.setItem('pt_diff', v); } catch {} if ($('diffSel')) $('diffSel').value = v; }
   else if (k === 'count' && has('ccMax')) { ccMax = +v; if ($('countSel')) $('countSel').value = String(v); }
   else if (k === 'tees' && has('ccTees')) { ccTees = v; try { localStorage.setItem('cc_tees', v); } catch {} if ($('teeSel')) $('teeSel').value = v; }
@@ -700,14 +762,31 @@ function setField(k, v) {
 
 document.addEventListener('click', (e) => {
   const host = $('bay'); if (!host || !host.classList.contains('active')) return;
-  const t = e.target.closest('[data-go],[data-back],[data-set],[data-roll],[data-toggle],[data-launch],[data-join],[data-pick],[data-old],[data-skin],[data-rematch]');
+  const t = e.target.closest('[data-go],[data-back],[data-set],[data-roll],[data-toggle],[data-launch],[data-join],[data-pick],[data-old],[data-skin],[data-rematch],[data-solo]');
   if (!t || !host.contains(t)) return;
   if (has('Audio')) Audio.ensure();
-  if ('back' in t.dataset) { back(); return; }
+  // The lobby's Back IS Cancel. Leaving any other way strands a queued create
+  // (it would flush into a room nobody asked for, and the grace timer would
+  // yank the bay back to the lobby) or, in a solo room, leaves the in-page
+  // engine installed as the transport so every later tap goes into it.
+  if ('back' in t.dataset) {
+    if (current === 'lobby') { const b = $('cancelBtn'); if (b) b.onclick(); return; }
+    back(); return;
+  }
   if (t.dataset.pick) { togglePick(t.dataset.pick); render(current); return; }
   // Rematch cannot reach a named player (there is no way to invite one), so it
   // starts the same mode with a fresh code -- honest about what it can do.
-  if (t.dataset.rematch) { setField('mode', t.dataset.rematch); const b = $('createBtn'); if (b) b.onclick(); return; }
+  // The chip also restores WHO it was against ('Computer' is the literal the
+  // server emits for a vs-bot row): a 'Computer' FFA row really restarts vs
+  // CPUs, and a human FFA row can no longer start a surprise bot match because
+  // ccFfaOpp happened to be 'cpu'.
+  if (t.dataset.rematch) {
+    const md = t.dataset.rematch, vs = t.dataset.vs === 'cpu' ? 'cpu' : 'friend';
+    setField('mode', md);
+    if (md === 'duel') setField('opp', vs); else if (md === 'ffa') setField('ffaOpp', vs);
+    const b = $('createBtn'); if (b) b.onclick(); return;
+  }
+  if ('solo' in t.dataset) { if (fn('playSolo')) playSolo(); return; }
   if (t.dataset.old) { const b = $(t.dataset.old); if (!b) return; if (typeof b.onclick === 'function') b.onclick(); else b.click(); return; }
   if (t.dataset.skin) {
     const id = t.dataset.skin, ok = fn('skinUnlocked') ? skinUnlocked(id) : false;
@@ -755,7 +834,7 @@ applyMotion();
 // sees every message, then let them run unchanged (they also call showScreen,
 // which routes 'lobby' to the bay under the flag).
 if (fn('renderLobby')) { const orig = renderLobby; renderLobby = function (m) { lobby.m = m; lobby.mode = 'host'; return orig.apply(this, arguments); }; }
-if (fn('showLobby'))   { const orig = showLobby;   showLobby   = function (mode) { lobby.mode = mode; if (mode === 'search') lobby.m = null; return orig.apply(this, arguments); }; }
+if (fn('showLobby'))   { const orig = showLobby;   showLobby   = function (mode) { lobby.mode = mode; if (mode !== 'host') lobby.m = null; return orig.apply(this, arguments); }; }
 
 // BOOT. The bay is the menu: take the route in, once.
 if (has('showScreen')) showScreen('home');

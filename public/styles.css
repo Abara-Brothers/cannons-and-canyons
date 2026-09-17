@@ -1824,8 +1824,6 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
      filter:blur(calc(1.4 * var(--u))) saturate(.62) brightness(.78);pointer-events:none;
      -webkit-mask-image:linear-gradient(180deg,rgba(0,0,0,.85),transparent 74%);
              mask-image:linear-gradient(180deg,rgba(0,0,0,.85),transparent 74%)}
-  #bay .horiz{position:absolute;left:0;right:0;top:calc(222 * var(--u));height:1px;pointer-events:none;
-     background:linear-gradient(90deg,transparent,rgba(255,180,107,.42) 25%,rgba(84,200,255,.3) 75%,transparent)}
 
   /* ------------------------------------------------------------- top bar -- */
   #bay .top{position:absolute;left:calc(18 * var(--u));right:calc(18 * var(--u));top:calc(8 * var(--u));height:calc(32 * var(--u));display:flex;align-items:center;gap:calc(9 * var(--u));z-index:20}
@@ -1863,6 +1861,12 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .board.on .bic{fill:#ffc98f}
   #bay .bpl{position:absolute;top:calc(9 * var(--u));right:calc(9 * var(--u));font-family:"JetBrains Mono",monospace;font-size:calc(8.5 * var(--u));
      font-weight:700;letter-spacing:.1em;color:#9fb0d2;background:rgba(5,8,14,.72);padding:calc(2 * var(--u)) calc(5 * var(--u));border-radius:calc(3 * var(--u))}
+  /* The offline badge (item 3): sits under the players tag on the home boards
+     and top-right on the Mission board pictures. Absolute, so it never moves a
+     sibling and the layout baseline stays exactly where it was. */
+  #bay .bof{position:absolute;top:calc(26 * var(--u));right:calc(9 * var(--u));font-family:"JetBrains Mono",monospace;font-size:calc(7.5 * var(--u));
+     font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#3ce88f;background:rgba(5,8,14,.72);padding:calc(2 * var(--u)) calc(5 * var(--u));border-radius:calc(3 * var(--u));pointer-events:none}
+  #bay .mbi .bof{top:calc(8 * var(--u))}
   #bay .blab{position:absolute;left:calc(9 * var(--u));right:calc(9 * var(--u));bottom:calc(8 * var(--u));display:block}
   #bay .bnm{display:block;font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:calc(14.5 * var(--u));line-height:1;
      text-transform:uppercase;letter-spacing:.02em;color:#eef3ff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

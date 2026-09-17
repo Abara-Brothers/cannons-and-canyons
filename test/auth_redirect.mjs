@@ -11,10 +11,15 @@
 // absent on the other looks identical in every manual test that signs in
 // successfully: the CSRF case is the one nobody performs by hand.
 //
-// Also pinned here: the native reply must come back to a DOMAIN-BOUND URL, never
-// a private-use scheme. This client uses the implicit flow, so the fragment
-// carries a live access token; any app can register a scheme, so a scheme
-// callback hands a working session to whoever claimed it.
+// Also pinned here: WHICH return URL each carrier gets. This client uses the
+// implicit flow, so the fragment carries a live access token. Where the OS
+// routes the reply (a Universal Link / App Link reopening the app), the return
+// must be DOMAIN-BOUND, never a private-use scheme: any app can register a
+// scheme, so a scheme callback would hand a working session to whoever claimed
+// it. Where the in-app sheet routes the reply (iOS, ASWebAuthenticationSession
+// via the CCWebAuth plugin), the return is the app's own scheme — safe there,
+// because the session hands the URL only to the app that opened it — and it
+// must be used ONLY when that plugin is actually present.
 import fs from 'node:fs';
 
 const out = { errors: [] };
@@ -23,6 +28,7 @@ const fail = (m) => { out.errors.push(m); console.error('FAIL ' + m); };
 
 const SRC = fs.readFileSync(new URL('../public/cloud.js', import.meta.url), 'utf8');
 const SB = 'https://proj.supabase.co';
+const CALLBACK = 'com.abarabrothers.cannonsandcanyons://auth/callback';
 
 function mkStore() {
   const m = new Map();
@@ -36,13 +42,17 @@ function mkStore() {
 
 // Build an isolated "browser" and return its Cloud plus the stores, so a test
 // can inspect exactly which storage the flag landed in.
-function load({ native }) {
+function load({ native, inApp }) {
   const window = {
     CC_SUPABASE_URL: SB,
     CC_SUPABASE_KEY: 'pk_test',
     CC_NATIVE_HOST: 'tanks.abarabrothers.com',
   };
+  // config.js sets CC_IOS_CALLBACK on EVERY platform; what must decide the
+  // route is the plugin's presence, so the stub carries the value everywhere.
+  window.CC_IOS_CALLBACK = CALLBACK;
   if (native) window.Capacitor = { getPlatform: () => 'ios' };
+  if (inApp && window.Capacitor) window.Capacitor.Plugins = { CCWebAuth: { start: async () => ({}) } };
   const local = mkStore(), sess = mkStore();
   window.localStorage = local;
   window.sessionStorage = sess;
@@ -78,11 +88,26 @@ const FRAG = 'access_token=at_fake&refresh_token=rt_fake&expires_in=3600';
 
   const back = aUrl.searchParams.get('redirect_to') || '';
   if (back === 'https://tanks.abarabrothers.com/auth/callback') {
-    ok('native comes back to the claimed Universal Link path');
+    ok('native WITHOUT the in-app sheet comes back to the claimed Universal Link path');
   } else fail(`native redirect_to is ${back}`);
-  // The security decision, pinned so it cannot be "simplified" later.
-  if (/^https:\/\//.test(back)) ok('the native return is https, NOT a private-use scheme');
-  else fail(`the native return is not https (${back}) — any app could claim it and take the token`);
+  // The security decision, pinned so it cannot be "simplified" later: when the
+  // OS routes the reply, the return is domain-bound.
+  if (/^https:\/\//.test(back)) ok('the OS-routed native return is https, NOT a private-use scheme');
+  else fail(`the OS-routed native return is not https (${back}) — any app could claim it and take the token`);
+
+  // WITH the in-app sheet, the return is the app's own scheme — exactly the
+  // configured value, because that string is also what Supabase's redirect
+  // allow-list holds, and a near-miss is a refused sign-in with no error here.
+  const sheet = load({ native: true, inApp: true });
+  const sUrl = new URL(sheet.Cloud.signInUrl('google'));
+  const sBack = sUrl.searchParams.get('redirect_to') || '';
+  if (sBack === CALLBACK) ok('native WITH the in-app sheet comes back to CC_IOS_CALLBACK, verbatim');
+  else fail(`in-app redirect_to is ${sBack}, expected ${CALLBACK}`);
+  if (sheet.Cloud.inAppAuth() === true) ok('inAppAuth() says yes when the plugin is present');
+  else fail('inAppAuth() is false with the plugin present — goSignIn would leave for Safari and the scheme reply would be lost');
+  if (nat.Cloud.inAppAuth() === false && web.Cloud.inAppAuth() === false) {
+    ok('inAppAuth() says no without the plugin, so nothing is ever sent to a scheme the OS would route');
+  } else fail('inAppAuth() is true without the plugin — a scheme return would be handed to the OS');
 }
 
 // ---- 2. the CSRF guard, on BOTH carriers -----------------------------------
@@ -101,6 +126,13 @@ const FRAG = 'access_token=at_fake&refresh_token=rt_fake&expires_in=3600';
   if (r2 === false && b.local.getItem('cc_session') === null) {
     ok('native: a link this client did not ask for is discarded');
   } else fail(`native: an unsolicited Universal Link was accepted (${r2}) — login CSRF on the native path`);
+
+  // IN-APP carrier, no flag: a scheme reply nobody asked for.
+  const c = load({ native: true, inApp: true });
+  const r3 = c.Cloud.consumeRedirect(CALLBACK + '#' + FRAG);
+  if (r3 === false && c.local.getItem('cc_session') === null) {
+    ok('in-app: a reply this client did not ask for is discarded');
+  } else fail(`in-app: an unsolicited scheme reply was accepted (${r3}) — login CSRF on the sheet path`);
 }
 
 // ---- 3. a sign-in this client DID start is accepted, once ------------------
@@ -114,6 +146,16 @@ const FRAG = 'access_token=at_fake&refresh_token=rt_fake&expires_in=3600';
   else fail(`native: a legitimate reply was refused (${first})`);
   if (second === false) ok('native: the flag is single-use, so a captured link cannot be replayed');
   else fail(`native: the same link was consumed twice (${second}) — the flag is not being cleared`);
+
+  const s = load({ native: true, inApp: true });
+  s.Cloud.signInUrl('google');
+  const sUrl = CALLBACK + '#' + FRAG;
+  const sFirst = s.Cloud.consumeRedirect(sUrl);
+  const sSecond = s.Cloud.consumeRedirect(sUrl);
+  if (sFirst === 'ok') ok('in-app: the reply to a sign-in this client started is accepted');
+  else fail(`in-app: a legitimate scheme reply was refused (${sFirst})`);
+  if (sSecond === false) ok('in-app: the flag is single-use on the sheet path too');
+  else fail(`in-app: the same reply was consumed twice (${sSecond})`);
 
   const w = load({ native: false });
   w.Cloud.signInUrl('google');
@@ -149,6 +191,25 @@ const FRAG = 'access_token=at_fake&refresh_token=rt_fake&expires_in=3600';
   const r = n.Cloud.consumeRedirect('https://tanks.abarabrothers.com/auth/callback#error=access_denied');
   if (r === 'error') ok('a cancelled sign-in is reported as an error, not as silence');
   else fail(`a provider error returned ${r} — the player would be told nothing`);
+}
+
+// ---- 6. a dismissed sheet disarms the flag ---------------------------------
+// The in-app sheet gives a definite "no reply is coming" signal (cancelled, or
+// failed to open), and goSignIn() calls cancelPending() on every one of them.
+// On native the flag lives in localStorage, so without this it would stay
+// armed until the next reply of ANY kind — a crafted Universal Link opened
+// from a message included, which is precisely what the flag exists to refuse.
+{
+  const s = load({ native: true, inApp: true });
+  s.Cloud.signInUrl('google');
+  if (s.local.getItem('cc_oauth_pending') === '1') ok('starting a sign-in arms the flag on the sheet path');
+  else fail('the sheet path did not arm the flag — its own reply would be refused');
+  s.Cloud.cancelPending();
+  if (s.local.getItem('cc_oauth_pending') === null) ok('cancelPending() disarms it');
+  else fail('cancelPending() left the flag armed');
+  const r = s.Cloud.consumeRedirect(CALLBACK + '#' + FRAG);
+  if (r === false && s.local.getItem('cc_session') === null) ok('after a cancel, a late reply is refused');
+  else fail(`after a cancel, a late reply was accepted (${r})`);
 }
 
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nALL GOOD');

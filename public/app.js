@@ -1026,10 +1026,13 @@ async function cloudBoot(returnUrl) {
 // device can register a scheme. The return is a domain-bound Universal Link /
 // App Link instead — see redirectTarget() in cloud.js.
 //
-// The provider leg runs in the REAL Safari, not in this WebView. Capacitor's
-// WebViewDelegationHandler cancels any top-level navigation outside the app's
-// own server and hands the URL to UIApplication.open, so `location.href = url`
-// already does the right thing and no browser plugin is involved.
+// On iOS the provider leg now runs in an IN-APP sheet (ASWebAuthenticationSession,
+// via the CCWebAuth plugin the shell registers) and its reply never leaves the
+// app — see goSignIn(). Everywhere else the leg runs in the REAL browser, not
+// in this WebView: Capacitor's WebViewDelegationHandler cancels any top-level
+// navigation outside the app's own server and hands the URL to
+// UIApplication.open, so `location.href = url` already does the right thing.
+// The Universal Link return below stays as the route for that case.
 const IS_NATIVE = !!(window.Capacitor && window.Capacitor.getPlatform
   && window.Capacitor.getPlatform() !== 'web');
 const IS_IOS = !!(window.Capacitor && window.Capacitor.getPlatform
@@ -1046,8 +1049,9 @@ const PROVIDERS = IS_IOS ? ['apple', 'google'] : ['google'];
 const PROVIDER_NAME = { apple: 'Apple', google: 'Google' };
 
 // Can this platform actually COMPLETE a sign-in? The answer is no longer "is it
-// native": iOS can, because its Universal Link return is claimed by an
-// `applinks:` entitlement and the association file is served and verified.
+// native": iOS can — the provider leg runs in an in-app sheet whose reply comes
+// straight back to goSignIn(), and its Universal Link return is claimed by an
+// `applinks:` entitlement as the fallback route.
 //
 // ANDROID CANNOT YET. AndroidManifest has no App Links intent-filter for
 // /auth/callback, and adding one would not be enough on its own — Android only
@@ -1117,10 +1121,45 @@ $('accountBtn').onclick = () => {
 $('accCloseBtn').onclick = () => $('accountModal').classList.add('hidden');
 $('accLinkBtn').onclick = () => chooseProvider('link');
 
+// Sign in with Apple, NATIVELY, on iOS: the system sheet (Face ID) instead of
+// any web flow, through the AppleSignIn plugin the shell registers. Apple
+// returns a signed identity token whose audience is this bundle id, and
+// Cloud.signInWithApple() posts it to GoTrue's id_token grant -- no redirect,
+// no fragment, no pending flag. Shaped as a url-thunk that resolves null so it
+// slots into the SAME age gate and goSignIn() as the web providers: goSignIn
+// only navigates on a URL. Everything after the token is the cloudBoot() every
+// carrier shares, plus the re-hello the in-app paths need.
+const NATIVE_APPLE = () => !!(IS_IOS && window.Capacitor.Plugins && window.Capacitor.Plugins.AppleSignIn);
+const appleNativeFn = (kind) => async () => {
+  let res;
+  try { res = await window.Capacitor.Plugins.AppleSignIn.start({}); }
+  catch (e) {
+    if (!(e && e.message === 'busy')) showToast('Could not open Sign in with Apple — try again');
+    return null;
+  }
+  if (!res || !res.idToken || !res.nonce) {
+    showToast(res && res.cancelled ? 'Sign-in was cancelled' : 'Could not open Sign in with Apple — try again');
+    return null;
+  }
+  const r = await Cloud.signInWithApple(res.idToken, res.nonce, kind === 'link');
+  if (!r.ok) {
+    // A link that fails is NEVER retried as a fresh sign-in -- see linkFn.
+    showToast(r.code === 'identity_already_exists'
+      ? 'That Apple ID is already linked to another account — sign out first, then sign in with it'
+      : 'Sign in with Apple did not complete — check your connection and try again');
+    return null;
+  }
+  showToast('Signed in — your progress follows you now');
+  await cloudBoot();
+  if (S.ws) sendHello(S.ws);
+  return null;
+};
+
 // A fresh sign-in mints whatever account the provider says; a LINK keeps the
 // guest's existing account and row.
-const signInFn = (prov) => () => Cloud.signInUrl(prov);
-const linkFn = (prov) => async () => {
+const signInFn = (prov) => (prov === 'apple' && NATIVE_APPLE()
+  ? appleNativeFn('signin') : () => Cloud.signInUrl(prov));
+const linkFn = (prov) => (prov === 'apple' && NATIVE_APPLE() ? appleNativeFn('link') : async () => {
   const url = await Cloud.linkUrl(prov);         // keeps the account + row
   if (url) return url;
   // Do NOT fall back to a plain sign-in. This button is labelled "Keep my
@@ -1131,7 +1170,7 @@ const linkFn = (prov) => async () => {
   // transient one worth retrying, never a reason to start over.
   showToast('Could not link your account right now — check your connection and try again');
   return null;                                   // goSignIn() only navigates on a URL
-};
+});
 
 // With ONE provider there is nothing to choose, so web and Android go straight
 // through exactly as they always have — a chooser over a single option is a tap
@@ -1147,11 +1186,13 @@ function chooseProvider(kind) {
 }
 $('provCancelBtn').onclick = () => $('providerModal').classList.add('hidden');
 
-// ---- OAuth return on native -------------------------------------------------
-// The provider leg runs in Safari, so the reply cannot land in this WebView's
-// address bar. It arrives as a Universal Link that reopens the app, and
-// @capacitor/app turns that into an appUrlOpen event carrying the whole URL,
-// fragment included.
+// ---- OAuth return on native (the Universal Link route) ----------------------
+// When the provider leg runs in the real browser — Android, or an iOS shell
+// without the in-app sheet — the reply cannot land in this WebView's address
+// bar. It arrives as a Universal Link that reopens the app, and @capacitor/app
+// turns that into an appUrlOpen event carrying the whole URL, fragment
+// included. The in-app sheet never comes through here: its reply is the
+// resolved promise in goSignIn().
 //
 // Registered unconditionally, NOT only while a sign-in is pending: iOS may have
 // discarded the WebView entirely while Safari was in front, in which case this
@@ -1215,9 +1256,39 @@ function startSignIn(urlFn, provider) {
   $('accountModal').classList.add('hidden');
   $('ageModal').classList.remove('hidden');
 }
+// Where the sign-in actually goes. WEB, and any native shell without the
+// in-app sheet: navigate, and the reply comes back as a page load or a
+// Universal Link. iOS WITH the sheet: the provider page opens in
+// ASWebAuthenticationSession over this WebView and the reply is the resolved
+// promise — no Safari, no relaunch, no Universal Link. From there it is the
+// same cloudBoot() every carrier uses, so the merge, the push and the chip
+// refresh stay single-copy. One thing the web path never needs: the socket is
+// still up and still introduced as the OLD identity (guest or nobody), so it
+// is re-introduced here — a page reload gives web that for free.
 async function goSignIn(urlFn) {
   const url = await urlFn();
-  if (url) location.href = url;
+  if (!url) return;
+  if (!Cloud.inAppAuth()) { location.href = url; return; }
+  const scheme = String(window.CC_IOS_CALLBACK).split('://')[0];
+  let res;
+  try {
+    res = await window.Capacitor.Plugins.CCWebAuth.start({ url, scheme });
+  } catch (e) {
+    // 'busy': the FIRST sheet is still up and its reply is still expected, so
+    // the flag it armed must stay armed. Anything else (bad_url, bad_scheme,
+    // no_window, failed, start_failed) means no reply is coming.
+    if (e && e.message === 'busy') return;
+    Cloud.cancelPending();
+    showToast('Could not open sign-in — try again');
+    return;
+  }
+  if (!res || !res.url) {
+    Cloud.cancelPending();
+    showToast(res && res.cancelled ? 'Sign-in was cancelled' : 'Could not open sign-in — try again');
+    return;
+  }
+  await cloudBoot(res.url);
+  if (S.ws) sendHello(S.ws);
 }
 $('ageCancelBtn').onclick = () => { pendingSignIn = null; $('ageModal').classList.add('hidden'); };
 $('ageOkBtn').onclick = () => {
@@ -1355,7 +1426,15 @@ function connect() {
     flushIntent();
     sendHello(ws);
   };
-  ws.onclose = () => { S.connected = false; if (S.playing) $('connErr').classList.remove('hidden'); setTimeout(connect, 1500); };
+  ws.onclose = () => {
+    S.connected = false; if (S.playing) $('connErr').classList.remove('hidden');
+    // The socket opened, flushIntent sent and nulled the create, and the socket
+    // died before 'created': without this the pending lobby's spinner (or its
+    // Play solo button, with nothing left to start) sits there for good. While
+    // the socket has never opened, pendingIntent is still set and this is inert.
+    if (lobbyWait && !pendingIntent) { showToast('Connection dropped — try again'); $('cancelBtn').onclick(); }
+    setTimeout(connect, 1500);
+  };
   ws.onerror = () => {};
   ws.onmessage = (e) => { let m; try { m = JSON.parse(e.data); } catch { return; } S.msgCount = (S.msgCount || 0) + 1; handle(m); };
 }
@@ -1537,8 +1616,44 @@ function flushIntent() { if (pendingIntent) { sendMsg(pendingIntent); pendingInt
 // three seconds after every tab-return during an offline match.
 let engineMod = null;      // cached dynamic import of room-engine.js
 let localFallback = null;  // pending server-unreachable fallback timer
-const offlineCapable = (m) =>
-  m.type === 'ai' || (m.type === 'create' && m.mode === 'golf');
+// Which taps may run on this device with no server. Two predicates, because
+// the one they replace was consulted at two sites with two meanings and
+// widening it for one site widened it for both.
+//   soloByConstruction: an 'ai' frame (Duel or Free-for-all vs Computer). No
+//   code, no invite, no lobby — nothing exists that going local could
+//   convert, so it starts at once when the device KNOWS it is offline, and
+//   after a short grace when the server merely cannot be raised (deploy
+//   restart, cold start, captive portal).
+//   soloOfferable: a 'create' for an invite room one player can still play
+//   (Boss, Aliens, Golf, Free-for-all). These NEVER go local by themselves:
+//   the lobby shows where things stand and OFFERS Play solo. Golf is an
+//   invite room too (two seats, a code, copy buttons), so the old automatic
+//   solo round is replaced by the same offer — one rule for every invite room.
+const SOLO_MODES = ['boss', 'aliens', 'golf', 'ffa'];
+const soloByConstruction = (m) => m.type === 'ai';
+const soloOfferable = (m) => m.type === 'create' && SOLO_MODES.includes(m.mode);
+// THE FRAME PLAY SOLO SENDS. Boss/Aliens/Golf: the queued create, verbatim —
+// the engine seats their NPCs itself and accepts one commander. Free-for-all:
+// the engine seats CPUs ONLY through the 'ai' case (a one-seat ffa create is
+// refused at startMatch), so the invite room is exchanged for the exact
+// vs-Computer frame Setup sends when 'Computer' is picked. One engine path,
+// one message shape, online and offline.
+const soloFrameFor = (m) => (m.mode === 'ffa'
+  ? { type: 'ai', mode: 'ffa', max: m.max, difficulty: cpuDifficulty, name: m.name, skin: m.skin }
+  : m);
+// What a mode offers with no server, for the bay's boards. DERIVED from the
+// two predicates above, never listed separately, so a badge can never promise
+// what intent() will not deliver.
+//   'cpu'    a vs-Computer form starts locally (Duel, Free-for-all)
+//   'solo'   Play solo is offered for the invite room (Boss, Aliens, Golf)
+//   'online' nothing runs without the server
+function offlineKind(modeId) {
+  if ((modeId === 'duel' || modeId === 'ffa') && soloByConstruction({ type: 'ai', mode: modeId })) return 'cpu';
+  if (soloOfferable({ type: 'create', mode: modeId })) return 'solo';
+  return 'online';
+}
+let soloAutoStart = false;   // a Play solo on a lobby-mode frame: start the round as soon as the local room exists
+let lobbyWait = null;        // 'offline' | 'connecting' | 'unreachable' while a queued create is shown on the lobby screen
 
 let localStarting = false;
 async function startLocal(m) {
@@ -1552,16 +1667,25 @@ async function startLocal(m) {
     catch {
       // Precache incomplete — the first ever visit went offline mid-install.
       localStarting = false;
+      soloAutoStart = false;
       const el = $('homeError');
       if (el) el.textContent = 'Offline play could not load — connect once and it will be ready.';
+      // #homeError lives inside the hidden legacy rack; say it where it shows.
+      showToast('Offline play could not load — connect once and it will be ready.');
       return;
     }
   }
   localStarting = false;
   // The world may have changed across that await: if the real connection came
   // back while the module loaded, honour the tap ONLINE instead of hijacking
-  // a healthy socket to play the server's own engine locally.
-  if (S.connected) { sendMsg(m); return; }
+  // a healthy socket to play the server's own engine locally. A Play solo
+  // that lands here is honoured ONLINE — the lobby flips from an offer to a
+  // share-this-code screen — so say why.
+  if (S.connected) {
+    const wasSolo = soloAutoStart; soloAutoStart = false;
+    if (wasSolo) showToast('Connection is back — your room is live');
+    sendMsg(m); return;
+  }
   // Silence any real socket first, half-open or dying: a later onopen would
   // set S.connected and push a stale resume into the LOCAL engine, and a
   // later onclose would keep scheduling reconnects underneath the stand-in.
@@ -1570,6 +1694,7 @@ async function startLocal(m) {
     try { S.ws.close(); } catch { /* never opened */ }
   }
   S.local = true;
+  lobbyWait = null;                    // from here the lobby's fate is the local engine's, not the socket's
   // The stand-in socket has TWO faces, one per direction — conflating them
   // routes the client's own messages straight back into handle():
   //   engineLink is what the ENGINE holds. Its send() is the engine talking
@@ -1631,26 +1756,36 @@ function endLocal() {
 // offline, so a player really can sit on a working home screen tapping a mode
 // that will never start. Say so plainly rather than leaving them guessing.
 //
-// Since 8.44 the dead-end is gone for the two modes that never needed a
-// server (BQ-007): those start locally instead — immediately when the device
-// KNOWS it is offline, or after a short grace when it merely cannot raise
-// the server (down, cold start, captive portal).
+// A vs-Computer frame starts locally on its own (at once when offline, after
+// four seconds when the server cannot be raised); an invite-room mode shows
+// the lobby in a pending state and OFFERS Play solo. Nothing that carries a
+// code or an invite is ever converted into a solo game by a timer.
 function intent(m) {
-  if (S.connected) { sendMsg(m); return; }
+  if (S.connected) { sendMsg(m); return; }              // UNCHANGED, first line: a connected client never reaches the rest
   const offline = navigator.onLine === false;
-  if (offline && offlineCapable(m)) { startLocal(m); return; }
+  if (offline && soloByConstruction(m)) { startLocal(m); return; }
   pendingIntent = m;
-  const msg = offline
-    ? 'You are offline. Vs. Computer and solo Golf still work — everything else needs a connection.'
-    : 'Cannot reach the server — retrying.';
-  const el = $('homeError');
-  if (el) el.textContent = msg;
-  showToast(offline ? 'No connection' : 'Reconnecting');
   connect();          // don't sit out the 1.5s retry loop after a deliberate tap
-  // The timer self-guards: if the socket opened in time, flushIntent already
-  // sent this intent online and cleared it, so the fallback does nothing.
-  if (offlineCapable(m)) {
-    clearTimeout(localFallback);
+  clearTimeout(localFallback); localFallback = null;
+  if (soloOfferable(m)) {
+    // An invite room never goes solo by itself. Show where things stand and,
+    // once the server is clearly not coming, OFFER solo. The queued create
+    // still flushes into a real room if the socket opens meanwhile (ISSUE-017).
+    if (offline) { showLobby('offline'); return; }
+    showLobby('connecting');
+    localFallback = setTimeout(() => {
+      if (S.connected || pendingIntent !== m) return;
+      showLobby('unreachable');                         // an offer, never a start
+    }, 4000);
+    return;
+  }
+  const el = $('homeError');
+  if (el) el.textContent = offline ? 'You are offline. This needs a connection.' : 'Cannot reach the server — retrying.';
+  showToast(offline ? 'No connection' : 'Reconnecting');
+  // Only a vs-Computer frame may start locally on its own: nothing about it
+  // can be converted. Self-guarding — if the socket opened in time, flushIntent
+  // already sent it online and cleared it.
+  if (soloByConstruction(m)) {
     localFallback = setTimeout(() => {
       if (S.connected || pendingIntent !== m) return;
       pendingIntent = null;
@@ -1659,12 +1794,41 @@ function intent(m) {
   }
 }
 
+// The only door into a solo invite room. Takes the queued create, nulls it
+// FIRST (a socket opening during startLocal's import await must not
+// double-send it via flushIntent — the same order the 4 s timer uses), and
+// boots the in-page engine with the frame the online path would have sent.
+// A top-level declaration on purpose: bay.js reaches it as fn('playSolo').
+function playSolo() {
+  const m = pendingIntent;
+  if (!m || !soloOfferable(m) || S.connected) return;   // flushIntent already nulls it once the socket opens
+  pendingIntent = null;
+  clearTimeout(localFallback); localFallback = null;
+  lobbyWait = null;
+  soloAutoStart = m.mode !== 'ffa';       // ffa's 'ai' frame starts the match itself; the others answer with a lobby first
+  startLocal(soloFrameFor(m));
+}
+
 function handle(m) {
   switch (m.type) {
     case 'created': S.code = m.code; $('lobbyCode').textContent = m.code; showLobby('host'); break;
-    case 'lobby': renderLobby(m); break;
+    case 'lobby':
+      renderLobby(m);
+      // Play solo is one tap for every mode: Boss/Aliens/Golf send startMatch
+      // the moment the local room exists (the engine accepts one commander for
+      // them); a free-for-all's 'ai' frame needs nothing. created -> lobby ->
+      // startMatch -> start are all delivered from queued microtasks, so the
+      // solo lobby is written to the DOM but never painted.
+      if (S.local && soloAutoStart) { soloAutoStart = false; sendMsg({ type: 'startMatch' }); }
+      break;
     case 'queued': showLobby('search'); break;
-    case 'joinError': $('homeError').textContent = m.reason; break;
+    case 'joinError':
+      $('homeError').textContent = m.reason;
+      // #homeError is inside the hidden legacy rack. A refusal (capacity) after
+      // a queued create flushed would otherwise leave 'Reaching the server' up
+      // for good: the grace timer exits early because the socket is connected.
+      if (lobbyWait) { showToast(m.reason); $('cancelBtn').onclick(); }
+      break;
     // ISSUE-031: the server used to refuse a rematch in silence, leaving a dead
     // button. Say why, and drop the button so the player is pointed at the only
     // thing that WILL work.
@@ -1927,6 +2091,11 @@ $('armouryCloseBtn').onclick = () => {
 
 let ccMode = 'duel', ccMax = 4;
 let ccOpp = 'friend';        // duel opponent: 'friend' (code/link) or 'cpu'
+// The free-for-all's own opponent memory: 'friend' (lobby + code) or 'cpu'
+// (CPUs fill the ridge and the match starts now). Separate from ccOpp on
+// purpose — a Duel 'Computer' choice must never make a Free-for-all Launch
+// start a bot match. Not persisted, as ccOpp is not.
+let ccFfaOpp = 'friend';
 (function initMode() {
   const mr = $('modeRow');
   mr.addEventListener('click', (e) => {
@@ -1944,8 +2113,15 @@ $('teeSel').value = ccTees;
 $('teeSel').onchange = () => { ccTees = $('teeSel').value; try { localStorage.setItem('cc_tees', ccTees); } catch {} };
 $('createBtn').onclick = () => {
   Audio.ensure(); $('homeError').textContent = '';
-  if (ccMode === 'duel' && ccOpp === 'cpu') {
-    intent({ type: 'ai', difficulty: cpuDifficulty, name: myName(), skin: mySkin() });
+  // A vs-Computer game is an 'ai' frame: Duel exactly as it always was
+  // (no mode, no max — key for key the frame every shipped client sends), and
+  // since item A a Free-for-all too, carrying its mode and seat count. All
+  // three launch paths reach this onclick: the bay's Launch, the sortie
+  // rematch chip and the legacy button.
+  const vsCpu = (ccMode === 'duel' && ccOpp === 'cpu') || (ccMode === 'ffa' && ccFfaOpp === 'cpu');
+  if (vsCpu) {
+    intent({ type: 'ai', difficulty: cpuDifficulty, name: myName(), skin: mySkin(),
+      ...(ccMode === 'ffa' ? { mode: 'ffa', max: ccMax } : {}) });
     return;
   }
   intent({ type: 'create', name: myName(), skin: mySkin(), mode: ccMode, max: ccMode === 'ffa' ? ccMax : 2, tees: ccTees });
@@ -1957,12 +2133,13 @@ $('diffSel').value = cpuDifficulty;
 $('diffSel').onchange = () => { cpuDifficulty = $('diffSel').value; localStorage.setItem('pt_diff', cpuDifficulty); };
 // Duel's opponent choice: a friend via code/link, or the CPU right here.
 function syncCreateRow() {
-  const duel = ccMode === 'duel';
-  $('oppBtns').classList.toggle('hidden', !duel);
-  $('diffWrap').classList.toggle('hidden', !(duel && ccOpp === 'cpu'));
+  const cpuMode = ccMode === 'duel' || ccMode === 'ffa';
+  const vsCpu = (ccMode === 'duel' && ccOpp === 'cpu') || (ccMode === 'ffa' && ccFfaOpp === 'cpu');
+  $('oppBtns').classList.toggle('hidden', !cpuMode);
+  $('diffWrap').classList.toggle('hidden', !vsCpu);
   $('countWrap').classList.toggle('hidden', ccMode !== 'ffa');
   $('teeWrap').classList.toggle('hidden', ccMode !== 'golf');
-  $('createBtn').textContent = duel && ccOpp === 'cpu' ? 'START VS COMPUTER' : 'CREATE GAME';
+  $('createBtn').textContent = vsCpu ? 'START VS COMPUTER' : 'CREATE GAME';
 }
 // Opponent is two buttons now (Friend/online vs the Computer), not a dropdown.
 $('oppBtns').addEventListener('click', (e) => {
@@ -2067,7 +2244,15 @@ $('joinBtn').onclick = () => {
   intent({ type: 'join', code, name: myName(), skin: mySkin() });
 };
 $('codeInput').addEventListener('input', (e) => { e.target.value = e.target.value.toUpperCase(); });
-$('cancelBtn').onclick = () => { sendMsg({ type: 'leave' }); sendMsg({ type: 'cancelQuick' }); S.code = null; S.quick = false; endLocal(); showScreen('home'); };
+// Cancel also drops a queued create and its grace timer, so a later reconnect
+// cannot flush a room the player walked away from. Online, pendingIntent is
+// already null and no timer is armed: a no-op there.
+$('cancelBtn').onclick = () => {
+  sendMsg({ type: 'leave' }); sendMsg({ type: 'cancelQuick' });
+  pendingIntent = null; clearTimeout(localFallback); localFallback = null;
+  soloAutoStart = false; lobbyWait = null;
+  S.code = null; S.quick = false; endLocal(); showScreen('home');
+};
 
 $('copyLinkBtn').onclick = async () => {
   const link = `${location.origin}/?room=${S.code}`;
@@ -2092,12 +2277,15 @@ function showScreen(name) {
 }
 function showLobby(mode) {
   const searching = mode === 'search';
-  $('lobbyHeading').textContent = searching ? 'Searching for an opponent…' : 'Waiting for your opponent…';
-  $('lobbyHint').textContent = searching ? "We'll drop you into a battle the moment someone else is looking too." : 'Send this link or code. The battle starts the moment they join.';
-  $('lobbyCode').style.display = searching ? 'none' : '';
-  $('copyLinkBtn').style.display = searching ? 'none' : '';
-  $('copyCodeBtn').style.display = searching ? 'none' : '';
-  if (searching) { $('roster').innerHTML = ''; $('startMatchBtn').classList.add('hidden'); }
+  const pending = mode === 'offline' || mode === 'connecting' || mode === 'unreachable';
+  lobbyWait = pending ? mode : null;              // 'host' (a real room, local or online) and 'search' clear it
+  $('lobbyHeading').textContent = searching ? 'Searching for an opponent…' : pending ? 'Waiting for a connection…' : 'Waiting for your opponent…';
+  $('lobbyHint').textContent = searching ? "We'll drop you into a battle the moment someone else is looking too." : pending ? 'Nothing has been created yet.' : 'Send this link or code. The battle starts the moment they join.';
+  const bare = searching || pending;
+  $('lobbyCode').style.display = bare ? 'none' : '';
+  $('copyLinkBtn').style.display = bare ? 'none' : '';
+  $('copyCodeBtn').style.display = bare ? 'none' : '';
+  if (bare) { $('roster').innerHTML = ''; $('startMatchBtn').classList.add('hidden'); }
   showScreen('lobby');
 }
 
@@ -2148,8 +2336,10 @@ function renderLobby(m) {
   // these three and nothing ever un-hid them on this path.
   const solo = !!S.local;
   if (solo) {
-    $('lobbyHeading').textContent = 'Artillery Golf — offline solo round';
-    $('lobbyHint').textContent = 'No connection needed for a solo round. Tee off when ready.';
+    // The heading above is already mode-aware; this rack is hidden, but it
+    // must never say 'Artillery Golf' over a Boss room again.
+    $('lobbyHeading').textContent += ' — solo, on this device';
+    $('lobbyHint').textContent = 'Nobody can join this room.';
   }
   $('lobbyCode').style.display = solo ? 'none' : '';
   $('copyLinkBtn').style.display = solo ? 'none' : '';
@@ -2495,7 +2685,19 @@ function buildWeaponStrip() {
     chip.setAttribute('aria-label',
       `${w.name}, ${w.ammo >= 99 ? 'unlimited rounds' : `${left} ${left === 1 ? 'round' : 'rounds'} left`}`);
     chip.onclick = () => {
-      if (left > 0 && canAim()) { S.selected = w.id; buildWeaponStrip(); flashWeaponName(w.id); }
+      if (!(left > 0 && canAim())) return;
+      // `left` is 99 for every club because room-engine seeds per-seat golf ammo
+      // as {golfball:99, driver:99, putter:99} and it is copied into S.ammo — not
+      // because of the `?? w.ammo` fallthrough above. Capture BEFORE assigning:
+      // re-tapping the club already in hand is not "picking a club", and the
+      // golf lesson must not clear on it. Own-turn gate: in online golf canAim()
+      // has no turn check, and a chip tap on the opponent's turn would tick the
+      // step while the card is hidden — and, as the last step, persist cc_coach.
+      // The auto-putter hand-off near the cup writes S.selected directly and
+      // correctly does not come through here.
+      const changed = w.id !== S.selected;
+      S.selected = w.id; buildWeaponStrip(); flashWeaponName(w.id);
+      if (changed && S.turn === S.you) coachPass('club');
     };
     strip.appendChild(chip);
   }
@@ -2803,7 +3005,15 @@ function guideDir() {
 //     after firing, the turn is over and driving has to wait for the next one.
 // Grandfathered on PROF.shots the same way the demo is: this is for battle one.
 const COACH_KEY = 'cc_coach';
-const COACH_STEPS = [
+// Two copy sets, ONE id contract. 'pull' and 'fire' are shared so the existing
+// coachPass call sites and the canvas tests (coachCurrent() === 'pull') are
+// untouched; only the third step differs. Golf has no free driving at all —
+// room-engine rejects moves in golf and the drive row is display:none there —
+// so the combat set's 'drive' step could never be passed on a golf hole: a
+// first-timer sat on "Step 3 of 3 · You can move, too." for the whole round.
+// Golf's third lesson is the bag instead. Both sets are EXACTLY three long
+// because index.html hard-codes three dots and renderCoach lights only those.
+const COACH_COMBAT = [
   { id: 'pull', title: 'Touch anywhere. Pull back.',
     body: 'The shell flies the opposite way — like a slingshot. Pull further for more power.' },
   { id: 'fire', title: 'Now fire.',
@@ -2811,18 +3021,34 @@ const COACH_STEPS = [
   { id: 'drive', title: 'You can move, too.',
     body: 'Drive left or right on your turn. It spends fuel, and the fuel bar refills every turn.' },
 ];
+// Copy checked against game-core.js: the Driver carries furthest and rolls
+// longest; the Iron bites on landing; the Putter is ground:true and never lofts.
+// No Iron number is stated on purpose — its speedMul is a 1.0038 trim, not 1.0.
+const COACH_GOLF = [
+  { id: 'pull', title: 'Touch anywhere. Pull back.',
+    body: 'The ball flies the opposite way — like a slingshot. Pull further for more power.' },
+  { id: 'fire', title: 'Now fire.',
+    body: 'Tap the CONTROLS tab to bring the panel up, then hit FIRE. One stroke each turn — no clock, take your time.' },
+  { id: 'club', title: 'Pick your club.',
+    body: 'Driver for maximum carry off the tee. Iron for a shot that bites on landing. Putter never leaves the turf — it only rolls, exactly as far as you dare.' },
+];
+// A function, not a constant: S.mode is assigned long after this script loads.
+const coachSteps = () => (S.mode === 'golf' ? COACH_GOLF : COACH_COMBAT);
 let coachDone = false;
 try {
   coachDone = localStorage.getItem(COACH_KEY) === '1' || PROF.shots > 0;
 } catch {}
-const coachMet = { pull: false, fire: false, drive: false };
+// ONE ledger for the page session (declared here, written only in coachPass):
+// a player who did pull+fire in a duel and then starts golf without a reload
+// lands straight on step 3. Accepted — those two lessons were genuinely learned.
+const coachMet = { pull: false, fire: false, drive: false, club: false };
 let coachLive = false;      // the sequence is running right now
 let coachShown = null;      // step currently painted — the DOM is touched only on change
 let coachVis = null;        // last visibility written, same reason
 
 function coachCurrent() {
   if (!coachLive) return null;
-  const st = COACH_STEPS.find(s => !coachMet[s.id]);
+  const st = coachSteps().find(s => !coachMet[s.id]);
   return st ? st.id : null;
 }
 // Visible only when the player could actually act on it. Mirrors aimGuideOn()'s
@@ -2844,8 +3070,9 @@ function coachMaybeStart() {
 }
 function coachPass(id) {
   if (!coachLive || coachMet[id]) return;
+  if (!coachSteps().some(s => s.id === id)) return;   // not a lesson in THIS mode's set
   coachMet[id] = true;
-  if (!coachCurrent()) coachEnd(true);   // all three done — never again on this device
+  if (!coachCurrent()) coachEnd(true);   // all three of this set done — never again on this device
   else renderCoach();
 }
 function coachEnd(persist) {
@@ -2862,12 +3089,14 @@ function renderCoach() {
   const id = coachCurrent();
   const show = !!id && coachShowable();
   if (show !== coachVis) { el.classList.toggle('hidden', !show); coachVis = show; }
-  if (!show || id === coachShown) return;
-  coachShown = id;
-  const i = COACH_STEPS.findIndex(s => s.id === id);
-  $('coachStep').textContent = `Step ${i + 1} of ${COACH_STEPS.length}`;
-  $('coachTitle').textContent = COACH_STEPS[i].title;
-  $('coachBody').textContent = COACH_STEPS[i].body;
+  const steps = coachSteps();
+  const step = steps.find(s => s.id === id) || null;
+  if (!show || step === coachShown) return;
+  coachShown = step;
+  const i = steps.indexOf(step);
+  $('coachStep').textContent = `Step ${i + 1} of ${steps.length}`;
+  $('coachTitle').textContent = step.title;
+  $('coachBody').textContent = step.body;
   const dots = $('coachDots').children;
   for (let k = 0; k < dots.length; k++) dots[k].classList.toggle('on', k === i);
 }

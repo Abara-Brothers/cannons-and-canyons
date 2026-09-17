@@ -1011,7 +1011,11 @@ function scheduleBot(room) {
   clearTimeout(room.botTimer); clearInterval(room.botWalker);
   // Survival enemies keep the pressure up: three of them share the clock, so
   // each thinks, walks and fires on a much tighter cycle than a duel CPU.
-  const quick = cur.horde;
+  // FFA CPUs (item A) borrow ONLY this cadence, through a per-seat `quick`
+  // flag — never `horde`, which also changes targeting, walking, kinds and
+  // the drafted loadout. Three duel-paced CPUs back to back would leave the
+  // human waiting most of a minute between turns.
+  const quick = cur.horde || cur.quick;
   // Stay frozen until every client has finished WATCHING the previous shot —
   // an NPC that starts driving mid-replay reads as moving on the human's turn.
   // Scaled by the test knob (BOT_FIRE_MS) so fast suites stay fast.
@@ -1188,7 +1192,7 @@ function botFire(room) {
   broadcast(room, { type: 'aim', seat, angle: shot.angle, power: shot.power, weapon: shot.weapon });
   room.botTimer = safeTimeout(() => {
     if (room.state === 'playing' && room.turn === seat) resolveFire(room, seat, shot.weapon, shot.angle, shot.power);
-  }, bot.horde ? Math.min(550, BOT_FIRE_MS) : BOT_FIRE_MS);
+  }, (bot.horde || bot.quick) ? Math.min(550, BOT_FIRE_MS) : BOT_FIRE_MS);
 }
 
 // Unlimited shots — the match only ends when a tank is destroyed.
@@ -1620,6 +1624,30 @@ function handleResume(ws, msg) {
   scheduleBot(room);   // if it was the CPU's turn, resume its thinking
 }
 
+// ---- CPU seats for a vs-Computer game -----------------------------------------
+// One pure factory for every plain CPU seat the 'ai' case fills: no timers, no
+// room mutation. A DUEL seat is key-for-key the literal the case built by hand
+// until item A (name `CPU · Hard`, paint desert) — it must stay that way, and
+// test/ffa_bots.mjs deep-equals it. A FREE-FOR-ALL numbers its CPUs, and the
+// names are short on purpose: the phone HUD's four-row name column is about
+// 62px wide, and the difficulty is already shown on the Setup brief. `quick`
+// is set ONLY on FFA seats (a duel seat gets no such key) and carries only the
+// survival cadence — see scheduleBot and botFire. Everything else a bot seat
+// needs — hp, loadout, ammo, facing — startGame builds from players.length,
+// drawing a random loadout for any bot that is neither boss nor horde.
+function cpuSeat(mode, diff, seat) {
+  const label = `${diff[0].toUpperCase()}${diff.slice(1)}`;
+  return {
+    ws: null, bot: true, difficulty: diff,
+    ...(mode === 'ffa' ? { quick: true } : {}),
+    name: mode === 'ffa' ? `CPU ${seat}` : `CPU · ${label}`,
+    token: makeToken(), connected: true, dropTimer: null,
+    // Seat 1 keeps 'desert' (today's duel CPU); later seats take the same
+    // per-seat fallback paint a client that sent no skin gets: jungle, midnight.
+    skin: sanitizeSkin(seat === 1 ? 'desert' : null, seat),
+  };
+}
+
 // ---- Inbound message router --------------------------------------------------
 // The single entry point for everything a client says. server.js hands it every
 // parsed frame from a real socket after rate-limiting; the offline driver will
@@ -1708,17 +1736,19 @@ export function handleClientMessage(ws, msg) {
     case 'cancelQuick': if (waiting === ws) waiting = null; break;
     case 'ai': {
       const diff = ['easy', 'medium', 'hard'].includes(msg.difficulty) ? msg.difficulty : 'medium';
-      // CPU games stay strictly 2-player.
-      const r = createRoom(ws, msg.name, msg.skin, { mode: 'duel' });
+      // A CPU game is a duel (the only shape until item A) or a free-for-all
+      // against CPUs. Anything else stays a duel, so an older client's frame —
+      // which carries no mode at all — produces exactly what it always did.
+      // createRoom ignores opts.max for every non-ffa mode and clamps ffa to
+      // 2..4, so the seat loop below runs once for a duel.
+      const mode = msg.mode === 'ffa' ? 'ffa' : 'duel';
+      const r = createRoom(ws, msg.name, msg.skin, { mode, max: msg.max });
       if (!r) { send(ws, { type: 'joinError', reason: 'The server is at capacity. Try again shortly.' }); break; }
       r.players[0].loadout = sanitizeLoadout(msg.loadout);
-      r.vsBot = true;
-      r.players[1] = {
-        ws: null, bot: true, difficulty: diff,
-        name: `CPU · ${diff[0].toUpperCase()}${diff.slice(1)}`,
-        token: makeToken(), connected: true, dropTimer: null,
-        skin: sanitizeSkin('desert', 1),
-      };
+      r.vsBot = true;                       // scheduleBot refuses to move a bot without it
+      // Seats are filled HERE, not in startGame: a rematch calls startGame
+      // again and reuses these seats, exactly as duel-vs-CPU always has.
+      for (let seat = 1; seat < r.max; seat++) r.players[seat] = cpuSeat(mode, diff, seat);
       startGame(r);
       break;
     }

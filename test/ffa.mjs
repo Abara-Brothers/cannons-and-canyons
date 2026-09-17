@@ -80,6 +80,10 @@ try {
     if (s.alive.length !== 4 || !s.alive.every(Boolean)) fail('everyone should start alive');
     if (s.facing.length !== 4) fail(`facing.length is ${s.facing.length}`);
     if (s.mode !== 'ffa') fail(`snapshot.mode is '${s.mode}'`);
+    // The fence from the human side: the create+join path must never seat a
+    // CPU. Since item A the engine can fill a free-for-all with CPUs, but only
+    // through the 'ai' frame this test never sends.
+    if (s.names.some((n) => /^CPU\b/.test(n))) fail(`a human free-for-all grew a CPU seat: ${s.names}`);
   }
   // Seats must be ordered left -> right, and every seat sees the same battlefield.
   const xs = starts[0].tanks.map(t => t.x);

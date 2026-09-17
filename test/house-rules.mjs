@@ -13,7 +13,7 @@ const ok = (m) => console.log('  ok — ' + m);
 const fail = (m) => { out.errors.push(m); console.error('FAIL ' + m); };
 const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8');
 
-const UI_FILES = ['public/index.html', 'public/app.js', 'public/styles.css', 'server.js',
+const UI_FILES = ['public/index.html', 'public/app.js', 'public/bay.js', 'public/styles.css', 'server.js',
   'public/game-core.js', 'public/room-engine.js', 'public/cloud.js', 'public/errors.js'];
 
 // ---- 1. NO EMOJI ANYWHERE IN THE UI -----------------------------------------
@@ -279,6 +279,46 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   else ok(`index.html's ${refs.length} local css/js are all stamped and all precached under the same URL`);
 }
 
+// ---- 7c. THE WORKER VERSION MUST MOVE WITH THE ASSET STAMP -------------------
+// 7b keeps index.html's ?v= stamps and sw.js's SHELL list in step, but it never
+// read sw.js's VERSION — so index.html ?v=4 + SHELL ?v=4 + a forgotten 'cc-v3'
+// passed ALL GOOD, and a returning player kept the old cache under a new page
+// (ISSUE-038's exact shape). The number in VERSION must be the stamp number.
+{
+  const sw = read('public/sw.js');
+  const html = read('public/index.html');
+  const ver = (sw.match(/const VERSION = 'cc-v(\d+)'/) || [])[1];
+  const stamp = (html.match(/\.(?:js|css)\?v=(\d+)/) || [])[1];
+  if (!ver) fail("sw.js has no `const VERSION = 'cc-vN'` — the worker cannot retire old caches");
+  else if (!stamp) fail('index.html has no ?v=N stamp to compare against');
+  else if (ver !== stamp) fail(`sw.js VERSION is cc-v${ver} but index.html stamps ?v=${stamp} — bump them together or a stale worker serves the old shell`);
+  else ok(`sw.js VERSION cc-v${ver} matches the ?v=${stamp} asset stamp`);
+}
+
+// ---- 7d. OFFLINE PLAY HAS TWO PREDICATES, NEVER ONE -------------------------
+// `offlineCapable` was one predicate consulted at two sites with two meanings:
+// "the device knows it is offline, start now" and "the server merely cannot be
+// raised, silently go local after 4 s". Widening it for the first widened it for
+// the second, and that second conversion is the one the owner forbade for every
+// invite room (Boss, Aliens, Golf, Free-for-all). The replacement is
+// soloByConstruction (an 'ai' frame: nothing to convert) and soloOfferable (an
+// invite room: show the lobby, OFFER Play solo). Nobody may fold them back into
+// one, and the prose that enumerated modes — and drifted — may not return.
+{
+  const app = read('public/app.js');
+  const bad = [];
+  if (/\bofflineCapable\b/.test(app)) bad.push('app.js reintroduces `offlineCapable` — one predicate with two meanings');
+  if (app.includes('Vs. Computer and solo Golf')) bad.push('app.js reintroduces the mode-enumerating offline prose that drifted');
+  for (const id of ['soloByConstruction', 'soloOfferable', 'soloFrameFor', 'playSolo']) {
+    if (!new RegExp('\\b' + id + '\\b').test(app)) bad.push(`app.js has no ${id}`);
+  }
+  if (!app.includes("const soloByConstruction = (m) => m.type === 'ai';")) {
+    bad.push("soloByConstruction must be exactly `m.type === 'ai'` — any mode, and nothing else (a create is never solo by construction)");
+  }
+  if (bad.length) fail(`the offline predicates have drifted:\n      ${bad.join('\n      ')}`);
+  else ok('offline play keeps soloByConstruction and soloOfferable apart, and Play solo is the only door into a solo invite room');
+}
+
 // ---- 8. VERSION MUST AGREE ACROSS ALL THREE PROJECTS (ISSUE-016) ------------
 // package.json is the source; `npm run version:sync` pushes it into the native
 // projects. Nothing forces anyone to run it, and the failure is invisible
@@ -390,6 +430,75 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
       ok(`sign-in is offered only where the reply can arrive (${listed.join(', ')})`);
     }
   }
+}
+
+// ---- 8d. THE IN-APP SIGN-IN CALLBACK MUST BE THE APP'S OWN, AND WIRED --------
+// On iOS the provider leg runs in ASWebAuthenticationSession (CCWebAuthPlugin,
+// ios/App/App/SceneDelegate.swift) and the reply comes back to CC_IOS_CALLBACK,
+// a scheme URL. That is safe ONLY because the session intercepts it inside the
+// app — so the scheme must never ALSO be registered with the OS, or any app
+// could hand this one a token. And the value has to agree in places that never
+// see each other: config.js (the string Supabase's allow-list holds), cloud.js
+// (the plugin name it gates on must be the jsName Swift exports), app.js (the
+// method it calls must be one Swift declares), and the scene delegate (which
+// must install the subclass that registers the plugin — the storyboard alone
+// does nothing). A drift in any of them is invisible in every test that does
+// not run the sheet: the old Safari leg silently comes back, or the sheet opens
+// and its reply is refused.
+{
+  const grab = (src, re) => { const m = src.match(re); return m ? m[1].trim() : null; };
+  // Every native sign-in plugin the shell must export and register and the
+  // client must call. The first is also what cloud.js gates the return URL on.
+  const PLUGINS = [['CCWebAuth', 'start'], ['AppleSignIn', 'start']];
+  const JS_NAME = PLUGINS[0][0];
+  const cfg = read('public/config.js');
+  const cloud = read('public/cloud.js');
+  const app = read('public/app.js');
+  const swift = read('ios/App/App/SceneDelegate.swift');
+  const plist = read('ios/App/App/Info.plist');
+  const cb = grab(cfg, /window\.CC_IOS_CALLBACK = '([^']*)';/);
+  const path = grab(cloud, /const RETURN_PATH = '([^']*)';/);
+  const pbxIds = [...new Set([...read('ios/App/App.xcodeproj/project.pbxproj')
+    .matchAll(/PRODUCT_BUNDLE_IDENTIFIER = ([^;]+);/g)].map((m) => m[1].trim()))];
+  const bad = [];
+  if (!cb) bad.push('public/config.js has no CC_IOS_CALLBACK');
+  else if (!path) bad.push('public/cloud.js has no RETURN_PATH');
+  else {
+    const scheme = cb.split('://')[0];
+    if (pbxIds.length !== 1 || scheme !== pbxIds[0]) {
+      bad.push(`CC_IOS_CALLBACK scheme '${scheme}' is not the iOS bundle id (${pbxIds.join(' / ') || 'none found'})`);
+    }
+    if (cb !== scheme + '://' + path.replace(/^\//, '')) {
+      bad.push(`CC_IOS_CALLBACK is '${cb}' but the callback path cloud.js uses is '${path}'`);
+    }
+    if (new RegExp('<string>' + scheme.replace(/\./g, '\\.') + '</string>').test(plist)) {
+      bad.push(`Info.plist registers '${scheme}' as a URL scheme — the OS would route it to any app that claims it, the hole the sheet exists to close`);
+    }
+  }
+  for (const [name, method] of PLUGINS) {
+    // The method must be declared INSIDE that plugin's class, not anywhere in
+    // the file: slice from its jsName to the next @objc( class, or the end.
+    const at = swift.indexOf(`public let jsName = "${name}"`);
+    if (at === -1) { bad.push(`SceneDelegate.swift exports no plugin named ${name}`); continue; }
+    const next = swift.indexOf('@objc(', at);
+    const cls = swift.slice(at, next === -1 ? undefined : next);
+    if (!cls.includes(`CAPPluginMethod(name: "${method}", returnType: CAPPluginReturnPromise)`)) {
+      bad.push(`${name} declares no promise-returning '${method}' method`);
+    }
+    if (!swift.includes(`registerPluginInstance(${name}Plugin())`)) {
+      bad.push(`SceneDelegate.swift never registers ${name}Plugin — JS would see no plugin and fall back to the web flow`);
+    }
+    if (!app.includes(`Plugins.${name}.${method}(`)) bad.push(`app.js never calls Capacitor.Plugins.${name}.${method}()`);
+  }
+  if ((swift.match(/class CCBridgeViewController/g) || []).length !== 1) {
+    bad.push('there must be exactly ONE CCBridgeViewController — every plugin registers in its capacitorDidLoad()');
+  }
+  if (!/window\?\.rootViewController = CCBridgeViewController\(\)/.test(swift)) {
+    bad.push('SceneDelegate does not install CCBridgeViewController as rootViewController — the registering subclass is never used');
+  }
+  if (!cloud.includes(`Plugins.${JS_NAME}`)) bad.push(`cloud.js does not gate on Capacitor.Plugins.${JS_NAME}`);
+  if (bad.length) fail(`the in-app sign-in sheet is mis-wired:\n      ${bad.join('\n      ')}`);
+  else ok(`in-app sign-in callback is the app's own (${cb}), unregistered with the OS; ${PLUGINS.map((p) => p[0]).join(' + ')} exported, registered and called`);
 }
 
 // ---- 9. THE .hidden UTILITY MUST EXIST (8.55) --------------------------------

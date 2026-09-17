@@ -29,26 +29,43 @@ window.Cloud = (() => {
   // ---- Where the provider sends the browser back to --------------------------
   // WEB: this origin, exactly as before.
   //
-  // NATIVE: an https:// URL on our own domain, claimed as a Universal Link
+  // NATIVE, WITH the in-app sheet (iOS, once the shell has registered the
+  // CCWebAuth plugin): the app's own scheme, CC_IOS_CALLBACK. The provider leg
+  // runs inside ASWebAuthenticationSession, which intercepts the navigation to
+  // that scheme within the session and hands the URL ONLY to the app that
+  // started it. A scheme here is therefore not the takeover hole described
+  // next: no other app is ever asked to open it, and it never reaches an
+  // address bar.
+  //
+  // NATIVE, WITHOUT the sheet (Android, or an iOS shell whose plugin did not
+  // register): an https:// URL on our own domain, claimed as a Universal Link
   // (iOS) / App Link (Android) and SCOPED to this one path. Deliberately NOT a
-  // private-use scheme like com.abarabrothers.…:// — that is a security choice,
-  // not a style one. This client uses the IMPLICIT flow (see the Google block
-  // below), so what comes back in the fragment is a LIVE ACCESS TOKEN, not an
-  // authorization code that is worthless without a verifier. Any app on the
-  // device can register a scheme, and iOS does not let the user choose which
-  // wins, so a scheme callback would hand whoever claimed it a working session
-  // — account takeover, not interception. A domain-bound link cannot be claimed
-  // by an app that cannot serve files from the domain.
+  // private-use scheme there — that is a security choice, not a style one. This
+  // client uses the IMPLICIT flow (see the Google block below), so what comes
+  // back in the fragment is a LIVE ACCESS TOKEN, not an authorization code that
+  // is worthless without a verifier. When the OS is the one routing the reply,
+  // any app on the device can register a scheme, iOS does not let the user
+  // choose which wins, and a scheme callback would hand whoever claimed it a
+  // working session — account takeover, not interception. A domain-bound link
+  // cannot be claimed by an app that cannot serve files from the domain.
   //
   // The host MUST match the `applinks:` entry in ios/App/App/App.entitlements;
   // a mismatch means iOS never opens the app and the player is stranded in
-  // Safari holding a token nothing will read. house-rules keeps them in step.
+  // Safari holding a token nothing will read. house-rules keeps them in step
+  // (8b), and pins CC_IOS_CALLBACK to the bundle id and this same path (8d).
   const NATIVE = !!(window.Capacitor && window.Capacitor.getPlatform
     && window.Capacitor.getPlatform() !== 'web');
   const RETURN_PATH = '/auth/callback';
-  const redirectTarget = () => (NATIVE
-    ? 'https://' + (window.CC_NATIVE_HOST || 'tanks.abarabrothers.com') + RETURN_PATH
-    : location.origin + '/');
+  // Decided at CALL time, not load time. The plugin object is defined by a
+  // document-start script so it is there either way; reading it lazily costs
+  // nothing and lets the headless test stand the plugin up per case.
+  const inApp = () => !!(NATIVE && window.CC_IOS_CALLBACK
+    && window.Capacitor.Plugins && window.Capacitor.Plugins.CCWebAuth);
+  const redirectTarget = () => (inApp()
+    ? window.CC_IOS_CALLBACK
+    : NATIVE
+      ? 'https://' + (window.CC_NATIVE_HOST || 'tanks.abarabrothers.com') + RETURN_PATH
+      : location.origin + '/');
 
   // The anti-login-CSRF flag (see consumeRedirect). On WEB it lives in
   // sessionStorage: per-tab, dies with the tab, so a crafted #access_token link
@@ -58,6 +75,9 @@ window.Cloud = (() => {
   // which would silently reject a legitimate return and look like a broken
   // button. localStorage there keeps the same guarantee (a flag this app set,
   // for a sign-in this app started) without losing it to a memory warning.
+  // (With the in-app sheet the WebView is never backgrounded, but the same
+  // store still holds: one store for both native carriers is one fewer branch
+  // to get wrong, and localStorage loses nothing the sheet needs.)
   const pendStore = () => (NATIVE ? window.localStorage : window.sessionStorage);
   const REFRESH_SKEW_S = 60;          // refresh this long before expiry
   let session = null;                  // { access_token, refresh_token, expires_at, user_id }
@@ -244,6 +264,52 @@ window.Cloud = (() => {
       } catch { return false; }
     },
 
+    // True when the shell can run the provider leg in an in-app sheet. app.js
+    // routes goSignIn() through the CCWebAuth plugin when this says so and
+    // through location.href otherwise; both MUST agree with redirectTarget(),
+    // so the predicate lives here, once.
+    inAppAuth() { return inApp(); },
+
+    // The sheet was dismissed or failed to open: no reply is coming, so the
+    // "expecting tokens" flag must not outlive the attempt. On native the flag
+    // is in localStorage and would otherwise stay armed until the next reply of
+    // ANY kind — a crafted Universal Link opened from a message included, which
+    // is exactly what the flag exists to refuse.
+    cancelPending() { try { pendStore().removeItem(PENDING); } catch {} },
+
+    // ---- Sign in with Apple, natively (iOS) --------------------------------
+    // The system sheet returns a signed identity token whose audience is the
+    // bundle id; GoTrue's id_token grant verifies it against Apple's keys and
+    // mints a session -- or, with link_identity and the guest's bearer, attaches
+    // the Apple identity to the guest's EXISTING account and returns a session
+    // for that same account (verified live: the bearer is checked only when
+    // link_identity is sent). No redirect, no fragment, no pending flag: the
+    // reply is a fetch response, and replay is refused by the nonce Apple
+    // embedded. NEVER falls back from a failed link to a fresh sign-in -- that
+    // mints a different account and orphans the guest's row, the trap linkUrl()
+    // refuses for the same reason. Resolves { ok } or { ok:false, code }.
+    async signInWithApple(idToken, nonce, link) {
+      const headers = { apikey: KEY, 'Content-Type': 'application/json' };
+      const body = { provider: 'apple', id_token: idToken, nonce };
+      if (link) {
+        try { await ensureSession(false); } catch { return { ok: false, code: 'no_session' }; }
+        headers.Authorization = 'Bearer ' + session.access_token;
+        body.link_identity = true;
+      }
+      let res, j = null;
+      try {
+        res = await fetch(BASE + '/auth/v1/token?grant_type=id_token', {
+          method: 'POST', headers, body: JSON.stringify(body), signal: timeout(),
+        });
+        try { j = await res.json(); } catch { j = null; }
+      } catch { return { ok: false, code: 'network' }; }
+      if (!res.ok || !j || !j.access_token || !j.refresh_token) {
+        return { ok: false, code: (j && (j.error_code || j.error)) || ('http_' + res.status) };
+      }
+      storeSession(fromTokenResponse(j));
+      return { ok: true };
+    },
+
     // ---- Google sign-in (8.47) ----------------------------------------------
     // The IMPLICIT flow, chosen deliberately for a zero-build classic-script
     // client: the browser goes to /authorize, Google comes back to
@@ -286,10 +352,11 @@ window.Cloud = (() => {
     // stores the arriving tokens as the session and scrubs them from the
     // address bar (they must not survive into history or a shared link).
     // Returns 'ok', 'error' (user cancelled / provider error), or false.
-    // `rawUrl` is the NATIVE carrier: the Universal Link the app was reopened
-    // with, handed over by the appUrlOpen listener. Same tokens and the same
-    // guard as the web path — only the carrier differs, because a packaged app
-    // has no address bar for the provider to redirect.
+    // `rawUrl` is the NATIVE carrier: either the scheme URL the in-app sheet
+    // resolved with (iOS, handed over by goSignIn) or the Universal Link the
+    // app was reopened with (handed over by the appUrlOpen listener). Same
+    // tokens and the same guard as the web path — only the carrier differs,
+    // because a packaged app has no address bar for the provider to redirect.
     consumeRedirect(rawUrl) {
       let frag;
       if (rawUrl) {

@@ -48,6 +48,8 @@ jobs:
           node --check server.js
           node --check public/game-core.js
           node --check public/app.js
+          node --check public/bay.js
+          node --check public/cloud.js
 
       - name: House rules
         run: node test/house-rules.mjs
