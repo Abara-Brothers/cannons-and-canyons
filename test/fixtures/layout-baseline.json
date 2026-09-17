@@ -70,9 +70,9 @@
         "type": {
           "title": 16,
           "boardName": 14.5,
-          "boardTag": 8,
+          "boardTag": 9.5,
           "lbarName": 23,
-          "lbarTag": 8.5
+          "lbarTag": 10
         },
         "overflow": [
           false,
@@ -463,9 +463,9 @@
         "type": {
           "title": 16,
           "boardName": 13.1,
-          "boardTag": 7.2,
+          "boardTag": 8.6,
           "lbarName": 20.8,
-          "lbarTag": 7.7
+          "lbarTag": 9.1
         },
         "overflow": [
           false,
@@ -856,9 +856,9 @@
         "type": {
           "title": 16,
           "boardName": 10.4,
-          "boardTag": 5.7,
+          "boardTag": 6.8,
           "lbarName": 16.5,
-          "lbarTag": 6.1
+          "lbarTag": 7.2
         },
         "overflow": [
           false,
@@ -1249,9 +1249,9 @@
         "type": {
           "title": 16,
           "boardName": 8.8,
-          "boardTag": 4.9,
+          "boardTag": 5.8,
           "lbarName": 14,
-          "lbarTag": 5.2
+          "lbarTag": 6.1
         },
         "overflow": [
           false,
@@ -1642,9 +1642,9 @@
         "type": {
           "title": 16,
           "boardName": 13.1,
-          "boardTag": 7.2,
+          "boardTag": 8.6,
           "lbarName": 20.8,
-          "lbarTag": 7.7
+          "lbarTag": 9.1
         },
         "overflow": [
           false,
@@ -2035,9 +2035,9 @@
         "type": {
           "title": 16,
           "boardName": 14.8,
-          "boardTag": 8.2,
+          "boardTag": 9.7,
           "lbarName": 23.5,
-          "lbarTag": 8.7
+          "lbarTag": 10.2
         },
         "overflow": [
           false,
@@ -2428,9 +2428,9 @@
         "type": {
           "title": 16,
           "boardName": 13,
-          "boardTag": 7.2,
+          "boardTag": 8.5,
           "lbarName": 20.6,
-          "lbarTag": 7.6
+          "lbarTag": 8.9
         },
         "overflow": [
           false,
@@ -2826,9 +2826,9 @@
         "type": {
           "title": 16,
           "boardName": 18.6,
-          "boardTag": 10.2,
+          "boardTag": 12.2,
           "lbarName": 29.5,
-          "lbarTag": 10.9
+          "lbarTag": 12.8
         },
         "overflow": [
           false,
@@ -3224,9 +3224,9 @@
         "type": {
           "title": 16,
           "boardName": 15.9,
-          "boardTag": 8.8,
+          "boardTag": 10.4,
           "lbarName": 25.3,
-          "lbarTag": 9.3
+          "lbarTag": 11
         },
         "overflow": [
           false,
@@ -3622,9 +3622,9 @@
         "type": {
           "title": 16,
           "boardName": 12.8,
-          "boardTag": 7,
+          "boardTag": 8.4,
           "lbarName": 20.2,
-          "lbarTag": 7.5
+          "lbarTag": 8.8
         },
         "overflow": [
           false,
@@ -4020,9 +4020,9 @@
         "type": {
           "title": 16,
           "boardName": 11.6,
-          "boardTag": 6.4,
+          "boardTag": 7.6,
           "lbarName": 18.4,
-          "lbarTag": 6.8
+          "lbarTag": 8
         },
         "overflow": [
           false,
@@ -4418,9 +4418,9 @@
         "type": {
           "title": 16,
           "boardName": 7.9,
-          "boardTag": 4.4,
+          "boardTag": 5.2,
           "lbarName": 12.5,
-          "lbarTag": 4.6
+          "lbarTag": 5.4
         },
         "overflow": [
           false,
@@ -4816,9 +4816,9 @@
         "type": {
           "title": 16,
           "boardName": 10.8,
-          "boardTag": 6,
+          "boardTag": 7.1,
           "lbarName": 17.1,
-          "lbarTag": 6.3
+          "lbarTag": 7.4
         },
         "overflow": [
           false,
@@ -5209,9 +5209,9 @@
         "type": {
           "title": 16,
           "boardName": 8.6,
-          "boardTag": 4.7,
+          "boardTag": 5.6,
           "lbarName": 13.6,
-          "lbarTag": 5
+          "lbarTag": 5.9
         },
         "overflow": [
           false,

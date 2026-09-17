@@ -85,6 +85,9 @@ run solo_engine node test/solo_engine.mjs
   # Sign in with Apple, natively: the id_token grant, the link variant with the
   # guest's bearer, and every refusal. Headless — the same stub harness.
   run apple_native    node test/apple_native.mjs
+  # whoami()'s per-provider account list, the source of the account chip and
+  # the Bay controls row. Headless — the same stub harness.
+  run account         node test/account.mjs
 run validate    bash tools/backup/test-validate.sh
 run hitbox node test/hitbox.mjs
 run golf_hazards node test/golf_hazards.mjs
@@ -134,6 +137,9 @@ else
   # arrow, driven in a real page with the server stopped and resumed. Also skips
   # without Chrome — a SKIP here means the offline path shipped unproven.
   run offline node test/offline.mjs
+  # FOURTH client-side suite: the account chip, the Account row, the modal
+  # lines and the home-only type size, in a real page. Skips without Chrome.
+  run account_ui node test/account_ui.mjs
   # SECOND client-side suite, and the only one that looks at LAYOUT. Drives the
   # real bundle in headless Chrome at 14 exact viewports and diffs the measured
   # geometry against test/fixtures/layout-baseline.json. It is a change

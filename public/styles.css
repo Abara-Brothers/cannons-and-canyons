@@ -1841,6 +1841,30 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .chip svg{width:calc(13 * var(--u));height:calc(13 * var(--u));fill:currentColor;flex:none}
   #bay .chip:hover{border-color:rgba(255,180,107,.7);color:#ffd6ae;background:rgba(30,22,14,.8)}
   #bay .chip.sq{width:calc(27 * var(--u));padding:0;justify-content:center}
+  /* Account chip: provider marks in the chip's own colour; a guest reads quieter. */
+  #bay .chip.acc svg{width:calc(12 * var(--u));height:calc(12 * var(--u))}
+  #bay .chip.acc svg + svg{margin-left:calc(-1 * var(--u))}
+  #bay .chip.dim{color:#8494b8;border-style:dashed}
+  /* Bay controls, Account row: one line per linked provider. */
+  #bay .row .rd .acl{display:flex;align-items:center;gap:calc(5 * var(--u))}
+  #bay .row .rd .acl svg{width:calc(10 * var(--u));height:calc(10 * var(--u));fill:currentColor;flex:none}
+
+  /* HOME TYPE SIZE (owner, 2026-09-18): the mono labels on the home screen ran
+     7.5-9u, under 9 CSS px on a phone, and were hard to read. Only the home
+     screen grows (render() stamps data-scr on #bay) and only its small text:
+     a fifth larger, rounded to the half unit. Headlines and numbers are untouched.
+     Every rule here overrides one above by specificity, so the originals stay the
+     single source for every other screen. */
+  #bay[data-scr=home] .bof{font-size:calc(9 * var(--u))}
+  #bay[data-scr=home] .mark span{font-size:calc(9.5 * var(--u))}
+  #bay[data-scr=home] .btg{font-size:calc(9.5 * var(--u))}
+  #bay[data-scr=home] .st .std{font-size:calc(9.5 * var(--u))}
+  #bay[data-scr=home] .ro .rk{font-size:calc(9.5 * var(--u))}
+  #bay[data-scr=home] .sor .smt{font-size:calc(9.5 * var(--u))}
+  #bay[data-scr=home] .bpl{font-size:calc(10 * var(--u))}
+  #bay[data-scr=home] .ph{font-size:calc(10 * var(--u))}
+  #bay[data-scr=home] .ltg{font-size:calc(10 * var(--u))}
+  #bay[data-scr=home] .chip{font-size:calc(10.5 * var(--u))}
 
   /* -------------------------------------------------------- mission arc -- */
   #bay .boards{position:absolute;left:calc(18 * var(--u));right:calc(18 * var(--u));top:calc(48 * var(--u));height:calc(104 * var(--u));display:flex;gap:calc(12 * var(--u));

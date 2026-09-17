@@ -422,6 +422,12 @@ window.Cloud = (() => {
           anonymous: !!u.is_anonymous,
           google: !!g,
           apple: !!a,
+          // Every linked provider with the address it carries, for the account
+          // chip and the Bay controls row. Apple first, as the provider chooser
+          // lists it, so the order never changes between renders.
+          accounts: [['apple', a], ['google', g]]
+            .filter((x) => x[1])
+            .map((x) => ({ provider: x[0], email: (x[1].identity_data && x[1].identity_data.email) || null })),
           email: u.email
             || (g && g.identity_data && g.identity_data.email)
             || (a && a.identity_data && a.identity_data.email)

@@ -1078,6 +1078,10 @@ async function refreshAccountChip() {
   const btn = $('accountBtn');
   if (!btn || !window.Cloud || !Cloud.enabled()) return;
   const who = await Cloud.whoami();
+  // The Launch Bay draws the account chip and the Bay controls row from this,
+  // and redraws on the event at the end: the chip must change the moment a
+  // sign-in or sign-out lands, not on the next screen change.
+  window.CC_ACCOUNT = who || null;
   btn.classList.remove('hidden');
   if (who && !who.anonymous) {
     btn.dataset.state = 'in';
@@ -1090,9 +1094,10 @@ async function refreshAccountChip() {
   } else {
     btn.dataset.state = 'out';
     // No session AND no way to start one: the chip has nothing to offer.
-    if (!CAN_SIGN_IN) { btn.classList.add('hidden'); return; }
-    $('accountLabel').textContent = 'Sign in — save your progress';
+    if (!CAN_SIGN_IN) btn.classList.add('hidden');
+    else $('accountLabel').textContent = 'Sign in — save your progress';
   }
+  document.dispatchEvent(new CustomEvent('cc:account'));
 }
 $('accountBtn').onclick = () => {
   Audio.ensure();
@@ -1104,11 +1109,23 @@ $('accountBtn').onclick = () => {
   }
   // guest / in: the account panel — where deletion and export live, because
   // both stores require them reachable IN-APP (ADR-003).
-  $('accWho').textContent = state === 'in'
-    ? $('accountLabel').textContent.replace('Signed in · ', 'Signed in as ')
-    : (CAN_SIGN_IN
+  // Signed in: one line per linked provider with the address it carries, so a
+  // player with Apple AND Google linked sees both. Text nodes, never markup:
+  // an address is provider-supplied input.
+  const who = $('accWho'); who.textContent = '';
+  const linked = (state === 'in' && window.CC_ACCOUNT && window.CC_ACCOUNT.accounts) || [];
+  if (state === 'in' && !linked.length) {
+    who.textContent = $('accountLabel').textContent.replace('Signed in · ', 'Signed in as ');
+  } else if (state === 'in') {
+    linked.forEach((a, i) => {
+      if (i) who.appendChild(document.createElement('br'));
+      who.appendChild(document.createTextNode('Signed in with ' + (a.provider === 'apple' ? 'Apple' : 'Google') + ' · ' + (a.email || 'connected')));
+    });
+  } else {
+    who.textContent = CAN_SIGN_IN
       ? 'Playing as a guest. Sign in and your progress survives losing this device.'
-      : 'Playing as a guest. Your progress is saved on this device.');
+      : 'Playing as a guest. Your progress is saved on this device.';
+  }
   $('accLinkBtn').textContent = PROVIDERS.length === 1
     ? 'Keep my progress — sign in with Google'
     : 'Keep my progress — sign in';
@@ -1342,7 +1359,7 @@ async function exportMyData() {
     exported_at: new Date().toISOString(),
     account_id: Cloud.userId(),
     account_type: who ? (who.anonymous ? 'guest' : 'linked') : 'unknown',
-    sign_in: who ? { google_linked: who.google, email: who.email || null } : null,
+    sign_in: who ? { google_linked: who.google, apple_linked: who.apple, email: who.email || null } : null,
     callsign: savedName() || null,
     cloud_profile: row,
     local_progression: progressionSnapshot(),

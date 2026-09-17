@@ -87,6 +87,10 @@ const MODE_IC = {
 const SWORD = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.8 2.6l1.6 1.6-9.4 11.2-2-2-1.4-.6z"/><path d="M7.6 14.2l2.2 2.2-2 2-1.3 3-3-1.3 2-2-1.1-2.7 2.5-2.5z"/></svg>';
 const CROWN = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 18h18l-1.2-9-4.6 3.4L12 5.6 8.8 12.4 4.2 9z"/><rect x="4.4" y="19.2" width="15.2" height="2" rx="1"/></svg>';
 const IC = {
+  // The sign-in provider marks, single colour like every other icon here. The
+  // Apple shape is the one index.html's provider button carries.
+  apple:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/></svg>',
+  google:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .307 5.387.307 12s5.56 12 12.173 12c3.573 0 6.267-1.173 8.373-3.36 2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2.053H12.48z"/></svg>',
   back:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" ' +
        'stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5L8 12l6.5 6.5"/></svg>',
   play:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6.4 3.5a1 1 0 0 1 1.5-.9l12 8.5a1 1 0 0 1 0 1.8' +
@@ -342,6 +346,24 @@ async function loadSorties() {
     if (current === 'home') render('home');   // the panel appears once there is something in it
   } catch {} finally { sorties.busy = false; }
 }
+// The account chip: who this device is signed in as, at a glance. It reads the
+// state the old #accountBtn carries (in / guest / out) plus CC_ACCOUNT from
+// refreshAccountChip(), and taps straight into that button, so every account
+// path (sign in, keep my progress, manage, sign out) stays the one that exists.
+// Absent exactly when that button is hidden: no session and no way to start one.
+function accountChip() {
+  const btn = $('accountBtn');
+  if (!btn || btn.classList.contains('hidden')) return '';
+  const st = btn.dataset.state || 'out';
+  if (st === 'in') {
+    const marks = ((window.CC_ACCOUNT && window.CC_ACCOUNT.accounts) || []).map((a) => IC[a.provider] || '').join('');
+    return '<button class="chip acc" data-old="accountBtn" title="Your account">' + marks + '<b>Signed in</b></button>';
+  }
+  return '<button class="chip acc dim" data-old="accountBtn" title="' + (st === 'guest' ? 'Keep my progress' : 'Sign in') + '">'
+    + (st === 'guest' ? 'Guest' : 'Sign in') + '</button>';
+}
+const PROVIDER_NAME = { apple: 'Apple', google: 'Google' };
+
 function sortiesPanel() {
   const rows = sorties.rows.map((r) =>
     '<button class="sor" data-rematch="' + esc(r.mode) + '" data-vs="' + (r.opponent === 'Computer' ? 'cpu' : 'friend') + '" title="Play ' + esc(modeOf(r.mode).name) + ' again">'
@@ -420,7 +442,15 @@ SCREENS.settings = function () {
   ].map((r) => '<div class="row"><span class="rt"><span class="rn2">' + r[1] + '</span><span class="rd">' + r[2] + '</span></span>'
     + '<button class="rk2' + (r[3] ? ' on' : '') + '" data-toggle="' + r[0] + '" aria-label="' + r[1] + '"' + (r[4] ? ' disabled style="opacity:.4"' : '') + '><i></i><u>' + (r[3] ? 'On' : 'Off') + '</u></button></div>').join('');
   const row = (n, d, btn, act) => '<div class="row"><span class="rt"><span class="rn2">' + n + '</span><span class="rd">' + d + '</span></span>' + (btn ? '<button class="sbtn" ' + act + '>' + btn + '</button>' : '') + '</div>';
-  const right = row('Account', accState === 'in' ? 'Signed in &mdash; progress syncs across devices' : accState === 'guest' ? 'Guest &mdash; sign in to keep progress across devices' : 'Sign in to keep progress across devices', accState === 'out' ? 'Sign in' : 'Manage', 'data-old="accountBtn"')
+  // Signed in: one line per linked provider, mark + name + address, so Apple and
+  // Google both show when both are linked. esc() on the address: provider input.
+  const linked = (accState === 'in' && window.CC_ACCOUNT && window.CC_ACCOUNT.accounts) || [];
+  const accDesc = accState === 'in'
+    ? (linked.length
+      ? linked.map((a) => '<span class="acl">' + (IC[a.provider] || '') + (PROVIDER_NAME[a.provider] || esc(a.provider)) + ' &middot; ' + esc(a.email || 'connected') + '</span>').join('')
+      : 'Signed in &mdash; progress syncs across devices')
+    : accState === 'guest' ? 'Guest &mdash; sign in to keep progress across devices' : 'Sign in to keep progress across devices';
+  const right = row('Account', accDesc, accState === 'out' ? 'Sign in' : 'Manage', 'data-old="accountBtn"')
     + row('Callsign', esc(s.name), 'Roll', 'data-roll')
     + row('Tank paint', esc(s.skin.name) + ' is fitted', 'Open', 'data-go="paint"')
     + row('How to play', 'The six-chapter field manual', 'Open', 'data-old="helpHomeBtn"')
@@ -428,7 +458,8 @@ SCREENS.settings = function () {
     + '<div class="card" style="margin-top:' + u(10) + ';padding:' + u(10) + ' ' + u(13) + '"><span class="lbl">Built by</span>'
     + '<div style="font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:' + u(19) + ';text-transform:uppercase;letter-spacing:.05em;margin-top:' + u(4) + ';color:#eef3ff">Abara Brothers</div>'
     + '<div style="font-size:' + u(10.5) + ';color:#7f8fb5;margin-top:' + u(4) + ';font-weight:500">Cannons &amp; Canyons &mdash; landscape only, best with a friend.</div></div>';
-  return chrome('Bay controls', accState === 'in' ? 'Signed in &mdash; progress syncs across devices' : 'Guest &mdash; progress is stored on this device', 'Abara Brothers',
+  const withWhom = linked.length ? ' with ' + linked.map((a) => PROVIDER_NAME[a.provider] || esc(a.provider)).join(' and ') : '';
+  return chrome('Bay controls', accState === 'in' ? 'Signed in' + withWhom + ' &mdash; progress syncs across devices' : 'Guest &mdash; progress is stored on this device', 'Abara Brothers',
     '<div class="set" style="height:' + u(300) + '"><div style="flex:1">' + T + '</div><div style="flex:1">' + right + '</div></div>', '');
 };
 
@@ -643,6 +674,7 @@ SCREENS.home = function () {
     + '<div class="top">'
     +   '<div class="mark">Cannons <i>&amp;</i> Canyons<span>Abara Brothers &middot; Launch Bay</span></div>'
     +   '<div class="grow"></div>'
+    +   accountChip()
     +   '<button class="chip" data-roll title="Roll a new callsign">' + SWORD + '<b>' + esc(s.name) + '</b></button>'
     +   '<button class="chip" data-go="career">' + CROWN + '<b>' + s.wins + '</b> W</button>'
     +   '<button class="chip sq" data-toggle="sound" title="Sound">' + (has('UI_IC') ? (s.muted ? UI_IC.speakerOff : UI_IC.speakerOn) : '') + '</button>'
@@ -729,6 +761,9 @@ function render(name) {
   const entering = !host.firstChild || base(next) !== base(current);
   const html = SCREENS[next]();
   current = next;
+  // Which screen is up, for CSS that must apply to one screen only (the home
+  // type sizes). Set before the markup lands so the first paint is right.
+  host.dataset.scr = next;
   if (entering) {
     host.innerHTML = html;
     host.classList.add('enter');
@@ -828,6 +863,14 @@ document.addEventListener('click', (e) => {
 });
 
 window.Bay = { show: render, go, back, state, tankURL, MODES, haptic, rankFor, applyMotion };
+
+// refreshAccountChip() fires this the moment a session changes; the two screens
+// that show the account (home chip, Bay controls row) redraw in place. Only
+// while the bay is the screen on stage: a match must never be repainted over.
+document.addEventListener('cc:account', () => {
+  const host = $('bay');
+  if (host && host.classList.contains('active') && (current === 'home' || current === 'settings')) render(current);
+});
 applyMotion();
 
 // LOBBY FEED. renderLobby/showLobby are the game's own; wrap them so the bay
