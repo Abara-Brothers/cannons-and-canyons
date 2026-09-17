@@ -68,6 +68,7 @@ const modeOf = (id) => MODES.find((m) => m.id === id) || MODES[0];
 // What the pending lobby says for an invite-room mode: why it needs a
 // connection, and what one player can still do on this device.
 const SOLO_COPY = {
+  duel:   { need: 'Duel needs a connection to bring in your friend.', can: 'You can fight a CPU commander on this device.' },
   boss:   { need: 'Boss Fight needs a connection to bring in a second commander.', can: 'You can take on WARLORD-7 alone on this device.' },
   aliens: { need: 'Alien Invasion needs a connection to bring in a second commander.', can: 'You can hold the line alone on this device.' },
   ffa:    { need: 'Free-for-all needs a connection to invite commanders.', can: 'You can fight CPU commanders on this device.' },
@@ -371,7 +372,7 @@ function sortiesPanel() {
     + '<span class="smt">' + esc(SHORT[r.mode] || r.mode) + ' &middot; ' + esc(ago(r.when)) + '</span></span>'
     + '<span class="res ' + (r.result === 'W' ? 'w' : r.result === 'L' ? 'l' : '') + '">' + esc(r.result || '&ndash;') + '</span>'
     + IC.again.replace('<svg', '<svg class="rag"') + '</button>').join('');
-  return '<div class="pnl' + (rows ? '' : ' hidden') + '" style="left:' + u(18) + ';top:' + u(162) + ';width:' + u(196) + ';height:' + u(192) + '"><div class="ph">Recent sorties<s></s></div>' + rows + '</div>';
+  return '<div class="pnl' + (rows ? '' : ' hidden') + '" style="left:' + u(18) + ';top:' + u(174) + ';width:' + u(196) + ';height:' + u(192) + '"><div class="ph">Recent sorties<s></s></div>' + rows + '</div>';
 }
 
 /* ---- screens ---------------------------------------------------------------- */
@@ -566,7 +567,7 @@ SCREENS.lobby = function () {
   // the header's Back arrow is routed through it (see the click handler).
   const foot = '<button class="ghost" data-old="cancelBtn">Cancel</button><span class="grow"></span>'
     + (pending
-      ? (st === 'connecting' ? '' : '<button class="go" data-solo>Play solo' + IC.play + '</button>')
+      ? (st === 'connecting' ? '' : '<button class="go" data-solo>' + (mode.id === 'duel' || mode.id === 'ffa' ? 'Play vs Computer' : 'Play solo') + IC.play + '</button>')
       : '<button class="go' + (canStart ? '' : ' hidden') + '" ' + (filled < minSeats ? 'disabled' : 'data-old="startMatchBtn"') + '>' + startLabel + IC.play + '</button>');
   return chrome(title, esc(mode.name) + ' &middot; ' + rackPicks().slice(0, mode.draft).length + ' weapons loaded', pending ? (st === 'offline' ? 'Offline' : st === 'connecting' ? 'Waiting room' : 'Retrying') : solo ? 'Solo drop' : searching ? 'Quick match' : 'Waiting room',
     '<div class="doors"><span class="door" style="left:0"></span><span class="door" style="right:0"></span></div>'
@@ -652,7 +653,9 @@ SCREENS.home = function () {
     '<button class="board' + (x.id === m.id ? ' on' : '') + '" style="transform:rotate(' + arc[i][0] + 'deg) translateY(' + u(arc[i][1]) + ')" '
     + 'data-set="mode=' + x.id + '" title="' + esc(x.name) + '">'
     + '<span class="bcard"><img src="' + art(x.card) + '" alt=""><span class="bsc"></span><span class="barm"></span>'
-    + '<span class="bic">' + MODE_IC[x.id] + '</span><span class="bpl">' + esc(x.players) + '</span>' + offBadge(x.id)
+    // No offline badge on the home boards (owner, 2026-09-18); the Mission
+    // board keeps its badge, and offline play itself is unchanged.
+    + '<span class="bic">' + MODE_IC[x.id] + '</span><span class="bpl">' + esc(x.players) + '</span>'
     + '<span class="blab"><span class="bnm">' + esc(x.name) + '</span><span class="btg">' + esc(x.tag) + '</span></span></span></button>').join('');
 
 
@@ -682,13 +685,15 @@ SCREENS.home = function () {
     + '</div>'
     + '<div class="boards">' + boards + '</div>'
     + sortiesPanel()
-    + '<div class="pnl" style="right:' + u(18) + ';top:' + u(162) + ';width:' + u(196) + ';height:' + u(192) + '"><div class="ph">Bay stations<s></s></div>' + stations + '</div>'
+    + '<div class="pnl" style="right:' + u(18) + ';top:' + u(174) + ';width:' + u(196) + ';height:' + u(192) + '"><div class="ph">Bay stations<s></s></div>' + stations + '</div>'
     + '<div class="lbar">'
     +   '<span class="lic">' + MODE_IC[m.id] + '</span>'
     +   '<span style="display:block"><span class="lnm">' + esc(m.name) + '</span><span class="ltg">' + esc(m.tag) + '</span></span>'
     +   '<span class="lsep"></span>'
-    // One-tap LAUNCH removed the concept's only route into Setup, so the
-    // readouts are that route: tap what you want to change.
+    // Launch AND the readouts open Match setup (owner, 2026-09-18): the one-tap
+    // create is gone from home, and the bay doors open from the armoury, so
+    // every launch passes the mode brief and the rack. data-launch stays the
+    // armoury's word for the real create.
     +   '<button class="ros" data-go="setup" title="Match setup">'
     +   '<span class="ro"><span class="rk">Players</span><span class="rv">' + esc(players) + '</span></span>'
     +   '<span class="ro"><span class="rk">Weapon draft</span><span class="rv"><em>' + m.draft + '</em> picks</span></span>'
@@ -696,7 +701,7 @@ SCREENS.home = function () {
     +   '</button>'
     +   '<span class="grow"></span>'
     +   '<button class="ghost" data-go="join">' + IC.keypad + 'Join code</button>'
-    +   '<button class="launch" data-launch>' + IC.play + 'Launch</button>'
+    +   '<button class="launch" data-go="setup">' + IC.play + 'Launch</button>'
     + '</div>'
     + '</div></div>';
 };
@@ -762,8 +767,10 @@ function render(name) {
   const html = SCREENS[next]();
   current = next;
   // Which screen is up, for CSS that must apply to one screen only (the home
-  // type sizes). Set before the markup lands so the first paint is right.
-  host.dataset.scr = next;
+  // geometry and type sizes, the service record sizes). Set before the markup
+  // lands so the first paint is right. The BASE screen: the join panel renders
+  // the whole home under its overlay, so it must not drop home's rules.
+  host.dataset.scr = base(next);   // join is home under an overlay: it keeps home's geometry and sizes
   if (entering) {
     host.innerHTML = html;
     host.classList.add('enter');

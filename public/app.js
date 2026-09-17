@@ -1642,11 +1642,14 @@ let localFallback = null;  // pending server-unreachable fallback timer
 //   after a short grace when the server merely cannot be raised (deploy
 //   restart, cold start, captive portal).
 //   soloOfferable: a 'create' for an invite room one player can still play
-//   (Boss, Aliens, Golf, Free-for-all). These NEVER go local by themselves:
-//   the lobby shows where things stand and OFFERS Play solo. Golf is an
-//   invite room too (two seats, a code, copy buttons), so the old automatic
-//   solo round is replaced by the same offer — one rule for every invite room.
-const SOLO_MODES = ['boss', 'aliens', 'golf', 'ffa'];
+//   (Duel, Boss, Aliens, Golf, Free-for-all). These NEVER go local by
+//   themselves: the lobby shows where things stand and OFFERS Play solo (Play
+//   vs Computer for Duel and Free-for-all). Golf is an invite room too (two
+//   seats, a code, copy buttons), so the old automatic solo round is replaced
+//   by the same offer — one rule for every invite room. Duel joined on
+//   2026-09-18 (owner): with Friend selected and no connection it used to be a
+//   dead end ("You are offline"); now it offers the CPU duel like the others.
+const SOLO_MODES = ['duel', 'boss', 'aliens', 'golf', 'ffa'];
 const soloByConstruction = (m) => m.type === 'ai';
 const soloOfferable = (m) => m.type === 'create' && SOLO_MODES.includes(m.mode);
 // THE FRAME PLAY SOLO SENDS. Boss/Aliens/Golf: the queued create, verbatim —
@@ -1657,7 +1660,11 @@ const soloOfferable = (m) => m.type === 'create' && SOLO_MODES.includes(m.mode);
 // one message shape, online and offline.
 const soloFrameFor = (m) => (m.mode === 'ffa'
   ? { type: 'ai', mode: 'ffa', max: m.max, difficulty: cpuDifficulty, name: m.name, skin: m.skin }
-  : m);
+  // Duel's Play vs Computer sends the HISTORICAL ai frame, key for key (no
+  // mode, no max): the very message the Computer choice in Match setup sends.
+  : m.mode === 'duel'
+    ? { type: 'ai', difficulty: cpuDifficulty, name: m.name, skin: m.skin }
+    : m);
 // What a mode offers with no server, for the bay's boards. DERIVED from the
 // two predicates above, never listed separately, so a badge can never promise
 // what intent() will not deliver.
@@ -1822,8 +1829,9 @@ function playSolo() {
   pendingIntent = null;
   clearTimeout(localFallback); localFallback = null;
   lobbyWait = null;
-  soloAutoStart = m.mode !== 'ffa';       // ffa's 'ai' frame starts the match itself; the others answer with a lobby first
-  startLocal(soloFrameFor(m));
+  const frame = soloFrameFor(m);
+  soloAutoStart = !soloByConstruction(frame);   // an 'ai' frame (Duel, FFA) starts the match itself; the others answer with a lobby first
+  startLocal(frame);
 }
 
 function handle(m) {
@@ -2898,6 +2906,11 @@ canvas.addEventListener('pointerdown', (e) => {
   // A tap during the killcam skips it, and is consumed: without the early
   // return the same press would anchor an aim drag as the bars retract.
   if (skipKillcam()) return;
+  // GOLF: a tap on the off-screen flag marker pans the view to the cup and is
+  // consumed here — it must never anchor an aim drag.
+  // Only a FIRST finger: a second one landing on the marker mid-aim is a pinch
+  // and must reach the two-pointer branch below, never pan the view.
+  if (pointers.size === 0 && cupMarkerHit(evX(e), evY(e))) { panToCup(); return; }
   pointers.set(e.pointerId, { x: evX(e), y: evY(e) });
   guideHoldOff = performance.now() + 2600;   // the aim guide yields to a real finger
   // Capture is a nicety (keeps the drag alive off-canvas), never a dependency —
@@ -3917,6 +3930,11 @@ function applyResolve(m) {
     releaseAllTerrain();                                   // free whatever no blast claimed
   }
   S.tanks = m.tanks.map(t => ({ x: t.x, y: t.y }));
+  // GOLF: your ball has come to rest — drop any flag-marker pan, or the camera
+  // (your tank + S.panX) would frame cup + shot length instead of your new lie.
+  // panToCup() is tank-relative by design; the pan buttons and pinch share the
+  // same offset and are cleared with it. The opponent's stroke leaves yours.
+  if (S.mode === 'golf' && m.by === S.you) S.panX = 0;
   // HP only ever falls within a match — take the min so a burn 'dot' that
   // already arrived can't be undone by this (higher) pre-burn snapshot.
   S.hp = (m.hp || S.hp).map((h, i) => Math.min(S.hp[i] ?? h, h));
@@ -5025,6 +5043,7 @@ function draw() {
     }
     drawWarp();
     drawEdgeIndicators();
+    drawCupIndicator();
     drawAim();
     drawProjectiles();
     drawMuzzleFlashes();      // over the gun and the shell, under damage numbers
@@ -5332,6 +5351,65 @@ function drawEdgeIndicators() {
       ctx.textAlign = 'left';
     }
   }
+}
+
+// ---- Golf: the off-screen flag -----------------------------------------------
+// Owner (2026-09-18): on a long hole the cup is often off-screen and nothing
+// said where. Same language as the off-screen tank marker above — a chevron at
+// the edge and a distance — plus a small flag glyph in the pin's own colours.
+// It sits one band ABOVE the tank markers (those stagger downward), so the cup
+// and your own tank at the same height never overlap. Gone once you have holed
+// out, and whenever the cup is in view. Pure: draw and tap both read it.
+function cupMarker() {
+  const g = S.golf;
+  if (S.mode !== 'golf' || !g || !g.cup || golfHoledMe()) return null;
+  const sx = wx2s(g.cup.x);
+  if (sx >= -10 && sx <= view.cssW + 10) return null;
+  const left = sx < 0;
+  const ex = left ? 14 : view.cssW - 14;
+  const ey = Math.min(view.cssH - 60, Math.max(70, wy2s(surfaceAt(g.cup.x) - 300))) - 30;
+  const me = S.tanks[S.you];
+  return { left, ex, ey, dist: me ? Math.abs(g.cup.x - me.x) : null };
+}
+function drawCupIndicator() {
+  const m = cupMarker(); if (!m) return;
+  const { left, ex, ey } = m;
+  ctx.fillStyle = '#ff3b30';                                    // the pin's flag red
+  ctx.beginPath();
+  if (left) { ctx.moveTo(ex - 8, ey); ctx.lineTo(ex + 8, ey - 8); ctx.lineTo(ex + 8, ey + 8); }
+  else { ctx.moveTo(ex + 8, ey); ctx.lineTo(ex - 8, ey - 8); ctx.lineTo(ex - 8, ey + 8); }
+  ctx.closePath(); ctx.fill();
+  const fx = left ? ex + 18 : ex - 18;                          // the pole, beside the chevron
+  ctx.fillStyle = '#e8ecf2';                                    // the pin's pole white
+  ctx.fillRect(fx - 1, ey - 11, 2, 22);
+  ctx.fillStyle = '#ff3b30';
+  ctx.beginPath();
+  if (left) { ctx.moveTo(fx + 1, ey - 11); ctx.lineTo(fx + 13, ey - 6); ctx.lineTo(fx + 1, ey - 1); }
+  else { ctx.moveTo(fx - 1, ey - 11); ctx.lineTo(fx - 13, ey - 6); ctx.lineTo(fx - 1, ey - 1); }
+  ctx.closePath(); ctx.fill();
+  if (m.dist != null) {
+    ctx.fillStyle = '#e8ecf2';
+    ctx.font = '800 14px system-ui, sans-serif';
+    ctx.textAlign = left ? 'left' : 'right';
+    ctx.fillText(`${(m.dist / 1000).toFixed(1)}k`, left ? fx + 18 : fx - 18, ey + 5);
+    ctx.textAlign = 'left';
+  }
+}
+// The marker's touch target: chevron, glyph and distance, padded to a
+// comfortable tap. Draw-space coordinates, like the pointer handler's.
+function cupMarkerHit(x, y) {
+  const m = cupMarker(); if (!m) return false;
+  const x0 = m.left ? m.ex - 14 : m.ex - 84, x1 = m.left ? m.ex + 84 : m.ex + 14;
+  return x >= x0 && x <= x1 && Math.abs(y - m.ey) <= 24;
+}
+// Owner decision: a tap on the marker pans the view to the cup. The camera
+// centres on your tank plus S.panX (golf skips the survey blend), so this
+// offset puts the cup mid-screen; same clamp as the pan buttons. The pan
+// buttons bring the view back.
+function panToCup() {
+  const g = S.golf; if (!g || !g.cup) return;
+  const focus = S.tanks[S.you] || S.tanks[0]; if (!focus) return;
+  S.panX = Math.max(-WW(), Math.min(WW(), g.cup.x - focus.x));
 }
 
 function tankScreen(i) {

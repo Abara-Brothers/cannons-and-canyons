@@ -251,7 +251,7 @@ const PROBE = (screen) => `(() => {
       lbar:     r('#bay .lbar'),
       pnl:      r('#bay .pnl:not(.hidden)'),
       tankw:    r('#bay .tankw'),
-      launch:   r('#bay [data-launch]'),
+      launch:   r('#bay .launch, #bay [data-launch]'),   // home's Launch, or the armoury's bay-doors button
     },
     // Type size is the thing that degrades invisibly when a design frame is
     // scaled down: the boxes can all be in proportion while the words become

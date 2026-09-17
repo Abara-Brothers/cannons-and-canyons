@@ -74,7 +74,7 @@ await send('Page.enable'); await send('Runtime.enable');
 const STATE = `({ local: S.local, playing: S.playing, mode: S.mode, n: S.n, names: S.names, kinds: S.kinds, boss: S.boss, code: S.code, connected: S.connected,
   pend: (typeof pendingIntent === 'undefined' || !pendingIntent) ? null : pendingIntent.mode, lw: lobbyWait,
   text: document.getElementById('bay').textContent, wait: !!document.querySelector('#bay .seat.wait'),
-  solo: !!document.querySelector('#bay [data-solo]'), home: !!document.querySelector('#bay .lbar'), back: !!document.querySelector('#bay .bk'),
+  solo: !!document.querySelector('#bay [data-solo]'), soloLabel: (document.querySelector('#bay [data-solo]') || { textContent: null }).textContent, home: !!document.querySelector('#bay .lbar'), back: !!document.querySelector('#bay .bk'),
   toasts: window.__toasts || [], waitSeen: !!window.__waitSeen })`;
 const state = () => ev(STATE);
 
@@ -105,7 +105,8 @@ async function pendingOffer(mode, waitMs = 1500) {
   await sleep(waitMs);
   return state();
 }
-const NEED = { boss: 'Boss Fight needs a connection', aliens: 'Alien Invasion needs a connection', golf: 'Artillery Golf needs a connection', ffa: 'Free-for-all needs a connection' };
+const NEED = { duel: 'Duel needs a connection', boss: 'Boss Fight needs a connection', aliens: 'Alien Invasion needs a connection', golf: 'Artillery Golf needs a connection', ffa: 'Free-for-all needs a connection' };
+const LABEL = { duel: 'Play vs Computer', ffa: 'Play vs Computer', boss: 'Play solo', aliens: 'Play solo', golf: 'Play solo' };
 
 try {
   // ---- 0. the three launch paths and the predicates, online ----------------
@@ -117,22 +118,25 @@ try {
     ccFfaOpp = 'friend'; $('createBtn').onclick(); const b = snap();
     ccMode = 'duel'; ccOpp = 'cpu'; $('createBtn').onclick(); const c = snap();
     ccMode = 'ffa'; ccFfaOpp = 'friend'; $('createBtn').onclick(); const d = snap();   // ccOpp is still 'cpu': must not leak
-    ccFfaOpp = 'cpu'; Bay.show('home'); document.querySelector('#bay [data-launch]').click(); const e = snap();
+    ccFfaOpp = 'cpu'; Bay.show('armoury'); document.querySelector('#bay [data-launch]').click(); const e = snap();
+    Bay.show('home'); document.querySelector('#bay .launch').click(); const launchScr = $('bay').dataset.scr; Bay.show('home');
     const btn = document.createElement('button'); btn.dataset.rematch = 'ffa'; btn.dataset.vs = 'friend'; document.getElementById('bay').appendChild(btn);
     btn.click(); const f = snap(); btn.dataset.vs = 'cpu'; btn.click(); const g = snap(); btn.remove();
     const home = (() => { Bay.show('home'); return document.querySelector('#bay .lbar').textContent; })();
     const p = { offBoss: soloOfferable({ type: 'create', mode: 'boss' }), offGolf: soloOfferable({ type: 'create', mode: 'golf' }), offDuel: soloOfferable({ type: 'create', mode: 'duel' }),
       offAi: soloOfferable({ type: 'ai', mode: 'ffa' }), byAi: soloByConstruction({ type: 'ai' }), byCreate: soloByConstruction({ type: 'create', mode: 'golf' }),
-      frame: soloFrameFor({ type: 'create', mode: 'ffa', max: 3, name: 'T', skin: 'olive' }), frameBoss: soloFrameFor({ type: 'create', mode: 'boss', max: 2 }) };
+      frame: soloFrameFor({ type: 'create', mode: 'ffa', max: 3, name: 'T', skin: 'olive' }), frameBoss: soloFrameFor({ type: 'create', mode: 'boss', max: 2 }),
+      frameDuel: soloFrameFor({ type: 'create', mode: 'duel', max: 2, name: 'T', skin: 'olive' }) };
     ccMode = 'duel'; ccOpp = 'friend'; ccFfaOpp = 'friend'; window.intent = orig;
-    return { a, b, c, d, e, f, g, p, home };
+    return { a, b, c, d, e, f, g, p, home, launchScr };
   })()`);
   const isAiFfa = (m) => m && m.type === 'ai' && m.mode === 'ffa' && m.max === 4 && typeof m.difficulty === 'string' && typeof m.name === 'string' && typeof m.skin === 'string';
   if (isAiFfa(r0.a)) ok('0: Launch with FFA + Computer sends the ai frame with mode and max'); else fail('0: ffa+cpu frame was ' + JSON.stringify(r0.a));
   if (r0.b && r0.b.type === 'create' && r0.b.mode === 'ffa' && r0.b.max === 4) ok('0: FFA + Friends sends a create, as before'); else fail('0: ffa+friend frame was ' + JSON.stringify(r0.b));
   if (r0.c && r0.c.type === 'ai' && !('mode' in r0.c) && !('max' in r0.c)) ok('0: Duel + Computer sends the historical ai frame, no mode or max keys'); else fail('0: duel+cpu frame was ' + JSON.stringify(r0.c));
   if (r0.d && r0.d.type === 'create') ok("0: a Duel 'Computer' choice does not leak into a Free-for-all Launch"); else fail('0: leak — ' + JSON.stringify(r0.d));
-  if (isAiFfa(r0.e)) ok("0: the bay's Launch button reaches the same predicate"); else fail('0: bay launch frame was ' + JSON.stringify(r0.e));
+  if (isAiFfa(r0.e)) ok("0: the armoury's bay-doors button reaches the same predicate"); else fail('0: armoury launch frame was ' + JSON.stringify(r0.e));
+  if (r0.launchScr === 'setup') ok('0: the home Launch button opens Match setup, like a second tap on the mode card (owner, 2026-09-18)'); else fail('0: home Launch went to ' + r0.launchScr);
   if (r0.f && r0.f.type === 'create' && isAiFfa(r0.g)) ok('0: a sortie rematch chip restores who it was against (friend -> create, Computer -> ai)'); else fail(`0: rematch frames were ${JSON.stringify(r0.f)} / ${JSON.stringify(r0.g)}`);
   if (/You \+ 3 CPU/.test(r0.home)) ok("0: with Computer picked the home launch bar says 'You + 3 CPU'"); else fail('0: home launch bar read: ' + r0.home.slice(0, 80));
   // The offline badges: one per board, derived from the same predicates, so
@@ -141,17 +145,21 @@ try {
     Bay.show('modes'); const modes = [...document.querySelectorAll('#bay .mb .bof')].map((e) => e.textContent); Bay.show('home');
     const kinds = ['duel', 'ffa', 'boss', 'aliens', 'golf'].map(offlineKind); return { home, modes, kinds }; })()`);
   const WANT = ['Offline vs CPU', 'Offline vs CPU', 'Offline solo', 'Offline solo', 'Offline solo'];
-  if (JSON.stringify(badges.home) === JSON.stringify(WANT)) ok('0: every home board carries its offline badge, in mode order'); else fail('0: home badges were ' + JSON.stringify(badges.home));
+  if (badges.home.length === 0) ok('0: the home boards carry no offline badge (owner, 2026-09-18)'); else fail('0: home badges were ' + JSON.stringify(badges.home));
   if (JSON.stringify(badges.modes) === JSON.stringify(WANT)) ok('0: every Mission board card carries the same badge'); else fail('0: mission badges were ' + JSON.stringify(badges.modes));
   if (JSON.stringify(badges.kinds) === JSON.stringify(['cpu', 'cpu', 'solo', 'solo', 'solo'])) ok('0: offlineKind derives cpu/cpu/solo/solo/solo from the predicates'); else fail('0: offlineKind gave ' + JSON.stringify(badges.kinds));
   const p = r0.p;
-  if (p.offBoss && p.offGolf && !p.offDuel && !p.offAi && p.byAi && !p.byCreate) ok('0: soloOfferable is the four invite-room modes on a create; soloByConstruction is exactly an ai frame');
+  if (p.offBoss && p.offGolf && p.offDuel && !p.offAi && p.byAi && !p.byCreate) ok('0: soloOfferable is the five invite-room modes on a create (Duel joined 2026-09-18); soloByConstruction is exactly an ai frame');
   else fail('0: predicates were ' + JSON.stringify(p));
+  const fd = p.frameDuel;
+  if (fd && fd.type === 'ai' && !('mode' in fd) && !('max' in fd) && typeof fd.difficulty === 'string' && fd.name === 'T' && fd.skin === 'olive') ok("0: soloFrameFor swaps a Duel create for the historical ai frame — no mode, no max");
+  else fail('0: duel solo frame was ' + JSON.stringify(fd));
   if (p.frame.type === 'ai' && p.frame.mode === 'ffa' && p.frame.max === 3 && p.frameBoss.type === 'create') ok('0: soloFrameFor swaps an ffa create for the ai frame and leaves the others alone'); else fail('0: soloFrameFor gave ' + JSON.stringify([p.frame, p.frameBoss]));
 
   // ---- 1. an invite room never converts while offline -----------------------
-  for (const mode of ['boss', 'aliens', 'golf', 'ffa']) {
+  for (const mode of ['duel', 'boss', 'aliens', 'golf', 'ffa']) {
     const s = await pendingOffer(mode, mode === 'boss' ? 5200 : 1500);   // boss waits out the old 4 s timer
+    if (s.soloLabel === LABEL[mode]) ok(`1: ${mode} offline — the offer reads '${LABEL[mode]}'`); else fail(`1: ${mode} offline — the offer reads '${s.soloLabel}'`);
     if (!s.local && !s.playing && s.pend === mode) ok(`1: ${mode} offline — nothing started, the create is queued`);
     else fail(`1: ${mode} offline — local=${s.local} playing=${s.playing} pend=${s.pend}`);
     if (s.solo && s.text.includes(NEED[mode]) && s.text.includes('No connection') && s.lw === 'offline') ok(`1: ${mode} offline — the lobby explains and offers Play solo`);
@@ -184,12 +192,13 @@ try {
   if (!s.local && !s.solo) ok('3: the real room is not a local one and the offer is gone'); else fail('3: after flush local=' + s.local + ' solo=' + s.solo);
 
   // ---- 4. Play solo is one tap, for every mode ------------------------------
-  for (const mode of ['boss', 'aliens', 'golf', 'ffa']) {
+  for (const mode of ['duel', 'boss', 'aliens', 'golf', 'ffa']) {
     await pendingOffer(mode);
     await ev(`(document.querySelector('#bay [data-solo]').click(), true)`);
     const started = await until(`S.local === true && S.playing === true`, 6000);
     s = await state();
-    const shape = mode === 'boss' ? (s.mode === 'boss' && s.boss >= 0 && s.n === 2)
+    const shape = mode === 'duel' ? (s.mode === 'duel' && s.n === 2)
+      : mode === 'boss' ? (s.mode === 'boss' && s.boss >= 0 && s.n === 2)
       : mode === 'aliens' ? (s.mode === 'aliens' && s.n === 4 && (s.kinds || []).some((k) => k !== 'tank'))
       : mode === 'golf' ? (s.mode === 'golf' && s.n === 1)
       : (s.mode === 'ffa' && s.n === 4 && (s.names || []).slice(1).every((n) => /^CPU \d$/.test(n)));

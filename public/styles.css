@@ -1853,9 +1853,9 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
      7.5-9u, under 9 CSS px on a phone, and were hard to read. Only the home
      screen grows (render() stamps data-scr on #bay) and only its small text:
      a fifth larger, rounded to the half unit. Headlines and numbers are untouched.
+     (The home boards lost their offline badge the same day, so .bof is not here.)
      Every rule here overrides one above by specificity, so the originals stay the
      single source for every other screen. */
-  #bay[data-scr=home] .bof{font-size:calc(9 * var(--u))}
   #bay[data-scr=home] .mark span{font-size:calc(9.5 * var(--u))}
   #bay[data-scr=home] .btg{font-size:calc(9.5 * var(--u))}
   #bay[data-scr=home] .st .std{font-size:calc(9.5 * var(--u))}
@@ -1864,17 +1864,33 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay[data-scr=home] .bpl{font-size:calc(10 * var(--u))}
   #bay[data-scr=home] .ph{font-size:calc(10 * var(--u))}
   #bay[data-scr=home] .ltg{font-size:calc(10 * var(--u))}
-  #bay[data-scr=home] .chip{font-size:calc(10.5 * var(--u))}
-  /* HOME HEADER TAP TARGETS (owner, 2026-09-18): the chips were 27u tall, about
-     25 CSS px on a phone, and hard to hit. On home they grow to 36u with their
-     icons scaled to match, and the header row grows from 32u to 40u starting 4u
-     higher, so its bottom edge (44u) still clears the mode boards at 48u. The
-     text keeps the size chosen the same morning. Home only, like the sizes above. */
-  #bay[data-scr=home] .top{top:calc(4 * var(--u));height:calc(40 * var(--u))}
-  #bay[data-scr=home] .chip{height:calc(36 * var(--u));padding:0 calc(13 * var(--u));gap:calc(8 * var(--u));border-radius:calc(5 * var(--u))}
-  #bay[data-scr=home] .chip svg{width:calc(17 * var(--u));height:calc(17 * var(--u))}
-  #bay[data-scr=home] .chip.sq{width:calc(36 * var(--u));padding:0}
-  #bay[data-scr=home] .chip.acc svg{width:calc(15 * var(--u));height:calc(15 * var(--u))}
+  /* HOME HEADER TAP TARGETS (owner, 2026-09-18, second pass: "go to 44pt"). On
+     the phone 1u = min((874 - 2*59) / 932, (402 - 21) / 430) ≈ 0.81pt once the
+     landscape safe-area insets are taken out, so 44pt is 55u. The five chips are
+     55u tall (square ones 55u wide), icons 22u, and the header row is 55u from
+     4u — its bottom edge at 59u. Everything below moves to make room, sizes
+     unchanged: the mode boards from 48u to 63u (4u clear of the header), the
+     two side panels from 162u to 174u (inline, in bay.js), and the launch bar
+     from 12u to 4u above the bottom of the frame (4u clear of the panels). The
+     chip text goes 10.5u -> 12u so it is not lost inside the larger chip. Home
+     only, like the sizes above. */
+  #bay[data-scr=home] .top{top:calc(4 * var(--u));height:calc(55 * var(--u))}
+  #bay[data-scr=home] .chip{height:calc(55 * var(--u));padding:0 calc(16 * var(--u));gap:calc(10 * var(--u));border-radius:calc(7 * var(--u));font-size:calc(12 * var(--u))}
+  #bay[data-scr=home] .chip svg{width:calc(22 * var(--u));height:calc(22 * var(--u))}
+  #bay[data-scr=home] .chip.sq{width:calc(55 * var(--u));padding:0}
+  #bay[data-scr=home] .chip.acc svg{width:calc(19 * var(--u));height:calc(19 * var(--u))}
+  #bay[data-scr=home] .boards{top:calc(63 * var(--u))}
+  #bay[data-scr=home] .lbar{bottom:calc(4 * var(--u))}
+
+  /* SERVICE RECORD TYPE SIZE (owner, 2026-09-18): the same step as home, a fifth
+     up on the small mono text; names and the big numbers are untouched. The two
+     fixed-width bar columns widen with their text. */
+  #bay[data-scr=career] .lbl{font-size:calc(10 * var(--u))}
+  #bay[data-scr=career] .ps{font-size:calc(10 * var(--u))}
+  #bay[data-scr=career] .pm{font-size:calc(11 * var(--u))}
+  #bay[data-scr=career] .bar .bn{font-size:calc(10 * var(--u));width:calc(58 * var(--u))}
+  #bay[data-scr=career] .bar .bv{font-size:calc(11 * var(--u));width:calc(20 * var(--u))}
+  #bay[data-scr=career] .b-ach .ad{font-size:calc(11 * var(--u))}
 
   /* -------------------------------------------------------- mission arc -- */
   #bay .boards{position:absolute;left:calc(18 * var(--u));right:calc(18 * var(--u));top:calc(48 * var(--u));height:calc(104 * var(--u));display:flex;gap:calc(12 * var(--u));

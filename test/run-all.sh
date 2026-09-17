@@ -140,6 +140,9 @@ else
   # FOURTH client-side suite: the account chip, the Account row, the modal
   # lines and the home-only type size, in a real page. Skips without Chrome.
   run account_ui node test/account_ui.mjs
+  # FIFTH client-side suite: Artillery Golf's off-screen flag marker and its
+  # tap-to-pan, on a local solo round. Skips without Chrome.
+  run golf_marker node test/golf_marker.mjs
   # SECOND client-side suite, and the only one that looks at LAYOUT. Drives the
   # real bundle in headless Chrome at 14 exact viewports and diffs the measured
   # geometry against test/fixtures/layout-baseline.json. It is a change
