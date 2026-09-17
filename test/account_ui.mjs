@@ -102,7 +102,13 @@ for (const [w, h] of [[667, 375], [932, 430]]) {
   const H = sizes.home;
   if (H.scr === 'home' && H.btg === 9.5 && H.ltg === 10 && H.chip === 10.5 && H.ph === 10 && H.std === 9.5 && H.rk === 9.5 && H.bof === 9 && H.mark === 9.5) ok(`${V}: home type: tags 9.5u, launch tag 10u, chips 10.5u, panel heads 10u, badges 9u`); else fail(`${V}: home sizes ${JSON.stringify(H)}`);
   if (sizes.set.scr === 'settings' && sizes.set.lbl === 8.5 && sizes.setup.scr === 'setup' && sizes.setup.lbl === 8.5 && sizes.setup.hint === 8.5) ok(`${V}: other screens keep their sizes (labels 8.5u on settings and setup)`); else fail(`${V}: leak ${JSON.stringify({ set: sizes.set, setup: sizes.setup })}`);
-  // 11. nothing on the home header, boards, stations or launch bar clips after the bump
+  // 11. tap targets (owner, 2026-09-18): every header chip is 36u tall, the square
+  //     ones 36u wide, the header row 40u tall, and its bottom edge exactly 4u
+  //     above the mode boards — all on home only. Measured as a gap, not an
+  //     absolute y: the design frame is letterboxed at some viewports.
+  const tap = await ev(`(() => { const u = (() => { const e = document.createElement('div'); e.style.cssText = 'position:absolute;width:calc(100 * var(--u))'; $('bay').appendChild(e); const w = e.getBoundingClientRect().width / 100; e.remove(); return w; })(); Bay.show('home'); const r = (el) => el.getBoundingClientRect(); const bay = r(document.querySelector('#bay .bay')); /* the design frame, letterboxed inside #bay at some sizes */ const top = r(document.querySelector('#bay .top')); const boards = r(document.querySelector('#bay .boards')); const chips = [...document.querySelectorAll('#bay .top .chip')]; return { n: chips.length, heights: chips.map((c) => +(r(c).height / u).toFixed(1)), sqWidths: chips.filter((c) => c.classList.contains('sq')).map((c) => +(r(c).width / u).toFixed(1)), topY: +((top.top - bay.top) / u).toFixed(1), topH: +(top.height / u).toFixed(1), gap: +((boards.top - top.bottom) / u).toFixed(1) }; })()`);
+  if (tap.n === 5 && tap.heights.every((h) => h === 36) && tap.sqWidths.length === 2 && tap.sqWidths.every((w) => w === 36) && tap.topH === 40 && tap.gap === 4) ok(`${V}: five header chips 36u tall, square ones 36u wide, header 40u tall, exactly 4u clear of the boards`); else fail(`${V}: tap targets ${JSON.stringify(tap)}`);
+  // 11b. nothing on the home header, boards, stations or launch bar clips after the bump
   const clips = await ev(`(() => [...document.querySelectorAll('#bay .top *, #bay .boards .blab *, #bay .pnl *, #bay .lbar .ltg, #bay .lbar .rk')].filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.className))()`);
   if (clips.length === 0) ok(`${V}: no horizontal clipping in the header, board labels, stations or launch tags`); else fail(`${V}: clipped ${JSON.stringify(clips)}`);
 }

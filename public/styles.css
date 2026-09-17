@@ -1865,6 +1865,16 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay[data-scr=home] .ph{font-size:calc(10 * var(--u))}
   #bay[data-scr=home] .ltg{font-size:calc(10 * var(--u))}
   #bay[data-scr=home] .chip{font-size:calc(10.5 * var(--u))}
+  /* HOME HEADER TAP TARGETS (owner, 2026-09-18): the chips were 27u tall, about
+     25 CSS px on a phone, and hard to hit. On home they grow to 36u with their
+     icons scaled to match, and the header row grows from 32u to 40u starting 4u
+     higher, so its bottom edge (44u) still clears the mode boards at 48u. The
+     text keeps the size chosen the same morning. Home only, like the sizes above. */
+  #bay[data-scr=home] .top{top:calc(4 * var(--u));height:calc(40 * var(--u))}
+  #bay[data-scr=home] .chip{height:calc(36 * var(--u));padding:0 calc(13 * var(--u));gap:calc(8 * var(--u));border-radius:calc(5 * var(--u))}
+  #bay[data-scr=home] .chip svg{width:calc(17 * var(--u));height:calc(17 * var(--u))}
+  #bay[data-scr=home] .chip.sq{width:calc(36 * var(--u));padding:0}
+  #bay[data-scr=home] .chip.acc svg{width:calc(15 * var(--u));height:calc(15 * var(--u))}
 
   /* -------------------------------------------------------- mission arc -- */
   #bay .boards{position:absolute;left:calc(18 * var(--u));right:calc(18 * var(--u));top:calc(48 * var(--u));height:calc(104 * var(--u));display:flex;gap:calc(12 * var(--u));
