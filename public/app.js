@@ -1641,6 +1641,17 @@ const soloOfferable = (m) => m.type === 'create' && SOLO_MODES.includes(m.mode);
 const soloFrameFor = (m) => (m.mode === 'ffa'
   ? { type: 'ai', mode: 'ffa', max: m.max, difficulty: cpuDifficulty, name: m.name, skin: m.skin }
   : m);
+// What a mode offers with no server, for the bay's boards. DERIVED from the
+// two predicates above, never listed separately, so a badge can never promise
+// what intent() will not deliver.
+//   'cpu'    a vs-Computer form starts locally (Duel, Free-for-all)
+//   'solo'   Play solo is offered for the invite room (Boss, Aliens, Golf)
+//   'online' nothing runs without the server
+function offlineKind(modeId) {
+  if ((modeId === 'duel' || modeId === 'ffa') && soloByConstruction({ type: 'ai', mode: modeId })) return 'cpu';
+  if (soloOfferable({ type: 'create', mode: modeId })) return 'solo';
+  return 'online';
+}
 let soloAutoStart = false;   // a Play solo on a lobby-mode frame: start the round as soon as the local room exists
 let lobbyWait = null;        // 'offline' | 'connecting' | 'unreachable' while a queued create is shown on the lobby screen
 

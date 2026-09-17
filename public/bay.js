@@ -114,6 +114,13 @@ const IC = {
        '<rect x="8.2" y="3.4" width="12" height="12" rx="2"/><path d="M15.8 18.2v.4a2 2 0 0 1-2 2H5.8a2 2 0 0 1-2-2V8.6a2 2 0 0 1 2-2h.4"/></svg>'
 };
 
+// The offline badge on every mode board: what this mode does with no server,
+// asked of app.js's own predicates so a board can never promise more than the
+// launch path delivers. Green is the bay's OFFLINE colour.
+const OFF_TXT = { cpu: 'Offline vs CPU', solo: 'Offline solo', online: 'Online only' };
+const offKind = (id) => (fn('offlineKind') ? offlineKind(id) : 'online');
+const offBadge = (id) => '<span class="bof">' + esc(OFF_TXT[offKind(id)] || OFF_TXT.online) + '</span>';
+
 const MOTES = [
   [118,318,9.2,0.0,2],[206,262,11.4,1.4,1.6],[332,344,8.6,2.6,2.2],[418,296,12.2,0.7,1.6],
   [498,362,10.4,3.2,2],[578,276,9.6,1.9,1.6],[658,330,11.8,4.1,2.2],[298,208,13.0,2.2,1.6],
@@ -542,7 +549,7 @@ SCREENS.modes = function () {
   const cards = MODES.map((x) => {
     const on = x.id === s.mode.id;
     return '<button class="mb' + (on ? ' on' : '') + '" data-set="mode=' + x.id + '" data-go="setup">'
-      + '<span class="mbi"><img src="' + art(x.card) + '" alt=""><span class="g"></span><span class="lip"></span>'
+      + '<span class="mbi"><img src="' + art(x.card) + '" alt=""><span class="g"></span><span class="lip"></span>' + offBadge(x.id)
       +   '<span class="mbicn">' + MODE_IC[x.id] + '</span><span class="mbn">' + esc(x.name) + '</span></span>'
       + '<span class="mbc"><span class="mbt' + (on ? '' : ' mbt2') + '">' + (on ? 'Armed &middot; ' : '') + esc(x.tag) + '</span>'
       +   '<span class="mbb">' + esc(x.blurb) + '</span>'
@@ -614,7 +621,7 @@ SCREENS.home = function () {
     '<button class="board' + (x.id === m.id ? ' on' : '') + '" style="transform:rotate(' + arc[i][0] + 'deg) translateY(' + u(arc[i][1]) + ')" '
     + 'data-set="mode=' + x.id + '" title="' + esc(x.name) + '">'
     + '<span class="bcard"><img src="' + art(x.card) + '" alt=""><span class="bsc"></span><span class="barm"></span>'
-    + '<span class="bic">' + MODE_IC[x.id] + '</span><span class="bpl">' + esc(x.players) + '</span>'
+    + '<span class="bic">' + MODE_IC[x.id] + '</span><span class="bpl">' + esc(x.players) + '</span>' + offBadge(x.id)
     + '<span class="blab"><span class="bnm">' + esc(x.name) + '</span><span class="btg">' + esc(x.tag) + '</span></span></span></button>').join('');
 
 

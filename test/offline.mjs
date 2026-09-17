@@ -135,6 +135,15 @@ try {
   if (isAiFfa(r0.e)) ok("0: the bay's Launch button reaches the same predicate"); else fail('0: bay launch frame was ' + JSON.stringify(r0.e));
   if (r0.f && r0.f.type === 'create' && isAiFfa(r0.g)) ok('0: a sortie rematch chip restores who it was against (friend -> create, Computer -> ai)'); else fail(`0: rematch frames were ${JSON.stringify(r0.f)} / ${JSON.stringify(r0.g)}`);
   if (/You \+ 3 CPU/.test(r0.home)) ok("0: with Computer picked the home launch bar says 'You + 3 CPU'"); else fail('0: home launch bar read: ' + r0.home.slice(0, 80));
+  // The offline badges: one per board, derived from the same predicates, so
+  // what a board says and what a tap does can only ever agree.
+  const badges = await ev(`(() => { Bay.show('home'); const home = [...document.querySelectorAll('#bay .board .bof')].map((e) => e.textContent);
+    Bay.show('modes'); const modes = [...document.querySelectorAll('#bay .mb .bof')].map((e) => e.textContent); Bay.show('home');
+    const kinds = ['duel', 'ffa', 'boss', 'aliens', 'golf'].map(offlineKind); return { home, modes, kinds }; })()`);
+  const WANT = ['Offline vs CPU', 'Offline vs CPU', 'Offline solo', 'Offline solo', 'Offline solo'];
+  if (JSON.stringify(badges.home) === JSON.stringify(WANT)) ok('0: every home board carries its offline badge, in mode order'); else fail('0: home badges were ' + JSON.stringify(badges.home));
+  if (JSON.stringify(badges.modes) === JSON.stringify(WANT)) ok('0: every Mission board card carries the same badge'); else fail('0: mission badges were ' + JSON.stringify(badges.modes));
+  if (JSON.stringify(badges.kinds) === JSON.stringify(['cpu', 'cpu', 'solo', 'solo', 'solo'])) ok('0: offlineKind derives cpu/cpu/solo/solo/solo from the predicates'); else fail('0: offlineKind gave ' + JSON.stringify(badges.kinds));
   const p = r0.p;
   if (p.offBoss && p.offGolf && !p.offDuel && !p.offAi && p.byAi && !p.byCreate) ok('0: soloOfferable is the four invite-room modes on a create; soloByConstruction is exactly an ai frame');
   else fail('0: predicates were ' + JSON.stringify(p));
