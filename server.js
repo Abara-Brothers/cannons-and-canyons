@@ -1147,6 +1147,30 @@ function handleRequest(req, res) {
       // Apple components array is scoped above.
     }]));
   }
+  // THE OAUTH RETURN PATH IS A REDIRECT. /auth/callback exists for the OS: it
+  // is the Universal Link (AASA above) / App Link (intent-filter) that reopens
+  // the native app with the provider's reply in the URL fragment. The server
+  // only sees it when the OS did NOT route it — a third-party default browser
+  // (Chrome on iOS never hands a server redirect to an app), an unverified App
+  // Link, the app not installed. Falling through to the SPA fallback below
+  // stranded that player on a raw page: index.html links its assets relatively,
+  // so under /auth/ every stylesheet and script 404'd. Seen on the owner's
+  // iPhone, 2026-09-17.
+  //
+  // A 302 whose Location has no fragment: browsers carry the request's fragment
+  // over to the new URL (RFC 7231 §7.1.2), so /auth/callback#access_token=…
+  // lands on /#access_token=…, where cloud.js consumeRedirect() runs as on any
+  // web load — this tab never started the flow, so it scrubs the tokens from the
+  // address bar and the game opens as before. Fragments never reach the server
+  // either way. OS routing is untouched: Universal/App Link matching happens on
+  // the URL before any request is made, and the AASA still names this path.
+  // The service worker passes it through: a navigation is fetched with
+  // redirect=manual, so the worker sees an opaqueredirect (not ok, never
+  // cached) and the browser performs the redirect itself.
+  if (urlPath === '/auth/callback' || urlPath === '/auth/callback/') {
+    res.writeHead(302, { Location: '/', 'Cache-Control': 'no-store' });
+    return res.end();
+  }
   if (urlPath === '/') urlPath = '/index.html';
   const filePath = path.join(PUBLIC, path.normalize(urlPath));
   if (!filePath.startsWith(PUBLIC)) { res.writeHead(403); return res.end('Forbidden'); }

@@ -106,6 +106,38 @@ for (const [w, h] of [[667, 375], [932, 430]]) {
   const clips = await ev(`(() => [...document.querySelectorAll('#bay .top *, #bay .boards .blab *, #bay .pnl *, #bay .lbar .ltg, #bay .lbar .rk')].filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.className))()`);
   if (clips.length === 0) ok(`${V}: no horizontal clipping in the header, board labels, stations or launch tags`); else fail(`${V}: clipped ${JSON.stringify(clips)}`);
 }
+// ---- the stranded OAuth return, in a real browser --------------------------
+// The server answers /auth/callback with a 302 to "/" (see server.js). What only
+// a browser can prove: the fragment (the provider's reply) is carried over to
+// "/", cloud.js scrubs it there because this tab never started a flow, the game
+// renders — and the same holds once the service worker controls the page, which
+// is the case for every returning web player.
+{
+  await send('Emulation.setDeviceMetricsOverride', { width: 932, height: 430, deviceScaleFactor: 2, mobile: false });
+  const FRAG = '#access_token=stranded_at&refresh_token=stranded_rt&expires_in=3600&token_type=bearer';
+  const landed = async () => {
+    for (let i = 0; i < 80; i++) { if (await ev('!!window.Bay && !!document.querySelector("#bay .top")').catch(() => false)) break; await sleep(200); }
+    return ev(`({ path: location.pathname, hash: location.hash, bay: !!document.querySelector('#bay .top'), session: (() => { try { return JSON.parse(localStorage.getItem('cc_session') || 'null'); } catch { return 'unreadable'; } })(), sw: !!(navigator.serviceWorker && navigator.serviceWorker.controller) })`);
+  };
+  await send('Page.navigate', { url: `http://127.0.0.1:${appPort}/auth/callback${FRAG}` });
+  const first = await landed();
+  if (first.path === '/' && first.hash === '' && first.bay) ok('stranded return: /auth/callback#tokens lands on / with the tokens scrubbed and the game rendered');
+  else fail('stranded return (first): ' + JSON.stringify(first));
+  if (!(first.session && first.session.access_token === 'stranded_at')) ok('stranded return: the tokens are NOT adopted as a session (this tab never started a flow)');
+  else fail('stranded return adopted the tokens: ' + JSON.stringify(first.session));
+  // Now with the service worker in control: one plain navigation lets the
+  // registered worker claim the page, then the same return again.
+  await send('Page.navigate', { url: `http://127.0.0.1:${appPort}/` });
+  for (let i = 0; i < 100; i++) { if (await ev('!!(navigator.serviceWorker && navigator.serviceWorker.controller)').catch(() => false)) break; await sleep(200); }
+  const controlled = await ev('!!(navigator.serviceWorker && navigator.serviceWorker.controller)');
+  if (controlled) {
+    await send('Page.navigate', { url: `http://127.0.0.1:${appPort}/auth/callback${FRAG}` });
+    const second = await landed();
+    if (second.path === '/' && second.hash === '' && second.bay && second.sw) ok('stranded return under the service worker: the redirect passes through the worker, same landing');
+    else fail('stranded return (service worker): ' + JSON.stringify(second));
+  } else fail('service worker never took control of the page, so the pass-through was not proven');
+}
+
 cleanup();
 console.log(errors.length ? `\n${errors.length} FAILED` : '\nall account_ui checks passed');
 process.exit(errors.length ? 1 : 0);

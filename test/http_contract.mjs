@@ -104,6 +104,20 @@ const missingImage = await get('/nope.png');
 const deepLink = await get('/some-deep-link');
 const realAsset = await get('/app.js');
 const root = await get('/');
+// (i) the OAuth return path is a redirect to the root, never the raw shell.
+// redirect:'manual' so the 302 itself is observed; the fragment a browser would
+// carry over cannot be sent to a server, which is exactly why Location must be
+// fragment-less (RFC 7231 §7.1.2: the request's fragment is inherited).
+const cbRaw = async (p) => {
+  const res = await fetch(`http://127.0.0.1:${port}${p}`, { redirect: 'manual' });
+  const body = await res.text();
+  return { status: res.status, location: res.headers.get('location'), cache: res.headers.get('cache-control') || '', body, hsts: res.headers.get('strict-transport-security') || '' };
+};
+const cb = await cbRaw('/auth/callback');
+const cbSlash = await cbRaw('/auth/callback/');
+const cbErr = await cbRaw('/auth/callback?error=access_denied&error_description=probe');
+const cbFollowed = await get('/auth/callback');          // default follow: lands on the game
+const cbSibling = await get('/auth/callbackx');          // not the route: ordinary deep link
 
 // ---- (d) an unauthenticated /account/delete must not spend the budget -------
 // Until 2026-08-18 `delTokens -= 1` ran BEFORE the Authorization header was even
@@ -242,6 +256,15 @@ const results = [
   ['(c) extension-less deep link still 200 html', deepLink.status === 200 && deepLink.type.includes('html')],
   ['(c) real asset still 200 js', realAsset.status === 200 && realAsset.type.includes('javascript')],
   ['(c) root still 200 html', root.status === 200 && root.type.includes('html')],
+  ['(i) /auth/callback -> 302', cb.status === 302],
+  ['(i) Location is exactly "/" (no fragment, so the browser inherits the request\'s)', cb.location === '/'],
+  ['(i) redirect body is empty', cb.body === ''],
+  ['(i) redirect is never cached', /no-store/.test(cb.cache)],
+  ['(i) redirect still carries the security headers', /max-age=31536000/.test(cb.hsts)],
+  ['(i) trailing slash form redirects too', cbSlash.status === 302 && cbSlash.location === '/'],
+  ['(i) a provider-error return (query) redirects too, query dropped', cbErr.status === 302 && cbErr.location === '/'],
+  ['(i) followed, it lands on the game page', cbFollowed.status === 200 && cbFollowed.type.includes('html')],
+  ['(i) only the exact path: /auth/callbackx is still an ordinary deep link', cbSibling.status === 200],
   ['(d) 15 header-less deletes all 401', delAllStatuses.length === 15 && delAllStatuses.every((s) => s === 401)],
   ['(d) none of them hit the 429 budget', !delAllStatuses.includes(429)],
   ['(e) HSTS present with a year max-age', /max-age=31536000/.test(sec.hsts)],
