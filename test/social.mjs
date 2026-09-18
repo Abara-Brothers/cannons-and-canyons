@@ -477,12 +477,16 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
   // Read INSIDE createSocial, so setting it here reaches every instance this
   // section builds even though social.js was imported at the top of the file.
   process.env.SOCIAL_PRESENCE_MS = '40';
+  // The fan-out collapse window, OFF for every section but the one that tests
+  // it: an operation's own snapshot must arrive before the next `await` in a
+  // test, and 0 means every push is immediate. (b3) sets a real window itself.
+  process.env.SOCIAL_PUSH_MS = '0';
 
   // HEX LETTERS ON PURPOSE. A fixture of digits alone makes toUpperCase() a
   // no-op, so the case-fold on ids arriving off the wire would have no test
   // that can fail — see the upper-case remove in (e).
   const uid = (n) => '00000000-0000-4000-8000-ab' + String(n).padStart(10, '0');
-  const A = uid(1), B = uid(2), C = uid(3), D = uid(4), E = uid(5);
+  const A = uid(1), B = uid(2), C = uid(3), D = uid(4), E = uid(5), F = uid(6);
   // callsign_key is the SERVER's word — the phase 6 migration revokes update on
   // that column from the authenticated role, so only the secret key writes it.
   // `callsign` beside it is NOT: profiles_update_own lets the account PATCH it
@@ -499,10 +503,12 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
   // (the contract), in memory. `boom` turns any one method into the real
   // thing's failure — sbAdmin throws `sb <METHOD> <status>` and keeps no body.
   //
-  // profilesByIds returns { id, callsign } ONLY, exactly as server/store.js does
-  // (`select=id,callsign`): the read model gets no callsign_key for anyone but
-  // the player themselves, which is why those names go through the filter
-  // rather than through the key proof.
+  // profilesByIds returns { id, callsign, callsign_key } and NOTHING ELSE,
+  // exactly as server/store.js does (`select=id,callsign,callsign_key`). The
+  // key is the whole reason a panel name can be believed: `callsign` beside it
+  // is PATCHed by the account itself. A double that handed back the full row
+  // would let a name be proved against a column the real query never selects,
+  // which is the bug this suite exists to catch rather than to reproduce.
   const PAIR = (a, b) => (a < b ? a + '|' + b : b + '|' + a);
   function memStore(rows) {
     const profiles = new Map(rows.map((p) => [p.id, { ...p }]));
@@ -516,7 +522,7 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
       async profileById(id) { st._hit('profileById'); return profiles.get(id) || null; },
       async profileByFriendCode(code) { st._hit('profileByFriendCode'); return [...profiles.values()].find((p) => p.friend_code === code) || null; },
       async profileByCallsignKey(k) { st._hit('profileByCallsignKey'); return [...profiles.values()].find((p) => p.callsign_key === k) || null; },
-      async profilesByIds(ids) { st._hit('profilesByIds'); const m = new Map(); for (const id of ids) { const p = profiles.get(id); if (p) m.set(id, { id, callsign: p.callsign }); } return m; },
+      async profilesByIds(ids) { st._hit('profilesByIds'); const m = new Map(); for (const id of ids) { const p = profiles.get(id); if (p) m.set(id, { id, callsign: p.callsign, callsign_key: p.callsign_key ?? null }); } return m; },
       async friendIdsOf(id) { st._hit('friendIdsOf'); const o = []; for (const k of friends) { const [a, b] = k.split('|'); if (a === id) o.push(b); else if (b === id) o.push(a); } return o; },
       async requestsOf(id) { st._hit('requestsOf'); const incoming = [], outgoing = []; for (const k of requests) { const [f, t] = k.split('>'); if (t === id) incoming.push(f); else if (f === id) outgoing.push(t); } return { incoming, outgoing }; },
       async blockIdsOf(id) { st._hit('blockIdsOf'); const blocked = [], blockedBy = []; for (const k of blocks) { const [a, b] = k.split('>'); if (a === id) blocked.push(b); else if (b === id) blockedBy.push(a); } return { blocked, blockedBy }; },
@@ -615,18 +621,18 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     else fail('(a2) honest own callsign: ' + JSON.stringify(last(wd, 'friends')));
   }
 
-  // ---- (a3) every OTHER player's name goes through the filter ----------------
-  // These names come from profilesByIds, which selects id,callsign and nothing
-  // else — there is no callsign_key to prove them against. They are therefore
-  // treated as what they are: a string the account itself wrote. The same
-  // blocklist the callsign message enforces at set time is applied here at read
-  // time, so a name PATCHed straight into the row cannot ride into a panel.
+  // ---- (a3) every OTHER player's name is filtered at READ time too -----------
+  // The key proves the server stored the name; it does not prove the name is
+  // still allowed. server/blocklist.txt is read at start-up and terms are added
+  // to it, so a name that was clean when it was set is put through the same
+  // rules again at the moment it is shown. This is the second half of the check,
+  // on top of the key — (a4) is the half that closes impersonation.
   {
     const DIRTY = [
-      { id: A, callsign: 'Anvil Six',    friend_code: 'ABC234', callsign_key: 'anvil six', callsign_set_at: null },
-      { id: B, callsign: 'Badword Nine', friend_code: 'BDF345', callsign_key: null,        callsign_set_at: null },
-      { id: C, callsign: 'x',            friend_code: 'CGH456', callsign_key: null,        callsign_set_at: null },
-      { id: D, callsign: 'Dune Four',    friend_code: 'DJK567', callsign_key: null,        callsign_set_at: null },
+      { id: A, callsign: 'Anvil Six',    friend_code: 'ABC234', callsign_key: 'anvil six',    callsign_set_at: null },
+      { id: B, callsign: 'Badword Nine', friend_code: 'BDF345', callsign_key: 'badword nine', callsign_set_at: null },
+      { id: C, callsign: 'x',            friend_code: 'CGH456', callsign_key: 'x',            callsign_set_at: null },
+      { id: D, callsign: 'Dune Four',    friend_code: 'DJK567', callsign_key: 'dune four',    callsign_set_at: null },
     ];
     const st = memStore(DIRTY);
     await st.addFriendship(A, B);
@@ -637,12 +643,74 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     await S.handle(wa, { type: 'friends' });
     const names = ((last(wa, 'friends') || {}).friends || []).map((x) => [x.id, x.callsign]);
     const byId = new Map(names);
-    if (byId.get(B) === null) ok('(a3) a friend whose PATCHed name carries a blocklist term is presented as null, not verbatim');
+    if (byId.get(B) === null) ok('(a3) a name the server DID store is still refused when the blocklist has caught up with it');
     else fail('(a3) dirty friend name: ' + JSON.stringify(names));
     if (byId.get(C) === null) ok('(a3) a name outside the length rules is null too, never a raw column value');
     else fail('(a3) short friend name: ' + JSON.stringify(names));
-    if (byId.get(D) === 'Dune Four') ok('(a3) an ordinary rolled name is untouched');
+    if (byId.get(D) === 'Dune Four') ok('(a3) an ordinary proven name is untouched');
     else fail('(a3) clean friend name: ' + JSON.stringify(names));
+  }
+
+  // ---- (a4) A PANEL NAME IS ONE THE SERVER PROVED, IN ALL FOUR LISTS ---------
+  // THE CRITICAL. profiles.callsign is written by the account itself on every
+  // cloud save; uniqueness lives on callsign_key, which the client cannot write.
+  // So a row with no key is free text, and free text in a panel is
+  // impersonation: an account holding only a ROLLED name can put another
+  // player's chosen callsign in its display column and render identically —
+  // and a name report against what is on screen then names the wrong account.
+  // 'FOLLOW ME OK' is the other half: clean, in class, in length, and nothing
+  // anyone chose. Neither is stopped by the blocklist, because neither is a
+  // blocked word. Both are stopped by asking the key.
+  //
+  // This is reachable: search hands out an id for any known callsign, and a
+  // request puts the requester's name straight into the target's incoming list,
+  // ten a minute. So the rule has to hold for friends, for BOTH request
+  // directions and for the blocked list — every list the frame carries.
+  {
+    const FAKE = [
+      { id: A, callsign: 'Anvil Six',    friend_code: 'ABC234', callsign_key: 'anvil six',   callsign_set_at: null },
+      // A rolled account wearing A's own proven callsign. The panel must not
+      // show two 'Anvil Six'es, and this is the row that has no right to it.
+      { id: B, callsign: 'Anvil Six',    friend_code: 'BDF345', callsign_key: null,          callsign_set_at: null },
+      // Clean, in class, in length — and the key says the server stored
+      // something else entirely.
+      { id: C, callsign: 'FOLLOW ME OK', friend_code: 'CGH456', callsign_key: 'crater two',  callsign_set_at: null },
+      { id: D, callsign: 'Dune Four',    friend_code: 'DJK567', callsign_key: 'dune four',   callsign_set_at: null },
+      { id: E, callsign: 'Echo Seven',   friend_code: 'EMN678', callsign_key: null,          callsign_set_at: null },
+      { id: F, callsign: 'Anvil Six',    friend_code: 'FPQ789', callsign_key: null,          callsign_set_at: null },
+    ];
+    const st = memStore(FAKE);
+    await st.addFriendship(A, B);       // the impersonator, as a friend
+    await st.addFriendship(A, D);       // an honest, proven friend
+    await st.addRequest(C, A);          // incoming: a name that reached A unasked
+    await st.addRequest(A, E);          // outgoing: a rolled name
+    await st.addBlock(A, F);            // and a second impersonator, blocked
+    const S = mkSocial(st);
+    const wa = mkws(A); S.onAuth(wa);
+    await S.handle(wa, { type: 'friends' });
+    const f = last(wa, 'friends') || {};
+    const byId = new Map(((f.friends) || []).map((x) => [x.id, x.callsign]));
+    if (byId.get(B) === null) ok('(a4) a rolled account wearing another player’s proven callsign is NOT named in the friends list');
+    else fail('(a4) impersonated friend name: ' + JSON.stringify(f.friends));
+    if (byId.get(B) !== f.callsign) ok('(a4) the impersonator cannot render as the viewer’s own chosen name');
+    else fail('(a4) impersonation reached the panel: ' + JSON.stringify([byId.get(B), f.callsign]));
+    if (byId.get(D) === 'Dune Four') ok('(a4) a friend whose row PROVES its name is still named, verbatim');
+    else fail('(a4) proven friend name: ' + JSON.stringify(f.friends));
+    const inc = ((f.requests || {}).in || [])[0];
+    if (inc && inc.id === C && inc.callsign === null)
+      ok('(a4) an INCOMING request — attacker-chosen text delivered to a stranger — is listed with no name at all');
+    else fail('(a4) incoming request name: ' + JSON.stringify((f.requests || {}).in));
+    const outg = ((f.requests || {}).out || [])[0];
+    if (outg && outg.id === E && outg.callsign === null) ok('(a4) an OUTGOING request carries no unproven name either');
+    else fail('(a4) outgoing request name: ' + JSON.stringify((f.requests || {}).out));
+    const blk = (f.blocked || [])[0];
+    if (blk && blk.id === F && blk.callsign === null) ok('(a4) the blocked list is no exception — the row stays, the name does not');
+    else fail('(a4) blocked name: ' + JSON.stringify(f.blocked));
+    // The ROW must survive so Task 8 still has something to hang Report and
+    // Block on; dropping the entry would hide the person instead of the name.
+    if ((f.friends || []).length === 2 && (f.blocked || []).length === 1)
+      ok('(a4) an unprovable name empties the name, never the row');
+    else fail('(a4) rows lost: ' + JSON.stringify([f.friends, f.blocked]));
   }
 
   // ---- (b) add by code is immediate and mutual (D2) --------------------------
@@ -668,6 +736,73 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     if (snapB && snapB.friends.length === 1 && snapB.friends[0].id === A && snapB.id === undefined)
       ok('(b) add: B’s pushed snapshot lists A and carries no request id');
     else fail('(b) B snapshot: ' + JSON.stringify(snapB));
+  }
+
+  // ---- (b3) A BURST DRIVEN BY OTHER PEOPLE IS COLLAPSED ---------------------
+  // A snapshot is eight PostgREST round trips and one frame per device, and the
+  // player it is pushed to did not ask for it: the accepts come from other
+  // accounts, spending other accounts' allowances. Ten friends accepting at once
+  // cost the player at the other end ten snapshots and eighty round trips, on
+  // nobody's bucket. The leading push still goes out IMMEDIATELY — a panel must
+  // react to what the player just did — and the rest of the window collapses
+  // into ONE trailing snapshot, built when it fires so it carries the newest
+  // state rather than a stale one. Same shape as the presence debounce.
+  {
+    const prev = process.env.SOCIAL_PUSH_MS;
+    process.env.SOCIAL_PUSH_MS = '60';
+    const st = memStore(ROWS);
+    const S = mkSocial(st);                        // reads the window at build time
+    process.env.SOCIAL_PUSH_MS = prev;
+    await st.addRequest(A, B); await st.addRequest(A, C); await st.addRequest(A, D);
+    const wa1 = mkws(A), wa2 = mkws(A);            // the victim, on two devices
+    const wb = mkws(B), wc = mkws(C), wd = mkws(D);
+    S.onAuth(wa1); S.onAuth(wa2); S.onAuth(wb); S.onAuth(wc); S.onAuth(wd);
+    await S.handle(wb, { type: 'friend', op: 'accept', from: A });
+    if (sent(wa1, 'friends').length === 1 && sent(wa2, 'friends').length === 1)
+      ok('(b3) the first accept reaches every device of the other player at once — the collapse is trailing, not leading');
+    else fail(`(b3) leading push: ${sent(wa1, 'friends').length} + ${sent(wa2, 'friends').length}`);
+    await S.handle(wc, { type: 'friend', op: 'accept', from: A });
+    await S.handle(wd, { type: 'friend', op: 'accept', from: A });
+    if (sent(wa1, 'friends').length === 1) ok('(b3) two more accepts inside the window add no further snapshot');
+    else fail('(b3) burst not collapsed: ' + sent(wa1, 'friends').length);
+    await sleep(150);
+    const total = sent(wa1, 'friends').length;
+    if (total === 2 && sent(wa2, 'friends').length === 2)
+      ok('(b3) three accepts from three different people cost two snapshots per device, not three');
+    else fail(`(b3) after the window: ${total} + ${sent(wa2, 'friends').length}`);
+    const snap = last(wa1, 'friends');
+    if (snap && (snap.friends || []).length === 3)
+      ok('(b3) the trailing snapshot is built when it FIRES, so it carries all three and nothing is missed');
+    else fail('(b3) trailing snapshot: ' + JSON.stringify(snap && snap.friends));
+    // Each accepter is a different player and gets their own immediate push.
+    if (sent(wb, 'friends').length === 1 && sent(wc, 'friends').length === 1 && sent(wd, 'friends').length === 1)
+      ok('(b3) the collapse is per player: the three accepters each got their own snapshot straight away');
+    else fail(`(b3) accepter pushes: ${sent(wb, 'friends').length}, ${sent(wc, 'friends').length}, ${sent(wd, 'friends').length}`);
+  }
+
+  // ---- (b4) a socket that throws mid-fan-out takes nothing with it ----------
+  // The engine's send() raises on a half-closed socket. Inside a fan-out that
+  // throw used to reach handleFriend's catch — which emitted
+  // { op:'add', error:'unavailable' } AFTER the same client had been told
+  // ok:true for an operation that really was written, and left the player's
+  // other devices and the other player with no snapshot at all.
+  {
+    const st = memStore(ROWS);
+    const S = mkSocial(st);
+    const dead = mkws(A), live = mkws(A), wb = mkws(B);
+    dead.rx.push = () => { throw new Error('write after end'); };
+    S.onAuth(dead); S.onAuth(live); S.onAuth(wb);  // dead is first in the fan-out
+    await S.handle(live, { type: 'friend', op: 'add', code: 'BDF345', id: 31 });
+    const answers = live.rx.filter((m) => m.type === 'friend');
+    if (answers.length === 1 && answers[0].ok === true)
+      ok('(b4) one answer, and it is the true one — no failure frame after a success');
+    else fail('(b4) answers: ' + JSON.stringify(answers));
+    if (sent(live, 'friends').length === 1) ok('(b4) the player’s surviving device still got its snapshot');
+    else fail('(b4) surviving device: ' + JSON.stringify(live.rx));
+    if (sent(wb, 'friends').length === 1) ok('(b4) and so did the other player — one dead socket does not end the loop');
+    else fail('(b4) other player: ' + JSON.stringify(wb.rx));
+    if (st.friends.has(pair(A, B))) ok('(b4) the friendship the client was told about really is written');
+    else fail('(b4) rows: ' + JSON.stringify([...st.friends]));
   }
 
   // ---- (c) add refused: self, unknown code, already, blocked either way ------
@@ -907,6 +1042,45 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     else fail('(e3) blocked list: ' + JSON.stringify(f.blocked));
   }
 
+  // ---- (e4) a friend is never also a pending request ------------------------
+  // THE RACE, AS THE PANEL RENDERS IT. Every op here is read-then-write with no
+  // transaction, and one ordering survives its own recovery: an add-by-code
+  // racing a request from the other side writes the friendship while the
+  // request row stays, because each op read the relation before the other one
+  // wrote it. (Two simultaneous requests produce two rows and no friendship,
+  // which accept then clears — that ordering heals itself. This one does not.)
+  // The state is CONSTRUCTED rather than raced, because a race that depends on
+  // two microtask queues interleaving is not a test, it is a coin toss; what is
+  // asserted is the rule that makes the state harmless wherever it came from.
+  {
+    const st = memStore(ROWS);
+    await st.addFriendship(A, B);
+    await st.addRequest(B, A);        // incoming, from someone who is now a friend
+    await st.addFriendship(A, D);
+    await st.addRequest(A, D);        // outgoing, to someone who is now a friend
+    await st.addRequest(C, A);        // a genuine incoming request
+    await st.addRequest(A, E);        // a genuine outgoing request
+    const S = mkSocial(st);
+    const wa = mkws(A); S.onAuth(wa);
+    st.calls.length = 0;
+    await S.handle(wa, { type: 'friends' });
+    const f = last(wa, 'friends') || {};
+    const ids = (f.friends || []).map((x) => x.id);
+    if (ids.length === 2 && ids.includes(B) && ids.includes(D)) ok('(e4) both friendships are listed as friendships');
+    else fail('(e4) friends: ' + JSON.stringify(f.friends));
+    const inc = ((f.requests || {}).in || []).map((x) => x.id);
+    if (inc.length === 1 && inc[0] === C) ok('(e4) an incoming request from someone who is ALREADY a friend is not rendered — the panel cannot show one person twice');
+    else fail('(e4) incoming: ' + JSON.stringify(inc));
+    const outg = ((f.requests || {}).out || []).map((x) => x.id);
+    if (outg.length === 1 && outg[0] === E) ok('(e4) the outgoing direction is filtered the same way, and a real request survives both filters');
+    else fail('(e4) outgoing: ' + JSON.stringify(outg));
+    // The fix is a Set of ids the snapshot already holds. If it ever costs a
+    // read, it is the wrong fix.
+    if (st.calls.filter((c) => c === 'friendIdsOf').length === 1 && st.calls.length === 6)
+      ok('(e4) the filter costs no extra store read — the friend ids were already in hand');
+    else fail('(e4) store calls: ' + JSON.stringify(st.calls));
+  }
+
   // ---- (f) a request to someone who already requested you ACCEPTS ------------
   {
     const st = memStore(ROWS);
@@ -1012,11 +1186,132 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     else fail('(h) flap end state: ' + JSON.stringify(frames));
   }
 
+  // ---- (g3) PRESENCE IS NOT A ROUTE ROUND A BLOCK ---------------------------
+  // The one open block route. The fan-out reads the FRIENDSHIP table, so a block
+  // written without deleting the friendship — one forgotten line in the task that
+  // adds the block op — turns presence into a live session signal about somebody
+  // who blocked you, symmetrically, in both directions, with nothing in the
+  // suite failing. This case constructs exactly that state: a block, and a
+  // friendship row that outlived it. It is written to ENFORCE the dependency
+  // rather than to document it — the only way to pass it is for this layer to
+  // check the blocks itself, which flushPresence now does.
+  {
+    const st = memStore(ROWS);
+    await st.addFriendship(A, B);
+    await st.addFriendship(A, C);
+    await st.addBlock(B, A);                       // B blocked A; the row survives
+    const S = mkSocial(st);
+    const wb = mkws(B), wc = mkws(C);
+    S.onAuth(wb); S.onAuth(wc);
+    await sleep(120);
+    wb.rx.length = 0; wc.rx.length = 0;
+    const wa = mkws(A); S.onAuth(wa);
+    await sleep(120);
+    if (!sent(wb, 'presence').length) ok('(g3) presence: a friendship that outlived a block delivers NOTHING to the blocker');
+    else fail('(g3) presence reached a blocker: ' + JSON.stringify(wb.rx));
+    if (sent(wc, 'presence').length === 1) ok('(g3) presence: an ordinary friend is unaffected by somebody else’s block');
+    else fail('(g3) unblocked friend: ' + JSON.stringify(wc.rx));
+    // AND THE OTHER DIRECTION. Blocking is not a mute: the player who blocked
+    // must not be told about the player they blocked either.
+    wb.rx.length = 0; wc.rx.length = 0;
+    const wa2 = mkws(A);
+    S.onClose(wa); S.onAuth(wa2);                  // settle A back to online
+    await sleep(120);
+    wb.rx.length = 0;
+    S.onClose(wb);                                 // the blocker goes offline
+    await sleep(120);
+    if (!sent(wa2, 'presence').filter((m) => m.id === B).length)
+      ok('(g3) presence: the player who was blocked hears nothing about the blocker either');
+    else fail('(g3) presence reached the blocked player: ' + JSON.stringify(wa2.rx));
+  }
+
+  // ---- (h3) two flushes for one player cannot cross -------------------------
+  // The timer handle is cleared BEFORE the read, so a change arriving while the
+  // read is in flight schedules a second flush. Without a generation compared
+  // after the read, the older flush can finish last and latch the wrong dot —
+  // and it latches it for good, because it also records the state it sent as
+  // the one friends were last told, so the collapse suppresses the correction.
+  {
+    const st = memStore(ROWS);
+    await st.addFriendship(A, B);
+    const S = mkSocial(st);
+    const wb = mkws(B); S.onAuth(wb);
+    await sleep(120); wb.rx.length = 0;
+    const realIds = st.friendIdsOf;
+    let stall = true;
+    st.friendIdsOf = async (id) => { const v = await realIds(id); if (id === A && stall) { stall = false; await sleep(100); } return v; };
+    const wa = mkws(A); S.onAuth(wa);              // flush 1 fires and stalls in its read
+    await sleep(60);
+    S.onClose(wa);                                 // A is gone before that read returns
+    await sleep(200);
+    const frames = sent(wb, 'presence');
+    if (!frames.length) ok('(h3) a flush overtaken by a newer one says nothing — no stale dot is latched');
+    else fail('(h3) a stale flush latched: ' + JSON.stringify(frames));
+    const wa2 = mkws(A); S.onAuth(wa2);
+    await sleep(120);
+    if ((last(wb, 'presence') || {}).online === true)
+      ok('(h3) the guard drops a frame, never the player: the next change is delivered normally');
+    else fail('(h3) presence stopped working after the overtake: ' + JSON.stringify(wb.rx));
+    S.onClose(wa2); await sleep(120);
+  }
+
+  // ---- (h4) in and out inside one window costs nothing -----------------------
+  // The last state is SEEDED on first sight, because "nothing was ever said" and
+  // "offline" are the same thing to a friend. Without the seed the flush finds
+  // no entry, decides offline is a change, and pays a store read to broadcast an
+  // offline dot for a player nobody was told about.
+  {
+    const st = memStore(ROWS);
+    await st.addFriendship(A, B);
+    const S = mkSocial(st);
+    const wb = mkws(B); S.onAuth(wb);
+    await sleep(120);
+    wb.rx.length = 0; st.calls.length = 0;
+    const wa = mkws(A); S.onAuth(wa); S.onClose(wa);
+    await sleep(120);
+    if (!sent(wb, 'presence').length) ok('(h4) a player who connects and drops inside one window is never announced');
+    else fail('(h4) a never-announced player was announced: ' + JSON.stringify(wb.rx));
+    if (!st.calls.length) ok('(h4) and it costs no store read at all');
+    else fail('(h4) the flush read the database for a player nobody was told about: ' + JSON.stringify(st.calls));
+  }
+
+  // ---- (h5) the last-state map is bounded, like the online map beside it -----
+  // One permanent entry per account that has ever come online is the same
+  // unbounded growth dropping the empty Set in dropPresence exists to avoid.
+  // Offline is the last thing there is to say about an account, so the entry
+  // goes when it is said — and absent reads as offline, which is what the seed
+  // in (h4) writes, so nothing is re-sent.
+  {
+    const st = memStore(ROWS);
+    await st.addFriendship(A, B);
+    const S = mkSocial(st);
+    const wb = mkws(B); S.onAuth(wb);
+    const wa = mkws(A); S.onAuth(wa);
+    await sleep(120);
+    if (S.presenceLast.get(A) === true && S.presenceLast.get(B) === true) ok('(h5) an online account is remembered while it is online');
+    else fail('(h5) online states: ' + JSON.stringify([...S.presenceLast]));
+    S.onClose(wa);
+    await sleep(120);
+    if (!S.presenceLast.has(A) && S.online.size === 1) ok('(h5) the entry is deleted once friends have been told the account is offline');
+    else fail('(h5) after offline: ' + JSON.stringify([...S.presenceLast]));
+    const wa2 = mkws(A); S.onAuth(wa2);
+    await sleep(120);
+    if ((last(wb, 'presence') || {}).online === true) ok('(h5) and coming back still reads as a change — the delete did not break the collapse');
+    else fail('(h5) reconnect after delete: ' + JSON.stringify(wb.rx));
+    S.onClose(wa2); S.onClose(wb);
+    await sleep(120);
+    if (S.presenceLast.size === 0 && S.online.size === 0) ok('(h5) with everyone gone both maps are empty, not one entry per account that ever connected');
+    else fail('(h5) leftovers: ' + JSON.stringify([[...S.presenceLast], [...S.online.keys()]]));
+  }
+
   // ---- (h2) the pending flush never holds the process open -------------------
   // A 2 s window means there is almost always a timer in flight when the last
-  // socket goes. test/run-all.sh runs this file as a child process and waits
-  // for it to EXIT; a ref'd timer would make the suite hang for the length of
-  // the window at best, and a production server carries the same handle.
+  // socket goes, and a ref'd one keeps the event loop alive until it fires.
+  // NOT BECAUSE OF THIS FILE: it ends with process.exit, which tears down a
+  // ref'd timer without waiting, so the suite could never catch this by hanging
+  // — the earlier version of this note claimed it could, and was wrong. The
+  // handle is asserted DIRECTLY, here, because the thing that pays for it is the
+  // production server, which holds one per account and exits on its own terms.
   {
     const prev = process.env.SOCIAL_PRESENCE_MS;
     process.env.SOCIAL_PRESENCE_MS = '30000';
@@ -1057,10 +1352,14 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
   }
 
   // ---- (i2) the read model has a bucket of its own --------------------------
-  // Six store reads per frame and no limit in design 4.2, behind an engine
-  // socket limiter that allows 60 frames a second: one signed-in client could
-  // aim ~360 PostgREST reads a second at our own database. The allowance is
-  // deliberately far above any honest client — a panel opens, it does not poll.
+  // SIX STORE METHODS IS EIGHT ROUND TRIPS, not six: requestsOf makes two GETs
+  // (and a DELETE on the turn of the hour) and blockIdsOf makes two. With no
+  // limit, behind an engine socket limiter that allows 60 frames a second, one
+  // signed-in client could aim ~480 PostgREST round trips a second at our own
+  // database without sending a single write. The allowance is deliberately far
+  // above any honest client — a panel opens, it does not poll. WHAT IT DOES NOT
+  // DO: the bucket is on the SOCKET, so an account opening several sockets
+  // multiplies it, and nothing here caps an account or the database.
   {
     const st = memStore(ROWS);
     const S = mkSocial(st);
@@ -1080,6 +1379,29 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     if (Array.isArray((last(wa, 'friend') || {}).results))
       ok('(i2) rate limit: the snapshot bucket is separate from the friend-op bucket');
     else fail('(i2) friend op starved by the snapshot bucket: ' + JSON.stringify(last(wa, 'friend')));
+  }
+
+  // ---- (i3) an op that does not exist is limited too -------------------------
+  // It was answered ABOVE the rate check, which made it the one path in the
+  // layer with no limit at all: {type:'friend', op:'x'} costs no store read, but
+  // it costs a frame, every time, as fast as the socket limiter will carry it.
+  {
+    const st = memStore(ROWS);
+    const S = mkSocial(st);
+    const wa = mkws(A); S.onAuth(wa);
+    for (let i = 0; i < 10; i++) await S.handle(wa, { type: 'friend', op: 'nonsense' });
+    const before = sent(wa, 'friend').filter((m) => m.error === 'slow_down').length;
+    await S.handle(wa, { type: 'friend', op: 'nonsense', id: 9 });
+    const l = last(wa, 'friend') || {};
+    if (before === 0 && l.error === 'slow_down' && l.op === 'nonsense' && l.id === 9)
+      ok('(i3) an unknown op is answered ten times a minute, then slow_down — and the answer still names the op');
+    else fail('(i3) unknown op bucket: ' + before + ' early errors, then ' + JSON.stringify(l));
+    await S.handle(wa, { type: 'friend', op: 'search', q: 'Bunker Nine' });
+    if ((last(wa, 'friend') || {}).error === 'slow_down')
+      ok('(i3) it spent from the FRIEND bucket, not a bucket of its own — a misspelled op cannot buy extra searches');
+    else fail('(i3) unknown ops had their own allowance: ' + JSON.stringify(last(wa, 'friend')));
+    if (!st.calls.length) ok('(i3) and not one of the twelve reached the store');
+    else fail('(i3) unknown op reached the store: ' + JSON.stringify(st.calls));
   }
 
   // ---- (j) a guest, and a store that is down --------------------------------

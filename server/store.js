@@ -25,6 +25,14 @@ export const FRIEND_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';  // no I,
 export const FRIEND_CODE_LEN = 6;
 export const FRIEND_CODE_TRIES = 8;
 export const REQUEST_TTL_MS = 30 * 24 * 60 * 60 * 1000;                 // design section 3.2
+// HOW OFTEN THE STALE-REQUEST SWEEP MAY COST A ROUND TRIP. The sweep is
+// housekeeping, not an answer: the two reads in requestsOf already ignore
+// anything older than the cutoff, so nothing a caller sees depends on when the
+// DELETE runs. It used to run on EVERY requestsOf, which is once in relationTo
+// plus once in each of the two snapshots a fan-out builds — two or three
+// DELETEs per friend operation, and one on every friends frame. Once an hour
+// per store instance collects the same rows for a fraction of the traffic.
+export const SWEEP_MIN_MS = 60 * 60 * 1000;
 export const IDS_PER_CALL = 100;
 // name_reports.callsign is `check (char_length(callsign) between 1 and 16)`, the
 // same 16 as CALLSIGN_MAX in server/callsign.js. A value outside 1..16 is not a
@@ -107,6 +115,12 @@ function makeFriendCode() {
 export function createStore({ sbAdmin } = {}) {
   if (typeof sbAdmin !== 'function') throw new TypeError('createStore needs sbAdmin');
 
+  // When the stale-request sweep last cost a round trip. 0, not Date.now(), so a
+  // freshly built store still sweeps on its FIRST read — the sweep is not
+  // deferred, only stopped from repeating. A process that starts and is
+  // restarted hourly therefore still sweeps exactly as often as before.
+  let sweptAt = 0;
+
   // ---- profiles -------------------------------------------------------------
   async function profileById(userId) {
     const id = mustUuid(userId);
@@ -125,6 +139,18 @@ export function createStore({ sbAdmin } = {}) {
     return one(await sbAdmin('GET', `/profiles?callsign_key=eq.${enc(k)}&select=${PROFILE_COLS}&limit=1`));
   }
 
+  // CALLSIGN_KEY IS SELECTED BESIDE THE NAME, AND THAT IS THE WHOLE POINT OF THIS
+  // METHOD'S SHAPE. profiles.callsign is PATCHed by the account itself on every
+  // cloud save (profiles_update_own); callsign_key beside it has update revoked
+  // from the authenticated role by the phase 6 migration, so it is the only part
+  // of the row the server is entitled to believe. Every name in a friends panel
+  // — friends, both request directions and the blocked list — is resolved here,
+  // so selecting `id,callsign` alone left the caller with no way to prove any of
+  // them: an account holding only a rolled name could write another player's
+  // chosen callsign into its display column and render identically in every
+  // panel, and a name report would then point at the wrong account.
+  // server/social.js's provenName re-derives the key from the name and refuses
+  // the pair when they disagree. Two columns, not one, or that check cannot run.
   async function profilesByIds(ids) {
     const out = new Map();
     const seen = new Set();
@@ -137,8 +163,8 @@ export function createStore({ sbAdmin } = {}) {
     const list = [...seen];
     for (let i = 0; i < list.length; i += IDS_PER_CALL) {
       const chunk = list.slice(i, i + IDS_PER_CALL).map((v) => enc(v)).join(',');
-      const rows = await sbAdmin('GET', `/profiles?id=in.(${chunk})&select=id,callsign`);
-      for (const r of rows || []) if (r && r.id) out.set(r.id, { id: r.id, callsign: r.callsign || null });
+      const rows = await sbAdmin('GET', `/profiles?id=in.(${chunk})&select=id,callsign,callsign_key`);
+      for (const r of rows || []) if (r && r.id) out.set(r.id, { id: r.id, callsign: r.callsign || null, callsign_key: r.callsign_key || null });
     }
     return out;
   }
@@ -241,7 +267,8 @@ export function createStore({ sbAdmin } = {}) {
     const id = mustUuid(userId);
     const cut = new Date(Date.now() - REQUEST_TTL_MS).toISOString();
     // CONCURRENT, NOT SEQUENTIAL. These two reads do not depend on each other, and
-    // one Friends frame is nine round trips behind the 8s timeout Task 4 adds — a
+    // one Friends frame is EIGHT round trips — nine on the turn of the hour, when
+    // the sweep below runs — behind the 8s timeout Task 4 adds, so better than a
     // minute of a pending handler against a degraded upstream. One leg instead of
     // two. Both are still BARE: Promise.all rejects if either does, so a missing
     // table still reaches the caller. Only the sweep below may fail quietly.
@@ -251,13 +278,21 @@ export function createStore({ sbAdmin } = {}) {
       sbAdmin('GET', `/friend_requests?to_user=eq.${enc(id)}&created_at=gte.${enc(cut)}&select=from_user`),
       sbAdmin('GET', `/friend_requests?from_user=eq.${enc(id)}&created_at=gte.${enc(cut)}&select=to_user`),
     ]);
-    try {
-      // Housekeeping, not an answer: "a request older than 30 days is ignored and
-      // deleted when next read" (design 3.2). The two reads above already ignored
-      // them, so a sweep that fails costs nothing and must not fail the panel.
-      // THIS IS THE ONLY SWALLOWED CALL IN THE FILE.
-      await sbAdmin('DELETE', `/friend_requests?created_at=lt.${enc(cut)}`, undefined, 'return=minimal');
-    } catch { /* swept on the next read */ }
+    // AT MOST ONCE AN HOUR, NOT ONCE PER READ. Stamped BEFORE the await so two
+    // concurrent requestsOf calls — which is what one friend operation makes,
+    // relationTo plus a snapshot for each side — cannot both decide to sweep.
+    // A failed sweep does not un-stamp: the rows are still ignored by the reads
+    // above, and the next hour's sweep collects them.
+    if (Date.now() - sweptAt >= SWEEP_MIN_MS) {
+      sweptAt = Date.now();
+      try {
+        // Housekeeping, not an answer: "a request older than 30 days is ignored and
+        // deleted when next read" (design 3.2). The two reads above already ignored
+        // them, so a sweep that fails costs nothing and must not fail the panel.
+        // THIS IS THE ONLY SWALLOWED CALL IN THE FILE.
+        await sbAdmin('DELETE', `/friend_requests?created_at=lt.${enc(cut)}`, undefined, 'return=minimal');
+      } catch { /* swept on the next read */ }
+    }
     return {
       incoming: (inc || []).map((r) => r.from_user).filter(Boolean),
       outgoing: (outg || []).map((r) => r.to_user).filter(Boolean),

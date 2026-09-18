@@ -27,12 +27,26 @@ export const SOCIAL_TYPES = new Set(['friends', 'friend', 'block', 'callsign', '
 // these stop one signed-in client turning a single socket into a write
 // amplifier against PostgREST. friend and report are wired by Tasks 5 and 6.
 // `friends` — the READ MODEL — is not in design 4.2's table, and it is the
-// heaviest path in this layer: six PostgREST reads per frame, behind an engine
-// socket limiter that allows 60 frames a second. Unlimited, one signed-in client
-// could aim several hundred reads a second at our own database without sending a
-// single write. Twenty a minute is far above any honest client — a panel opens,
-// it does not poll — and 'slow_down' already has copy (BINDING resolution 16).
-// Stated here because it is a deviation from the spec's list, not an oversight.
+// heaviest path in this layer. THE COST, COUNTED IN ROUND TRIPS AND NOT IN
+// METHOD CALLS, because the first version of this note said "six reads" and six
+// is the number of store METHODS: friendIdsOf 1, requestsOf 2, blockIdsOf 2,
+// ensureFriendCode 1, profileById 1, profilesByIds 1 — EIGHT PostgREST round
+// trips per frame, nine when requestsOf's hourly sweep runs, ten the first time
+// an account is given a friend code. Behind an engine socket limiter that allows
+// 60 frames a second, unlimited, that is ~480 round trips a second from one
+// signed-in client without a single write. Twenty a minute is far above any
+// honest client — a panel opens, it does not poll — and caps this at 160 round
+// trips a minute per socket. 'slow_down' already has copy (BINDING 16).
+//
+// WHAT THIS BUCKET DOES NOT PROTECT, stated plainly so nothing is sized against
+// it again: it lives on the SOCKET. There is no per-account and no
+// per-connection cap in this server, so one account opening N sockets gets N
+// buckets and N times the allowance, and the database sees the sum. It caps a
+// connection, not an account and not the database. The push path is not in it
+// either — a snapshot pushed by somebody else's accept costs the same eight
+// round trips and spends nobody's allowance (see pushFriends, which collapses
+// those instead). A per-connection cap belongs with the connection accounting
+// in server.js and is the next task's, not this one's.
 const LIMITS = { callsign: 3, friend: 10, friends: 20, report: 5 };
 
 // The chosen-callsign cooling-off period: a rolling 24 hours since the last
@@ -63,6 +77,16 @@ export function createSocial({ store, terms, send, now }) {
     if (msg && msg.id !== undefined) frame.id = msg.id;
     send(ws, frame);
   }
+
+  // The send used by every loop that is not answering a request: a fan-out to a
+  // player's other sockets, a snapshot to the other side of an operation, a
+  // presence dot to a friend. A throw from ONE socket — a half-closed ws whose
+  // send() raises rather than returning — must not take the rest of the loop
+  // with it. In pushFriends it did worse than that: the operation had already
+  // been written and already been answered ok, so the throw propagated into
+  // handleFriend's catch and emitted a second frame saying it had failed, while
+  // the remaining sockets and the other player got no snapshot at all.
+  const safeSend = (ws, frame) => { try { send(ws, frame); } catch { /* one dead socket, not the loop */ } };
 
   // ---- The two gates (BINDING.md resolutions 1 and 18) ----------------------
   // A GUEST HAS AN ACCOUNT ID. public/cloud.js mints an ANONYMOUS Supabase
@@ -137,6 +161,14 @@ export function createSocial({ store, terms, send, now }) {
     let set = online.get(ws.userId);
     if (!set) { set = new Set(); online.set(ws.userId, set); }
     set.add(ws);
+    // SEED THE LAST STATE ON FIRST SIGHT. Nobody has ever been told anything
+    // about this account, and "nothing said" is the same as offline — so record
+    // it. Without the seed a player who connects and drops inside one window
+    // ends the window offline against an EMPTY last state, which is not equal,
+    // so the flush costs a store read and broadcasts an offline dot for someone
+    // no friend was ever told about. presenceLast is cleared again when a flush
+    // reports offline, so this runs for every fresh arrival, not only the first.
+    if (!presenceLast.has(ws.userId)) presenceLast.set(ws.userId, false);
     // Every counted change asks for a flush, rather than only the first socket.
     // The "only the first and last socket of a player move presence" property
     // comes from the COLLAPSE in flushPresence, which is the one place it can be
@@ -161,8 +193,9 @@ export function createSocial({ store, terms, send, now }) {
     if (!set || !set.delete(ws)) return;
     // Drop the empty set rather than leaving it behind: this Map is keyed by
     // account and would otherwise grow by one entry per account that has ever
-    // connected, for the life of the process.
-    if (!set.size) online.delete(id);
+    // connected, for the life of the process. pushAt goes with it for the same
+    // reason — there is nobody left to collapse a snapshot for.
+    if (!set.size) { online.delete(id); pushAt.delete(id); }
     presenceChanged(id);
   }
 
@@ -286,7 +319,18 @@ export function createSocial({ store, terms, send, now }) {
   const envPresence = Number(process.env.SOCIAL_PRESENCE_MS);
   const PRESENCE_MS = Number.isFinite(envPresence) && envPresence >= 0 ? envPresence : 2000;
   const presenceTimers = new Map();   // userId -> Timeout; at most one at a time
-  const presenceLast = new Map();     // userId -> the state its friends were last TOLD
+  // userId -> the state its friends were last TOLD. BOUNDED THE SAME WAY the
+  // online map beside it is: the entry is deleted the moment a flush tells
+  // friends this account is OFFLINE, which is the last thing there is to say
+  // about it. Left in place it would be one permanent entry per account that has
+  // ever come online, for the life of the process — the exact growth dropping
+  // the empty Set in dropPresence exists to avoid. Absent therefore means
+  // "offline as far as anyone was told", which is what the seed in onAuth
+  // writes on first sight, so the two agree and no state is re-sent.
+  const presenceLast = new Map();
+  // userId -> a counter bumped by EVERY change. Read before the flush's store
+  // read and compared after it; see flushPresence.
+  const presenceGen = new Map();
 
   const isOnline = (id) => { const s = online.get(id); return !!(s && s.size); };
   const socketsOf = (id) => { const s = online.get(id); return s ? [...s] : []; };
@@ -311,7 +355,11 @@ export function createSocial({ store, terms, send, now }) {
   // window there is nearly always one in flight, and test/run-all.sh waits for
   // this file's child process to exit.
   function presenceChanged(id) {
-    if (!id || presenceTimers.has(id)) return;
+    if (!id) return;
+    // BUMPED ON EVERY CHANGE, including the ones that schedule no timer. This is
+    // what a flush already in flight compares itself against.
+    presenceGen.set(id, (presenceGen.get(id) || 0) + 1);
+    if (presenceTimers.has(id)) return;
     const t = setTimeout(() => {
       presenceTimers.delete(id);
       flushPresence(id).catch(() => {});
@@ -321,19 +369,44 @@ export function createSocial({ store, terms, send, now }) {
   }
 
   async function flushPresence(id) {
+    // THE TIMER HANDLE IS CLEARED BEFORE THIS RUNS, so a change arriving while
+    // the reads below are in flight schedules a SECOND flush — two flushes for
+    // one player, interleaved, with the older one free to finish last and latch
+    // a wrong dot until that player's next change. The generation is read here
+    // and compared after the await: if it moved, a newer flush is already
+    // scheduled and owns the answer, so this one says nothing at all.
+    const gen = presenceGen.get(id);
     const state = isOnline(id);
     if (presenceLast.get(id) === state) return;
-    let ids;
+    let ids, blocks;
     // A store fault costs one presence dot and nothing else. Recording the state
     // as delivered only AFTER the read succeeds is what makes the next change
     // try again rather than skip.
-    try { ids = await store.friendIdsOf(id); } catch { return; }
-    presenceLast.set(id, state);
+    try {
+      // BLOCKS ARE READ HERE, not assumed away. This fan-out reads the
+      // friendship table, and a block written without deleting the friendship —
+      // which is one forgotten line in Task 6 — turns it into a live session
+      // signal about somebody who blocked you, symmetrically, in both
+      // directions. One store method (two GETs) per flush, and a flush is
+      // debounced to at most one per player per window, so the guarantee is a
+      // property of THIS function rather than of another task remembering.
+      [ids, blocks] = await Promise.all([store.friendIdsOf(id), store.blockIdsOf(id)]);
+    } catch { return; }
+    if (presenceGen.get(id) !== gen) return;
+    // Offline is the LAST thing there is to say about an account, so both entries
+    // go rather than sitting in their maps for ever. Absent reads as offline,
+    // which is exactly what onAuth seeds on first sight.
+    if (state) presenceLast.set(id, state);
+    else { presenceLast.delete(id); presenceGen.delete(id); }
+    const hidden = new Set([...blocks.blocked, ...blocks.blockedBy]);
     const frame = { type: 'presence', id, online: state };
     // FRIENDS ONLY, and the list comes from the friendship table rather than
     // from the online map: presence is the one frame in this layer that goes to
     // someone who did not ask for it, so who receives it is the whole guarantee.
-    for (const fid of ids) for (const w of socketsOf(fid)) send(w, frame);
+    for (const fid of ids) {
+      if (hidden.has(fid)) continue;
+      for (const w of socketsOf(fid)) safeSend(w, frame);
+    }
   }
 
   // ---- names that came out of the database -----------------------------------
@@ -354,33 +427,50 @@ export function createSocial({ store, terms, send, now }) {
     return shown.toLowerCase() === key ? shown : null;
   };
 
-  // A name with no key to prove it. server/store.js's profilesByIds selects
-  // `id,callsign` alone, so every name in the panel arrives this way, and a
-  // ROLLED name legitimately has no key and cannot be refused for lacking one.
-  // It is put through the SAME rules the callsign message enforces at set time —
-  // the character class, the length, and the injected blocklist — before anybody
-  // else sees it.
+  // A second pass over a name the key already proved. The blocklist is read at
+  // START-UP and a term can be added to it after a name was set, so a name that
+  // was clean when it was stored is checked again at the moment it is shown.
+  // This is belt and braces on top of provenName, NOT a substitute for it: the
+  // character class here is letters, digits and spaces, so plenty of unwanted
+  // text passes it, and a name it passes is still only a string the account
+  // itself wrote unless a key stands behind it.
   const presentable = (raw) => { const v = validateCallsign(raw, terms); return v.ok ? v.name : null; };
 
-  // What another player is shown for a row: a proven chosen name verbatim, a
-  // rolled name filtered, and NOTHING for a row that holds a key its callsign no
-  // longer matches. null keeps the row — and the Report and Block buttons on
-  // it — in place, which dropping the entry would not.
+  // WHAT ANOTHER PLAYER IS SHOWN FOR A ROW: the name the SERVER stored, proven
+  // against callsign_key, and nothing else. A row with no key — an account
+  // holding only a rolled name — is shown as null, because its display column is
+  // free text the account PATCHes itself and there is nothing to check it
+  // against. That is the invariant this release committed to, and the blocklist
+  // is not a stand-in for it: 'FOLLOW ME OK' is clean, in class and in length,
+  // and an account with a rolled name could put ANOTHER PLAYER'S chosen callsign
+  // there and render identically in a panel — with a name report then pointing
+  // at the wrong account. Search hands out an id for any known callsign and a
+  // request puts the requester's name into the target's incoming list, so this
+  // is reachable against any account whose callsign is known.
+  //
+  // null keeps the ROW — and Task 8's Report and Block buttons on it — in place,
+  // which dropping the entry would not. Task 8 renders the fallback copy.
   const displayName = (row) => {
-    if (!row) return null;
-    return row.callsign_key ? provenName(row) : presentable(row.callsign);
+    const shown = provenName(row);
+    return shown === null ? null : presentable(shown);
   };
 
   const skinOf = (row) => (row && typeof row.skin === 'string' && SKIN_IDS.has(row.skin) ? row.skin : null);
 
   // ---- the friends read model (design 4.2, row 1) ----------------------------
-  // Five independent reads in one leg, then ONE name lookup: friends, both
-  // request directions and the blocked list all resolve out of a single
+  // Five independent store METHODS in one leg, then ONE name lookup: friends,
+  // both request directions and the blocked list all resolve out of a single
   // profilesByIds rather than one query per person in the panel.
   //
-  // profileById is the sixth read and the only per-id one. It is the player's
-  // OWN row, and it is here because it is the only row this frame gets to see a
-  // callsign_key for — which is what BINDING resolution 13 needs.
+  // profileById is the sixth METHOD and the only per-id one. It is the player's
+  // own row, and it is here because BINDING resolution 13 needs this account's
+  // own chosen name and neither of the other profile reads answers for it.
+  //
+  // SIX METHODS IS NOT SIX ROUND TRIPS. requestsOf makes two GETs (and a DELETE
+  // on the turn of the hour) and blockIdsOf makes two, so one frame is EIGHT
+  // PostgREST round trips, nine when the sweep runs, and ten the first time an
+  // account is given a friend code. Anything sizing a limit against this number
+  // must use the round trips, not the method count.
   async function friendsSnapshot(userId) {
     const [ids, reqs, blocks, friendCode, self] = await Promise.all([
       store.friendIdsOf(userId),
@@ -400,8 +490,20 @@ export function createSocial({ store, terms, send, now }) {
     const hidden = new Set([...blocks.blocked, ...blocks.blockedBy]);
     const visible = (list) => list.filter((id) => !hidden.has(id));
     const friendIds = visible(ids);
-    const incoming = visible(reqs.incoming);
-    const outgoing = visible(reqs.outgoing);
+    // A REQUEST FROM SOMEONE WHO IS ALREADY A FRIEND IS NOT A REQUEST. Every op
+    // in this layer is read-then-write with no transaction, and one ordering
+    // leaves exactly that behind: an add-by-code racing a request from the other
+    // side writes the friendship and the request row survives, because each op
+    // read the relation before the other wrote it. Unfiltered, the panel then
+    // shows the same person as a friend AND as an incoming request until
+    // somebody acts on it — and Accept on a row that is already a friendship
+    // does nothing a player can see. The friend ids are already in hand, so this
+    // costs no read; it is the cheap half of the fix and the write side stays
+    // racy by design (the unique constraints, not a read, settle the rows).
+    const friends = new Set(friendIds);
+    const pending = (list) => visible(list).filter((id) => !friends.has(id));
+    const incoming = pending(reqs.incoming);
+    const outgoing = pending(reqs.outgoing);
     const wanted = [...new Set([...friendIds, ...incoming, ...outgoing, ...blocks.blocked])];
     const names = wanted.length ? await store.profilesByIds(wanted) : new Map();
     const nameOf = (id) => displayName(names.get(id));
@@ -426,12 +528,49 @@ export function createSocial({ store, terms, send, now }) {
   // own faults: a fan-out is a courtesy, never a reason to fail an operation
   // that has already been written and already been answered. Carries no `id`,
   // because it answers no request — a client must not match it to one.
-  async function pushFriends(userId) {
+  //
+  // COLLAPSED, THE WAY PRESENCE IS, BECAUSE THIS BURST IS DRIVEN BY OTHER
+  // PEOPLE. A snapshot is eight PostgREST round trips and a frame to every one
+  // of the player's devices, and NOTHING here touches the player's own rate
+  // bucket: ten friends accepting at once cost the player at the other end ten
+  // snapshots, eighty round trips, and ten frames per device, on ten other
+  // people's allowances. The leading push still goes out IMMEDIATELY — a panel
+  // must react to the operation the player just performed — and any further
+  // push for the same player inside the window is collapsed into one trailing
+  // snapshot, which is built when it fires and therefore carries the newest
+  // state. A window of 0 (what the suite's op sections use) disables the
+  // collapse entirely, so every push is immediate.
+  const envPush = Number(process.env.SOCIAL_PUSH_MS);
+  const PUSH_MS = Number.isFinite(envPush) && envPush >= 0 ? envPush : 250;
+  const pushAt = new Map();       // userId -> when a snapshot was last built
+  const pushTimers = new Map();   // userId -> the pending trailing push
+  async function sendSnapshot(userId) {
     const live = socketsOf(userId);
     if (!live.length) return;
+    pushAt.set(userId, Date.now());
     let snap;
     try { snap = await friendsSnapshot(userId); } catch { return; }
-    for (const w of live) send(w, snap);
+    for (const w of live) safeSend(w, snap);
+  }
+  async function pushFriends(userId) {
+    if (!userId) return;
+    // A trailing push is already scheduled and will carry whatever this change
+    // did, so there is nothing to add.
+    if (pushTimers.has(userId)) return;
+    const since = Date.now() - (pushAt.get(userId) || 0);
+    if (PUSH_MS > 0 && since < PUSH_MS) {
+      const t = setTimeout(() => {
+        pushTimers.delete(userId);
+        // Nobody left to tell: drop the entries rather than grow two maps by an
+        // account each, the way presenceLast is bounded above.
+        if (!socketsOf(userId).length) { pushAt.delete(userId); return; }
+        sendSnapshot(userId).catch(() => {});
+      }, PUSH_MS - since);
+      if (typeof t.unref === 'function') t.unref();
+      pushTimers.set(userId, t);
+      return;
+    }
+    await sendSnapshot(userId);
   }
   const pushBoth = async (a, b) => { await pushFriends(a); await pushFriends(b); };
 
@@ -589,8 +728,14 @@ export function createSocial({ store, terms, send, now }) {
   async function handleFriend(ws, msg) {
     const op = typeof msg.op === 'string' ? msg.op : '';
     const fn = FRIEND_OPS[op];
+    // THE RATE CHECK COMES BEFORE THE ANSWER, INCLUDING FOR AN OP THAT DOES NOT
+    // EXIST. An unknown op used to be answered above this line, which made it
+    // the one path in the layer with no limit at all: a client sending
+    // {type:'friend', op:'x'} got a frame back every time, as fast as the
+    // engine's socket limiter would carry it. An unknown op costs no store read,
+    // but it costs a reply, so it spends from the friend bucket like the rest.
+    if ((!fn || FRIEND_LIMITED.has(op)) && !rateOk(ws, 'friend', LIMITS.friend)) return friendReply(ws, msg, op || 'unknown', { error: 'slow_down' });
     if (!fn) return friendReply(ws, msg, op || 'unknown', { error: 'unavailable' });
-    if (FRIEND_LIMITED.has(op) && !rateOk(ws, 'friend', LIMITS.friend)) return friendReply(ws, msg, op, { error: 'slow_down' });
     // A catch of its own BESIDE handle()'s net, because this reply has to carry
     // the OP: a client with two friend answers outstanding cannot tell which one
     // failed from { type:'friend', error:'unavailable' } alone.
@@ -598,5 +743,10 @@ export function createSocial({ store, terms, send, now }) {
     catch { friendReply(ws, msg, op, { error: 'unavailable' }); }
   }
 
-  return { handle, online, onAuth, onClose };
+  // presenceLast is handed out for the same reason `online` is, and for no
+  // other: both are process-lifetime Maps keyed by account, so the only way a
+  // test can assert they do not grow by an entry per account that has ever
+  // connected is to look at them. Nothing outside writes to either. server.js
+  // uses handle, onAuth and onClose alone.
+  return { handle, online, onAuth, onClose, presenceLast };
 }

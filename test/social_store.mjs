@@ -110,14 +110,27 @@ function mkSb(routes = []) {
 }
 
 // ---- (d) profilesByIds: the one method whose ids come straight off a socket ---
+// THE SELECT IS PINNED, AND callsign_key IS THE REASON. Every name in a friends
+// panel is resolved through this one call, and profiles.callsign is a column the
+// account PATCHes itself on every cloud save. Without the key beside it the
+// caller has nothing to check the name against, and an account holding only a
+// rolled name can write another player's chosen callsign into its display column
+// and render identically in every panel — impersonation that a name report then
+// attributes to the wrong account. server/social.js's provenName is what runs
+// that check; it cannot run on a column that was never selected.
 {
-  const h = mkSb([[/^GET/, [{ id: A, callsign: 'One' }, { id: C, callsign: 'Three' }]]]);
+  const h = mkSb([[/^GET/, [{ id: A, callsign: 'One', callsign_key: 'one' }, { id: C, callsign: 'Three' }]]]);
   const m = await h.store.profilesByIds([A, 'not-a-uuid', C, A]);
-  const want = `/profiles?id=in.(${A},${C})&select=id,callsign`;
-  if (h.calls.length === 1 && h.calls[0].path === want) ok('(d) profilesByIds drops a junk id, collapses the duplicate, one exact path');
+  const want = `/profiles?id=in.(${A},${C})&select=id,callsign,callsign_key`;
+  if (h.calls.length === 1 && h.calls[0].path === want) ok('(d) profilesByIds drops a junk id, collapses the duplicate, one exact path — and selects callsign_key');
   else fail('(d) profilesByIds path: ' + JSON.stringify(h.calls.map((c) => c.path)));
   if (m instanceof Map && m.size === 2 && m.get(A).callsign === 'One' && m.get(C).id === C) ok('(d) profilesByIds returns a Map keyed by id');
   else fail('(d) profilesByIds map: ' + JSON.stringify([...(m || [])]));
+  // The key has to survive the projection, not just the query string, or the
+  // name it proves arrives at the panel unprovable anyway.
+  if (m.get(A).callsign_key === 'one' && m.get(C).callsign_key === null)
+    ok('(d) profilesByIds carries callsign_key through, and a row without one reads null rather than undefined');
+  else fail('(d) profilesByIds keys: ' + JSON.stringify([...(m || [])]));
 
   const h2 = mkSb();
   const m2 = await h2.store.profilesByIds(['x', 12, null, undefined]);
@@ -282,6 +295,18 @@ function mkSb(routes = []) {
   else fail('(h) cutoff age ms: ' + age);
   if (paths[2] && paths[2].startsWith('DELETE /friend_requests?created_at=lt.')) ok('(h) the stale sweep runs on read, as section 3.2 requires');
   else fail('(h) sweep: ' + paths[2]);
+
+  // AND IT RUNS ONCE AN HOUR, NOT ONCE A READ. One friend operation calls
+  // requestsOf three times — relationTo, then a snapshot for each side of the
+  // fan-out — and every friends frame calls it again, so an unthrottled sweep was
+  // a DELETE on nearly every social message. The rows are already excluded by the
+  // two reads above, so nothing a caller sees depends on when it runs. The FIRST
+  // read of a fresh store still sweeps, which is why every case above is unchanged.
+  h.calls.length = 0;
+  await h.store.requestsOf(A);
+  const again = h.calls.map((c) => c.method);
+  if (same(again, ['GET', 'GET'])) ok('(h) a second read inside the hour makes the two reads and NO sweep');
+  else fail('(h) second read: ' + JSON.stringify(again));
 
   const h2 = mkSb();
   await h2.store.addRequest(B, A);
