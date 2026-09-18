@@ -28,6 +28,17 @@ import { isGeneratedCallsign } from '../public/game-core.js';
 // engine here gives a second, independent `rooms` Map with no listeners and no
 // timers, which the section tears down when it is done.
 import { handleClientMessage } from '../public/room-engine.js';
+// ...and the two lists, to build section 6's profanity fixture at RUN TIME
+// instead of spelling a slur in this file. The fixture has to be a term the
+// ENGINE refuses and server/blocklist.txt does NOT, because that is exactly
+// the name the server would store and only the engine's own check keeps off
+// the board. Deriving it means the check cannot go stale when either list
+// moves — and if the lists ever fully agree, it says so and skips rather than
+// quietly asserting nothing.
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import { validateCallsign, loadBlocklist } from '../server/callsign.js';
 
 const URL = process.env.WS || 'ws://localhost:3000/ws';
 const out = { steps: [], errors: [] };
@@ -316,6 +327,57 @@ async function noFreeTextNames() {
   if (second && second !== 'Someone Else Entirely' && isGeneratedCallsign(second))
     step('a verified socket still may not present any OTHER free text');
   else fail(`a second free-text name passed on a verified socket: ${JSON.stringify(second)}`);
+
+  // AND THE EXEMPTION IS NOT EXEMPT FROM THE PROFANITY FILTER. sanitizeName
+  // used to return `allowed` BEFORE isProfane() ran, which made the one
+  // player-AUTHORED string in the product the only string exempt from the
+  // product's own check — with the server blocklist as the sole authority. The
+  // two filters are not the same list and cannot be: the blocklist is
+  // substring-matched on a folded form, so the engine's whole-token BAD_WORD
+  // terms cannot go in it at all, and terms whose folded form sits inside
+  // innocent names are deliberately left out. Anything in that gap is a name
+  // the server stores happily, and THIS is what stops it reaching a lobby.
+  //
+  // The fixture is derived, never spelled here: the first term in the engine's
+  // own BAD_SUB that the shipped blocklist does not already refuse.
+  const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+  const terms = loadBlocklist(path.join(ROOT, 'server', 'blocklist.txt'));
+  const engineSrc = readFileSync(path.join(ROOT, 'public', 'room-engine.js'), 'utf8');
+  const listSrc = (engineSrc.match(/const BAD_SUB = \[([\s\S]*?)\];/) || [])[1] || '';
+  const badSub = [...listSrc.matchAll(/'([a-z]+)'/g)].map((m) => m[1]);
+  if (!badSub.length) {
+    fail('could not read BAD_SUB out of public/room-engine.js — the fixture below proves nothing');
+  } else {
+    // The 'Xxxx Ridge' shape is the one a player actually types, and the
+    // server's own length and character rules apply to it as well.
+    //
+    // EVERY term, not a sample. The guarantee is about the two layers TOGETHER:
+    // a term is either refused by the server filter before it is ever stored,
+    // or — when it sits in the gap between the two lists — replaced by the
+    // engine at the door. Neither layer alone covers all of them, and the count
+    // of each is printed so the split is visible when either list moves.
+    const shapes = badSub
+      .map((t) => `${t[0].toUpperCase()}${t.slice(1)} Ridge`)
+      .filter((n) => [...n].length <= 16);
+    const gap = shapes.filter((n) => validateCallsign(n, terms).ok === true);
+    const leaked = [];
+    for (const dirty of gap) {
+      const w = { readyState: 1, chosenName: dirty, _rx: [], send(s) { this._rx.push(JSON.parse(s)); } };
+      handleClientMessage(w, { type: 'create', name: dirty, skin: 'olive', mode: 'duel' });
+      const got = nameIn(w);
+      try { handleClientMessage(w, { type: 'leave' }); } catch {}
+      if (got === dirty || !got || !isGeneratedCallsign(got)) leaked.push(dirty);
+    }
+    // No term is ever printed: the messages carry counts and the shape only.
+    if (!leaked.length) {
+      step(`${shapes.length} engine BAD_SUB term(s) in the typed-name shape: ${shapes.length - gap.length}`
+        + ` refused by the server filter before storage, ${gap.length} stored but replaced at the door`
+        + ' by isProfane — none reaches a lobby');
+    } else {
+      fail(`${leaked.length} of ${gap.length} stored chosen callsign(s) carrying an engine BAD_SUB term`
+        + ' were presented VERBATIM — the exemption is returning before isProfane');
+    }
+  }
 
   // A GUEST IS NOT EXEMPT, and this is the case that actually walks in the door.
   // public/cloud.js signs every player who saves anything into an ANONYMOUS

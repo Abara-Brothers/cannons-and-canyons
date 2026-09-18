@@ -217,7 +217,18 @@ function sanitizeName(raw, seat = 0, allowed = null) {
   // What is returned is `allowed` — the SERVER's stored string — never the
   // client's copy of it. A near-miss that normalises equal still cannot smuggle
   // a different sequence of characters onto another player's screen.
-  if (typeof allowed === 'string' && allowed
+  //
+  // AND IT STILL FACES THIS FILE'S OWN FILTER. The exemption used to return
+  // before isProfane() below, which made the one player-AUTHORED string in the
+  // product the only string exempt from the product's own profanity check. The
+  // server blocklist was meant to be the replacement authority and is not the
+  // same list: it is substring-matched with safe words, so it cannot carry the
+  // BAD_WORD terms at all, and it deliberately leaves out terms whose folded
+  // form appears inside innocent names. Keeping isProfane here is the defence
+  // in depth that makes the ordering safe whatever the server's term list
+  // contains — including a stored name from before a term was added to it.
+  // It is checked against `allowed`, the SERVER's string, not the client's.
+  if (typeof allowed === 'string' && allowed && !isProfane(allowed)
     && name.normalize('NFC').trim().replace(/\s+/gu, ' ') === allowed) return allowed;
   if (isGeneratedCallsign(name) && !isProfane(name)) return name;
   const h = [...name].reduce((a, c) => (a * 31 + c.charCodeAt(0)) | 0, 7) + seat * 2654435761;

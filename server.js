@@ -27,7 +27,7 @@ import {
 // engine gains no database (ADR-001).
 import { createStore } from './server/store.js';
 import { createSocial, SOCIAL_TYPES } from './server/social.js';
-import { loadBlocklist } from './server/callsign.js';
+import { loadBlocklist, normaliseCallsign } from './server/callsign.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, 'public');
@@ -196,6 +196,14 @@ setAuthSink((ws, token) => {
     // ws.userId, so clearing first would strand this socket in the online map
     // under an account it no longer speaks for (design 4.1).
     if (social) social.onClose(ws);
+    // BUMP THE GENERATION FIRST. Clearing the four fields does not reach a
+    // verification that is ALREADY in flight: that promise resolves a moment
+    // later and writes ws.userId, ws.isGuest and ws.chosenName straight back,
+    // so a sign-out that lands mid-hello is silently undone and the socket
+    // keeps the account's presence entry and its free-text exemption. The
+    // generation is the cancel: the callback below bails when it no longer
+    // holds the current one.
+    ws.authGen = (ws.authGen || 0) + 1;
     ws.userId = null; ws.isGuest = false; ws.chosenName = null; ws.authPending = null;
     return;
   }
@@ -228,8 +236,16 @@ setAuthSink((ws, token) => {
   // millisecond. `authPending` is the handle the message loop waits on, so a
   // `friends` sent straight after `hello` is answered for the account instead
   // of being refused with sign_in for a race the client cannot see.
+  //
+  // ONE GENERATION PER VERIFICATION, taken before the fetch. It is what makes
+  // the callback cancellable: a sign-out, or a second hello for a different
+  // account, bumps it, and every write below is then refused. Without it the
+  // callback wrote the id and the guest flag unconditionally when the fetch
+  // settled — so a sign-out landing mid-flight was undone, and of two
+  // concurrent hellos the LOSER's answer could overwrite the winner's.
+  const gen = (ws.authGen = (ws.authGen || 0) + 1);
   ws.authPending = sbAccountFromToken(token).then(async (acct) => {
-    if (!acct) return;
+    if (!acct || ws.authGen !== gen) return;
     const id = acct.id;
     // A socket that hellos as a DIFFERENT account would otherwise leave the
     // previous one's presence behind — same reason as the sign-out branch.
@@ -249,10 +265,47 @@ setAuthSink((ws, token) => {
     if (ws.isGuest) return;
     try {
       const p = await store.profileById(id);
-      // Re-check: a second hello may have landed while this read was in flight.
-      if (ws.userId === id) ws.chosenName = p && p.callsign_key ? p.callsign : null;
+      // Re-check the GENERATION, not just the id: a sign-out, or a second hello
+      // for any account, may have landed while this read was in flight, and the
+      // generation is the one handle that catches all three.
+      //
+      // THE STRING MUST PROVE THE SERVER STORED IT, not merely that a key
+      // exists beside it. `callsign_key` is server-only and the migration
+      // revokes it — but `callsign` is NOT: the same migration grants
+      // `update (id, callsign, progression, progression_version)` to
+      // `authenticated`, because public/cloud.js save() writes the rolled name
+      // on every cloud save, and the column's only constraint is a length
+      // check with no content rule. So: sign in with a linked account, send ONE
+      // legitimate callsign frame (which sets callsign_key permanently), then
+      // PATCH your own row's `callsign` to any 16 characters and reconnect. A
+      // key-only test hands that string to sanitizeName as `allowed` and it
+      // reaches every opponent's screen and the shared result card verbatim —
+      // with no socket frame sent, so the blocklist, the character class, the
+      // once-a-day gate and the 3/min bucket are all bypassed.
+      //
+      // The key IS the proof: server/callsign.js validateCallsign returns
+      // key = normaliseCallsign(name).toLowerCase(), so a name the server
+      // stored still normalises to the key beside it and a substituted one
+      // does not. normaliseCallsign is IMPORTED, not re-spelled here: a second
+      // hand-rolled copy drifts from the one that wrote the key, and every
+      // drift in this direction fails OPEN.
+      //
+      // What is kept is the NORMALISED form, not the raw column: it is what
+      // passed validation up to case, and it is the exact shape the engine
+      // compares the client's copy against.
+      if (ws.authGen === gen && ws.userId === id) {
+        const shown = normaliseCallsign(p && typeof p.callsign === 'string' ? p.callsign : '');
+        const key = p && typeof p.callsign_key === 'string' ? p.callsign_key : '';
+        ws.chosenName = key && shown.toLowerCase() === key ? shown : null;
+      }
     } catch {}
-  }).catch(() => {}).finally(() => { ws.authPending = null; });
+  }).catch(() => {}).finally(() => {
+    // ONLY THE CURRENT generation clears the handle. Clearing it unconditionally
+    // meant the FIRST hello to settle dropped the handle the message loop is
+    // waiting on, and a social frame sent during the second verification was
+    // answered sign_in for a race the client cannot see.
+    if (ws.authGen === gen) ws.authPending = null;
+  });
 });
 
 // A player registered a push subscription: persist it keyed to their account

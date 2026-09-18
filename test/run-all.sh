@@ -132,6 +132,11 @@ else
   # shared server up — and must never be aimed at a deployed one.
   echo "== self-hosted (spawns + signals its own server) =="
   run shutdown node test/shutdown.mjs
+  # The AUTH SINK, driven end to end: a profile row whose `callsign` does not
+  # normalise to its own `callsign_key` must not become ws.chosenName, because
+  # `callsign` is a column the account itself may PATCH. Mocks GoTrue and
+  # PostgREST and spawns its own server, so it never reaches Supabase.
+  run auth_sink node test/auth_sink.mjs
   # Also self-hosted: mocks Supabase locally and asserts the push-persistence
   # wire shapes (verify, upsert, nudge lookup, delivery, dead-endpoint delete).
   run push_persist node test/push_persist.mjs

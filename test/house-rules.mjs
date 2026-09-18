@@ -929,28 +929,86 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
     bad.push('sbAccountFromToken does not read is_anonymous as "!== false" — either it ignores the'
       + ' field (every guest reads as linked) or it fails OPEN when GoTrue omits it');
   }
-  if (!/ws\.isGuest = acct\.anonymous;/.test(src)) {
+
+  // SCOPED TO THE SINK'S OWN BODY, and with its comments stripped, the way the
+  // sbAdmin check above scopes itself. Matched against the whole file these
+  // regexes were satisfied by a COMMENTED-OUT or otherwise dead copy of the
+  // line anywhere in server.js, and said nothing about whether the line was on
+  // the auth-sink path at all.
+  //
+  // THE TRADE, stated plainly: this is still source text. Stripping `//`
+  // comments kills the commented-out copy, and the slice kills the
+  // somewhere-else copy, but a live `if (false)` branch INSIDE the sink would
+  // still satisfy it, and the regexes still pin exact wording (a semantically
+  // identical rewording fails). What actually EXECUTES these lines is
+  // test/auth_sink.mjs, which drives the real sink in a real server against a
+  // mock GoTrue and PostgREST. This section is the cheap tripwire for the two
+  // lines that suite cannot distinguish; it is not the proof.
+  const sinkStart = src.indexOf('setAuthSink((ws, token) => {');
+  let sink = '';
+  if (sinkStart < 0) {
+    bad.push('no "setAuthSink((ws, token) => {" in server.js — there is no auth sink to check, and'
+      + ' every assertion below would pass vacuously against the rest of the file');
+  } else {
+    const sinkEnd = src.indexOf('\n});', sinkStart);
+    sink = src.slice(sinkStart, sinkEnd < 0 ? src.length : sinkEnd)
+      .split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+  }
+  const inSink = (re) => sink && re.test(sink);
+
+  if (sink && !inSink(/ws\.isGuest = acct\.anonymous;/)) {
     bad.push('the auth sink does not set ws.isGuest from the verified account — every social gate'
       + ' downstream then reads undefined and waves guests through');
   }
   // The sink must use the ACCOUNT helper, not the id-only one. Reverting this
   // one call reinstates the whole hole with nothing else looking different.
-  if (!/ws\.authPending = sbAccountFromToken\(token\)/.test(src)) {
+  if (sink && !inSink(/ws\.authPending = sbAccountFromToken\(token\)/)) {
     bad.push('the auth sink does not call sbAccountFromToken — sbUserFromToken returns an id and no'
       + ' kind, so ws.isGuest would never be set from a real verification');
   }
   // Cleared with the id on sign-out: a stale `false` left behind is a guest
   // holding the previous account's privileges.
-  if (!/ws\.userId = null; ws\.isGuest = false;/.test(src)) {
+  if (sink && !inSink(/ws\.userId = null; ws\.isGuest = false;/)) {
     bad.push('the sign-out branch does not clear ws.isGuest beside ws.userId — a socket that signs'
       + ' out of a linked account and back in as a guest keeps the linked account\'s privileges');
+  }
+  // (d) THE FLAG MUST BE READ, not merely written. Every assertion above is
+  // satisfied by a sink that sets ws.isGuest perfectly and a layer downstream
+  // that never looks at it — which is the same product as having no guest split
+  // at all, and reads exactly as green. The reader is server/social.js's
+  // requireLinked.
+  const socialSrc = read('server/social.js')
+    .split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+  if (!/function requireLinked\([^)]*\)\s*\{[^}]*ws\.isGuest/.test(socialSrc)) {
+    bad.push('server/social.js requireLinked does not read ws.isGuest — the auth sink can set the'
+      + ' flag perfectly and nothing acts on it, which is the same product as no guest split');
+  }
+  // (e) THE CHOSEN NAME MUST PROVE ITSELF. `callsign_key` is server-only, but
+  // `callsign` is a column the account may PATCH (the migration grants
+  // update(id, callsign, ...) so public/cloud.js can write rolled names), so a
+  // key-only test hands an unvalidated string to sanitizeName. The key is the
+  // server's own normalised lowercase of what it stored, so it is the proof —
+  // and it must be computed with server/callsign.js's own normaliser, because
+  // a second hand-rolled copy drifts and drift here fails OPEN.
+  // test/auth_sink.mjs proves the behaviour; this pins the shared normaliser.
+  if (!/import \{[^}]*\bnormaliseCallsign\b[^}]*\} from '\.\/server\/callsign\.js'/.test(src)) {
+    bad.push('server.js does not import normaliseCallsign from server/callsign.js — the auth sink'
+      + ' cannot check a stored callsign against its own callsign_key with the SAME normalisation'
+      + ' that wrote the key, and a second hand-rolled copy drifts open (see test/auth_sink.mjs)');
+  }
+  if (sink && !inSink(/normaliseCallsign\(/)) {
+    bad.push('the auth sink sets ws.chosenName without normaliseCallsign — if it trusts callsign'
+      + ' whenever callsign_key is non-null, any 16 characters the account PATCHes into its own'
+      + ' row reach every opponent\'s screen with no socket frame sent (see test/auth_sink.mjs)');
   }
 
   if (bad.length) fail(`server.js social wiring:\n      ${bad.join('\n      ')}`);
   else {
-    ok('server.js social wiring: sbAdmin\'s fetch is bounded by AbortSignal.timeout, the auth sink'
-      + ' verifies through sbAccountFromToken, reads is_anonymous fail-closed, records it as'
-      + ' ws.isGuest and clears it on sign-out');
+    ok('server.js social wiring: sbAdmin\'s fetch is bounded by AbortSignal.timeout, and INSIDE the'
+      + ' auth sink\'s own body (comments stripped) it verifies through sbAccountFromToken, reads'
+      + ' is_anonymous fail-closed, records it as ws.isGuest, clears it on sign-out, and proves a'
+      + ' stored callsign against its key with the shared normaliser — with server/social.js'
+      + ' requireLinked actually reading the flag');
   }
 }
 

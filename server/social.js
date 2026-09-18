@@ -87,7 +87,12 @@ export function createSocial({ store, terms, send, now }) {
     const tok = ws._socialTokens || (ws._socialTokens = {});
     const ref = ws._socialRefill || (ws._socialRefill = {});
     const t = now();
-    tok[key] = Math.min(limit, (tok[key] ?? limit) + ((t - (ref[key] ?? t)) / 60000) * limit);
+    // Math.max(0, …): CLAMP THE ELAPSED TERM AT ZERO. now() is wall-clock, and
+    // a clock that jumps BACKWARDS (ntp step, a VM resume, a manual set) makes
+    // the refill NEGATIVE — the bucket then goes below zero with no floor and
+    // this socket is starved in proportion to the jump, for as long as it takes
+    // the honest refill to climb back. Min() caps the top; this is the bottom.
+    tok[key] = Math.min(limit, (tok[key] ?? limit) + (Math.max(0, t - (ref[key] ?? t)) / 60000) * limit);
     ref[key] = t;
     if (tok[key] < 1) return false;
     tok[key] -= 1;
@@ -132,8 +137,19 @@ export function createSocial({ store, terms, send, now }) {
     // on a rolled frame is ignored: the rolled display form is written to the
     // profile by the client's own cloud queue, as it always has been.
     if (msg.rolled === true) {
-      await store.clearCallsignKey(ws.userId);
-      ws.chosenName = null;
+      // ONE WRITE PER NAME GIVEN UP, NOT ONE PER FRAME. The bucket above lives
+      // on the SOCKET, so reconnecting resets it, and this branch has no
+      // once-a-day gate and no check that the account holds a key at all —
+      // which made every rolled frame an unconditional PATCH against PostgREST,
+      // uncapped per account. ws.chosenName is the socket's copy of what the
+      // profile row holds (server.js's auth sink fills it, the set branch
+      // below updates it), so a null one means there is nothing to clear and
+      // the round trip buys nothing. The reply is identical either way, so no
+      // client can tell the difference.
+      if (ws.chosenName) {
+        await store.clearCallsignKey(ws.userId);
+        ws.chosenName = null;
+      }
       return reply(ws, msg, { type: 'callsign', ok: true, callsign: null });
     }
 

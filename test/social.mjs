@@ -286,6 +286,31 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
   else fail('(g) a fresh socket was limited: ' + JSON.stringify(last(other)));
 }
 
+// ---- (g2) the bucket has a FLOOR as well as a ceiling ----------------------
+// The refill term is (now - lastRefill), and now() is wall clock. A clock that
+// steps BACKWARDS — ntp correction, a VM resume, someone setting the date —
+// makes it negative, and without a clamp the bucket goes below zero with no
+// floor: the socket is then starved for as long as the honest refill takes to
+// climb back from -N, in proportion to the size of the jump. A player's
+// callsign box silently stops working and nothing anywhere says why.
+{
+  clock = BASE;
+  const { social } = mk();
+  const ws = mkws('u1');
+  // Spend one, then hand the limiter a clock ten minutes in the past.
+  await social.handle(ws, { type: 'callsign', name: 'ab' });
+  clock = BASE - 600000;
+  const got = [];
+  for (let i = 0; i < 2; i++) { await social.handle(ws, { type: 'callsign', name: 'ab' }); got.push(last(ws).error); }
+  // 3/min, one already spent: two more must still be served across the jump.
+  if (same(got, ['length', 'length'])) ok('(g2) a backwards clock jump does not drive the bucket below zero');
+  else fail('(g2) after a backwards clock jump two messages gave ' + JSON.stringify(got));
+  // ...and the limit itself still bites, so the clamp did not simply open it.
+  await social.handle(ws, { type: 'callsign', name: 'ab' });
+  if (last(ws).error === 'slow_down') ok('(g2) the clamp restores the floor, it does not remove the limit');
+  else fail('(g2) the fourth message after the jump gave ' + JSON.stringify(last(ws)));
+}
+
 // ---- (h) a store failure is unavailable, never a crash ---------------------
 {
   for (const [label, over] of [
@@ -297,6 +322,10 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     const { social } = mk(over);
     const ws = mkws('u1');
     const msg = label === 'the key clear' ? { type: 'callsign', rolled: true } : { type: 'callsign', name: 'Wren Delacroix' };
+    // The roll path only writes when there is a key to clear (see (i3) below),
+    // so this socket has to be holding a chosen name or the failing store call
+    // is never reached and this case would assert nothing.
+    if (label === 'the key clear') ws.chosenName = 'Wren Delacroix';
     let threw = null;
     try { await social.handle(ws, msg); } catch (e) { threw = e; }
     if (threw) fail(`(h) ${label} threw out of handle(): ` + threw.message);
@@ -332,6 +361,39 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
   await social.handle(ws2, { type: 'callsign', rolled: true, name: 'Badword Ridge' });
   if (last(ws2).ok === true && ws2.chosenName === null) ok('(i) a name on a rolled frame is ignored, not stored');
   else fail('(i) rolled+name gave ' + JSON.stringify(last(ws2)) + ' chosenName=' + JSON.stringify(ws2.chosenName));
+}
+
+// ---- (i3) a roll with nothing to clear is not a database write -------------
+// The roll branch has no once-a-day gate, and the 3/min bucket lives on the
+// SOCKET — so reconnecting resets it. An unconditional PATCH there is one
+// uncapped database write per frame per account, from a client that only has
+// to open a socket and say hello. ws.chosenName is what the account actually
+// holds (server.js's auth sink fills it from the profile row), so a null one
+// means the write would clear a key that is already null.
+{
+  clock = BASE;
+  const { store, social } = mk();
+  // An account that holds NO chosen name — the overwhelmingly common case,
+  // because every player who has never picked one is in it.
+  const ws = mkws('u1');
+  for (let i = 0; i < 3; i++) await social.handle(ws, { type: 'callsign', rolled: true, id: i });
+  const writes = store.calls.filter((c) => c[0] === 'clearCallsignKey');
+  if (!writes.length) ok('(i3) three rolled frames from an account with no chosen name cost zero writes');
+  else fail(`(i3) a roll with nothing to clear still wrote ${writes.length} time(s): ` + JSON.stringify(store.calls));
+  // The REPLY is unchanged, so no client can tell the write was skipped.
+  if (same(last(ws), { type: 'callsign', ok: true, callsign: null, id: 2 })) ok('(i3) the reply is the same ok/callsign:null either way');
+  else fail('(i3) the skipped-write reply was ' + JSON.stringify(last(ws)));
+  // And an account that DOES hold one still pays exactly once.
+  clock = BASE + DAY;
+  const ws2 = mkws('u2');
+  await social.handle(ws2, { type: 'callsign', name: 'Wren Delacroix' });
+  await social.handle(ws2, { type: 'callsign', rolled: true });
+  await social.handle(ws2, { type: 'callsign', rolled: true });
+  const w2 = store.calls.filter((c) => c[0] === 'clearCallsignKey' && c[1] === 'u2');
+  if (w2.length === 1) ok('(i3) an account that holds a chosen name pays for exactly one clear, not one per frame');
+  else fail(`(i3) clearing an existing key cost ${w2.length} write(s)`);
+  if (store.rows.get('u2').callsign_key === null) ok('(i3) and the key really is gone after that one write');
+  else fail('(i3) key after roll is ' + JSON.stringify(store.rows.get('u2').callsign_key));
 }
 
 // ---- (i2) a guest cannot roll away someone's key either --------------------
