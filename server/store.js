@@ -43,6 +43,21 @@ export const CALLSIGN_COL_MAX = 16;
 // single spaces, so no real name can ever be this string.
 export const NO_CALLSIGN = '(no name)';
 
+// WHAT A name_reports ROW ACTUALLY HOLDS, as one function, because two callers
+// need the same answer and a second copy of it would drift. addReport below
+// applies it on the way to PostgREST; server/social.js applies it before its
+// log line, so THE LINE IN THE LOG AND THE ROW IN THE TABLE ARE THE SAME
+// STRING. Without that the obvious log line — the reported player's callsign,
+// straight off the profile — prints `null` for the one player the sentinel
+// exists for, and a moderation queue you cannot reconcile against the log is
+// worth less than no log at all.
+//
+// CODE POINTS, NOT CODE UNITS: see the note in addReport.
+export function reportCallsign(raw) {
+  const seen = [...String(raw ?? '').trim()].slice(0, CALLSIGN_COL_MAX).join('');
+  return seen || NO_CALLSIGN;
+}
+
 const PROFILE_COLS = 'id,callsign,friend_code,callsign_key,callsign_set_at';
 
 // SHAPE, NOT RFC VERSION: eight-four-four-four-twelve hex. The job of this regex
@@ -362,15 +377,15 @@ export function createStore({ sbAdmin } = {}) {
     // not valid UTF-8 for Postgres to accept.
     //
     // AND A PLAYER WITH NO NAME IS STILL REPORTABLE. profiles.callsign is nullable,
-    // and Task 6 passes it straight through (addReport(ws.userId, id, who.callsign)),
-    // so null arrives here as the ordinary case, not an edge. '' fails the CHECK, so
-    // the empty string is never sent: NO_CALLSIGN goes in instead and the report
-    // lands. Refusing would make a never-named player the one player nobody can
+    // and server/social.js's handleReport hands over whatever displayName could
+    // vouch for — null for a player who never chose a name, and null again for a
+    // display column holding text no proof stands behind — so null arrives here as
+    // the ORDINARY case, not an edge. '' fails the CHECK, so the empty string is
+    // never sent: NO_CALLSIGN goes in instead and the report lands. Refusing would make a never-named player the one player nobody can
     // report — and would need a fourth player-visible error string while BINDING
     // resolution 16 is still open. The name is evidence, not an identifier; the
     // reported uuid is what identifies the account.
-    const seen = [...String(callsign ?? '').trim()].slice(0, CALLSIGN_COL_MAX).join('');
-    await sbAdmin('POST', '/name_reports', { reporter: r, reported: t, callsign: seen || NO_CALLSIGN }, 'return=minimal');
+    await sbAdmin('POST', '/name_reports', { reporter: r, reported: t, callsign: reportCallsign(callsign) }, 'return=minimal');
   }
 
   async function reportedSince(reporter, reported, since) {

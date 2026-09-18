@@ -15,7 +15,11 @@ import { validateCallsign, normaliseCallsign, CALLSIGN_MIN, CALLSIGN_MAX } from 
 // word for a request that was simply misaddressed. Checking the shape here turns
 // it into 'no_such_user' and saves the round trip, using the same regex the
 // store guards its own query strings with rather than a second copy of it.
-import { isUuid } from './store.js';
+// reportCallsign comes from the same module for the same reason: it is what a
+// name_reports row ACTUALLY holds — the clamp to the column and the sentinel
+// for a player with no name — and handleReport has to log the string the store
+// stored, not the one it was handed.
+import { isUuid, reportCallsign } from './store.js';
 // THE TWO PURE CALLSIGN TESTS, from the module that owns the curated lists.
 // Imported, never copied: isGeneratedCallsign is the standard the engine already
 // applies to every name any client presents (room-engine.js's sanitizeName), and
@@ -299,10 +303,19 @@ export function createSocial({ store, terms, send, now }) {
           await handleFriend(ws, msg);
           return;
         case 'block':
-        case 'report':
           // Open to a guest on purpose — see requireAccount above.
           if (!requireAccount(ws, msg)) return;
-          return reply(ws, msg, { type: msg.type, error: 'unavailable' });
+          // AWAIT, not `return handleBlock(...)`. Returning the promise from
+          // inside a try hands its rejection to the CALLER: the net below never
+          // runs, the client never gets a reply, and in this server the
+          // rejection reaches reportServerError instead. Every await in here is
+          // deliberate.
+          await handleBlock(ws, msg);
+          return;
+        case 'report':
+          if (!requireAccount(ws, msg)) return;
+          await handleReport(ws, msg);
+          return;
         default:
           // Unreachable while server.js gates on SOCIAL_TYPES, and answered
           // anyway: same reasoning as above, answer, never drop.
@@ -793,6 +806,147 @@ export function createSocial({ store, terms, send, now }) {
     // failed from { type:'friend', error:'unavailable' } alone.
     try { await fn(ws, msg); }
     catch { friendReply(ws, msg, op, { error: 'unavailable' }); }
+  }
+
+  // ---- blocks (design 4.2; Apple Guideline 1.2, "the ability to block") ------
+  // THE ONE SOCIAL ACT THAT DESTROYS STATE. `add` writes the block row and then
+  // clears everything the pair had: the friendship, and the pending request in
+  // BOTH directions. Each of those is a way back in that the row alone would
+  // leave standing — a friendship an unblock would silently hand back, and a
+  // request that walks the same person in the moment it is accepted. Both
+  // parties are then pushed a fresh snapshot: the blocked player's box must
+  // stop showing someone who is gone, without being told why.
+  //
+  // THE ORDER OF THE WRITES IS PART OF THE DESIGN, not an accident of typing.
+  // There is no transaction across PostgREST calls, so a failure half way
+  // through leaves one of two states and only one of them is safe. Block first,
+  // teardown after: a block row with a friendship that outlived it is hidden by
+  // friendsSnapshot and by flushPresence, both of which read the blocks
+  // themselves, whereas a deleted friendship with no block row is silent data
+  // loss for a player who is not even protected. Tested both ways round.
+  //
+  // Removing the blocked party from a SQUAD — the other half of the 4.2 rule —
+  // is PROJECT 3. There are no squads in this build, so it is not implemented
+  // here and has no test here.
+  //
+  // NO PER-TYPE RATE LIMIT, and that is the spec rather than an oversight:
+  // design 4.2 limits friend, callsign and report and says nothing about block,
+  // because a player in trouble must be able to block several people quickly.
+  // The engine's 60 frames/s socket limiter (MSG_RATE / MSG_BURST in server.js)
+  // is what bounds it.
+  async function handleBlock(ws, msg) {
+    const op = typeof msg.op === 'string' ? msg.op : '';
+    // Answered rather than dropped, and answered the way an unknown friend op
+    // is: a client that gets nothing back waits for its reply for ever.
+    if (op !== 'add' && op !== 'remove') return reply(ws, msg, { type: 'block', op: op || 'unknown', error: 'unavailable' });
+    const id = wireId(msg.id);
+    // THE SHAPE TEST BEFORE THE STORE, for the reason friendRequest has one:
+    // server/store.js throws 'bad uuid' on a malformed id and the net would
+    // answer 'unavailable', which is the wrong word for a frame that was simply
+    // misaddressed — after a round trip spent to say it.
+    if (!isUuid(id)) return reply(ws, msg, { type: 'block', op, error: 'no_such_user' });
+    // wireId lower-cased it, so the same account spelled in another case is
+    // caught here rather than inside store.addBlock, which throws 'pair self'
+    // and would be answered 'unavailable'.
+    if (id === wireId(ws.userId)) return reply(ws, msg, { type: 'block', op, error: 'self' });
+    let outcome;
+    let alsoPush = null;
+    try {
+      if (op === 'add') {
+        const who = await store.profileById(id);
+        if (!who) outcome = { type: 'block', op, error: 'no_such_user' };
+        else {
+          await store.addBlock(ws.userId, id);
+          await store.removeFriendship(ws.userId, id);
+          await store.deleteRequest(ws.userId, id);
+          await store.deleteRequest(id, ws.userId);
+          outcome = { type: 'block', op, ok: true };
+          alsoPush = id;
+        }
+      } else {
+        // NO PROFILE LOOKUP ON REMOVE, and no complaint when there was no row.
+        // A block can point at an account that has since been deleted, and
+        // refusing to clear it would strand the blocker with a block they
+        // cannot lift.
+        await store.removeBlock(ws.userId, id);
+        outcome = { type: 'block', op, ok: true };
+      }
+    } catch { outcome = { type: 'block', op, error: 'unavailable' }; }
+    reply(ws, msg, outcome);
+    if (!outcome.ok) return;
+    await pushFriends(ws.userId);
+    // ONLY ON ADD. The blocked player's own panel really did change — the
+    // friendship is gone — so it has to be rebuilt. On REMOVE nothing of theirs
+    // changed, and an unsolicited frame at the moment somebody lifts a block is
+    // a timing signal that they had been blocked. A block is silent in both
+    // directions, going on and coming off.
+    if (alsoPush) await pushFriends(alsoPush);
+  }
+
+  // ---- name reports (design 4.2; Apple Guideline 1.2, "a mechanism to report")
+  // There is no email provider in this build (design 3.2), so a report surfaces
+  // in exactly two places: the name_reports table and one line on stdout.
+  //
+  //   [report] <reported-uuid> "<callsign>" by <reporter-uuid>
+  //
+  // The reported uuid is there so the owner can find the row and the account;
+  // the quoted callsign is there because it IS the report, and it is already
+  // public — every player who saw that name saw it; the reporter uuid is there
+  // so one person filing many reports is visible at a glance. Both uuids stay
+  // in the log and in the table and never reach another player, in any frame.
+  async function handleReport(ws, msg) {
+    // THE RATE CHECK IS FIRST — before the shape and self guards, and long
+    // before any store call. Two reasons, and the second is the one that bites.
+    // The limit exists to stop a loop reaching the database at all, so spending
+    // a query to answer slow_down defeats it. And a REFUSAL IS STILL A REPLY:
+    // a check placed after the guards leaves a loop of self-reports or junk ids
+    // answered as fast as the socket limiter will carry them, with no limit of
+    // its own — the exact hole the unknown friend op had before (i3) closed it.
+    if (!rateOk(ws, 'report', LIMITS.report)) return reply(ws, msg, { type: 'report', error: 'slow_down' });
+    const id = wireId(msg.id);
+    if (!isUuid(id)) return reply(ws, msg, { type: 'report', error: 'no_such_user' });
+    if (id === wireId(ws.userId)) return reply(ws, msg, { type: 'report', error: 'self' });
+    // NO try/catch OF ITS OWN, unlike handleBlock next door, and the difference
+    // is the reply rather than the risk. A block answer has to carry the `op` a
+    // client is waiting on, so it needs a local catch to build that frame;
+    // a report reply has no op, and handle()'s net already produces exactly
+    // { type:'report', error:'unavailable', id } for a throw from here. A second
+    // catch that can only ever build the identical frame is a branch no test can
+    // fail on — Task 4's one-net-in-one-place, kept.
+    const who = await store.profileById(id);
+    if (!who) return reply(ws, msg, { type: 'report', error: 'no_such_user' });
+    // A ROLLING 24 HOURS, not a calendar day: "one report per reporter per
+    // reported per day" has to mean the same thing at 23:59 as it does at 00:01,
+    // or a grudge gets two free reports either side of midnight. DAY is the
+    // constant the chosen-callsign gate above already uses, for the same reason
+    // — one definition of a day in this file, not two.
+    if (await store.reportedSince(ws.userId, id, new Date(now() - DAY).toISOString())) return reply(ws, msg, { type: 'report', error: 'already' });
+    // THE NAME AS SEEN — AND WHO CAN WRITE profiles.callsign? The account
+    // ITSELF, on every cloud save (profiles_update_own, public/cloud.js
+    // save()). So the raw column is free text, and handing it to addReport
+    // would fill the moderation table with whatever the reported player
+    // typed and write the same string into the log line below, where a
+    // newline in it forges a line of its own.
+    //
+    // displayName is therefore the source, not the column: it is the string
+    // another player was ACTUALLY shown, by one of the two proofs — the
+    // name matches callsign_key (a chosen name the server stored, on a
+    // column no client may write) or it is a curated rolled pair. Anything
+    // else was never on anybody's screen, so there is nothing about it to
+    // report, and reportCallsign turns the null into the store's sentinel
+    // so the row still LANDS: a player who never chose a callsign must not
+    // be the one player nobody can report. The reported uuid is what
+    // identifies the account; the name is evidence beside it.
+    //
+    // reportCallsign is server/store.js's own function, applied here rather
+    // than restated, so THE LINE IN THE LOG AND THE ROW IN THE TABLE ARE
+    // THE SAME STRING — addReport applies it again on the way out and it is
+    // idempotent. A log the moderation queue cannot be reconciled against
+    // is worth less than no log.
+    const seen = reportCallsign(displayName(who));
+    await store.addReport(ws.userId, id, seen);
+    console.log(`[report] ${id} "${seen}" by ${ws.userId}`);
+    reply(ws, msg, { type: 'report', ok: true });
   }
 
   // presenceLast is handed out for the same reason `online` is, and for no

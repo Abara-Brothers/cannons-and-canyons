@@ -383,9 +383,9 @@ function mkSb(routes = []) {
   if (clamped === LONG.slice(0, CALLSIGN_COL_MAX) && [...clamped].length === CALLSIGN_COL_MAX) ok('(j) a name longer than the column is clamped to 16, not sent for the CHECK to refuse');
   else fail('(j) long name: ' + JSON.stringify(clamped));
 
-  // profiles.callsign is nullable and Task 6 passes it straight through
-  // (addReport(ws.userId, id, who.callsign)), so a player who never chose a name is
-  // the ORDINARY case here, not an edge — and '' is exactly what the CHECK refuses.
+  // profiles.callsign is nullable, and server/social.js hands over only a name one
+  // of its two proofs stands behind — null otherwise — so a player who never chose
+  // a name is the ORDINARY case here, not an edge — and '' is exactly what the CHECK refuses.
   // If this regresses, the one player nobody can report is the one with no name.
   const h6 = mkSb();
   await h6.store.addReport(A, B, null);

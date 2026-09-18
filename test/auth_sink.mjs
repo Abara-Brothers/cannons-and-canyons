@@ -72,7 +72,15 @@ const ROWS = {
   // the one whose verification is still in flight when the next frame lands.
   [SLOW_ID]: { id: SLOW_ID, callsign: SLOW, friend_code: 'ABC236', callsign_key: SLOW.toLowerCase(), callsign_set_at: null },
 };
-const TOKENS = { 'tok-honest': HONEST_ID, 'tok-tampered': TAMPER_ID, 'tok-slow': SLOW_ID, 'tok-slower': HONEST_ID };
+// A REAL ANONYMOUS ACCOUNT — what public/cloud.js mints for every player who
+// saves anything. It carries a perfectly good uuid, so it is the case a gate
+// written as `if (!ws.userId)` waves straight through. Case 8 drives report and
+// block on it END TO END, through the real socket, the real interception seam
+// and the real store, because a test that calls the handler directly can pass
+// while the path that reaches it is broken.
+const GUEST_ID = '44444444-4444-4444-8444-444444444444';
+const TOKENS = { 'tok-honest': HONEST_ID, 'tok-tampered': TAMPER_ID, 'tok-slow': SLOW_ID, 'tok-slower': HONEST_ID, 'tok-guest': GUEST_ID };
+const ANON = new Set(['tok-guest']);
 // How long the mock GoTrue sits on each delayed token before answering. Long
 // enough that a sign-out, or a second hello, is comfortably ahead of it — and
 // two different delays, so an OLDER verification can settle while a NEWER one
@@ -83,6 +91,7 @@ const DELAY = { 'tok-slow': SLOW_MS, 'tok-slower': SLOWER_MS };
 // ---- Mock Supabase -----------------------------------------------------------
 const MOCK_PORT = 9931, GAME_PORT = 3106;
 const profileHits = [];
+const reportPosts = [], blockPosts = [];
 mock = http.createServer((req, res) => {
   let body = '';
   req.on('data', (c) => { body += c; });
@@ -94,11 +103,23 @@ mock = http.createServer((req, res) => {
       const token = (req.headers.authorization || '').replace('Bearer ', '');
       const id = TOKENS[token];
       if (!id) { res.writeHead(401); return res.end('{}'); }
-      // A LINKED account in every case: the guest split is a different gate and
-      // test/social.mjs owns it. What is under test here is the profile read.
-      const answer = () => json(200, { id, aud: 'authenticated', is_anonymous: false });
+      // Linked for every token but 'tok-guest'. is_anonymous is the field the
+      // whole social layer gates on (BINDING.md resolution 1), and GoTrue
+      // reports it on this same GET.
+      const answer = () => json(200, { id, aud: 'authenticated', is_anonymous: ANON.has(token) });
       if (DELAY[token]) return void setTimeout(answer, DELAY[token]);
       return answer();
+    }
+    // What the moderation writes actually put on the wire. PostgREST answers a
+    // return=minimal insert with 204 and no body, which is what the catch-all
+    // below does; these two only record first.
+    if (u.pathname === '/rest/v1/name_reports' && req.method === 'POST') {
+      try { reportPosts.push(JSON.parse(body)); } catch { reportPosts.push({ unparseable: body }); }
+      res.writeHead(204); return res.end();
+    }
+    if (u.pathname === '/rest/v1/blocks' && req.method === 'POST') {
+      try { blockPosts.push(JSON.parse(body)); } catch { blockPosts.push({ unparseable: body }); }
+      res.writeHead(204); return res.end();
     }
     if (u.pathname === '/rest/v1/profiles' && req.method === 'GET') {
       const eq = (u.searchParams.get('id') || '').replace(/^eq\./, '');
@@ -273,6 +294,48 @@ async function presentedName(token, typed) {
     if (friends && !refused) ok('(6) a social frame still waits on the CURRENT hello after an older one has settled');
     else fail('(6) the wait handle was cleared by the older verification: the frame was answered '
       + JSON.stringify(refused || friends) + ' while a hello was still in flight');
+  }
+
+  // ---- 8. A GUEST MAY REPORT AND BLOCK, END TO END --------------------------
+  // BINDING.md resolution 18, proved on the path a player actually takes rather
+  // than against a fake socket: hello with an ANONYMOUS token, then two frames
+  // through server.js's SOCIAL_TYPES interception into the real social layer
+  // and the real store, against this mock PostgREST. A guest who sees an
+  // offensive name in a lobby is exactly the player who needs to report it, and
+  // Apple asks for a mechanism for USERS, not for some of them.
+  {
+    const ws = await open();
+    send(ws, { type: 'hello', token: 'tok-guest' });
+    send(ws, { type: 'report', id: HONEST_ID });
+    const rep = await wait(ws, 'report');
+    send(ws, { type: 'block', op: 'add', id: HONEST_ID });
+    const blk = await wait(ws, 'block');
+    // ...and the SAME socket must still be refused the linked-only paths, which
+    // is what makes this a per-type gate rather than one gate left open.
+    send(ws, { type: 'friends', id: 8 });
+    const refused = await wait(ws, 'social', 4000);
+    const panel = ws._rx.find((m) => m.type === 'friends');
+    try { ws.close(); } catch {}
+
+    if (rep && rep.ok === true) ok('(8) a guest report is accepted through the real socket and the real store');
+    else fail('(8) guest report replied ' + JSON.stringify(rep));
+    if (blk && blk.ok === true && blk.op === 'add') ok('(8) a guest block is accepted through the real socket and the real store');
+    else fail('(8) guest block replied ' + JSON.stringify(blk));
+    const row = reportPosts.find((r) => r && r.reporter === GUEST_ID);
+    if (row && row.reported === HONEST_ID && row.callsign === HONEST)
+      ok(`(8) the name_reports row really reached PostgREST: reporter=<guest> reported=<honest> callsign=${JSON.stringify(HONEST)}`);
+    else fail('(8) name_reports POSTs: ' + JSON.stringify(reportPosts));
+    const brow = blockPosts.find((r) => r && r.blocker === GUEST_ID);
+    if (brow && brow.blocked === HONEST_ID) ok('(8) the blocks row really reached PostgREST, with the guest as the blocker');
+    else fail('(8) blocks POSTs: ' + JSON.stringify(blockPosts));
+    // The log line is the other half of the moderation surface, and it is
+    // written by the real server process — so it is in this child's stdout.
+    const line = `[report] ${HONEST_ID} "${HONEST}" by ${GUEST_ID}`;
+    if (log.includes(line)) ok('(8) the server logged [report] <reported-uuid> "<callsign>" by <reporter-uuid>');
+    else fail('(8) the report log line is not in the server output: ' + JSON.stringify(log.split('\n').filter((l) => l.startsWith('[report]'))));
+    if (refused && refused.error === 'sign_in' && !panel)
+      ok('(8) the same anonymous socket is still refused the friends panel — the gate is per message type');
+    else fail('(8) a guest reached the friends panel: ' + JSON.stringify(panel || refused));
   }
 
   // ---- 7. nothing crashed the host ------------------------------------------
