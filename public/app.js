@@ -2115,6 +2115,7 @@ $('armouryCloseBtn').onclick = () => {
 };
 
 let ccMode = 'duel', ccMax = 4;
+let ccGolfMax = 2;           // golf seats the host opens, 1..4 (owner, 2026-09-18); a pair by default
 let ccOpp = 'friend';        // duel opponent: 'friend' (code/link) or 'cpu'
 // The free-for-all's own opponent memory: 'friend' (lobby + code) or 'cpu'
 // (CPUs fill the ridge and the match starts now). Separate from ccOpp on
@@ -2149,7 +2150,7 @@ $('createBtn').onclick = () => {
       ...(ccMode === 'ffa' ? { mode: 'ffa', max: ccMax } : {}) });
     return;
   }
-  intent({ type: 'create', name: myName(), skin: mySkin(), mode: ccMode, max: ccMode === 'ffa' ? ccMax : 2, tees: ccTees });
+  intent({ type: 'create', name: myName(), skin: mySkin(), mode: ccMode, max: ccMode === 'ffa' ? ccMax : ccMode === 'golf' ? ccGolfMax : 2, tees: ccTees });
 };
 
 // Single-player vs CPU, with a difficulty selector.

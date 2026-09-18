@@ -22,6 +22,7 @@ const G = {
   get ccFfaOpp()      { return typeof ccFfaOpp      !== 'undefined' ? ccFfaOpp      : undefined; },
   get pendingIntent() { return typeof pendingIntent !== 'undefined' ? pendingIntent : undefined; },
   get ccMax()         { return typeof ccMax         !== 'undefined' ? ccMax         : undefined; },
+  get ccGolfMax()     { return typeof ccGolfMax     !== 'undefined' ? ccGolfMax     : undefined; },
   get ccTees()        { return typeof ccTees        !== 'undefined' ? ccTees        : undefined; },
   get cpuDifficulty() { return typeof cpuDifficulty !== 'undefined' ? cpuDifficulty : undefined; },
   get HELP_WEAPONS()  { return typeof HELP_WEAPONS  !== 'undefined' ? HELP_WEAPONS  : undefined; },
@@ -60,7 +61,7 @@ const MODES = [
   { id: 'aliens', name: 'Alien Invasion', players: '1-2 co-op', tag: 'Hold the line',
     blurb: 'Escalating waves of xeno saucers. See how long you last.',
     art: 'ruins-wide',    card: 'ruins-mid',     draft: 7 },
-  { id: 'golf',   name: 'Artillery Golf', players: '1-2',       tag: 'Nine holes, no damage',
+  { id: 'golf',   name: 'Artillery Golf', players: '1-4',       tag: 'Nine holes, no damage',
     blurb: 'Driver, Iron, Putter. Real rolling physics and a scorecard.',
     art: 'ice-wide',      card: 'ice-mid',       draft: 5 },
 ];
@@ -72,7 +73,7 @@ const SOLO_COPY = {
   boss:   { need: 'Boss Fight needs a connection to bring in a second commander.', can: 'You can take on WARLORD-7 alone on this device.' },
   aliens: { need: 'Alien Invasion needs a connection to bring in a second commander.', can: 'You can hold the line alone on this device.' },
   ffa:    { need: 'Free-for-all needs a connection to invite commanders.', can: 'You can fight CPU commanders on this device.' },
-  golf:   { need: 'Artillery Golf needs a connection to invite a second player.', can: 'You can play a solo round on this device.' },
+  golf:   { need: 'Artillery Golf needs a connection to invite other players.', can: 'You can play a solo round on this device.' },
 };
 const SHORT = { duel: 'Duel', ffa: 'FFA', boss: 'Boss', aliens: 'Aliens', golf: 'Golf' };
 const art = (k) => 'bay/' + k + '.jpg';
@@ -152,6 +153,7 @@ function state() {
     ffaOpp: has('ccFfaOpp') ? ccFfaOpp : 'friend',
     diff: has('cpuDifficulty') ? cpuDifficulty : 'medium',
     count: has('ccMax') ? ccMax : 4,
+    gcount: has('ccGolfMax') ? ccGolfMax : 2,     // golf seats, 1..4
     tees: has('ccTees') ? ccTees : 'mens',
     name: has('myName') ? myName() : 'Commander',
     wins: has('totalWins') ? totalWins() : 0,
@@ -609,6 +611,9 @@ SCREENS.setup = function () {
   // and only its labels change to the number of CPUs that implies.
   const oppSeg = seg('Opponent', oppKey, [['friend', m.id === 'ffa' ? 'Friends by code' : 'Friend by code'], ['cpu', 'Computer']], oppVal, !cpuMode);
   const extra = seg(vsCpu ? 'CPU commanders' : 'Commanders on the ridge', 'count', vsCpu ? [[3, '2'], [4, '3']] : [[3, '3'], [4, '4']], s.count, m.id !== 'ffa')
+    // Golf seats 1..4 (owner, 2026-09-18): the host opens that many; one is a
+    // solo round, exactly the old Play solo path.
+    + seg('Players', 'gcount', [[1, '1'], [2, '2'], [3, '3'], [4, '4']], s.gcount, m.id !== 'golf')
     + seg('Tee set', 'tees', [['champ', 'Champ'], ['mens', 'Men&rsquo;s'], ['womens', 'Women&rsquo;s'], ['junior', 'Junior']], s.tees, m.id !== 'golf')
     + seg('Difficulty', 'diff', [['easy', 'Easy'], ['medium', 'Medium'], ['hard', 'Hard']], s.diff, !vsCpu);
   const oppText = vsCpu ? 'Computer &middot; ' + esc(cap(s.diff)) : (m.id === 'ffa' ? 'Friends by code' : 'Friend by code');
@@ -651,7 +656,9 @@ SCREENS.home = function () {
   // Players readout says so. In the default state (both opponents 'friend',
   // neither persisted) this markup is byte-identical to before.
   const vsCpu = (m.id === 'duel' && s.opp === 'cpu') || (m.id === 'ffa' && s.ffaOpp === 'cpu');
-  const players = vsCpu ? (m.id === 'ffa' ? 'You + ' + (s.count - 1) + ' CPU' : 'You vs CPU') : m.players;
+  const players = vsCpu ? (m.id === 'ffa' ? 'You + ' + (s.count - 1) + ' CPU' : 'You vs CPU')
+    : m.id === 'golf' ? String(s.gcount)             // the seats the host chose, 1..4
+    : m.players;
   const arc = [[-6, 14], [-3, 5], [0, 0], [3, 5], [6, 14]];
   const boards = MODES.map((x, i) =>
     '<button class="board' + (x.id === m.id ? ' on' : '') + '" style="transform:rotate(' + arc[i][0] + 'deg) translateY(' + u(arc[i][1]) + ')" '
@@ -802,6 +809,7 @@ function setField(k, v) {
   else if (k === 'ffaOpp' && has('ccFfaOpp')) { ccFfaOpp = v; }
   else if (k === 'diff' && has('cpuDifficulty')) { cpuDifficulty = v; try { localStorage.setItem('pt_diff', v); } catch {} if ($('diffSel')) $('diffSel').value = v; }
   else if (k === 'count' && has('ccMax')) { ccMax = +v; if ($('countSel')) $('countSel').value = String(v); }
+  else if (k === 'gcount' && has('ccGolfMax')) { ccGolfMax = Math.max(1, Math.min(4, +v || 2)); }
   else if (k === 'tees' && has('ccTees')) { ccTees = v; try { localStorage.setItem('cc_tees', v); } catch {} if ($('teeSel')) $('teeSel').value = v; }
   if (fn('syncCreateRow')) syncCreateRow();
 }
