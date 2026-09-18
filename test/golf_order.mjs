@@ -108,8 +108,8 @@ const fake = (xs, done, alive) => ({
   const room = roomOf(hs[0]);
   if (room && room.state === 'playing' && room.players.length === 4 && hs.every((w) => frames(w, 'start').length === 1)) ok('(d) four golfers on the tee');
   else { fail('(d) round did not start: state=' + (room && room.state)); }
-  // Drop the seat that holds the turn (pinned to seat 1 above, so read it),
-  // so the mid-turn hand-off runs on every run. First place the balls so the
+  // Drop the seat that holds the turn (pinned to seat 1 just below), so the
+  // mid-turn hand-off runs on every run. First place the balls so the
   // generic ring (the next seat after the dropped one) and the honour rule
   // (the farthest ball) disagree: the seat two after the dropped one stays on
   // the tee, farthest; the ring's next seat is 0.4 of the way, the rest 0.6.
@@ -151,6 +151,45 @@ const fake = (xs, done, alive) => ({
   else fail(`(d) hole 2 opened on seat ${room.turn}; the rule from the seat before the wanted one says ${opener}; dead=${dead}`);
   for (let i = 0; i < n; i++) if (i !== dead) leave(hs[i]);
 }
+
+// ---- (c) a real hole with four golfers: every hand-off obeys the rule ------
+// The expected seat is computed from the room's state at the moment the
+// server hands the turn over (nothing moves between a stroke settling and the
+// next `turn`), so the assertion is the rule itself, not fixed numbers.
+async function playHole(n, label) {
+  const hs = Array.from({ length: n }, mkws);
+  golfCreate(hs[0], n);
+  const code = roomOf(hs[0]).code;
+  for (let i = 1; i < n; i++) handleClientMessage(hs[i], { type: 'join', code, name: 'P' + i, skin: 'olive', loadout: FIVE });
+  handleClientMessage(hs[0], { type: 'startMatch' });
+  const room = roomOf(hs[0]);
+  if (!(room && room.state === 'playing' && room.players.length === n)) { fail(`${label}: no ${n}-player round`); return; }
+  const first = frames(hs[0], 'start')[0];
+  if (first && first.golf && first.golf.hole === 1) ok(`${label}: ${n} golfers started hole 1 (turn ${room.turn})`); else fail(`${label}: no start frame for hole 1`);
+  let strokes = 0, handoffs = 0, bad = 0, holeTwo = false, nonRing = 0;
+  while (strokes < 80 && !holeTwo && room.state === 'playing') {
+    const by = room.turn;
+    const seenTurns = frames(hs[0], 'turn').length, seenHoles = frames(hs[0], 'hole').length;
+    handleClientMessage(hs[by], { type: 'fire', weapon: strokes % 3 === 0 ? 'driver' : 'putter', angle: 28 + (strokes % 5) * 6, power: 30 + (strokes % 4) * 15 });
+    strokes++;
+    const moved = await until(() => frames(hs[0], 'turn').length > seenTurns || frames(hs[0], 'hole').length > seenHoles || room.state !== 'playing', 3000);
+    if (!moved) { fail(`${label}: no hand-off after stroke ${strokes} by seat ${by}`); break; }
+    if (frames(hs[0], 'hole').length > seenHoles) { holeTwo = true; break; }
+    const want = golfNextSeat(room, by);
+    handoffs++;
+    if (room.turn !== want) { bad++; if (bad <= 3) fail(`${label}: after seat ${by}'s stroke the turn went to ${room.turn}, the rule says ${want} (dist ${room.players.map((_, i) => Math.round(Math.abs(room.golf.cup.x - room.tanks[i].x))).join('/')}, done ${room.golf.done.map(Number).join('')})`); }
+    if (want !== (by + 1) % n) nonRing++;
+  }
+  if (!bad && handoffs > 0) ok(`${label}: ${handoffs} hand-offs, every one to the farthest ball in play (${nonRing} of them not the next seat in the ring)`);
+  if (holeTwo) ok(`${label}: hole 1 completed in ${strokes} strokes and hole 2 opened on seat ${room.turn}`); else fail(`${label}: hole 1 did not complete within ${strokes} strokes (state ${room.state})`);
+  if (holeTwo) {                                     // hole h wants seat (h-1)%n; the rule from the seat before it
+    const opener = golfNextSeat(room, (room.golf.hole - 2 + n) % n);
+    if (room.turn === opener) ok(`${label}: hole 2 opened on the wanted seat by the rule (seat ${room.turn})`); else fail(`${label}: hole 2 opened on seat ${room.turn}, the rule says ${opener}`);
+  }
+  for (const w of hs) leave(w);
+}
+await playHole(4, '(c) four golfers');
+await playHole(2, '(g) two golfers');
 
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall golf_order checks passed');
 if (escaped) { console.error('escaped exception: ' + escaped.message); process.exit(1); }
