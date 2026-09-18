@@ -776,6 +776,612 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   if (t.length === 0 && typeof gname === 'string' && gname.length >= 3 && gname !== flipped.name)
     ok(`${V}: a guest's Roll renames them on this device and sends nothing`);
   else fail(`${V}: guest roll ${JSON.stringify({ t, gname })}`);
+
+  // ==========================================================================
+  // TASK 8 — THE FRIENDS SCREEN AND THE PLAYER MENU
+  // ==========================================================================
+  // Everything is driven from an INJECTED window.CC_SOCIAL and the stubbed
+  // socket Task 7 installed, so nothing here needs a database or a session.
+  // What is proven: the screen renders the snapshot honestly (a NULL snapshot
+  // is "not known yet", never "you have no friends"), every control sends the
+  // exact frame design 4.2 names, Report and Block ask first, the menu is
+  // reachable from a LOBBY SEAT and from an IN-MATCH CARD through the seat
+  // HANDLE (BINDING resolution 24 — no account id is ever on the wire), and a
+  // GUEST can report, block and lift a block but not add friends
+  // (resolution 18).
+  const FSNAP = {
+    empty: `{friends:[],requests:{in:[],out:[]},blocked:[],friendCode:'ABC234',callsign:'Anvil Six'}`,
+    some: `{friends:[{id:'11111111-1111-4111-8111-111111111111',callsign:'Bunker Nine',online:true},{id:'22222222-2222-4222-8222-222222222222',callsign:'Crater Two',online:false}],requests:{in:[],out:[]},blocked:[],friendCode:'ABC234',callsign:'Anvil Six'}`,
+    one: `{friends:[{id:'11111111-1111-4111-8111-111111111111',callsign:'Bunker Nine',online:false}],requests:{in:[],out:[]},blocked:[],friendCode:'ABC234',callsign:'Anvil Six'}`,
+    reqs: `{friends:[],requests:{in:[{id:'33333333-3333-4333-8333-333333333333',callsign:'Dune Four'}],out:[{id:'44444444-4444-4444-8444-444444444444',callsign:'Echo Five'}]},blocked:[],friendCode:'ABC234',callsign:'Anvil Six'}`,
+    blocked: `{friends:[],requests:{in:[],out:[]},blocked:[{id:'55555555-5555-4555-8555-555555555555',callsign:'Rude Name'}],friendCode:'ABC234',callsign:'Anvil Six'}`,
+    hostile: `{friends:[{id:'66666666-6666-4666-8666-666666666666',callsign:'<img src=x onerror=window.__pwned=1>',online:false}],requests:{in:[],out:[]},blocked:[],friendCode:'ABC234',callsign:'Anvil Six'}`,
+  };
+  const BOB = '11111111-1111-4111-8111-111111111111';
+  const CARA = '22222222-2222-4222-8222-222222222222';
+  // snapExpr may be the string 'null' — the third state, which is the whole point.
+  const arm = async (snapExpr, who = 'in', connected = true) => {
+    await ev(`(() => {
+      window.__tx.length = 0; window.__toast = [];
+      window.showToast = (x) => { window.__toast.push(x); };
+      S.ws = { readyState: ${connected ? 1 : 3}, send(s) { window.__tx.push(JSON.parse(s)); } };
+      S.connected = ${connected}; S.local = false;
+      window.CC_ACCOUNT = ${who === 'in' ? LINKED : who === 'guest' ? GUEST : 'null'};
+      const b = $('accountBtn'); b.classList.remove('hidden'); b.dataset.state = '${who}';
+      window.CC_SOCIAL = ${snapExpr};
+      $('bay').classList.add('active');
+      window.__tx.length = 0;
+      Bay.show('home'); Bay.show('friends');
+      return true;
+    })()`);
+    await sleep(60);
+  };
+  const toasts = () => ev('window.__toast.slice()');
+  const click = (sel) => ev(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (!e) return 'NO ' + ${JSON.stringify(sel)}; e.click(); return true; })()`);
+  // Answer the LAST frame matching `pred`, echoing its id exactly as the server does.
+  const answer = async (pred, frame) => {
+    const r = await ev(`(() => {
+      const fq = window.__tx.filter(${pred});
+      if (!fq.length) return 'NOTHING SENT';
+      handle(Object.assign({ id: fq[fq.length - 1].id }, ${JSON.stringify(frame)}));
+      return fq[fq.length - 1].id;
+    })()`);
+    await sleep(80); return r;
+  };
+  const scr = () => ev(`(() => {
+    const txt = (s) => { const e = document.querySelector(s); return e ? e.textContent.trim() : null; };
+    return {
+      scr: $('bay').dataset.scr,
+      title: txt('#bay .pt'), sub: txt('#bay .ps'), meta: txt('#bay .pm'),
+      lbls: [...document.querySelectorAll('#bay .lbl')].map((e) => e.textContent.trim()),
+      cards: [...document.querySelectorAll('#bay .pcd .sn')].map((e) => e.textContent.trim()),
+      lit: document.querySelectorAll('#bay .pdot.on').length,
+      lamps: document.querySelectorAll('#bay .pdot svg').length,
+      lampText: [...document.querySelectorAll('#bay .pdot')].map((e) => e.textContent).join(''),
+      menus: document.querySelectorAll('#bay .pcd [data-pmenu]').length,
+      notes: [...document.querySelectorAll('#bay .fnote')].map((e) => e.textContent.trim()),
+      errs: [...document.querySelectorAll('#bay .ferr')].map((e) => e.textContent.trim()).filter(Boolean),
+      code: txt('#bay .frcode'),
+      retry: !!document.querySelector('#bay [data-fr="retry"]'),
+      share: !!document.querySelector('#bay [data-fr="share"]'),
+      searchOff: !!(document.querySelector('#bay [data-fr="search"]') || {}).disabled,
+      signin: [...document.querySelectorAll('#bay .pbody button')].map((e) => e.textContent.trim()).filter((x) => x === 'Sign in').length,
+      body: txt('#bay .pbody'),
+      pwned: !!window.__pwned, img: !!document.querySelector('#bay .pcd img'),
+    };
+  })()`);
+  const menu = () => ev(`(() => {
+    const m = document.getElementById('pmenu');
+    const txt = (s) => { const e = m && m.querySelector(s); return e ? e.textContent.trim() : null; };
+    return {
+      open: !!(m && !m.hidden),
+      head: txt('.pmh'),
+      items: m ? [...m.querySelectorAll('.pmi')].map((e) => e.textContent.trim()) : [],
+      note: txt('.pmn'),
+      err: txt('.pme'),
+      acts: m ? [...m.querySelectorAll('[data-pm]')].map((e) => e.getAttribute('data-pm')) : [],
+    };
+  })()`);
+
+  // ---- 24. the empty snapshot: the spec 5.5 shell, the code, the empty lines
+  await arm(FSNAP.empty);
+  let fv = await scr();
+  if (fv.scr === 'friends' && fv.title === 'Friends' && fv.sub === 'No friends yet' && fv.code === 'FR-ABC234'
+      && fv.notes.includes('No friends yet. Share your friend code, or add a friend by theirs or by callsign.')
+      && fv.notes.includes('Nobody is blocked.') && fv.cards.length === 0)
+    ok(`${V}: friends — an empty snapshot renders the shell, the friend code and both empty lines`);
+  else fail(`${V}: friends empty ${JSON.stringify(fv)}`);
+  if (fv.lbls.includes('Find a friend') && fv.lbls.includes('Add by friend code') && fv.lbls.includes('Your friend code')
+      && fv.lbls.includes('Your friends · 0') && fv.lbls.includes('Blocked · 0'))
+    ok(`${V}: friends — the five section headings design 5.5 names`);
+  else fail(`${V}: friends headings ${JSON.stringify(fv.lbls)}`);
+
+  // ---- 25. THE THIRD STATE. A null snapshot is NOT KNOWN YET, never "empty".
+  //      Task 7 shipped this bug once on the Callsign row; the same mistake here
+  //      tells a player with fifty friends that they have none.
+  await arm('null');
+  fv = await scr();
+  if (fv.sub === 'Friends list not loaded'
+      && fv.notes.includes('Not loaded yet.') && fv.retry
+      && !fv.notes.includes('No friends yet. Share your friend code, or add a friend by theirs or by callsign.')
+      && !fv.notes.includes('Nobody is blocked.')
+      && fv.lbls.includes('Your friends') && fv.lbls.includes('Blocked')
+      && !fv.lbls.includes('Your friends · 0') && fv.code === 'FR-------')
+    ok(`${V}: friends — an UNKNOWN snapshot says so and never claims the lists are empty`);
+  else fail(`${V}: friends unknown ${JSON.stringify(fv)}`);
+  // Settle the read socialNeed() fired on entry: socialResync() refuses a
+  // second request while one is out, so an unsettled one would make Retry look
+  // broken when it is the guard doing its job.
+  await answer(`(fv) => fv.type === 'friends'`, { type: 'friends', error: 'unavailable' });
+  await clearTx();
+  await click('#bay [data-fr="retry"]');
+  await sleep(60);
+  let fq = await calls('friends');
+  if (fq.length === 1) ok(`${V}: friends — Retry asks the server for the read model again`);
+  else fail(`${V}: retry ${JSON.stringify(fq)}`);
+  await answer(`(fv) => fv.type === 'friends'`, { type: 'friends', error: 'unavailable' });
+
+  // ---- 26. two friends, one lit, a drawn lamp and a menu on each
+  await arm(FSNAP.some);
+  fv = await scr();
+  if (fv.sub === '2 friends · 1 online' && fv.cards.join('|') === 'Bunker Nine|Crater Two' && fv.lit === 1 && fv.menus === 2)
+    ok(`${V}: friends — two friends, one lit, a menu on each`);
+  else fail(`${V}: friends list ${JSON.stringify(fv)}`);
+  if (fv.lamps === 2 && fv.lampText === '')
+    ok(`${V}: friends — the presence lamp is a drawn SVG, not a character (house rule 1 rejects Geometric Shapes)`);
+  else fail(`${V}: friends lamp ${JSON.stringify({ lamps: fv.lamps, text: fv.lampText })}`);
+  // one friend reads "1 friend", not "1 friends"
+  await arm(FSNAP.one);
+  if ((await scr()).sub === '1 friend · 0 online') ok(`${V}: friends — one friend is said in the singular`);
+  else fail(`${V}: friends singular ${JSON.stringify((await scr()).sub)}`);
+  // a presence push lights the lamp without a whole new snapshot
+  await ev(`(() => { handle({ type: 'presence', id: ${JSON.stringify(BOB)}, online: true }); return true; })()`);
+  await sleep(60);
+  fv = await scr();
+  if (fv.lit === 1 && fv.sub === '1 friend · 1 online') ok(`${V}: friends — a presence push lights the lamp`);
+  else fail(`${V}: presence ${JSON.stringify({ lit: fv.lit, sub: fv.sub })}`);
+
+  // ---- 27. requests
+  await arm(FSNAP.reqs);
+  fv = await scr();
+  if (fv.lbls.includes('Requests · 1') && fv.cards.includes('Dune Four')
+      && fv.notes.includes('1 request waiting for an answer.'))
+    ok(`${V}: friends — an incoming request gets its own section, an outgoing one gets a line`);
+  else fail(`${V}: friends requests ${JSON.stringify(fv)}`);
+  await click('#bay [data-fr="acc:33333333-3333-4333-8333-333333333333"]');
+  await sleep(60);
+  fq = await tx();
+  if (fq.length === 1 && fq[0].type === 'friend' && fq[0].op === 'accept' && fq[0].from === '33333333-3333-4333-8333-333333333333')
+    ok(`${V}: friends — Accept sends {friend, accept, from}`);
+  else fail(`${V}: accept frame ${JSON.stringify(fq)}`);
+  await clearTx();
+  await click('#bay [data-fr="dec:33333333-3333-4333-8333-333333333333"]');
+  await sleep(60);
+  fq = await tx();
+  if (fq.length === 1 && fq[0].type === 'friend' && fq[0].op === 'decline' && fq[0].from === '33333333-3333-4333-8333-333333333333')
+    ok(`${V}: friends — Ignore sends {friend, decline, from}`);
+  else fail(`${V}: decline frame ${JSON.stringify(fq)}`);
+
+  // ---- 28. search: the frame, 0 results, 1 result, Add friend, an error
+  await arm(FSNAP.empty);
+  await ev(`(() => { $('frQ').value = '  Crater Two '; return true; })()`);
+  await click('#bay [data-fr="search"]');
+  await sleep(60);
+  fq = await tx();
+  if (fq.length === 1 && fq[0].type === 'friend' && fq[0].op === 'search' && fq[0].q === 'Crater Two')
+    ok(`${V}: friends — Search sends {friend, search, fq}, trimmed`);
+  else fail(`${V}: search frame ${JSON.stringify(fq)}`);
+  await answer(`(fv) => fv.type === 'friend' && fv.op === 'search'`, { type: 'friend', op: 'search', results: [] });
+  if ((await scr()).notes.includes('No player with that callsign.')) ok(`${V}: friends — a 0-result search says so`);
+  else fail(`${V}: search 0 ${JSON.stringify((await scr()).notes)}`);
+  await clearTx();
+  await click('#bay [data-fr="search"]');
+  await answer(`(fv) => fv.type === 'friend' && fv.op === 'search'`, { type: 'friend', op: 'search', results: [{ id: CARA, callsign: 'Crater Two', skin: null }] });
+  fv = await scr();
+  // BINDING resolution 23: a search result carries no tank, because the paint is
+  // not stored. The card shows the name.
+  if (fv.cards.includes('Crater Two') && fv.menus === 1 && !fv.img)
+    ok(`${V}: friends — a 1-result search renders one card with its menu and NO tank (resolution 23)`);
+  else fail(`${V}: search 1 ${JSON.stringify(fv)}`);
+  await clearTx();
+  await click(`#bay [data-fr="req:${CARA}"]`);
+  await sleep(60);
+  fq = await tx();
+  if (fq.length === 1 && fq[0].type === 'friend' && fq[0].op === 'request' && fq[0].to === CARA)
+    ok(`${V}: friends — Add friend on a search result sends {friend, request, to}`);
+  else fail(`${V}: request frame ${JSON.stringify(fq)}`);
+  await answer(`(fv) => fv.type === 'friend' && fv.op === 'request'`, { type: 'friend', op: 'request', ok: true, state: 'requested' });
+  if ((await toasts()).includes('Request sent.')) ok(`${V}: friends — a sent request is confirmed out loud`);
+  else fail(`${V}: request toast ${JSON.stringify(await toasts())}`);
+  await clearTx();
+  await click('#bay [data-fr="search"]');
+  await answer(`(fv) => fv.type === 'friend' && fv.op === 'search'`, { type: 'friend', op: 'search', error: 'slow_down' });
+  if ((await scr()).errs.includes('Too many tries. Wait a moment.')) ok(`${V}: friends — slow_down is said in words`);
+  else fail(`${V}: search slow_down ${JSON.stringify((await scr()).errs)}`);
+
+  // ---- 29. add by friend code
+  await arm(FSNAP.empty);
+  await ev(`(() => { $('frCode').value = 'fr-abc999'; return true; })()`);
+  await click('#bay [data-fr="add"]');
+  await sleep(60);
+  fq = await tx();
+  if (fq.length === 1 && fq[0].type === 'friend' && fq[0].op === 'add' && fq[0].code === 'FR-ABC999')
+    ok(`${V}: friends — Add by code upper-cases and sends {friend, add, code}`);
+  else fail(`${V}: add frame ${JSON.stringify(fq)}`);
+  await answer(`(fv) => fv.type === 'friend' && fv.op === 'add'`, { type: 'friend', op: 'add', error: 'no_such_code' });
+  if ((await scr()).errs.includes('No player has that friend code.')) ok(`${V}: friends — no_such_code is said in words`);
+  else fail(`${V}: add error ${JSON.stringify((await scr()).errs)}`);
+  await clearTx();
+  await click('#bay [data-fr="add"]');
+  await answer(`(fv) => fv.type === 'friend' && fv.op === 'add'`, { type: 'friend', op: 'add', ok: true, friend: { id: 'x', callsign: 'Nova Ten', online: true } });
+  if ((await toasts()).includes('Added Nova Ten as a friend.')) ok(`${V}: friends — a successful code add toasts the new friend`);
+  else fail(`${V}: add toast ${JSON.stringify(await toasts())}`);
+
+  // ---- 30. the menu: three items on a friend, two on a stranger
+  await arm(FSNAP.some);
+  await click(`#bay .pcd [data-pmenu="${BOB}"]`);
+  let mm = await menu();
+  if (mm.open && mm.head === 'Bunker Nine' && mm.items.join('|') === 'Report name|Block|Remove friend')
+    ok(`${V}: menu — a friend card offers Report name, Block and Remove friend`);
+  else fail(`${V}: friend menu ${JSON.stringify(mm)}`);
+  await click('#pmenu [data-pm="close"]');
+  if (!(await menu()).open) ok(`${V}: menu — Close shuts it`);
+  else fail(`${V}: menu close`);
+  await arm(FSNAP.empty);
+  await click('#bay [data-fr="search"]');
+  await answer(`(fv) => fv.type === 'friend' && fv.op === 'search'`, { type: 'friend', op: 'search', results: [{ id: CARA, callsign: 'Crater Two' }] });
+  await click(`#bay .pcd [data-pmenu="${CARA}"]`);
+  mm = await menu();
+  if (mm.items.join('|') === 'Report name|Block')
+    ok(`${V}: menu — a stranger offers Report name and Block, and no Remove friend`);
+  else fail(`${V}: stranger menu ${JSON.stringify(mm)}`);
+  await click('#pmenu [data-pm="close"]');
+
+  // ---- 31. Report asks FIRST, then thanks (design 5.5, word for word)
+  await arm(FSNAP.some);
+  await click(`#bay .pcd [data-pmenu="${BOB}"]`);
+  await clearTx();
+  await click('#pmenu [data-pm="report"]');
+  mm = await menu();
+  fq = await tx();
+  if (fq.length === 0 && mm.head === 'Report this name' && /Bunker Nine/.test(mm.note || ''))
+    ok(`${V}: report — it asks first and names the callsign; nothing is sent yet`);
+  else fail(`${V}: report confirm ${JSON.stringify({ fq, mm })}`);
+  await click('#pmenu [data-pm="cancel"]');
+  mm = await menu();
+  if ((await tx()).length === 0 && mm.open && mm.items.length === 3)
+    ok(`${V}: report — Cancel sends nothing and hands the player back to the menu`);
+  else fail(`${V}: report cancel ${JSON.stringify({ fq: await tx(), mm })}`);
+  await click('#pmenu [data-pm="report"]');
+  await click('#pmenu [data-pm="ok"]');
+  await sleep(60);
+  fq = await tx();
+  if (fq.length === 1 && fq[0].type === 'report' && fq[0].id === BOB && fq[0].handle === undefined)
+    ok(`${V}: report — confirming a friends-panel card sends {report, id} with the uuid the server gave us`);
+  else fail(`${V}: report frame ${JSON.stringify(fq)}`);
+  await answer(`(fv) => fv.type === 'report'`, { type: 'report', ok: true });
+  if ((await toasts()).includes('Reported. Thank you.') && !(await menu()).open)
+    ok(`${V}: report — the answer toasts exactly "Reported. Thank you." and the sheet closes`);
+  else fail(`${V}: report toast ${JSON.stringify(await toasts())}`);
+  // and a SECOND report of the same player is told what happened, in words
+  await click(`#bay .pcd [data-pmenu="${BOB}"]`);
+  await click('#pmenu [data-pm="report"]');
+  await click('#pmenu [data-pm="ok"]');
+  await answer(`(fv) => fv.type === 'report'`, { type: 'report', error: 'already' });
+  mm = await menu();
+  if (mm.open && mm.err === 'You have already reported this player in the past day.')
+    ok(`${V}: report — reporting the same player twice says so instead of failing silently`);
+  else fail(`${V}: report already ${JSON.stringify(mm)}`);
+  await click('#pmenu [data-pm="cancel"]');
+
+  // ---- 32. Block asks FIRST, and the copy claims exactly what resolution 25 allows
+  await arm(FSNAP.some);
+  await click(`#bay .pcd [data-pmenu="${CARA}"]`);
+  await clearTx();
+  await click('#pmenu [data-pm="block"]');
+  mm = await menu();
+  if ((await tx()).length === 0 && mm.head === 'Block this player' && /Crater Two/.test(mm.note || ''))
+    ok(`${V}: block — it asks first and names the callsign; nothing is sent yet`);
+  else fail(`${V}: block confirm ${JSON.stringify({ fq: await tx(), mm })}`);
+  // BINDING resolution 25: a block stops them finding or contacting you. It does
+  // NOT promise the two are never matched together again, and the sheet must not
+  // imply that it does.
+  if (/will not be able to find you or contact you/.test(mm.note || '')
+      && /still be matched/.test(mm.note || '') && !/never/.test(mm.note || ''))
+    ok(`${V}: block — the sheet says what a block does and states the limit (resolution 25)`);
+  else fail(`${V}: block copy ${JSON.stringify(mm.note)}`);
+  await click('#pmenu [data-pm="ok"]');
+  await sleep(60);
+  fq = await tx();
+  if (fq.length === 1 && fq[0].type === 'block' && fq[0].op === 'add' && fq[0].id === CARA)
+    ok(`${V}: block — confirming sends {block, add, id}`);
+  else fail(`${V}: block frame ${JSON.stringify(fq)}`);
+  await answer(`(fv) => fv.type === 'block' && fv.op === 'add'`, { type: 'block', op: 'add', ok: true });
+  if ((await toasts()).includes('Blocked.')) ok(`${V}: block — the answer is confirmed out loud`);
+  else fail(`${V}: block toast ${JSON.stringify(await toasts())}`);
+
+  // ---- 33. Remove friend does not confirm (design 5.5 names only Report and Block)
+  await arm(FSNAP.some);
+  await click(`#bay .pcd [data-pmenu="${BOB}"]`);
+  await clearTx();
+  await click('#pmenu [data-pm="unfriend"]');
+  await sleep(60);
+  fq = await tx();
+  if (fq.length === 1 && fq[0].type === 'friend' && fq[0].op === 'remove' && fq[0].id === BOB)
+    ok(`${V}: friends — Remove friend sends {friend, remove, id} straight away`);
+  else fail(`${V}: remove frame ${JSON.stringify(fq)}`);
+  await answer(`(fv) => fv.type === 'friend' && fv.op === 'remove'`, { type: 'friend', op: 'remove', ok: true });
+  if ((await toasts()).includes('Friend removed.') && !(await menu()).open)
+    ok(`${V}: friends — a removal is confirmed out loud and the menu closes`);
+  else fail(`${V}: remove toast ${JSON.stringify(await toasts())}`);
+
+  // ---- 34. the Blocked list and Unblock
+  await arm(FSNAP.blocked);
+  fv = await scr();
+  if (fv.lbls.includes('Blocked · 1') && fv.cards.includes('Rude Name') && fv.menus === 0)
+    ok(`${V}: friends — the blocked list names them and offers no menu (you have already acted)`);
+  else fail(`${V}: blocked list ${JSON.stringify(fv)}`);
+  await click('#bay [data-fr="unblock:55555555-5555-4555-8555-555555555555"]');
+  await sleep(60);
+  fq = await tx();
+  if (fq.length === 1 && fq[0].type === 'block' && fq[0].op === 'remove' && fq[0].id === '55555555-5555-4555-8555-555555555555')
+    ok(`${V}: friends — Unblock sends {block, remove, id}`);
+  else fail(`${V}: unblock frame ${JSON.stringify(fq)}`);
+  await answer(`(fv) => fv.type === 'block' && fv.op === 'remove'`, { type: 'block', op: 'remove', ok: true });
+  if ((await toasts()).includes('Unblocked.')) ok(`${V}: friends — an unblock is confirmed out loud`);
+  else fail(`${V}: unblock toast ${JSON.stringify(await toasts())}`);
+
+  // ---- 35. a callsign is player input: markup in it must not become markup
+  await arm(FSNAP.hostile);
+  fv = await scr();
+  if (!fv.pwned && fv.cards.length === 1 && fv.cards[0].indexOf('<img') === 0)
+    ok(`${V}: friends — a hostile callsign renders as text, not markup`);
+  else fail(`${V}: friends escaping ${JSON.stringify({ pwned: fv.pwned, cards: fv.cards })}`);
+
+  // ---- 36. THE LOBBY SEAT — the App Review path, through the seat handle.
+  //      BINDING resolution 24: the payload carries an opaque per-room handle
+  //      and NEVER an account id, so the menu sends `handle` and no uuid.
+  const LOB = `{type:'lobby',code:'ABCD',mode:'duel',max:3,you:0,host:0,players:[{name:'Anvil Six',skin:'olive',handle:'aaaa1111'},{name:'Bunker Nine',skin:'desert',handle:'1a2b3c4d'},{name:'Rusty Recoil',skin:'olive'}]}`;
+  await arm(FSNAP.empty);
+  await ev(`(() => { renderLobby(${LOB}); Bay.show('lobby'); window.__tx.length = 0; return true; })()`);
+  await sleep(60);
+  const seats = await ev(`(() => ({
+    menus: document.querySelectorAll('#bay .seat [data-pmenu]').length,
+    keys: [...document.querySelectorAll('#bay .seat [data-pmenu]')].map((e) => e.dataset.pmenu),
+  }))()`);
+  if (seats.menus === 1 && seats.keys.join('|') === '1a2b3c4d')
+    ok(`${V}: lobby — only the OTHER seat that carries a handle gets a menu; your own seat and an accountless seat do not`);
+  else fail(`${V}: lobby seat menus ${JSON.stringify(seats)}`);
+  await click('#bay .seat [data-pmenu]');
+  mm = await menu();
+  if (mm.open && mm.head === 'Bunker Nine' && mm.items.join('|') === 'Report name|Block')
+    ok(`${V}: lobby — a seat offers Report name and Block right there in the lobby`);
+  else fail(`${V}: lobby menu ${JSON.stringify(mm)}`);
+  await click('#pmenu [data-pm="block"]');
+  await click('#pmenu [data-pm="ok"]');
+  await sleep(60);
+  fq = await tx();
+  if (fq.length === 1 && fq[0].type === 'block' && fq[0].op === 'add' && fq[0].handle === '1a2b3c4d'
+      && typeof fq[0].id === 'number')
+    ok(`${V}: lobby — blocking a seat sends {block, add, handle} and no account id, with a correlation id`);
+  else fail(`${V}: lobby block frame ${JSON.stringify(fq)}`);
+  await answer(`(fv) => fv.type === 'block' && fv.op === 'add'`, { type: 'block', op: 'add', ok: true });
+  // a handle whose room has ended answers no_such_user, and that must read as
+  // "that player is no longer here" (task 6b, section 10.3) — never "no such user"
+  await click('#bay .seat [data-pmenu]');
+  await click('#pmenu [data-pm="report"]');
+  await click('#pmenu [data-pm="ok"]');
+  await answer(`(fv) => fv.type === 'report'`, { type: 'report', error: 'no_such_user' });
+  mm = await menu();
+  if (mm.open && mm.err === 'That player is no longer here.')
+    ok(`${V}: lobby — a dead handle is explained as a player who has gone, not as "no such user"`);
+  else fail(`${V}: stale handle ${JSON.stringify(mm)}`);
+  await click('#pmenu [data-pm="cancel"]');
+
+  // ---- 37. THE IN-MATCH CARD. The same handle, carried by the snapshot
+  //      (task 6b follow-up F6): a name is on screen for the whole match.
+  await arm(FSNAP.empty);
+  const hud = await ev(`(() => {
+    // A REAL snapshot through applySnapshot, not a hand-set S.handles: the line
+    // under test is the one that reads m.handles, and a test that writes the
+    // field itself proves nothing about it.
+    try {
+      applySnapshot({ type: 'start', mode: 'ffa', code: 'ABCD', world: { w: 3000, h: 1400 },
+        you: 0, n: 3, turn: 0, moveBudget: 0,
+        names: ['Anvil Six', 'Bunker Nine', 'Rusty Recoil'],
+        skins: ['olive', 'desert', 'olive'],
+        handles: ['aaaa1111', '1a2b3c4d', null],
+        weapons: [{ id: 'cannon', name: 'Cannon' }], ammo: { cannon: 99 },
+        terrain: new Array(200).fill(900), trees: [], hazards: [], scorch: [],
+        tanks: [{ x: 300, y: 900 }, { x: 1500, y: 900 }, { x: 2600, y: 900 }],
+        hp: [100, 100, 100] });
+    } catch (e) { return { err: String(e) }; }
+    return {
+      handles: (S.handles || []).slice(),
+      cards: [...document.querySelectorAll('#scoreRow .pscore')].length,
+      names: [...document.querySelectorAll('#scoreRow .pname')].map((e) => e.textContent.trim()),
+      menus: [...document.querySelectorAll('#scoreRow [data-pmenu]')].map((e) => e.dataset.pmenu),
+    };
+  })()`);
+  if (hud.cards === 3 && hud.names[0] === 'Anvil Six (you)' && hud.menus.join('|') === '1a2b3c4d'
+      && (hud.handles || []).length === 3 && hud.handles[2] === null)
+    ok(`${V}: in match — the card of the one other player with an account carries a menu, and the names are unchanged`);
+  else fail(`${V}: hud cards ${JSON.stringify(hud)}`);
+  await clearTx();
+  await click('#scoreRow [data-pmenu]');
+  mm = await menu();
+  if (mm.open && mm.items.join('|') === 'Report name|Block')
+    ok(`${V}: in match — the menu opens over the battlefield with Report name and Block`);
+  else fail(`${V}: hud menu ${JSON.stringify(mm)}`);
+  await click('#pmenu [data-pm="report"]');
+  await click('#pmenu [data-pm="ok"]');
+  await sleep(60);
+  fq = await tx();
+  if (fq.length === 1 && fq[0].type === 'report' && fq[0].handle === '1a2b3c4d' && typeof fq[0].id === 'number')
+    ok(`${V}: in match — reporting sends {report, handle} and no account id`);
+  else fail(`${V}: hud report frame ${JSON.stringify(fq)}`);
+  await answer(`(fv) => fv.type === 'report'`, { type: 'report', ok: true });
+  await ev(`(() => { $('scoreRow').innerHTML = ''; S.handles = []; S.playing = false; showScreen('home'); $('bay').classList.add('active'); return true; })()`);
+
+  // ---- 38. A GUEST (resolution 18): report and block YES, friends NO, and the
+  //      blocked list is their own to see and to lift.
+  await arm('null', 'guest');
+  await sleep(60);
+  fq = await ev(`window.__tx.slice()`);
+  fv = await scr();
+  if (fv.signin >= 1 && /Sign in to add friends/.test(fv.body || '') && fv.code === null
+      && fq.filter((x) => x.type === 'friends').length === 0
+      && fq.filter((x) => x.type === 'block' && x.op === 'list').length === 1)
+    ok(`${V}: guest — no friends panel and no friend code, but their own blocked list IS asked for`);
+  else fail(`${V}: guest screen ${JSON.stringify({ fv, fq })}`);
+  await answer(`(fv) => fv.type === 'block' && fv.op === 'list'`, { type: 'block', op: 'list', ok: true, blocked: [{ id: '55555555-5555-4555-8555-555555555555', callsign: 'Rude Name' }] });
+  fv = await scr();
+  if (fv.cards.includes('Rude Name') && fv.lbls.includes('Blocked · 1'))
+    ok(`${V}: guest — the blocked list is rendered from block op:'list'`);
+  else fail(`${V}: guest blocked ${JSON.stringify(fv)}`);
+  await clearTx();
+  await click('#bay [data-fr="unblock:55555555-5555-4555-8555-555555555555"]');
+  await sleep(60);
+  fq = await tx();
+  if (fq.length === 1 && fq[0].type === 'block' && fq[0].op === 'remove')
+    ok(`${V}: guest — a guest can lift their own block`);
+  else fail(`${V}: guest unblock ${JSON.stringify(fq)}`);
+  await answer(`(fv) => fv.type === 'block' && fv.op === 'remove'`, { type: 'block', op: 'remove', ok: true });
+  fq = await tx();
+  if (fq.filter((x) => x.type === 'block' && x.op === 'list').length === 1)
+    ok(`${V}: guest — lifting a block re-reads the list, because no snapshot is ever pushed to a guest`);
+  else fail(`${V}: guest re-read ${JSON.stringify(fq)}`);
+  await answer(`(fv) => fv.type === 'block' && fv.op === 'list'`, { type: 'block', op: 'list', ok: true, blocked: [] });
+  // and a guest can report and block from a lobby seat
+  await ev(`(() => { renderLobby(${LOB}); Bay.show('lobby'); window.__tx.length = 0; return true; })()`);
+  await sleep(60);
+  await click('#bay .seat [data-pmenu]');
+  mm = await menu();
+  if (mm.open && mm.items.join('|') === 'Report name|Block')
+    ok(`${V}: guest — a lobby seat menu offers Report name and Block (resolution 18)`);
+  else fail(`${V}: guest seat menu ${JSON.stringify(mm)}`);
+  await click('#pmenu [data-pm="report"]');
+  await click('#pmenu [data-pm="ok"]');
+  await sleep(60);
+  fq = await tx();
+  if (fq.length === 1 && fq[0].type === 'report' && fq[0].handle === '1a2b3c4d')
+    ok(`${V}: guest — the report really is sent`);
+  else fail(`${V}: guest report ${JSON.stringify(fq)}`);
+  await answer(`(fv) => fv.type === 'report'`, { type: 'report', ok: true });
+
+  // ---- 39. SIGNED OUT: every social frame is refused, so the menu says so and
+  //      sends nothing rather than offering a control that can only fail.
+  await arm('null', 'out');
+  await ev(`(() => { renderLobby(${LOB}); Bay.show('lobby'); window.__tx.length = 0; return true; })()`);
+  await sleep(60);
+  await click('#bay .seat [data-pmenu]');
+  mm = await menu();
+  if (mm.open && (await tx()).length === 0 && mm.items.length === 0
+      && /Sign in to report or block a player\./.test(mm.note || '') && mm.acts.includes('signin'))
+    ok(`${V}: signed out — the menu asks them to sign in and sends nothing`);
+  else fail(`${V}: signed-out menu ${JSON.stringify({ mm, fq: await tx() })}`);
+  await click('#pmenu [data-pm="close"]');
+
+  // ---- 40. offline: the snapshot stays on screen, the controls go quiet
+  await arm(FSNAP.some, 'in', false);
+  fv = await scr();
+  if (fv.meta === 'Needs a connection' && fv.searchOff && fv.cards.length === 2)
+    ok(`${V}: offline — the last snapshot stays, the controls are disabled, the header says why`);
+  else fail(`${V}: offline state ${JSON.stringify(fv)}`);
+  await clearTx();
+  await click('#bay [data-fr="search"]');
+  await sleep(60);
+  if ((await tx()).length === 0) ok(`${V}: offline — a disabled Search sends nothing`);
+  else fail(`${V}: offline send ${JSON.stringify(await tx())}`);
+  await click(`#bay .pcd [data-pmenu="${BOB}"]`);
+  mm = await menu();
+  if (mm.items.length === 0 && /Reporting and blocking go through the server/.test(mm.note || ''))
+    ok(`${V}: offline — the menu says why it cannot act instead of offering buttons that do nothing`);
+  else fail(`${V}: offline menu ${JSON.stringify(mm)}`);
+  await click('#pmenu [data-pm="close"]');
+
+  // ---- 40b. THE IN-PAGE OFFLINE ENGINE. A solo match swaps the socket for a
+  //      stand-in whose readyState is 1, and public/room-engine.js carries no
+  //      social code — so a frame sent into it vanishes and the screen waits
+  //      twelve seconds for an answer that cannot come. Enter in the search
+  //      field is the one path with no disabled attribute in front of it.
+  await arm(FSNAP.some);
+  await ev(`(() => { S.local = true; $('frQ').value = 'Crater Two'; window.__tx.length = 0;
+    $('frQ').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return true; })()`);
+  await sleep(60);
+  fv = await scr();
+  if ((await tx()).length === 0 && fv.errs.includes('Not connected. Try again in a moment.'))
+    ok(`${V}: offline — a solo match's in-page engine is never handed a social frame, and the field says why`);
+  else fail(`${V}: solo engine ${JSON.stringify({ fq: await tx(), errs: fv.errs })}`);
+  await ev(`(() => { S.local = false; return true; })()`);
+
+  // ---- 41. Share only where the browser has Web Share; Copy always
+  await arm(FSNAP.empty);
+  const had = await ev(`(() => { const h = typeof navigator.share === 'function'; window.__share = navigator.share; Object.defineProperty(navigator, 'share', { value: undefined, configurable: true }); Bay.show('home'); Bay.show('friends'); return h; })()`);
+  const noShare = (await scr()).share;
+  await ev(`(() => { Object.defineProperty(navigator, 'share', { value: () => Promise.resolve(), configurable: true }); Bay.show('home'); Bay.show('friends'); return true; })()`);
+  const yesShare = (await scr()).share;
+  await ev(`(() => { Object.defineProperty(navigator, 'share', { value: window.__share, configurable: true }); return typeof had; })()`);
+  if (noShare === false && yesShare === true) ok(`${V}: friends — Share appears only where Web Share exists; Copy is always there`);
+  else fail(`${V}: share button ${JSON.stringify({ noShare, yesShare })}`);
+
+  // ---- 42. the entry point: Bay controls (design 9)
+  await arm(FSNAP.some);
+  const entry = await ev(`(() => {
+    Bay.show('settings');
+    const row = [...document.querySelectorAll('#bay .row')].find((x) => x.querySelector('.rn2') && x.querySelector('.rn2').textContent === 'Friends');
+    if (!row) return { row: null };
+    const btn = row.querySelector('.sbtn');
+    const out = { desc: row.querySelector('.rd').textContent.trim(), go: btn && btn.dataset.go, label: btn && btn.textContent.trim(),
+                  heights: [...document.querySelectorAll('#bay .row')].map((x) => Math.round(x.getBoundingClientRect().height)) };
+    btn.click();
+    out.scr = $('bay').dataset.scr;
+    return out;
+  })()`);
+  if (entry.go === 'friends' && entry.label === 'Open' && entry.desc === '2 friends · 1 online'
+      && entry.scr === 'friends' && new Set(entry.heights).size === 1)
+    ok(`${V}: entry point — Bay controls carries a Friends row that counts the friends and opens the screen`);
+  else fail(`${V}: entry point ${JSON.stringify(entry)}`);
+
+  // ---- 43. layout: the three columns end inside the page body and nothing
+  //      clips, at both shipped phone shapes, with a long name and twenty blocks
+  await ev(`(() => {
+    const many = [];
+    for (let i = 0; i < 20; i++) many.push({ id: 'b' + i, callsign: 'Blocked Number ' + i });
+    window.CC_SOCIAL = { friends: [{ id: ${JSON.stringify(BOB)}, callsign: 'Wolfe Ridgebacker Longname', online: true }],
+      requests: { in: [], out: [] }, blocked: many, friendCode: 'ABC234', callsign: 'Anvil Six' };
+    Bay.show('home'); Bay.show('friends');
+    return true;
+  })()`);
+  await sleep(60);
+  const geo = await ev(`(() => {
+    const body = document.querySelector('#bay .pbody').getBoundingClientRect();
+    const cols = document.querySelector('#bay .cols').getBoundingClientRect();
+    const bay = document.querySelector('#bay');
+    return {
+      inBody: cols.bottom <= body.bottom + 1 && cols.right <= body.right + 1,
+      colOverflow: [...document.querySelectorAll('#bay .fcol')].filter((e) => e.scrollWidth > e.clientWidth + 1).length,
+      clipped: [...document.querySelectorAll('#bay .frcode, #bay .lbl')].filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.className),
+      scrolls: [...document.querySelectorAll('#bay .frl')].filter((e) => e.scrollHeight > e.clientHeight + 1).length,
+      pageOverflow: [bay.scrollWidth > bay.clientWidth, bay.scrollHeight > bay.clientHeight],
+    };
+  })()`);
+  if (geo.inBody && geo.colOverflow === 0 && geo.clipped.length === 0 && geo.scrolls === 1
+      && geo.pageOverflow[0] === false && geo.pageOverflow[1] === false)
+    ok(`${V}: friends — a long name and twenty blocks stay inside the frame; the list scrolls, the page does not`);
+  else fail(`${V}: friends geometry ${JSON.stringify(geo)}`);
+
+  // ---- 44. the landscape keyboard: focusing a friends field lifts the frame
+  //      over it, exactly as the callsign editor does.
+  await arm(FSNAP.empty);
+  const quiet2 = await ev(`(() => {
+    const vv = { offsetTop: 0, height: window.innerHeight, _l: [],
+      addEventListener(t, f) { this._l.push(f); }, removeEventListener(t, f) { this._l = this._l.filter((x) => x !== f); } };
+    Object.defineProperty(window, 'visualViewport', { value: vv, configurable: true });
+    $('frCode').focus();
+    const host = $('bay');
+    return { kbd: host.classList.contains('kbd'), lift: host.style.getPropertyValue('--kbd'),
+             bottom: document.querySelector('#frbCode').getBoundingClientRect().bottom };
+  })()`);
+  if (!quiet2.kbd && (quiet2.lift === '' || quiet2.lift === '0px')) ok(`${V}: friends — focusing a field with no keyboard lifts nothing`);
+  else fail(`${V}: friends lifted with no keyboard ${JSON.stringify(quiet2)}`);
+  const lift = await ev(`(() => {
+    const vv = window.visualViewport;
+    vv.height = Math.round(${quiet2.bottom} - 40);
+    vv._l.forEach((f) => f());
+    const host = $('bay'), box = document.querySelector('#frbCode').getBoundingClientRect();
+    return { kbd: host.classList.contains('kbd'), lift: parseFloat(host.style.getPropertyValue('--kbd')),
+             bottom: box.bottom, top: box.top, vh: vv.height };
+  })()`);
+  if (lift.kbd && lift.lift > 0 && lift.bottom <= lift.vh && lift.top >= 0)
+    ok(`${V}: friends — a keyboard under the Add-by-code field lifts it clear and leaves it on screen`);
+  else fail(`${V}: keyboard lift ${JSON.stringify(lift)}`);
+  await ev(`(() => { $('frCode').blur(); return true; })()`);
+  await sleep(20);
+  await ev(`(() => { Bay.show('home'); return true; })()`);
+  const gone = await ev(`(() => ({ kbd: $('bay').classList.contains('kbd'), lift: $('bay').style.getPropertyValue('--kbd') }))()`);
+  if (gone.kbd === false) ok(`${V}: friends — leaving the screen drops the lift`);
+  else fail(`${V}: lift left behind ${JSON.stringify(gone)}`);
 }
 
 cleanup();

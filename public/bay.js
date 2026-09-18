@@ -126,6 +126,11 @@ const KBD_PAD = 6;                                  // px of air under the field
 const callsign = { open: false, busy: false, err: '' };
 let csSeq = 0;                                      // which try an answer belongs to
 let kbdOn = null;                                   // the viewport listener, only while the editor is open
+// WHICH BOX THE LIFT IS MEASURED AGAINST. The callsign editor is no longer the
+// only field in the Bay: the Friends screen has two, and the lower one sits
+// under a landscape keyboard. One selector, set by whoever opens the watch, so
+// there is still exactly one measurement and one lift.
+let kbdSel = '#bay .csx';
 let csFocus = 0;                                    // the deferred focus/watch, cancelled if the editor closes first
 // What the pending lobby says for an invite-room mode: why it needs a
 // connection, and what one player can still do on this device.
@@ -178,7 +183,16 @@ const IC = {
        '-2.8-1.4L5.7 12 4.1 9.3l2.8-1.4.5-3.1 3.1.6z" opacity=".5"/></svg>',
   tick:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M9.2 16.6l-4.2-4.2 1.5-1.5 2.7 2.7L17.5 5.3 19 6.8z"/></svg>',
   copy:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">' +
-       '<rect x="8.2" y="3.4" width="12" height="12" rx="2"/><path d="M15.8 18.2v.4a2 2 0 0 1-2 2H5.8a2 2 0 0 1-2-2V8.6a2 2 0 0 1 2-2h.4"/></svg>'
+       '<rect x="8.2" y="3.4" width="12" height="12" rx="2"/><path d="M15.8 18.2v.4a2 2 0 0 1-2 2H5.8a2 2 0 0 1-2-2V8.6a2 2 0 0 1 2-2h.4"/></svg>',
+  // FRIENDS. Drawn, not typed. The obvious character for a presence lamp is a
+  // filled circle and the obvious one for a menu handle is a horizontal
+  // ellipsis; test/house-rules.mjs rejects the whole Geometric Shapes block
+  // (25A0-25FF) and the arrows block with it, so both are built here instead.
+  dot:'<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="8.4" stroke="currentColor" stroke-width="2.2" opacity=".42"/>' +
+       '<circle cx="12" cy="12" r="4.4" fill="currentColor"/></svg>',
+  more:'<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5.2" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="18.8" cy="12" r="1.9"/></svg>',
+  share:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+       '<path d="M12 3.6v11"/><path d="M8.3 7.3L12 3.6l3.7 3.7"/><path d="M5.8 12.6v6.1a1.9 1.9 0 0 0 1.9 1.9h8.6a1.9 1.9 0 0 0 1.9-1.9v-6.1"/></svg>'
 };
 
 // The offline badge on every mode board: what this mode does with no server,
@@ -566,9 +580,14 @@ SCREENS.settings = function () {
   };
   const right = row('Account', accDesc, accState === 'out' ? 'Sign in' : 'Manage', 'data-old="accountBtn"')
     + csRow(s)
+    // Design 9: "the Friends screen is reachable from Bay controls until the
+    // box exists" (project 3). It sits with Account and Callsign because that
+    // is what it belongs with, and PRIVACY POLICY moved to the other column to
+    // make room: this column's content already ends 350u down a 348u page body,
+    // so a sixth row here would have pushed the Built by card off the screen.
+    + row('Friends', friendsDesc(), 'Open', 'data-go="friends"')
     + row('Tank paint', esc(s.skin.name) + ' is fitted', 'Open', 'data-go="paint"')
     + row('How to play', 'The six-chapter field manual', 'Open', 'data-old="helpHomeBtn"')
-    + row('Privacy policy', 'Opens in your browser', '&rarr;', 'data-old="privacyLink"')
     // The credit card stands down while the field is open: the editor is about
     // 70u tall and the right column already reaches the bottom of .pbody, so
     // something has to give and this is the part nobody is reading mid-edit.
@@ -577,7 +596,12 @@ SCREENS.settings = function () {
     + '<div style="font-size:' + u(10.5) + ';color:#7f8fb5;margin-top:' + u(4) + ';font-weight:500">Cannons &amp; Canyons &mdash; landscape only, best with a friend.</div></div>');
   const withWhom = linked.length ? ' with ' + linked.map((a) => PROVIDER_NAME[a.provider] || esc(a.provider)).join(' and ') : '';
   return chrome('Bay controls', accState === 'in' ? 'Signed in' + withWhom + ' &mdash; progress syncs across devices' : 'Guest &mdash; progress is stored on this device', 'Abara Brothers',
-    '<div class="set" style="height:' + u(300) + '"><div style="flex:1">' + T + '</div><div style="flex:1">' + right + '</div></div>', '');
+    // Privacy policy rides at the foot of the TOGGLES column: it is a link out,
+    // it reads like a footer, and this column had 88u spare where the other had
+    // none. See the Friends row above for why the room had to come from here.
+    '<div class="set" style="height:' + u(300) + '"><div style="flex:1">' + T
+    +   row('Privacy policy', 'Opens in your browser', '&rarr;', 'data-old="privacyLink"')
+    + '</div><div style="flex:1">' + right + '</div></div>', '');
 };
 
 /* ---- Set callsign: opening, submitting, and the on-screen keyboard -------- */
@@ -591,7 +615,7 @@ SCREENS.settings = function () {
 // an inline style on .stage would be stripped on the next re-render (morphNode
 // removes every attribute the template does not carry).
 function kbdFit() {
-  const host = $('bay'), box = document.querySelector('#bay .csx');
+  const host = $('bay'), box = document.querySelector(kbdSel);
   if (!host || !box) return;
   host.classList.remove('kbd');                       // measure where the frame really sits
   const vv = window.visualViewport;
@@ -607,9 +631,10 @@ function kbdFit() {
   host.style.setProperty('--kbd', lift + 'px');
   host.classList.toggle('kbd', lift > 0);
 }
-function kbdWatch(on) {
+function kbdWatch(on, sel) {
   const vv = window.visualViewport;
   if (on) {
+    kbdSel = sel || '#bay .csx';
     if (!kbdOn) {
       kbdOn = () => kbdFit();
       if (vv) { vv.addEventListener('resize', kbdOn); vv.addEventListener('scroll', kbdOn); }
@@ -703,6 +728,492 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { e.preventDefault(); closeCallsign(); }
 });
 
+/* ---- FRIENDS, BLOCKS AND REPORTS (design 5.5 and 4.2) ---------------------
+   THE READ MODEL IS window.CC_SOCIAL and app.js is the only writer (Task 7's
+   contract: bay.js reads, never writes). `null` MEANS NOT KNOWN YET, never
+   "empty" — Task 7 shipped that bug once on the Callsign row, where an
+   unarrived snapshot rendered as "you have no callsign", and the same mistake
+   here would tell a player with fifty friends that they have none. Every list
+   below therefore has THREE states, and the unknown one says so.
+
+   EVERY FRAME GOES OUT THROUGH app.js's socialSend(frame, cb). It mints the
+   correlation id, keys its waiter on a number nobody else can choose (Task 7's
+   F5 — a target uuid is not unique per request), and answers the callback
+   exactly once, including when the socket is down. The callbacks here still
+   check the reply's `type` and `op` before they act, because BINDING
+   resolution 3 puts a TARGET uuid in `id` on block, report and friend remove,
+   so an echo is not proof of which request it answers.
+
+   WHO MAY DO WHAT (BINDING resolution 18, and the server's two gates):
+     friends, friend  -> a LINKED account
+     callsign         -> a LINKED account
+     report, block    -> ANY account, including an anonymous guest
+   So a guest gets Report and Block everywhere a name is shown, and their own
+   blocked list through `block op:'list'` — an action nobody can undo is worse
+   than one they were never offered. */
+const FR_MAX = 16;
+let fr = { q: '', code: '', res: null, ferr: '', cerr: '' };
+// A GUEST'S OWN BLOCKED LIST. They are refused the friends frame, so this is
+// the one read they get. null = not known yet, exactly like CC_SOCIAL.
+let gb = { list: null, err: '', asking: false };
+let pm = null;      // the open player menu:  { key, kind:'id'|'handle', name, err, busy }
+let pa = null;      // the confirm sheet:     { act:'report'|'block', key, kind, name, err, busy }
+let pmEl = null;    // the overlay node
+
+const snap = () => (has('CC_SOCIAL') ? G.CC_SOCIAL : null) || null;
+const acctState = () => (($('accountBtn') && $('accountBtn').dataset.state) || 'out');
+// Nothing is sent while the socket is the in-page offline stand-in: room-engine
+// carries no social code (it is the module the offline page imports), so the
+// frame would vanish and the screen would wait for an answer that cannot come.
+const wsReady = () => !!(G.S && S.connected && !S.local && S.ws && S.ws.readyState === 1);
+
+// THE ERROR MAP IS KEYED BY TYPE AND OP AS WELL AS CODE, and it is closed.
+// Task 7's CS_ERR gets away with a code-only map because only a callsign reply
+// is ever looked up in it; here `already` means "you are already friends" on a
+// friend add and "you have already reported this player" on a report, and
+// `no_such_user` on a LOBBY card means "that player is no longer here" — the
+// honest reading of an expired seat handle (task 6b, section 10.3). Closed,
+// because the server's own words are never rendered: a malformed or hostile
+// code cannot put markup on screen, and a code from a newer server still gets
+// a sentence.
+const SOC_ERR = {
+  'friend.search.slow_down':     'Too many tries. Wait a moment.',
+  'friend.search.sign_in':       'Sign in to add friends.',
+  'friend.search.offline':       'Not connected. Try again in a moment.',
+  'friend.search._':             'Friends are not available right now. Try again later.',
+  'friend.add.no_such_code':     'No player has that friend code.',
+  'friend.add.self':             'That is your own friend code.',
+  'friend.add.blocked':          'That player cannot be added.',
+  'friend.add.already':          'You are already friends.',
+  'friend.add.slow_down':        'Too many tries. Wait a moment.',
+  'friend.add.sign_in':          'Sign in to add friends.',
+  'friend.add.offline':          'Not connected. Try again in a moment.',
+  'friend.add._':                'Friends are not available right now. Try again later.',
+  'friend.request.self':         'That is you.',
+  'friend.request.blocked':      'That player cannot be added.',
+  'friend.request.already':      'You have already asked, or you are already friends.',
+  'friend.request.no_such_user': 'That player is no longer here.',
+  'friend.request.slow_down':    'Too many tries. Wait a moment.',
+  'friend.request.sign_in':      'Sign in to add friends.',
+  'friend.request.offline':      'Not connected. Try again in a moment.',
+  'friend.request._':            'Friends are not available right now. Try again later.',
+  'friend.accept.no_such_request': 'That request is already gone.',
+  'friend.accept.blocked':       'That player cannot be added.',
+  'friend.accept.offline':       'Not connected. Try again in a moment.',
+  'friend.accept._':             'Friends are not available right now. Try again later.',
+  'friend.decline.no_such_request': 'That request is already gone.',
+  'friend.decline.offline':      'Not connected. Try again in a moment.',
+  'friend.decline._':            'Friends are not available right now. Try again later.',
+  'friend.remove.no_such_user':  'They are not on your friends list.',
+  'friend.remove.offline':       'Not connected. Try again in a moment.',
+  'friend.remove._':             'Friends are not available right now. Try again later.',
+  'block.self':                  'You cannot block yourself.',
+  'block.no_such_user':          'That player is no longer here.',
+  'block.sign_in':               'Sign in to report or block a player.',
+  'block.offline':               'Not connected. Try again in a moment.',
+  'block._':                     'Blocking is not available right now. Try again later.',
+  'block.list.slow_down':        'Too many tries. Wait a moment.',
+  'block.list.sign_in':          'Sign in to see who you have blocked.',
+  'block.list.offline':          'Not connected. Try again in a moment.',
+  'block.list._':                'Your blocked list is not available right now. Try again later.',
+  'report.self':                 'You cannot report yourself.',
+  'report.no_such_user':         'That player is no longer here.',
+  'report.already':              'You have already reported this player in the past day.',
+  'report.slow_down':            'Too many reports. Wait a moment.',
+  'report.sign_in':              'Sign in to report or block a player.',
+  'report.offline':              'Not connected. Try again in a moment.',
+  'report._':                    'Reporting is not available right now. Try again later.',
+  _:                             'That did not work. Try again.',
+};
+function socErr(kind, code) {
+  const c = typeof code === 'string' && code ? code : 'unavailable';
+  return SOC_ERR[kind + '.' + c] || SOC_ERR[kind + '._'] || SOC_ERR._;
+}
+// THE REPLY THIS FRAME WAS WAITING FOR, and nothing else. A target uuid is not
+// unique per request, so the echo alone is not proof — check the shape too, and
+// treat anything that does not fit as a failure rather than acting on it.
+function fits(m, type, op) {
+  if (!m || typeof m !== 'object') return { error: 'offline' };
+  if (m.error) return m;
+  if (m.type !== type || (op && m.op !== op)) return { error: 'unavailable' };
+  return m;
+}
+// One way out. A dead socket answers here rather than leaving a dead button.
+function socialTx(frame, type, op, kind, cb) {
+  if (!wsReady() || !fn('socialSend')) { cb({ error: 'offline' }, socErr(kind, 'offline')); return false; }
+  socialSend(frame, (m) => { const r = fits(m, type, op); cb(r, r.error ? socErr(kind, r.error) : ''); });
+  return true;
+}
+// Repaint whatever is showing this state. render() is a no-op during a match,
+// so the body-level menu repaints itself separately — it is the one part of
+// this feature that has to work over the battlefield.
+function frPaint() {
+  const host = $('bay');
+  if (host && host.classList.contains('active') && (current === 'friends' || current === 'lobby' || current === 'settings')) render(current);
+  pmPaint();
+}
+
+/* ---- one player, wherever a player is shown ------------------------------ */
+// Task 5's D3: `callsign` is null when the server cannot vouch for the name, so
+// every list renders a fallback rather than an empty card.
+const nameOf = (p) => (p && typeof p.callsign === 'string' && p.callsign ? p.callsign : 'No callsign');
+// THE MENU BUTTON. `key` is either an account uuid the SERVER handed this
+// client (a friends list, a search result, a blocked list) or a per-room seat
+// HANDLE (a lobby payload, an in-match snapshot). They are different fields on
+// the wire and are never interchangeable — BINDING resolution 24, and
+// task 6b section 2. Nothing here logs or stores either one.
+const menuBtn = (key, kind, name, dis) =>
+  '<button class="pmb" data-pmenu="' + esc(key) + '" data-pmkind="' + kind + '" data-pmname="' + esc(name)
+  + '" aria-label="More for ' + esc(name) + '"' + (dis ? ' disabled' : '') + '>' + IC.more + '</button>';
+// BINDING resolution 23: a search result carries NO tank, because the paint is
+// not stored on the profile — the card shows the callsign alone. No card here
+// draws one, so there is no half-built path for a later project to trip over.
+function pcard(p, o) {
+  const opt = o || {}, name = nameOf(p);
+  return '<div class="pcd">'
+    + (opt.dot === false ? '' : '<span class="pdot' + (p.online ? ' on' : '') + '" title="' + (p.online ? 'Online' : 'Offline') + '">' + IC.dot + '</span>')
+    + '<span class="sn">' + esc(name) + '</span><span class="grow"></span>'
+    + (opt.act || '')
+    // THE MENU IS NEVER DISABLED, only the actions are. A greyed handle offline
+    // teaches nothing; the menu itself says reporting and blocking go through
+    // the server, which is the sentence the player actually needs.
+    + (opt.menu === false ? '' : menuBtn(p.id, 'id', name, false))
+    + '</div>';
+}
+
+/* ---- the player menu and the two confirm sheets -------------------------- */
+// A BODY-LEVEL LAYER, not part of any screen's markup. The menu has to open in
+// four places and only two of them are Bay screens: the friends list and a
+// search result are, a LOBBY SEAT is, and an IN-MATCH CARD is not — #bay is not
+// even on stage during a battle. One layer serves all four, so there is one
+// implementation of Report, Block and their confirmations.
+function pmHost() {
+  if (!pmEl) {
+    pmEl = document.createElement('div');
+    pmEl.id = 'pmenu';
+    pmEl.hidden = true;
+    document.body.appendChild(pmEl);
+    pmEl.addEventListener('click', pmClick);
+  }
+  return pmEl;
+}
+function pmOpen(key, kind, name) {
+  if (has('Audio')) Audio.ensure();
+  pm = { key, kind: kind === 'handle' ? 'handle' : 'id', name: name || '', err: '', busy: '' };
+  pa = null;
+  pmPaint();
+}
+function pmClose() { if (!pm && !pa) return; pm = null; pa = null; pmPaint(); }
+function pmItems() {
+  const who = acctState();
+  // A player with no account at all is refused every social frame, so a Report
+  // button here could only ever fail. Say the rule instead of failing it.
+  if (who === 'out') return '<p class="pmn">Sign in to report or block a player.</p>'
+    + '<button class="pmg" data-pm="signin">Sign in</button>';
+  if (!wsReady()) return '<p class="pmn">Reporting and blocking go through the server. Reconnect and try again.</p>';
+  // Remove friend needs the account uuid AND the friends list to know they are
+  // one, so it belongs to the friends-panel route only. A seat handle is
+  // meaningless outside its room and says nothing about a friendship.
+  const sn = who === 'in' ? snap() : null;
+  const isFriend = pm.kind === 'id' && !!(sn && (sn.friends || []).some((x) => x && x.id === pm.key));
+  return '<button class="pmi" data-pm="report">Report name</button>'
+    + '<button class="pmi" data-pm="block">Block</button>'
+    + (isFriend ? '<button class="pmi" data-pm="unfriend"' + (pm.busy ? ' disabled' : '') + '>Remove friend</button>' : '');
+}
+// Design 5.5: "Report confirms… Block confirms." Remove friend does not — the
+// design names only those two, and an accidental unfriend is undone by asking
+// again. BINDING resolution 25 fixes what the block sentence may claim: a block
+// stops them finding or contacting you and clears what is between you. It does
+// NOT promise the two are never matched together again, and this copy says so
+// rather than leaving a player to find out.
+function pmAsk() {
+  const rep = pa.act === 'report';
+  return '<div class="pmw" data-pmstop><div class="pmh">' + (rep ? 'Report this name' : 'Block this player') + '</div>'
+    + '<p class="pmn">' + (rep
+      ? 'Report the callsign ' + esc(pa.name) + ' to Abara Brothers. Every report is read.'
+      : 'Block ' + esc(pa.name) + '. They will not be able to find you or contact you, and any friendship or request between you is removed. You may still be matched into a battle together. You can undo this in Friends.')
+    + '</p>'
+    + (pa.err ? '<p class="pme">' + esc(pa.err) + '</p>' : '')
+    + '<div class="pmr"><button class="pmg" data-pm="cancel">Cancel</button><span class="grow"></span>'
+    + '<button class="pmg on" data-pm="ok"' + (pa.busy ? ' disabled' : '') + '>'
+    + (pa.busy ? (rep ? 'Reporting' : 'Blocking') : (rep ? 'Report' : 'Block')) + '</button></div></div>';
+}
+function pmPaint() {
+  const el = pmHost();
+  const html = pa ? pmAsk()
+    : pm ? '<div class="pmw" data-pmstop><div class="pmh">' + esc(pm.name || 'This player') + '</div>'
+        + pmItems()
+        + (pm.err ? '<p class="pme">' + esc(pm.err) + '</p>' : '')
+        + '<div class="pmr"><span class="grow"></span><button class="pmg" data-pm="close">Close</button></div></div>'
+    : '';
+  if (!html) { el.hidden = true; el.innerHTML = ''; return; }
+  el.innerHTML = html;
+  el.hidden = false;
+}
+// The target, in the field the server reads it from. ONE FORM, NEVER EITHER:
+// a handle goes in `handle` and a uuid in `id`, and a uuid is refused in
+// `handle` by design — that refusal is what stops a modified client addressing
+// a player it was never given (task 6b, section 2).
+const pmAim = (t) => (t.kind === 'handle' ? { handle: t.key } : { id: t.key });
+function pmClick(e) {
+  const t = e.target.closest ? e.target.closest('[data-pm]') : null;
+  if (!t) { if (!(e.target.closest && e.target.closest('[data-pmstop]'))) pmClose(); return; }
+  const a = t.dataset.pm;
+  if (a === 'close') return pmClose();
+  if (a === 'signin') { pmClose(); const b = $('accountBtn'); if (b && b.onclick) b.onclick(); return; }
+  if (a === 'cancel') { pa = null; pmPaint(); return; }
+  if (a === 'report' || a === 'block') {
+    if (!pm) return;
+    pa = { act: a, key: pm.key, kind: pm.kind, name: pm.name, err: '', busy: '' };
+    pmPaint(); return;
+  }
+  if (a === 'ok') {
+    if (!pa || pa.busy) return;
+    const rep = pa.act === 'report', kind = rep ? 'report' : 'block';
+    const frame = rep ? { type: 'report', ...pmAim(pa) } : { type: 'block', op: 'add', ...pmAim(pa) };
+    pa.busy = kind;
+    socialTx(frame, rep ? 'report' : 'block', rep ? '' : 'add', kind, (m, err) => {
+      if (!pa) return;
+      pa.busy = '';
+      if (err) { pa.err = err; pmPaint(); return; }
+      pm = null; pa = null; pmPaint();
+      if (fn('showToast')) showToast(rep ? 'Reported. Thank you.' : 'Blocked.');
+      if (!rep) gbRefresh();
+    });
+    pmPaint(); return;
+  }
+  if (a === 'unfriend') {
+    if (!pm || pm.kind !== 'id' || pm.busy) return;
+    const who = pm.key;
+    pm.busy = 'unfriend'; pm.err = '';
+    socialTx({ type: 'friend', op: 'remove', id: who }, 'friend', 'remove', 'friend.remove', (m, err) => {
+      if (!pm) return;
+      pm.busy = '';
+      if (err) { pm.err = err; pmPaint(); return; }
+      pmClose();
+      if (fn('showToast')) showToast('Friend removed.');
+    });
+    pmPaint();
+  }
+}
+
+/* ---- the three columns --------------------------------------------------- */
+function frFind(on) {
+  const res = fr.res;
+  const card = res === null
+    ? '<p class="fnote">Exact callsign only. A rolled name cannot be searched.</p>'
+    : res.length === 0
+    ? '<p class="fnote">No player with that callsign.</p>'
+    : pcard(res[0], { dot: false, dis: !on,
+        act: '<button class="sbtn" data-fr="req:' + esc(res[0].id) + '"' + (on ? '' : ' disabled') + '>Add friend</button>' });
+  return '<div id="frbQ"><span class="lbl">Find a friend</span>'
+    + '<div class="frow"><input id="frQ" class="b-in" maxlength="' + FR_MAX + '" placeholder="Callsign" autocomplete="off" spellcheck="false" enterkeyhint="search" aria-label="Callsign to find" value="' + esc(fr.q) + '">'
+    +   '<button class="sbtn" data-fr="search"' + (on ? '' : ' disabled') + '>Search</button></div>'
+    + '<p class="ferr">' + esc(fr.ferr) + '</p></div>' + card
+    + '<div class="fsec"></div>'
+    + '<div id="frbCode"><span class="lbl">Add by friend code</span>'
+    + '<div class="frow"><input id="frCode" class="b-in" maxlength="9" placeholder="FR-XXXXXX" autocomplete="off" autocapitalize="characters" spellcheck="false" enterkeyhint="done" aria-label="Friend code to add" value="' + esc(fr.code) + '">'
+    +   '<button class="sbtn" data-fr="add"' + (on ? '' : ' disabled') + '>Add</button></div>'
+    + '<p class="ferr">' + esc(fr.cerr) + '</p></div>'
+    + '<p class="fnote">A friend code adds you both straight away &mdash; there is no request to accept.</p>';
+}
+function frPeople(sn, on) {
+  // THE THIRD STATE, spelled out. No count, no "no friends yet" — this client
+  // has no evidence either way, and saying so is the only honest thing left.
+  if (!sn) return '<span class="lbl">Your friends</span><p class="fnote">Not loaded yet.</p>'
+    + '<div class="frow"><button class="sbtn" data-fr="retry"' + (on ? '' : ' disabled') + '>Retry</button></div>';
+  const rin = (sn.requests && sn.requests.in) || [], rout = (sn.requests && sn.requests.out) || [];
+  const friends = sn.friends || [];
+  const reqRows = rin.map((p) => pcard(p, { dot: false, dis: !on,
+    act: '<button class="sbtn" data-fr="acc:' + esc(p.id) + '"' + (on ? '' : ' disabled') + '>Accept</button>'
+       + '<button class="sbtn" data-fr="dec:' + esc(p.id) + '"' + (on ? '' : ' disabled') + '>Ignore</button>' })).join('');
+  const rows = friends.map((p) => pcard(p, { dis: !on })).join('');
+  // The requests a player must ANSWER and the ones they are waiting on belong
+  // together, above the list. Left at the foot of the column the outgoing line
+  // floated two hundred units under the last friend card, orphaned from the
+  // thing it is about, because the list below it takes the spare height.
+  return (rin.length || rout.length
+      ? '<span class="lbl">Requests' + (rin.length ? ' &middot; ' + rin.length : '') + '</span>'
+        + (rin.length ? '<div class="frl">' + reqRows + '</div>' : '')
+        + (rout.length ? '<p class="fnote">' + rout.length + ' request' + (rout.length === 1 ? '' : 's') + ' waiting for an answer.</p>' : '')
+        + '<div class="fsec"></div>'
+      : '')
+    + '<span class="lbl">Your friends &middot; ' + friends.length + '</span>'
+    + '<div class="frl frl2">' + (rows || '<p class="fnote">No friends yet. Share your friend code, or add a friend by theirs or by callsign.</p>') + '</div>';
+}
+// The blocked list, in the one shape both kinds of account render: a linked
+// account reads it out of the friends snapshot, a guest out of block op:'list'.
+function blockedSec(list, on, known) {
+  if (!known) return '<span class="lbl">Blocked</span><p class="fnote">Not loaded yet.</p>'
+    + '<div class="frow"><button class="sbtn" data-fr="retry"' + (on ? '' : ' disabled') + '>Retry</button></div>';
+  const rows = (list || []).map((p) => pcard(p, { dot: false, menu: false, dis: !on,
+    act: '<button class="sbtn" data-fr="unblock:' + esc(p.id) + '"' + (on ? '' : ' disabled') + '>Unblock</button>' })).join('');
+  return '<span class="lbl">Blocked &middot; ' + (list || []).length + '</span>'
+    + '<div class="frl frl2">' + (rows || '<p class="fnote">Nobody is blocked.</p>') + '</div>';
+}
+function frCode(sn, on) {
+  const code = sn && sn.friendCode ? 'FR-' + sn.friendCode : '';
+  const canShare = !!(typeof navigator !== 'undefined' && navigator.share);
+  return '<span class="lbl">Your friend code</span>'
+    + '<div class="frcode">' + esc(code || 'FR-------') + '</div>'
+    + '<div class="frow"><button class="ghost" data-fr="copy"' + (code ? '' : ' disabled') + '>' + IC.copy + 'Copy</button>'
+    +   (canShare ? '<button class="ghost" data-fr="share"' + (code ? '' : ' disabled') + '>' + IC.share + 'Share</button>' : '') + '</div>'
+    + '<p class="fnote">Anyone who enters this code is added as a friend straight away.</p>'
+    + '<div class="fsec"></div>' + blockedSec(sn ? sn.blocked : null, on, !!sn);
+}
+// What a player without a linked account is told, and it is honest about WHICH
+// half is shut: friends need an account, reporting and blocking do not.
+function frNoAccount(who) {
+  return '<div class="card" style="padding:' + u(18) + ' ' + u(20) + ' ' + u(20) + '">'
+    + '<span class="lbl">Friends</span>'
+    + '<div class="b-pname" style="font-size:' + u(26) + ';margin-top:' + u(6) + '">Sign in to add friends</div>'
+    + '<p class="fnote">' + (who === 'guest'
+      ? 'Friends need an account that follows you between devices. Blocking and reporting work without one, and anyone you block is listed here.'
+      : 'Friends, blocking and reporting need an account. Your progress on this device comes with you when you sign in.') + '</p>'
+    + '<button class="go" style="margin-top:' + u(16) + '" data-old="accountBtn">Sign in</button></div>';
+}
+
+/* ---- Copy and Share (design 5.5) ----------------------------------------- */
+function frShareCode(useShare) {
+  const sn = snap(); if (!sn || !sn.friendCode) return;
+  const code = 'FR-' + sn.friendCode;
+  const text = 'Add me on Cannons and Canyons. My friend code is ' + code;
+  if (useShare && typeof navigator !== 'undefined' && navigator.share) {
+    try { const p = navigator.share({ text }); if (p && p.catch) p.catch(() => {}); } catch {}
+    return;
+  }
+  try { navigator.clipboard.writeText(code).then(() => { if (fn('showToast')) showToast('Friend code copied.'); }, () => prompt('Your friend code:', code)); }
+  catch { prompt('Your friend code:', code); }
+}
+
+/* ---- asking for what this screen shows ----------------------------------- */
+// A LINKED account asks through Task 7's socialNeed(), which is guarded against
+// duplicates and against guests and is the one place the read model is fetched.
+// A GUEST asks for their blocked list, and for nothing else.
+function gbNeed() {
+  if (acctState() !== 'guest' || gb.list || gb.asking || !wsReady()) return;
+  gb.asking = true; gb.err = '';
+  socialTx({ type: 'block', op: 'list' }, 'block', 'list', 'block.list', (m, err) => {
+    gb.asking = false;
+    if (err) gb.err = err;
+    else { gb.list = Array.isArray(m.blocked) ? m.blocked : []; gb.err = ''; }
+    frPaint();
+  });
+}
+// A guest's list has no server push behind it, so a block or an unblock it made
+// has to re-read. A linked account is pushed a fresh snapshot by the server.
+function gbRefresh() {
+  if (acctState() !== 'guest') return;
+  gb.list = null; gb.err = '';
+  gbNeed();
+}
+function frNeed() {
+  const who = acctState();
+  if (who === 'in') { if (fn('socialNeed')) socialNeed(); return; }
+  if (who === 'guest') gbNeed();
+}
+function frRetry() {
+  const who = acctState();
+  if (who === 'guest') { gb.list = null; gb.err = ''; gbNeed(); return; }
+  if (fn('socialResync')) socialResync();
+}
+
+/* ---- the controls -------------------------------------------------------- */
+function frSearch() {
+  fr.q = (($('frQ') && $('frQ').value) || '').trim();
+  fr.res = null; fr.ferr = '';
+  if (!fr.q) { fr.ferr = 'Type a callsign first.'; return frPaint(); }
+  socialTx({ type: 'friend', op: 'search', q: fr.q }, 'friend', 'search', 'friend.search', (m, err) => {
+    if (err) { fr.ferr = err; fr.res = null; }
+    else { fr.ferr = ''; fr.res = Array.isArray(m.results) ? m.results : []; }
+    frPaint();
+  });
+  frPaint();
+}
+function frAddCode() {
+  fr.code = (($('frCode') && $('frCode').value) || '').trim().toUpperCase();
+  fr.cerr = '';
+  if (!fr.code) { fr.cerr = 'Type a friend code first.'; return frPaint(); }
+  socialTx({ type: 'friend', op: 'add', code: fr.code }, 'friend', 'add', 'friend.add', (m, err) => {
+    if (err) { fr.cerr = err; return frPaint(); }
+    fr.cerr = ''; fr.code = '';
+    const f = $('frCode'); if (f) f.value = '';
+    if (fn('showToast')) showToast('Added ' + nameOf(m.friend || {}) + ' as a friend.');
+    frPaint();
+  });
+  frPaint();
+}
+function frOne(frame, type, op, kind, done) {
+  socialTx(frame, type, op, kind, (m, err) => {
+    if (err) { fr.ferr = err; return frPaint(); }
+    fr.ferr = '';
+    done(m);
+    frPaint();
+  });
+}
+// Every control on the screen, on ONE delegated attribute so the click
+// handler's selector grows by one entry rather than by fifteen.
+function frAct(v) {
+  const i = v.indexOf(':');
+  const op = i < 0 ? v : v.slice(0, i), arg = i < 0 ? '' : v.slice(i + 1);
+  if (op === 'search') return frSearch();
+  if (op === 'add') return frAddCode();
+  if (op === 'copy') return frShareCode(false);
+  if (op === 'share') return frShareCode(true);
+  if (op === 'retry') return frRetry();
+  if (op === 'req') return frOne({ type: 'friend', op: 'request', to: arg }, 'friend', 'request', 'friend.request', (m) => {
+    fr.res = null;
+    if (fn('showToast')) showToast(m.state === 'friends' ? 'You are now friends.' : 'Request sent.');
+  });
+  if (op === 'acc') return frOne({ type: 'friend', op: 'accept', from: arg }, 'friend', 'accept', 'friend.accept', () => {});
+  if (op === 'dec') return frOne({ type: 'friend', op: 'decline', from: arg }, 'friend', 'decline', 'friend.decline', () => {});
+  if (op === 'unblock') return frOne({ type: 'block', op: 'remove', id: arg }, 'block', 'remove', 'block', () => {
+    if (fn('showToast')) showToast('Unblocked.');
+    gbRefresh();
+  });
+}
+
+// The Bay controls row that reaches this screen (design 9, until project 3
+// builds the Squad box). It carries the same three states the screen does.
+function friendsDesc() {
+  const who = acctState();
+  if (who === 'out') return 'Sign in to add friends';
+  if (who === 'guest') return 'Blocking and reporting work &mdash; friends need an account';
+  const sn = snap();
+  if (!sn) return 'Not loaded yet';
+  const n = (sn.friends || []).length, k = (sn.friends || []).filter((x) => x && x.online).length;
+  return n ? n + (n === 1 ? ' friend' : ' friends') + ' &middot; ' + k + ' online' : 'No friends yet &mdash; share your friend code';
+}
+
+// 9 — FRIENDS. Find a player by exact callsign or by friend code, your own code
+// with Copy and Share, your friends and the requests waiting on you, and the
+// blocked list with Unblock. Design 5.5 is the copy authority.
+SCREENS.friends = function () {
+  const s = state(), who = acctState(), on = wsReady();
+  const sn = who === 'in' ? snap() : null;
+  const friends = sn ? (sn.friends || []) : [];
+  const nOn = friends.filter((x) => x && x.online).length;
+  const sub = who === 'out' ? 'Sign in to add friends'
+    : who === 'guest' ? 'Blocking and reporting work without an account'
+    : !sn ? 'Friends list not loaded'
+    : !friends.length ? 'No friends yet'
+    : friends.length + (friends.length === 1 ? ' friend' : ' friends') + ' &middot; ' + nOn + ' online';
+  const body = who === 'in'
+    ? '<div class="cols" style="height:' + u(336) + '">'
+      + '<div class="fcol" style="width:' + u(292) + '">' + frFind(on) + '</div>'
+      + '<div class="fcol" style="width:' + u(292) + '">' + frPeople(sn, on) + '</div>'
+      + '<div class="fcol" style="flex:1;min-width:0">' + frCode(sn, on) + '</div></div>'
+    : who === 'guest'
+    ? '<div class="cols" style="height:' + u(336) + '">'
+      + '<div class="fcol" style="width:' + u(430) + '">' + frNoAccount('guest') + '</div>'
+      + '<div class="fcol" style="flex:1;min-width:0">' + (gb.err
+        ? '<span class="lbl">Blocked</span><p class="ferr">' + esc(gb.err) + '</p>'
+          + '<div class="frow"><button class="sbtn" data-fr="retry"' + (on ? '' : ' disabled') + '>Retry</button></div>'
+        : blockedSec(gb.list, on, gb.list !== null)) + '</div></div>'
+    : '<div class="cols" style="height:' + u(336) + '"><div class="fcol" style="width:' + u(430) + ';margin:0 auto">' + frNoAccount('out') + '</div></div>';
+  return chrome('Friends', sub, on ? esc(s.name) : 'Needs a connection', body, '');
+};
+
 // 4 — ARMOURY. Load the rack: n weapons go into the field.
 SCREENS.armoury = function () {
   const s = state(), n = s.mode.draft, picks = rackPicks().slice(0, n), full = picks.length >= n;
@@ -766,7 +1277,14 @@ SCREENS.lobby = function () {
       const p = m && m.players[i], you = m && i === m.you, host = m && i === m.host;
       const col = fn('seatColor') ? seatColor(i) : '#54c8ff';
       if (p) out += '<div class="seat">' + (you ? tankImg(s.skinId, 44) : '') + '<span class="b-dot" style="background:' + col + (you ? '' : ';margin-left:' + u(16)) + '"></span>'
-        + '<span class="sn">' + esc(p.name) + '</span><span class="lbl" style="margin-left:auto">' + (host ? 'Host' : '') + (you ? (host ? ' &middot; you' : 'You') : '') + '</span></div>';
+        + '<span class="sn">' + esc(p.name) + '</span><span class="lbl" style="margin-left:auto">' + (host ? 'Host' : '') + (you ? (host ? ' &middot; you' : 'You') : '') + '</span>'
+        // REPORT AND BLOCK WHERE THE NAME IS ACTUALLY READ. The seat carries an
+        // opaque per-room HANDLE and never an account id (BINDING resolution
+        // 24), and the key is absent on a seat with no account — a bot, or a
+        // player who has never saved anything, for whom there is no row to file.
+        // So: a menu where there is a handle, and nowhere else.
+        + (!you && p.handle ? menuBtn(p.handle, 'handle', p.name, false) : '')
+        + '</div>';
       else if (!solo) out += '<div class="seat wait"><span class="b-dot" style="background:#6f7fa6;margin-left:' + u(16) + '"></span><span class="sn">' + (mode.id === 'duel' ? 'Waiting for a commander' : 'Open slot') + '</span><span class="spin"></span></div>';
     }
     return out;
@@ -1033,6 +1551,9 @@ function render(name) {
   // down but leaving the screen. Closing here, at the top of the render that is
   // about to drop the field, puts the class removal ahead of that early return.
   if (callsign.open && (next !== 'settings' || !state().linked)) { callsign.open = false; callsign.busy = false; callsign.err = ''; csSeq++; kbdWatch(false); }
+  // The Friends screen has two fields of its own, so it owns the same duty: the
+  // lift must not survive the screen it was measured on.
+  if (kbdOn && current === 'friends' && next !== 'friends') kbdWatch(false);
   const entering = !host.firstChild || base(next) !== base(current);
   const html = SCREENS[next]();
   current = next;
@@ -1056,6 +1577,11 @@ function render(name) {
   // screen and the read model is eight round trips. socialNeed() is idempotent
   // and does nothing for a guest, so this costs a signed-out player nothing.
   if (entering && current === 'settings' && fn('socialNeed')) socialNeed();
+  // The Friends screen shows the same read model, and a GUEST's blocked list
+  // comes from its own frame. Asked on ENTRY, exactly like Bay controls, and
+  // idempotent — a refusal leaves the snapshot null on purpose, so coming back
+  // asks again, which is what Retry does by hand.
+  if (entering && current === 'friends') { fr.res = null; fr.ferr = ''; fr.cerr = ''; frNeed(); }
   if (current === 'home') loadSorties();
 }
 
@@ -1081,7 +1607,7 @@ function setField(k, v) {
 
 document.addEventListener('click', (e) => {
   const host = $('bay'); if (!host || !host.classList.contains('active')) return;
-  const t = e.target.closest('[data-go],[data-back],[data-set],[data-roll],[data-toggle],[data-launch],[data-join],[data-pick],[data-old],[data-skin],[data-rematch],[data-solo],[data-cs]');
+  const t = e.target.closest('[data-go],[data-back],[data-set],[data-roll],[data-toggle],[data-launch],[data-join],[data-pick],[data-old],[data-skin],[data-rematch],[data-solo],[data-cs],[data-fr]');
   if (!t || !host.contains(t)) return;
   if (has('Audio')) Audio.ensure();
   // The lobby's Back IS Cancel. Leaving any other way strands a queued create
@@ -1134,6 +1660,10 @@ document.addEventListener('click', (e) => {
     if (t.dataset.cs === 'save') { submitCallsign(); return; }
     return;
   }
+  // Every Friends-screen control, on one attribute. The value is the op, and an
+  // op that acts on somebody carries their id after a colon — a uuid holds no
+  // colon, so the split is unambiguous.
+  if (t.dataset.fr) { frAct(t.dataset.fr); return; }
   if (t.dataset.toggle) {
     const k = t.dataset.toggle;
     if (k === 'sound') { const b = $('muteBtn'); if (b) b.click(); }
@@ -1165,15 +1695,66 @@ window.Bay = { show: render, go, back, state, tankURL, MODES, haptic, rankFor, a
 // over. (Task 8 widens this to its Friends screen.)
 document.addEventListener('cc:social', () => {
   const host = $('bay');
-  if (host && host.classList.contains('active') && current === 'settings') render(current);
+  if (host && host.classList.contains('active') && (current === 'settings' || current === 'friends')) render(current);
+  // The open menu reads the snapshot too — Remove friend appears on a card the
+  // moment the friendship lands, and goes when it is torn down.
+  pmPaint();
+});
+// THE PLAYER MENU'S FOUR DOORS: a friends-list card, a search result, a LOBBY
+// SEAT and an IN-MATCH CARD. The first three are inside #bay; the fourth is the
+// HUD, which is why this listener is not gated on the bay being on stage the
+// way the one above it is.
+document.addEventListener('click', (e) => {
+  const t = e.target.closest ? e.target.closest('[data-pmenu]') : null;
+  if (!t) return;
+  pmOpen(t.dataset.pmenu, t.dataset.pmkind, t.dataset.pmname || '');
+});
+// A MENU MUST NOT OUTLIVE WHAT IT POINTS AT. showScreen is the game's own
+// router, so leaving a lobby, finishing a match and going back to the bay all
+// pass through here — and a seat handle is dead the moment its room is.
+if (fn('showScreen')) { const orig = showScreen; showScreen = function () { pmClose(); return orig.apply(this, arguments); }; }
+// The landscape keyboard, for the Friends screen's two fields. The lift is
+// measured against the box the field sits in, so the error line under it stays
+// visible; leaving the field, or the screen, puts the frame back down.
+document.addEventListener('focusin', (e) => {
+  const id = e.target && e.target.id;
+  if (current !== 'friends') return;
+  if (id === 'frQ') kbdWatch(true, '#frbQ');
+  else if (id === 'frCode') kbdWatch(true, '#frbCode');
+});
+document.addEventListener('focusout', (e) => {
+  const id = e.target && e.target.id;
+  if (id !== 'frQ' && id !== 'frCode') return;
+  setTimeout(() => {
+    const a = document.activeElement;
+    if (!a || (a.id !== 'frQ' && a.id !== 'frCode')) kbdWatch(false);
+  }, 0);
+});
+// Enter commits, the way it does in the callsign editor and the join panel.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || current !== 'friends') return;
+  const id = e.target && e.target.id;
+  if (id === 'frQ') { e.preventDefault(); frSearch(); }
+  else if (id === 'frCode') { e.preventDefault(); frAddCode(); }
 });
 document.addEventListener('cc:account', () => {
   const host = $('bay');
-  if (host && host.classList.contains('active') && (current === 'home' || current === 'settings')) render(current);
+  // A GUEST'S BLOCKED LIST BELONGS TO THAT GUEST. app.js drops CC_SOCIAL when
+  // the account changes, for the same reason; this is the other half of it, and
+  // without it a signed-out session would keep drawing the last account's list.
+  gb = { list: null, err: '', asking: false };
+  // The open menu's items depend on who is asking — Remove friend is a linked
+  // account's, and every item goes when the account does.
+  pmPaint();
+  if (host && host.classList.contains('active') && (current === 'home' || current === 'settings' || current === 'friends')) render(current);
   // A sign-in that lands WHILE Bay controls is open never re-enters the screen,
   // so render()'s entry hook would never fire and the row would go on saying
   // "sign in to choose a callsign" to somebody who just did.
   if (current === 'settings' && fn('socialNeed')) socialNeed();
+  // Same for the Friends screen: a sign-in that lands while it is open never
+  // re-enters it, so render()'s entry hook would never fire and the screen
+  // would go on offering the sign-in card to somebody who just did.
+  if (current === 'friends') frNeed();
 });
 applyMotion();
 

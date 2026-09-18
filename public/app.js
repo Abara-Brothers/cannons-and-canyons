@@ -162,6 +162,10 @@ const UI_IC = {
   sword: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.8 2.6l1.6 1.6-9.4 11.2-2-2-1.4-.6z"/><path d="M7.6 14.2l2.2 2.2-2 2-1.3 3-3-1.3 2-2-1.1-2.7 2.5-2.5z"/></svg>',
   shieldIc: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.4l8 3v6.2c0 5-3.4 8.4-8 10-4.6-1.6-8-5-8-10V5.4z"/></svg>',
   coin: '<svg viewBox="0 0 24 24" fill="currentColor"><ellipse cx="10" cy="16.6" rx="7.6" ry="3.6"/><ellipse cx="10" cy="12.8" rx="7.6" ry="3.6"/><ellipse cx="14" cy="8" rx="7.6" ry="3.6"/><ellipse cx="14" cy="7" rx="7.6" ry="3.4" fill="#ffd97a"/></svg>',
+  // The menu handle on an in-match player card. Three drawn dots, never a
+  // horizontal ellipsis character: test/house-rules.mjs rejects seven glyph
+  // ranges and this file is one of the nine it reads.
+  more: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5.2" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="18.8" cy="12" r="1.9"/></svg>',
 };
 
 const ICONS = {
@@ -1520,6 +1524,13 @@ function socialReply(m) {
   // worse than one that says it could not load. Read as a snapshot it would
   // also tell a player who HAS a chosen callsign that they hold none.
   if (m.type === 'friends' && !m.error) socialSnapshot(m);
+  // PRESENCE IS ALWAYS A PUSH, NEVER A REPLY, and it must not be matched like
+  // one: `id` on this frame is the FRIEND's uuid (server/social.js's presence
+  // fan-out), which is the very value BINDING resolution 3 puts in `id` on
+  // block, report and friend remove. Left to fall through, a friend coming
+  // online while a block on that same player was in flight would consume that
+  // block's waiter, and the real answer would then find nobody waiting.
+  if (m.type === 'presence') { socialPresence(m); return; }
   if (m.id == null) return;
   // OLDEST FIRST. A Map iterates in insertion order, so when two requests share
   // an echo -- two ops on the same target uuid -- the first asked is the first
@@ -1531,6 +1542,18 @@ function socialReply(m) {
     w.cb(m);
     return;
   }
+}
+// A friend came online or went. The server sends this INSTEAD of a whole
+// snapshot (one frame per friend per change rather than eight round trips), so
+// it is patched into the list in place. No snapshot, nothing to patch: null
+// still means NOT KNOWN YET, and inventing one here would be the same lie
+// socialCallsign refuses to tell.
+function socialPresence(m) {
+  const s = window.CC_SOCIAL;
+  if (!s || !Array.isArray(s.friends) || m.id == null) return;
+  let hit = false;
+  for (const f of s.friends) if (f && f.id === m.id) { f.online = !!m.online; hit = true; }
+  if (hit) document.dispatchEvent(new Event('cc:social'));
 }
 // WHAT THIS CLIENT HAS BEEN TOLD, kept apart from the read model. CC_SOCIAL is
 // a snapshot that may not have arrived, may have been refused, and may be built
@@ -2722,6 +2745,12 @@ function applySnapshot(m) {
   S.world = m.world || S.world;
   S.lavaY = m.lavaY ?? (S.world.h - 300);
   S.you = m.you; S.names = m.names; S.weapons = m.weapons;
+  // THE SEAT HANDLES, positional — index IS the seat, parallel to names and
+  // skins (task 6b, F2/F6). null at an index means that seat has no account, so
+  // there is no report row to file against it and its card carries no menu. The
+  // key is absent entirely when no seat has one, which is every offline match,
+  // so the fallback is the empty list rather than the previous match's.
+  S.handles = Array.isArray(m.handles) ? m.handles : [];
   S.n = m.n || (m.names ? m.names.length : 2);
   S.mode = m.mode || 'duel';
   S.skins = m.skins || S.skins;
@@ -2888,11 +2917,35 @@ function buildScoreboard() {
     el.id = 'p' + i;
     el.style.setProperty('--seat', seatColor(i));
     el.innerHTML =
-      '<div class="pname"></div>' +
+      '<div class="pname"><span class="pnm"></span></div>' +
       '<div class="pval"><span class="score">100</span><span class="shots">HP</span></div>' +
       '<div class="hpbar"><i></i></div>';
-    el.querySelector('.pname').textContent =
+    el.querySelector('.pnm').textContent =
       (S.names[i] || `Player ${i + 1}`) + (i === S.you ? ' (you)' : '');
+    // REPORT AND BLOCK ON THE CARD THAT CARRIES THE NAME FOR THE WHOLE MATCH.
+    // The lobby is where a stranger's name is first read; this is where it is
+    // read for the next twenty minutes. The target is the seat HANDLE the
+    // snapshot carries — opaque, per room, meaningless outside it and never an
+    // account id (BINDING resolution 24) — and bay.js's one player menu opens
+    // from it. Built with the DOM rather than markup so a name can never be
+    // anything but text, and only where there IS a handle: a bot and a player
+    // with no account both hold null, and a control that can only fail teaches
+    // players the feature is broken.
+    const seatHandle = (S.handles || [])[i];
+    if (seatHandle && i !== S.you) {
+      const mb = document.createElement('button');
+      mb.className = 'pmb';
+      mb.dataset.pmenu = seatHandle;
+      mb.dataset.pmkind = 'handle';
+      mb.dataset.pmname = S.names[i] || '';
+      mb.setAttribute('aria-label', `More for ${S.names[i] || 'this player'}`);
+      mb.innerHTML = UI_IC.more;
+      const nameEl = el.querySelector('.pname');
+      // .rep hands the name row the button's width back on a phone, where the
+      // name is capped — see styles.css. Only the cards that carry one.
+      nameEl.classList.add('rep');
+      nameEl.appendChild(mb);
+    }
     if (i === S.boss) el.classList.add('bossrow');
     row.appendChild(el);
   }
