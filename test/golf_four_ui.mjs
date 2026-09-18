@@ -51,6 +51,7 @@ const setup = await ev(`(() => {
   const tee = [...document.querySelectorAll('#bay .b-opt')].find((o) => o.querySelector('.lbl') && o.querySelector('.lbl').textContent === 'Tee set');
   const teeShown = !!tee && !tee.classList.contains('hidden');
   if (!seg) { ccMode = 'duel'; Bay.show('home'); return { opts, hidden, teeShown }; }   // RED: no segment yet
+  const before = seg.querySelector('.seg.on') && seg.querySelector('.seg.on').textContent.trim();   // the default, read before any tap
   window.__sent = []; const orig = intent; window.intent = (m) => { __sent.push(m); };
   seg.querySelector('[data-set="gcount=3"]').click();
   const after = ccGolfMax;
@@ -64,17 +65,38 @@ const setup = await ev(`(() => {
   const seg2 = findSeg();                                   // re-query: the base-screen change re-rendered the tree
   const on = seg2 && seg2.querySelector('.seg.on') && seg2.querySelector('.seg.on').textContent.trim();
   ccMode = 'duel'; ccGolfMax = 2; Bay.show('home');
-  return { opts, hidden, teeShown, after, frame, ffaFrame, readout, bpl, on };
+  return { opts, hidden, teeShown, before, after, frame, ffaFrame, readout, bpl, on };
 })()`);
 if (setup.opts && setup.opts.join(',') === '1,2,3,4' && setup.hidden === false && setup.teeShown) ok('setup: golf shows Players 1,2,3,4 beside the Tee set'); else fail('setup segment: ' + JSON.stringify(setup));
+if (setup.before === '2') ok('setup: golf defaults to 2 players'); else fail('golf default: ' + setup.before);
 if (setup.after === 3 && setup.on === '3') ok('setup: tapping 3 arms three seats'); else fail('setup: after tap ' + JSON.stringify({ after: setup.after, on: setup.on }));
 if (setup.frame && setup.frame.type === 'create' && setup.frame.mode === 'golf' && setup.frame.max === 3 && setup.frame.tees) ok('launch: the golf create frame carries max 3 and the tee set'); else fail('golf frame: ' + JSON.stringify(setup.frame));
 if (setup.ffaFrame && setup.ffaFrame.mode === 'ffa' && setup.ffaFrame.max === 4) ok('launch: the free-for-all count is untouched by the golf choice'); else fail('ffa frame: ' + JSON.stringify(setup.ffaFrame));
 if (setup.readout && /Players\s*3/.test(setup.readout.replace(/\s+/g, ' '))) ok('home: the launch bar reads Players 3 for golf'); else fail('home readout: ' + String(setup.readout).slice(0, 80));
 if (setup.bpl === '1-4') ok('home: the golf board says 1-4'); else fail('golf board players: ' + setup.bpl);
-// 2. The duel setup must not show the golf Players segment.
-const duel = await ev(`(() => { ccMode = 'duel'; Bay.show('setup'); const seg = [...document.querySelectorAll('#bay .b-opt')].find((o) => o.querySelector('.lbl') && o.querySelector('.lbl').textContent === 'Players'); const h = seg ? seg.classList.contains('hidden') : 'absent'; Bay.show('home'); return h; })()`);
-if (duel === true) ok('setup: the Players segment is hidden for a duel'); else fail('duel setup Players segment: ' + duel);
+// 2. No other mode shows the golf Players segment (free-for-all has its own count segment under a different label).
+const hiddenFor = await ev(`(() => { const out = {}; for (const m of ['duel', 'ffa', 'boss', 'aliens']) { ccMode = m; Bay.show('setup'); const seg = [...document.querySelectorAll('#bay .b-opt')].find((o) => o.querySelector('.lbl') && o.querySelector('.lbl').textContent === 'Players'); out[m] = seg ? seg.classList.contains('hidden') : 'absent'; Bay.show('home'); } ccMode = 'duel'; return out; })()`);
+if (['duel', 'ffa', 'boss', 'aliens'].every((m) => hiddenFor[m] === true)) ok('setup: the golf Players segment is hidden for duel, free-for-all, boss and aliens'); else fail('Players segment hidden: ' + JSON.stringify(hiddenFor));
+
+// 3. four golf seats in the HUD cards: strokes, IN for a holed seat, no hp bar.
+// The cards (#p0..#p3) are built by buildScoreboard() at match start from S.n
+// and S.names, so the injected state builds them too, and again on restore.
+const hud = await ev(`(() => {
+  const keep = { n: S.n, names: S.names, golf: S.golf, hp: S.hp.slice(), alive: S.alive.slice(), turn: S.turn, playing: S.playing };
+  S.n = 4; S.names = ['Ash', 'Bay', 'Cal', 'Dee']; S.hp = [100, 100, 100, 100]; S.alive = [true, true, true, true]; S.turn = 2; S.playing = true;
+  S.golf = { hole: 1, holes: 9, par: 4, cup: { x: 10000 }, strokes: [1, 2, 3, 4], totals: [1, 2, 3, 4], done: [false, false, true, false] };
+  buildScoreboard(); updateHud();
+  const cards = [0, 1, 2, 3].map((i) => { const el = $('p' + i); return el ? { score: el.querySelector('.score').textContent, shots: el.querySelector('.shots').textContent, bar: el.querySelector('.hpbar').style.display, acting: el.classList.contains('acting') } : null; });
+  S.n = keep.n; S.names = keep.names; S.golf = keep.golf; S.hp = keep.hp; S.alive = keep.alive; S.turn = keep.turn; S.playing = keep.playing; buildScoreboard(); updateHud();
+  return cards;
+})()`);
+if (hud.every(Boolean) && hud[0].score === '1' && hud[3].score === '4' && hud[2].shots === 'IN' && hud[1].shots.startsWith('STR') && hud.every((c) => c.bar === 'none') && hud[2].acting) ok('hud: four golf cards show strokes, IN for the holed seat, no hp bars, the acting seat lit'); else fail('hud cards: ' + JSON.stringify(hud));
+
+// 4. the scorecard lays out four rows with totals. golfCardHTML returns thead
+// and tbody without a table wrapper; parsed into a div the parser drops every
+// row, so the harness parses it into a table element.
+const card = await ev(`(() => { const html = golfCardHTML({ grid: [[4,0,0,0,0,0,0,0,0],[5,0,0,0,0,0,0,0,0],[3,0,0,0,0,0,0,0,0],[6,0,0,0,0,0,0,0,0]], pars: [4,3,5,4,4,3,5,4,4], totals: [4,5,3,6], done: [true,true,true,true], hole: 1 }); const d = document.createElement('table'); d.innerHTML = html; const rows = [...d.querySelectorAll('tr')].filter((r) => !r.classList.contains('gc-parrow') && !r.querySelector('th')); return { rows: rows.length, text: rows.map((r) => r.textContent.replace(/\\s+/g, ' ').trim().slice(0, 40)) }; })()`);
+if (card.rows === 4) ok('scorecard: four player rows'); else fail('scorecard rows: ' + JSON.stringify(card));
 } catch (e) { fail('harness: ' + e.message); }
 
 cleanup();

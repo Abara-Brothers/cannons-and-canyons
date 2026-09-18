@@ -146,6 +146,9 @@ else
   # FIFTH client-side suite: Artillery Golf's off-screen flag marker and its
   # tap-to-pan, on a local solo round. Skips without Chrome.
   run golf_marker node test/golf_marker.mjs
+  # SIXTH client-side suite: golf for four in the page — the Players choice
+  # into the create frame, four HUD cards, a four-row scorecard. Skips without Chrome.
+  run golf_four_ui node test/golf_four_ui.mjs
   # SECOND client-side suite, and the only one that looks at LAYOUT. Drives the
   # real bundle in headless Chrome at 14 exact viewports and diffs the measured
   # geometry against test/fixtures/layout-baseline.json. It is a change
