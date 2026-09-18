@@ -108,12 +108,16 @@ const fake = (xs, done, alive) => ({
   const room = roomOf(hs[0]);
   if (room && room.state === 'playing' && room.players.length === 4 && hs.every((w) => frames(w, 'start').length === 1)) ok('(d) four golfers on the tee');
   else { fail('(d) round did not start: state=' + (room && room.state)); }
-  // Drop the seat that holds the turn (hole 1's opener is random, so read it),
+  // Drop the seat that holds the turn (pinned to seat 1 above, so read it),
   // so the mid-turn hand-off runs on every run. First place the balls so the
   // generic ring (the next seat after the dropped one) and the honour rule
   // (the farthest ball) disagree: the seat two after the dropped one stays on
-  // the tee, farthest; the ring's next seat is 0.6 of the way, the rest 0.4.
+  // the tee, farthest; the ring's next seat is 0.4 of the way, the rest 0.6.
   // A forfeit routed through the generic ring fails the hand-off check.
+  // Hand the opening turn to seat 1, the seat hole 2 wants to open, so the
+  // scuttle is also proven to skip the wanted opener on every run (hole 1's
+  // opener is random; beginTurn has already run, and nothing else reads it).
+  room.turn = 1;
   const n = 4, dead = room.turn, ringNext = (dead + 1) % n, far = (dead + 2) % n;
   const live = hs[ringNext];                            // a socket that stays connected
   const tee = room.golf.tee, span = room.golf.cup.x - tee;
