@@ -585,9 +585,18 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
 
   // Nothing under public/ may BE it or NAME it: not a same-named copy sitting
   // in public/ (every file gets walked, including binaries, and checked by
-  // NAME), and not the bare word "blocklist" in any casing inside a text file
-  // public/ actually ships (binary assets — fonts, icons, photos — are not
-  // usefully readable as utf8 and are skipped for the content check only).
+  // NAME), and no POINTER AT THE FILE inside a text file public/ actually ships
+  // (binary assets — fonts, icons, photos — are not usefully readable as utf8
+  // and are skipped for the content check only).
+  //
+  // The content match is the file, not the word. It was /blocklist/i, which also
+  // fires on any client variable happening to be called `blocklist` — the Bay's
+  // own Blocked list feature has every reason to declare one — and would have
+  // failed the build with a message about a leaked slur file that has nothing to
+  // do with what changed. A pointer at the file always spells the file:
+  // `fetch('/blocklist.txt')`, `<script src="/server/blocklist.txt">`. The
+  // FILENAME match below stays deliberately broad, because a copy under public/
+  // is the severe case and may be named anything containing the word.
   const TEXT_EXT = new Set(['.js', '.html', '.css', '.webmanifest', '.svg', '.json', '.txt']);
   const walk = (dir) => {
     let files = [];
@@ -604,14 +613,14 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
     if (/blocklist/i.test(path.basename(file))) hits.push(`${rel} (filename)`);
     if (TEXT_EXT.has(path.extname(file))) {
       readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
-        if (/blocklist/i.test(line)) hits.push(`${rel}:${i + 1}`);
+        if (/blocklist\.txt|server[\/]blocklist/i.test(line)) hits.push(`${rel}:${i + 1}`);
       });
     }
   }
   if (hits.length) {
     fail(`public/ has a copy of, or a reference to, the blocklist — either would be served verbatim:\n      ${hits.join('\n      ')}`);
   } else {
-    ok('nothing under public/ is named after the blocklist or references it, by name or by path');
+    ok('nothing under public/ is named after the blocklist or points at the file, by filename or by path');
   }
 }
 

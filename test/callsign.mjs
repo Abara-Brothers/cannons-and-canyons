@@ -8,7 +8,7 @@
 // Each of its rules fails silently in a different direction — a length counted
 // in UTF-16 units quietly rejects a legitimate name, a blocklist line of digits
 // quietly rejects EVERY name, and a missing fold quietly lets the slur through.
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -173,6 +173,14 @@ const ZWSP = String.fromCodePoint(0x200B);      // zero-width space: NOT whitesp
     if (err(raw) === 'not_allowed') ok(`(6) ${raw} is folded back onto a term and rejected`);
     else fail(`(6) ${raw} -> ${err(raw)}, want not_allowed`);
   }
+  // EVERY term in the shipped file, not just the first. This is what makes the
+  // SAFE_WORDS rule enforceable: a future safe word that happened to contain a
+  // term would quietly unblock that term, and with only terms[0] exercised the
+  // suite would stay green the whole time. Line numbers only in the message —
+  // no term is ever printed.
+  const escaped = terms.map((t, i) => i).filter((i) => err(terms[i]) !== 'not_allowed');
+  if (!escaped.length) ok(`(6) every one of the ${terms.length} terms in the shipped file is itself rejected as a callsign`);
+  else fail(`(6) ${escaped.length} shipped term(s) are NOT rejected — line(s) ${escaped.map((i) => i + 1).join(', ')} of server/blocklist.txt`);
   // order: a too-long blocked name reads as 'length', because length is checked first
   if (err(first.repeat(9)) === 'length') ok('(6) length is checked before the blocklist');
   else fail('(6) an over-long blocked name reported ' + err(first.repeat(9)));
@@ -224,6 +232,16 @@ const ZWSP = String.fromCodePoint(0x200B);      // zero-width space: NOT whitesp
   const crlf = write('crlf.txt', 'nigger\r\nfaggot\r\n');
   if (eq(loadBlocklist(crlf), ['nigger', 'faggot'])) ok('(8) CRLF line endings do not become part of a term');
   else fail('(8) crlf load: ' + JSON.stringify(loadBlocklist(crlf)));
+  // Not every read failure is a missing file. A directory sitting where the file
+  // should be (or EACCES on a locked-down deploy) reported 'blocklist missing',
+  // which sends whoever is debugging the boot looking for a file that is right
+  // there. The message is the only thing they get to see.
+  const asDir = path.join(dir, 'a-directory.txt');
+  mkdirSync(asDir);
+  const dirMsg = threw(asDir);
+  const m = dirMsg && dirMsg.match(/^blocklist unreadable \(([A-Z]+)\)/);
+  if (m && dirMsg.includes(asDir)) ok(`(8) a directory in place of the file throws 'blocklist unreadable (${m[1]})' with the path, not the misleading 'blocklist missing'`);
+  else fail(`(8) a directory in place of the file threw ${JSON.stringify(dirMsg)}, want a 'blocklist unreadable (CODE)' message naming the path`);
   rmSync(dir, { recursive: true, force: true });
 }
 
@@ -247,6 +265,164 @@ const ZWSP = String.fromCodePoint(0x200B);      // zero-width space: NOT whitesp
     const got = err(raw);
     if (got === want) ok(`(9) ${why}`);
     else fail(`(9) ${JSON.stringify(raw)} -> ${got}, want ${want}`);
+  }
+}
+
+// ---- 10. compatibility forms of a term -------------------------------------
+// The fold normalises with NFKD, not NFD. NFD leaves a fullwidth or a
+// mathematical-bold letter exactly as it is, and the a-z strip at the end of the
+// fold then DELETES it — so one such letter dropped into an otherwise plain
+// spelling erased itself, the rest of the name folded to something no term
+// matched, and the name still rendered as the slur on every other player's
+// screen. Every shape below was probed against the shipped list and passed.
+//
+// The fixtures are built from terms[0] by code-point arithmetic, so no literal
+// appears in this file, and no fixture is ever printed — only its description.
+{
+  const term = terms[0];
+  const FW_UPPER = 0xFF21 - 0x41, FW_LOWER = 0xFF41 - 0x61;   // FULLWIDTH LATIN CAPITAL/SMALL A
+  const MB_UPPER = 0x1D400 - 0x41, MB_LOWER = 0x1D41A - 0x61; // MATHEMATICAL BOLD CAPITAL/SMALL A
+  const MO_UPPER = 0x1D670 - 0x41, MO_LOWER = 0x1D68A - 0x61; // MATHEMATICAL MONOSPACE CAPITAL/SMALL A
+  const shift = (s, up, low) => [...s].map((c) => {
+    const cp = c.codePointAt(0);
+    if (cp >= 0x41 && cp <= 0x5A) return String.fromCodePoint(cp + up);
+    if (cp >= 0x61 && cp <= 0x7A) return String.fromCodePoint(cp + low);
+    return c;
+  }).join('');
+  const one = (s, i, up, low) => [...s].map((c, j) => (j === i ? shift(c, up, low) : c)).join('');
+  const SUPER_N = String.fromCodePoint(0x207F);   // MODIFIER LETTER SMALL N: a letter to \p{L}, 'n' to NFKD
+  const CASES = [
+    [shift(term, FW_UPPER, FW_LOWER), 'a fully fullwidth spelling of the bare term'],
+    [one(term, 1, FW_UPPER, FW_LOWER), 'one fullwidth letter inside an otherwise ASCII spelling'],
+    [shift(term, MB_UPPER, MB_LOWER), 'a mathematical bold spelling (astral)'],
+    [shift(term, MO_UPPER, MO_LOWER), 'a mathematical monospace spelling (astral)'],
+    [one(term, 2, MB_UPPER, MB_LOWER), 'one mathematical bold letter inside an ASCII spelling'],
+    [SUPER_N + term.slice(1), 'a modifier letter (U+207F) standing in for the first letter'],
+    // Not in the reviewer's list, and the one shape a bare NFD->NFKD swap does
+    // NOT catch: the astral maths letters have no case mapping of their own, so
+    // a lowercase-then-normalise fold leaves ASCII CAPITALS for the a-z strip to
+    // delete. It is caught only because the fold lowercases AFTER normalising.
+    [shift(term.toUpperCase(), MB_UPPER, MB_LOWER), 'a mathematical bold CAPITAL spelling (astral, no case mapping of its own)'],
+  ];
+  const ascii = CASES.filter(([raw]) => [...raw].every((c) => c.codePointAt(0) < 0x80));
+  if (!ascii.length) ok(`(10) all ${CASES.length} fixtures really are non-ASCII respellings — none of them is just the plain term`);
+  else fail(`(10) ${ascii.length} fixture(s) came out as plain ASCII, so this section would prove nothing`);
+  for (const [raw, why] of CASES) {
+    const got = err(raw);
+    if (got === 'not_allowed') ok(`(10) ${why} is rejected`);
+    else fail(`(10) ${why} -> ${got}, want not_allowed`);
+  }
+  // The gap this does NOT close, asserted so it stays a known one: a Cyrillic or
+  // Greek letter that merely LOOKS Latin is a different letter, not a
+  // compatibility form, and NFKD leaves it alone. Closing it needs a confusables
+  // table or a mixed-script rule — an owner decision, not a quiet one.
+  const CYR = { a: 'а', e: 'е', o: 'о', c: 'с', p: 'р', x: 'х' };
+  const homoglyph = [...term].map((c) => CYR[c] || c).join('');
+  if (homoglyph === term) fail('(10) the homoglyph fixture came out identical to the term, so it documents nothing');
+  else if (err(homoglyph) === 'ok') ok('(10) KNOWN GAP, deliberate: a cross-script homoglyph spelling still passes — NFKD cannot see it, and a confusables table or a mixed-script rule is an owner decision');
+  else ok('(10) a cross-script homoglyph spelling is now rejected — the known gap has been closed and this assertion can go');
+}
+
+// ---- 11. a bad terms argument fails CLOSED ---------------------------------
+// This used to substitute [] for anything that was not an Array, so a Set, a
+// forgotten second argument, or an await that resolved to undefined returned
+// { ok: true } for EVERY name. Later tasks wire this up from the socket and from
+// the store, where all three are one keystroke away — and nothing would look
+// broken until a slur reached another player's screen.
+{
+  const caught = (t) => { try { validateCallsign('Ace Pilot', t); return null; } catch (e) { return e; } };
+  const BAD = [
+    [new Set(terms), 'a Set of the very same terms'],
+    [undefined, 'a missing second argument'],
+    [null, 'null'],
+    [terms.join('\n'), 'a string (the raw file contents, not the parsed list)'],
+  ];
+  for (const [bad, why] of BAD) {
+    const e = caught(bad);
+    if (e instanceof TypeError && /terms must be an array/.test(e.message)) ok(`(11) ${why} throws a TypeError instead of passing every name`);
+    else fail(`(11) ${why}: ${e ? `${e.constructor.name}: ${e.message}` : 'did not throw — the filter is off and silent'}`);
+  }
+  if (err('Ace Pilot') === 'ok' && err(terms[0]) === 'not_allowed') ok('(11) a proper array still accepts an ordinary name and still rejects a term');
+  else fail('(11) a proper array of terms no longer validates normally');
+  // Why the throw matters, stated as an assertion rather than a comment: an
+  // empty list really does accept the bare term, so silently substituting one
+  // for a bad argument was a kill switch with no indicator.
+  if (validateCallsign(terms[0], []).ok === true) ok('(11) an EMPTY list accepts even the bare term — which is exactly what substituting [] used to do');
+  else fail('(11) empty-list control assertion no longer holds');
+}
+
+// ---- 12. names written with combining marks --------------------------------
+// Two separate bugs met here. normaliseCallsign did no Unicode normalisation, so
+// the decomposed spelling of a name was answered 'chars' while the
+// identical-looking precomposed one was accepted. And the character class
+// admitted letters and digits only, which refuses outright every script that
+// cannot be written without combining marks — while section 4 above advertises
+// that a Cyrillic or Japanese callsign is legitimate.
+{
+  const COMPOSED = 'Zoé';        // precomposed LATIN SMALL LETTER E WITH ACUTE
+  const DECOMPOSED = 'Zoé';     // e + COMBINING ACUTE ACCENT: the same name
+  if (DECOMPOSED !== COMPOSED && DECOMPOSED.normalize('NFC') === COMPOSED) ok('(12) the two fixtures really are different strings that spell one name');
+  else fail('(12) the composed/decomposed fixtures are not what this section assumes');
+  const a = validateCallsign(COMPOSED, terms), b = validateCallsign(DECOMPOSED, terms);
+  if (a.ok && b.ok) ok('(12) the same name is accepted in both its precomposed and its decomposed spelling');
+  else fail(`(12) composed -> ${JSON.stringify(a)}, decomposed -> ${JSON.stringify(b)}`);
+  if (a.name === b.name && a.key === b.key) ok('(12) both spellings produce one name and one key, so they can never be two different players');
+  else fail(`(12) the two spellings take different keys: ${JSON.stringify(a.key)} vs ${JSON.stringify(b.key)}`);
+
+  const NAMES = [
+    ['हिन्दी', 'Devanagari, which cannot be written without combining marks'],
+    ['สุดา', 'a Thai name, whose vowels are combining marks'],
+    ['אָב', 'Hebrew with niqqud'],
+  ];
+  for (const [n, why] of NAMES) {
+    const got = err(n);
+    if (got === 'ok') ok(`(12) ${why} is accepted`);
+    else fail(`(12) ${why} -> ${got}, want ok`);
+  }
+  // Marks are characters and the cap counts them, so the length rule — not the
+  // character class — is what bounds a stack of them.
+  const STACK = 'a' + '́'.repeat(20);
+  if (err(STACK) === 'length') ok('(12) a stack of combining marks is still bounded by the 16-code-point cap');
+  else fail(`(12) a 21-code-point stack of combining marks -> ${err(STACK)}, want length`);
+}
+
+// ---- 13. terms manufactured at a word junction -----------------------------
+// The fold removes spaces, so a term can appear across a junction that exists in
+// neither word: "Epic Untold" folds a c up against unt, "Frag Head" folds rag up
+// against head. Both are plausible names in an artillery game and both were
+// refused. The terms involved are FOUND below rather than written out.
+{
+  const hit = (n) => terms.find((t) => foldForBlocklist(n).includes(t));
+  const T_UNT = hit('Epic Untold'), T_RAG = hit('Frag Head');
+  if (T_UNT && T_RAG && T_UNT !== T_RAG) ok('(13) both junctions really do manufacture a term in the folded form — these fixtures are not vacuous');
+  else fail('(13) the junctions no longer produce a term, so this section proves nothing');
+
+  const NAMES = ['Epic Untold', 'Arctic Untamed', 'Magic Untamed', 'Sonic Until', 'Frag Head', 'Drag Head', 'Crag Head'];
+  for (const n of NAMES) {
+    const got = err(n);
+    if (got === 'ok') ok(`(13) "${n}" is accepted`);
+    else fail(`(13) "${n}" -> ${got}, want ok`);
+  }
+  // The bare terms and their evasions are untouched by any of it.
+  for (const t of [T_UNT, T_RAG]) {
+    const which = t === T_UNT ? 'first' : 'second';
+    if (err(t) === 'not_allowed') ok(`(13) the ${which} bare term is still rejected`);
+    else fail(`(13) the ${which} bare term -> ${err(t)}, want not_allowed`);
+    const spaced = [...t].join(' ');
+    if (err(spaced) === 'not_allowed') ok(`(13) a spaced-out evasion of the ${which} bare term is still rejected`);
+    else fail(`(13) a spaced-out evasion of the ${which} bare term -> ${err(spaced)}, want not_allowed`);
+  }
+  // Removing a safe word can only JOIN what is either side of it, so it cannot
+  // destroy a match — the same assertion section 9 makes for the original entry,
+  // made here for a new one.
+  const EMBEDDED = [
+    ['frag' + T_UNT, 'a new safe word sitting directly in front of a term'],
+    ['Untold ' + T_UNT, 'a new safe word as a whole word in front of a term'],
+  ];
+  for (const [raw, why] of EMBEDDED) {
+    const got = err(raw);
+    if (got === 'not_allowed') ok(`(13) ${why} does not neutralise it`);
+    else fail(`(13) ${why} -> ${got}, want not_allowed`);
   }
 }
 
