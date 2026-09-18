@@ -24,6 +24,7 @@
     "test:security": "node test/security.mjs",
     "test:shutdown": "node test/shutdown.mjs",
     "test:house-rules": "node test/house-rules.mjs",
+    "test:callsign": "node test/callsign.mjs",
     "test:layout": "node test/layout.mjs",
     "test:layout:update": "node test/layout.mjs --update",
     "test:load": "node test/load.mjs",

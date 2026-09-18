@@ -3,7 +3,7 @@
 // These are standing project rules that have each been broken at least once and
 // caught only by an ad-hoc grep. Encoding them means they cannot regress
 // silently. Headless — no server required, so CI runs it first and cheaply.
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -548,6 +548,71 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   }
   if (bad.length) fail(`the client imports an npm package — nothing resolves it at runtime:\n      ${bad.join('\n      ')}`);
   else ok('client scripts import nothing from node_modules');
+}
+
+// ---- 11. THE BLOCKLIST NEVER REACHES THE WEB (server/blocklist.txt) --------
+// server/blocklist.txt holds real slurs, verbatim, so foldForBlocklist() can
+// match one as a substring of a folded callsign. Static files are served ONLY
+// from public/, with a containment check in server.js
+// (`if (!filePath.startsWith(PUBLIC))`), so nothing under server/ is
+// web-reachable today — but that guarantee is only as good as three things
+// that could each quietly break it: the file moving under public/, the
+// containment check itself getting loosened, or something under public/
+// naming the file (a stray `<script src="/server/blocklist.txt">` or a
+// `fetch('/blocklist.txt')` would be a live pointer at a file the server would
+// then happily serve — the containment check only blocks a path that escapes
+// PUBLIC upward; it has no opinion on what PUBLIC itself chooses to link to).
+{
+  const BLOCKLIST_REL = 'server/blocklist.txt';
+  const blocklistPath = path.join(ROOT, BLOCKLIST_REL);
+  if (existsSync(blocklistPath)) ok(`${BLOCKLIST_REL} exists`);
+  else fail(`${BLOCKLIST_REL} is missing`);
+
+  const publicDir = path.join(ROOT, 'public');
+  if (blocklistPath === publicDir || blocklistPath.startsWith(publicDir + path.sep)) {
+    fail(`${BLOCKLIST_REL} resolves inside public/ — it would be served verbatim to any browser`);
+  } else {
+    ok(`${BLOCKLIST_REL} resolves outside public/, where nothing is servable`);
+  }
+
+  // The one line standing between server/ and the wire. If it is ever loosened
+  // (say, to allow a new sibling of public/), this must fail loudly rather than
+  // let server/ quietly ride along.
+  const serverSrc = read('server.js');
+  const GUARD = "if (!filePath.startsWith(PUBLIC)) { res.writeHead(403); return res.end('Forbidden'); }";
+  if (serverSrc.includes(GUARD)) ok('server.js still refuses any static path that resolves outside PUBLIC');
+  else fail('server.js no longer contains the PUBLIC containment check — server/ could become web-reachable');
+
+  // Nothing under public/ may BE it or NAME it: not a same-named copy sitting
+  // in public/ (every file gets walked, including binaries, and checked by
+  // NAME), and not the bare word "blocklist" in any casing inside a text file
+  // public/ actually ships (binary assets — fonts, icons, photos — are not
+  // usefully readable as utf8 and are skipped for the content check only).
+  const TEXT_EXT = new Set(['.js', '.html', '.css', '.webmanifest', '.svg', '.json', '.txt']);
+  const walk = (dir) => {
+    let files = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) files = files.concat(walk(full));
+      else files.push(full);
+    }
+    return files;
+  };
+  const hits = [];
+  for (const file of walk(publicDir)) {
+    const rel = path.relative(ROOT, file);
+    if (/blocklist/i.test(path.basename(file))) hits.push(`${rel} (filename)`);
+    if (TEXT_EXT.has(path.extname(file))) {
+      readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+        if (/blocklist/i.test(line)) hits.push(`${rel}:${i + 1}`);
+      });
+    }
+  }
+  if (hits.length) {
+    fail(`public/ has a copy of, or a reference to, the blocklist — either would be served verbatim:\n      ${hits.join('\n      ')}`);
+  } else {
+    ok('nothing under public/ is named after the blocklist or references it, by name or by path');
+  }
 }
 
 // ---- NO BARE TIMERS IN THE ENGINE -------------------------------------------

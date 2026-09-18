@@ -69,6 +69,9 @@ start_server() {             # start_server [extra env assignments...]
 
 echo "== headless (no server needed) =="
 run house_rules node test/house-rules.mjs
+# The chosen-callsign rules (design 4.5): normalising, length, characters, the
+# folded blocklist, and the loader's own guards. Pure module, no server.
+run callsign node test/callsign.mjs
 run timer_safety node test/timer_safety.mjs
 # FFA vs CPUs, in-process: the 'ai' case's duel seat stays key-for-key the
 # historical literal, and a room of plain CPUs hands the turn bot to bot.
