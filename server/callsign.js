@@ -177,8 +177,8 @@ export const LETTER_LOOKALIKE = Object.fromEntries([
 // everyone on the board; 'untold' shares 'unt' with the term on line 11 the same
 // way. Neither word CONTAINS the other — containment is the direction the
 // original safety check tested — and sharing three letters at an edge was
-// enough. validateCallsign() now folds and strips PER TOKEN, so a safe word can
-// only consume letters from the token it genuinely occurs in.
+// enough. An entry here is now exempt only where it is a WHOLE TOKEN of the
+// name, so it can never consume letters that belong to anything else.
 //
 // test/callsign.mjs generates the invariant from these two lists at run time:
 // every (term, safe word) pair that shares an edge is welded back into the name
@@ -284,24 +284,24 @@ export function validateCallsign(raw, terms) {
   // the substring test while the bare term inside it, folded the exact same
   // way, is still caught by the term loop.
   //
-  // PER TOKEN, and that is the whole of the fix. Stripping the WHOLE folded
-  // string let a safe word that overlaps a term consume half of that term across
-  // a space: 'F ' in front of the term on line 8 folds to a string that starts
-  // with 'frag', the strip removed it, and what was left matched nothing. Fold
-  // each space-separated token on its own, strip inside that token, and only
-  // then join the results for the substring test — a safe word can no longer
-  // reach past the space it does not cross.
+  // A WHOLE TOKEN, and that is the whole of the fix. A token that folds to
+  // exactly a safe word is dropped; a token that merely CONTAINS one is kept
+  // whole and tested like any other. Removing the safe word wherever it appeared
+  // was what let it eat a term: 'F ' in front of the term on line 8 folds up
+  // against 'frag', the strip took 'frag' away, and what was left matched
+  // nothing — and the same weld inside ONE token did the same thing, which is
+  // the first shape anyone testing this filter tries.
   //
-  // A single token is still stripped whole, which is the deliberate price of the
-  // list: 'Craghead' is a village in County Durham and stays a legal callsign,
-  // and so does the one-word welding of the line 11 term to the tail of a safe
-  // word. A name typed as one word cannot be un-joined without refusing the
-  // village too, and the spaced forms — which is how an evader actually types
-  // it — are all caught.
+  // THE TRADE, and it is deliberate: a one-word weld is refused even when it is
+  // innocent. 'Craghead' — a village in County Durham — and the gaming spelling
+  // of 'frag head' as one word are both refused now. That is accepted: whoever
+  // is from the village can type 'Crag Head', which passes, and a clear error a
+  // player can work around beats a slur welded into one word reaching every
+  // other screen. Do not "fix" this by stripping inside a token again; the test
+  // suite generates both shapes of weld and will fail if you do.
   const folded = name.split(' ').map((token) => {
-    let t = foldForBlocklist(token);
-    for (const safe of SAFE_WORDS) t = t.split(safe).join('');
-    return t;
+    const t = foldForBlocklist(token);
+    return SAFE_WORDS.includes(t) ? '' : t;
   }).join('');
   for (const term of terms) {
     if (term && folded.includes(term)) return { ok: false, error: 'not_allowed' };

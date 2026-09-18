@@ -259,8 +259,10 @@ const ZWSP = String.fromCodePoint(0x200B);      // zero-width space: NOT whitesp
 // every evasion of it, is still caught. That was false for a safe word that
 // OVERLAPS a term: stripping the safe word ate the term with it, and the name
 // shipped. Section 13 has the fixtures and section 14 generates the invariant
-// that would have caught it. What is true, and all that is claimed now, is that
-// a safe word can only consume letters from the token it occurs in.
+// that would have caught it. What is true, and all that is claimed now, is
+// narrower: a safe word is exempt only where it is a WHOLE TOKEN of the name.
+// Inside a longer word it is not exempt at all, so it can never consume letters
+// that belong to something else.
 // (Names below are kept short to stay inside CALLSIGN_MAX.)
 {
   const term = 'cunt';
@@ -546,9 +548,10 @@ const ZWSP = String.fromCodePoint(0x200B);      // zero-width space: NOT whitesp
   // stopped being true. It holds while the safe word and the term are DISJOINT.
   // Where they share an EDGE, stripping the safe word from the whole folded
   // string took the term with it: every name below returned { ok: true } and
-  // rendered the slur, plainly legible, to everyone else on the board. The fold
-  // is now per TOKEN, so a safe word can only eat letters out of the token it
-  // occurs in and can no longer reach across a space.
+  // rendered the slur, plainly legible, to everyone else on the board. A safe
+  // word is now exempt only as a WHOLE TOKEN, so there is nothing left for it to
+  // eat: a token that merely contains one is kept whole and tested like any
+  // other string.
   const OVERLAP = [
     ['F ' + T_RAG, `a single-letter token in front of the term on line ${line(T_RAG)}, welding into a safe word across the space`],
     ['D ' + T_RAG, `the same weld in front of the term on line ${line(T_RAG)} through a second safe word`],
@@ -563,31 +566,49 @@ const ZWSP = String.fromCodePoint(0x200B);      // zero-width space: NOT whitesp
     if (got === 'not_allowed') ok(`(13) ${why} is refused`);
     else fail(`(13) ${why} -> ${got}, want not_allowed — the safe word ate the term`);
   }
-  // And the innocent names the safe words exist for are still accepted, which is
-  // the whole point: the per-token fold cannot tell them apart by intent, only
-  // by whether the safe word is a token of its own.
-  // Named by line number, never written out: "Craghead" and "Scunthorpe" each
-  // contain a shipped term outright, so printing the fixture would print the
-  // term. The names themselves are in the CASES above and in SAFE_WORDS.
+  // What the exemption still buys, and it is the whole of what it buys: a safe
+  // word standing as a TOKEN OF ITS OWN. Every name in NAMES above is of that
+  // shape, and so are these two.
+  // Named by line number, never written out: the town on the safe list contains
+  // a shipped term outright, so printing the fixture would print the term.
   const PLACES = [
-    ['Craghead', `a real English village whose ONE-WORD name contains the term on line ${line(T_RAG)}`],
-    ['Scunthorpe Utd', `the safe word containing the term on line ${line(T_UNT)}, beside a second token`],
+    ['Scunthorpe', `the town on the safe list, whose name contains the term on line ${line(T_UNT)}, as the only token`],
+    ['Scunthorpe Utd', `the same town beside a second token`],
   ];
   for (const [raw, why] of PLACES) {
     const got = err(raw);
     if (got === 'ok') ok(`(13) ${why} is still accepted`);
     else fail(`(13) ${why} -> ${got}, want ok`);
   }
-  // DOCUMENTED RESIDUE, and the price of the list. A single token is still
-  // stripped whole, so a term welded to a safe word's tail INSIDE one word
-  // survives. It cannot be closed without also refusing the County Durham
-  // village above, which is the name this list exists to protect. Either outcome
-  // passes; the assertion is here so the trade stays visible rather than being
-  // forgotten. The village is not named in the line, because its name contains a
-  // shipped term outright.
-  const WELDED = T_UNT + 'old';
-  if (err(WELDED) === 'ok') ok(`(13) DOCUMENTED RESIDUE: the term on line ${line(T_UNT)} welded to a safe word's tail INSIDE one token is still accepted — the price of accepting the village on the first line of PLACES`);
-  else ok(`(13) the one-token weld of the term on line ${line(T_UNT)} is now refused too — check by hand that both names in PLACES survived it`);
+  // THE TRADE, asserted so nobody quietly reverses it. A safe word INSIDE a
+  // longer word is not exempt any more, so the one-token welds are refused —
+  // including the innocent ones. The County Durham village and the gaming
+  // spelling of the line 8 term's junction as one word both fail this check now.
+  // That is the accepted cost: their owners can type the two-word form, which is
+  // asserted above, and a clear error a player can work around beats a slur
+  // welded into one word reaching every other screen. If one of these ever reads
+  // 'ok' again, the exemption has gone back to matching inside a token and the
+  // single-token evasions are open with it.
+  const WELDS = [
+    [T_UNT + 'old', `the term on line ${line(T_UNT)} welded to a safe word's tail inside ONE token`],
+    [T_UNT + 'il', `the same term welded to a second safe word's tail inside one token`],
+    [T_UNT + 'amed', `the same term welded to a third safe word's tail inside one token`],
+    ['Crag' + T_RAG.slice(3), `the innocent one-word spelling of the village — the term on line ${line(T_RAG)} welded to a safe word's head`],
+    ['Frag' + T_RAG.slice(3), `the innocent one-word gaming spelling of the same junction`],
+  ];
+  for (const [raw, why] of WELDS) {
+    const got = err(raw);
+    if (got === 'not_allowed') ok(`(13) ${why} is refused — the trade the whole-word exemption makes`);
+    else fail(`(13) ${why} -> ${got}, want not_allowed — the exemption is matching INSIDE a token again`);
+  }
+  // ...and the two-word forms those owners can type instead, which is what makes
+  // the trade survivable. Asserted here rather than left to NAMES above, because
+  // it is the remedy the comment offers.
+  for (const [raw, why] of [['Crag Head', 'the village written as two words'], ['Frag Head', 'the gaming spelling written as two words']]) {
+    const got = err(raw);
+    if (got === 'ok') ok(`(13) ${why} is accepted — the remedy for the refusal above`);
+    else fail(`(13) ${why} -> ${got}, want ok`);
+  }
 }
 
 // ---- 14. the invariant a safe word must satisfy, GENERATED -----------------
@@ -602,10 +623,11 @@ const ZWSP = String.fromCodePoint(0x200B);      // zero-width space: NOT whitesp
 // overlaps a term fails here on the run that adds it, instead of turning that
 // term off in silence.
 //
-// The weld is SPACED at the join, because that is the shape of the evasion: the
-// safe word is not a token of anything, and only appears at all because the fold
-// had already removed the space. A single token is a different case, and section
-// 13 records it as a deliberate residue.
+// BOTH shapes of weld are generated: spaced at the join, which is what the fold
+// used to turn into a safe word by removing the space, and welded into a SINGLE
+// TOKEN, which is what someone testing the filter by hand types first. Neither
+// is exempt, because the exemption is now whole-token only — so both must be
+// refused, and a change that reopens either one fails here.
 {
   const seen = new Set();
   const FIXTURES = [];
@@ -614,13 +636,21 @@ const ZWSP = String.fromCodePoint(0x200B);      // zero-width space: NOT whitesp
     for (const safe of SAFE_WORDS) {
       for (let k = 1; k <= Math.min(safe.length, t.length); k++) {
         // a TAIL of the safe word is a HEAD of the term: "<safe minus overlap> <term>"
-        if (safe.endsWith(t.slice(0, k))) add(safe.slice(0, safe.length - k) + ' ' + t, `"${safe}" ends with the first ${k} letter(s) of the term on line ${line(t)}`);
+        if (safe.endsWith(t.slice(0, k))) {
+          const head = safe.slice(0, safe.length - k), why = `"${safe}" ends with the first ${k} letter(s) of the term on line ${line(t)}`;
+          add(head + ' ' + t, `${why}, spaced at the join`);
+          add(head + t, `${why}, welded into one token`);
+        }
         // a TAIL of the term is a HEAD of the safe word: "<term> <safe minus overlap>"
-        if (t.endsWith(safe.slice(0, k))) add(t + ' ' + safe.slice(k), `the term on line ${line(t)} ends with the first ${k} letter(s) of "${safe}"`);
+        if (t.endsWith(safe.slice(0, k))) {
+          const tail = safe.slice(k), why = `the term on line ${line(t)} ends with the first ${k} letter(s) of "${safe}"`;
+          add(t + ' ' + tail, `${why}, spaced at the join`);
+          add(t + tail, `${why}, welded into one token`);
+        }
       }
     }
   }
-  if (FIXTURES.length >= 6) ok(`(14) the ${terms.length} terms and the ${SAFE_WORDS.length} safe words overlap at an edge in ${FIXTURES.length} places — every one of them is a way to eat a term, and every one is asserted below`);
+  if (FIXTURES.length >= 12) ok(`(14) the ${terms.length} terms and the ${SAFE_WORDS.length} safe words overlap at an edge in ${FIXTURES.length} places, counting both the spaced and the single-token weld of each — every one of them is a way to eat a term, and every one is asserted below`);
   else fail(`(14) only ${FIXTURES.length} overlap(s) generated — the generator has stopped finding them and this section proves nothing`);
   // Not vacuous: each weld really does spell a term once the fold removes the
   // space. Without this, a generator bug would turn the whole section green.
