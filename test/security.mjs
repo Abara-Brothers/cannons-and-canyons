@@ -342,11 +342,16 @@ async function noFreeTextNames() {
   // own BAD_SUB that the shipped blocklist does not already refuse.
   const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
   const terms = loadBlocklist(path.join(ROOT, 'server', 'blocklist.txt'));
-  const engineSrc = readFileSync(path.join(ROOT, 'public', 'room-engine.js'), 'utf8');
+  // game-core.js, not room-engine.js: the profanity lists moved there when
+  // server/social.js started applying the same test to a name in a friends
+  // panel, so that the engine and the social layer share ONE copy. Read from
+  // wherever it lives — a fixture spelled out here would be the second copy
+  // this check exists to make unnecessary.
+  const engineSrc = readFileSync(path.join(ROOT, 'public', 'game-core.js'), 'utf8');
   const listSrc = (engineSrc.match(/const BAD_SUB = \[([\s\S]*?)\];/) || [])[1] || '';
   const badSub = [...listSrc.matchAll(/'([a-z]+)'/g)].map((m) => m[1]);
   if (!badSub.length) {
-    fail('could not read BAD_SUB out of public/room-engine.js — the fixture below proves nothing');
+    fail('could not read BAD_SUB out of public/game-core.js — the fixture below proves nothing');
   } else {
     // The 'Xxxx Ridge' shape is the one a player actually types, and the
     // server's own length and character rules apply to it as well.

@@ -30,7 +30,7 @@ import {
   LOADOUT_POOL, validLoadout, loadoutAmmo, loadoutSizeFor,
   fireDamage, FIRE_TICK,
   BIOMES, BIOME_IDS, biomeLavaY, generateProps, generateRuins, prepareGolfHole,
-  isGeneratedCallsign, callsignFromSeed,
+  isGeneratedCallsign, callsignFromSeed, isProfane,
 } from './game-core.js';
 
 // Every tunable below is read through here. `process` exists in Node and nowhere
@@ -168,20 +168,12 @@ const sanitizeSkin = (s, seat) => (SKINS.includes(s) ? s : SEAT_SKIN[seat % SEAT
 // get scrubbed here at the door: printable ASCII only, and a profanity check
 // with leetspeak folded out. A dirty name is swapped for a clean callsign
 // (picked by name-hash so the same input always maps to the same fallback).
-const LEET = { '0': 'o', '1': 'i', '3': 'e', '4': 'a', '5': 's', '7': 't', '8': 'b', '@': 'a', '$': 's', '!': 'i', '+': 't' };
-const BAD_SUB = ['fuck', 'shit', 'cunt', 'bitch', 'bastard', 'asshole', 'arsehole', 'dick', 'cock', 'pussy',
-  'wank', 'twat', 'slut', 'whore', 'nigg', 'negro', 'fagg', 'dyke', 'kike', 'spic', 'chink', 'gook', 'coon',
-  'paki', 'retard', 'rape', 'rapist', 'pedo', 'paedo', 'nazi', 'hitler', 'porn', 'penis', 'vagin', 'anus',
-  'semen', 'jizz', 'dildo', 'blowjob', 'handjob', 'boner', 'nutsack'];
-const BAD_WORD = ['ass', 'arse', 'tit', 'tits', 'cum', 'hoe', 'fag', 'anal', 'kkk', 'fap', 'smd', 'stfu', 'wtf', 'sex'];
-const foldLeet = (s) => String(s).toLowerCase().split('').map(c => LEET[c] || c).join('');
-const lettersOf = (s) => foldLeet(s).replace(/[^a-z]/g, '');
-function isProfane(raw) {
-  const flat = lettersOf(raw);
-  if (BAD_SUB.some(w => flat.includes(w))) return true;
-  // Short words only count as whole tokens, so "Bass Master" and "Titan" pass.
-  return String(raw).toLowerCase().split(/[^a-z0-9@$!+]+/).map(lettersOf).some(t => BAD_WORD.includes(t));
-}
+// isProfane and its two word lists live in game-core.js, imported above. They
+// moved there when server/social.js started applying the same test to decide
+// whether a rolled name in a friends panel is one the server can vouch for: a
+// second copy of a profanity list drifts, and drift here fails OPEN on the one
+// string every other player has to look at. Behaviour is unchanged — same
+// function, same lists, one home.
 // Names are NOT free text (ISSUE-015). A client may only send a callsign it
 // rolled from the two curated lists in game-core.js, OR the one chosen callsign
 // the SERVER has already validated and stored for that socket's account and

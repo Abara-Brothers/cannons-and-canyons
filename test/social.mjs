@@ -9,13 +9,20 @@
 // of them shows up in ordinary play. A missing gate here is not a bug report,
 // it is a slur on a stranger's screen and an App Review rejection.
 import { createSocial, SOCIAL_TYPES } from '../server/social.js';
+// The two curated lists and the two pure tests the second name proof is built
+// from — the same module server/social.js imports, so (a5) can sweep every pair
+// the game can actually roll rather than a handful copied into a fixture.
+import { CALL_ADJ, CALL_NOUN, isGeneratedCallsign, isProfane } from '../public/game-core.js';
 
 const out = { errors: [] };
 const ok = (m) => console.log('  ok — ' + m);
 const fail = (m) => { out.errors.push(m); console.error('FAIL ' + m); };
 
 // The engine's send(), copied rather than imported so this suite never loads
-// the game engine (the original is public/room-engine.js:255-257).
+// room-engine.js — no rooms, no turn loop, no simulation (the original is
+// public/room-engine.js:255-257). It DOES now load public/game-core.js, through
+// server/social.js, for the two pure callsign tests that prove a rolled name:
+// constants and pure functions, no timers and no side effects.
 const send = (ws, m) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); };
 // `isGuest` is the ACCOUNT KIND, not the absence of an id (BINDING.md
 // resolution 1): public/cloud.js mints an ANONYMOUS Supabase account for every
@@ -736,6 +743,105 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     if (snapB && snapB.friends.length === 1 && snapB.friends[0].id === A && snapB.id === undefined)
       ok('(b) add: B’s pushed snapshot lists A and carries no request id');
     else fail('(b) B snapshot: ' + JSON.stringify(snapB));
+  }
+
+  // ---- (a5) A ROLLED PAIR IS PROOF ENOUGH TO SHOW A NAME --------------------
+  // Most players have never chosen a callsign, so a key-only rule would leave a
+  // friends panel of blank rows — worse than the problem it fixed. A ROLLED name
+  // is server-verifiable too: isGeneratedCallsign proves a string is one of the
+  // curated adjective-and-noun pairs, which is a SELECTION FROM A FIXED LIST and
+  // not attacker-chosen text, and it is the same test room-engine.js applies to
+  // every name a client presents in a lobby. So two proofs — the key, or the
+  // pair — and everything else is still null.
+  {
+    const ROLLED = [
+      { id: A, callsign: 'Anvil Six',        friend_code: 'ABC234', callsign_key: 'anvil six', callsign_set_at: null },
+      { id: B, callsign: 'Iron Ridge',       friend_code: 'BDF345', callsign_key: null, callsign_set_at: null },
+      // Correct pair, sloppy spelling: NFC, trim and collapse are applied before
+      // the test, so a decomposed or double-spaced copy of a real rolled name
+      // does not cost that player their name. What comes back is the pair.
+      { id: C, callsign: '  Rusty   Anvil ', friend_code: 'CGH456', callsign_key: null, callsign_set_at: null },
+      { id: D, callsign: 'Steel Mesa',       friend_code: 'DJK567', callsign_key: null, callsign_set_at: null },
+      { id: E, callsign: 'Frost Hawk',       friend_code: 'EMN678', callsign_key: null, callsign_set_at: null },
+      // 'Sixty' is in neither list, so this is free text wearing the shape of a
+      // pair — exactly what the test is for.
+      { id: F, callsign: 'Iron Sixty',       friend_code: 'FPQ789', callsign_key: null, callsign_set_at: null },
+    ];
+    const st = memStore(ROLLED);
+    await st.addFriendship(A, B);
+    await st.addFriendship(A, C);
+    await st.addRequest(D, A);
+    await st.addRequest(A, F);
+    await st.addBlock(A, E);
+    const S = mkSocial(st);
+    const wa = mkws(A); S.onAuth(wa);
+    await S.handle(wa, { type: 'friends' });
+    const f = last(wa, 'friends') || {};
+    const byId = new Map(((f.friends) || []).map((x) => [x.id, x.callsign]));
+    if (byId.get(B) === 'Iron Ridge') ok('(a5) a friend who only ever ROLLED a name is named in the panel');
+    else fail('(a5) rolled friend: ' + JSON.stringify(f.friends));
+    if (byId.get(C) === 'Rusty Anvil') ok('(a5) a sloppily spelled copy of a real pair is normalised, not blanked — and the PAIR is what is returned');
+    else fail('(a5) normalised rolled friend: ' + JSON.stringify(f.friends));
+    const inc = ((f.requests || {}).in || [])[0];
+    if (inc && inc.id === D && inc.callsign === 'Steel Mesa') ok('(a5) an incoming request carries its rolled name');
+    else fail('(a5) incoming: ' + JSON.stringify((f.requests || {}).in));
+    const outg = ((f.requests || {}).out || [])[0];
+    if (outg && outg.id === F && outg.callsign === null) ok('(a5) free text in the shape of a pair is still null — both halves must come from the lists');
+    else fail('(a5) outgoing: ' + JSON.stringify((f.requests || {}).out));
+    const blk = (f.blocked || [])[0];
+    if (blk && blk.id === E && blk.callsign === 'Frost Hawk') ok('(a5) the blocked list is named too — all four lists take either proof');
+    else fail('(a5) blocked: ' + JSON.stringify(f.blocked));
+
+    // BINDING RESOLUTION 13 IS UNTOUCHED. The account's OWN `callsign` field is
+    // the CHOSEN name and nothing else: null there is what makes the client
+    // offer "Set callsign", so the second proof must not reach it. This is why
+    // provenName was not itself widened.
+    const st2 = memStore([{ id: A, callsign: 'Iron Ridge', friend_code: 'ABC234', callsign_key: null, callsign_set_at: null }]);
+    const S2 = mkSocial(st2);
+    const wa2 = mkws(A); S2.onAuth(wa2);
+    await S2.handle(wa2, { type: 'friends' });
+    if ((last(wa2, 'friends') || {}).callsign === null)
+      ok('(a5) an account holding a ROLLED pair still reports its own callsign as null — the second proof is for OTHER people’s names only');
+    else fail('(a5) own rolled callsign: ' + JSON.stringify(last(wa2, 'friends')));
+
+    // THE IMPERSONATION QUESTION, ANSWERED IN A TEST. A rolled pair is not
+    // unique and never was — two players can roll the same one, and the lobby
+    // has always shown that collision — so wearing one is not a new weakness.
+    // Wearing a CHOSEN name without its key must stay impossible, and 'Anvil
+    // Six' is exactly that case: a real chosen name, not a rollable pair.
+    const st3 = memStore([
+      { id: A, callsign: 'Dune Four', friend_code: 'ABC234', callsign_key: 'dune four', callsign_set_at: null },
+      { id: B, callsign: 'Anvil Six', friend_code: 'BDF345', callsign_key: null, callsign_set_at: null },
+      { id: C, callsign: 'FOLLOW ME OK', friend_code: 'CGH456', callsign_key: null, callsign_set_at: null },
+    ]);
+    await st3.addFriendship(A, B);
+    await st3.addFriendship(A, C);
+    const S3 = mkSocial(st3);
+    const wa3 = mkws(A); S3.onAuth(wa3);
+    await S3.handle(wa3, { type: 'friends' });
+    const names = new Map((((last(wa3, 'friends') || {}).friends) || []).map((x) => [x.id, x.callsign]));
+    if (names.get(B) === null)
+      ok('(a5) the second proof did NOT open the first: a chosen name that is not a rollable pair is still refused without its key');
+    else fail('(a5) a chosen name was worn without the key: ' + JSON.stringify([...names]));
+    if (names.get(C) === null) ok('(a5) and plain free text is still null, pair or no pair');
+    else fail('(a5) free text reached the panel: ' + JSON.stringify([...names]));
+
+    // THE PROFANITY GUARD ON THE SECOND PROOF, AND THE ONE CHECK THAT REACHES
+    // IT. isProfane only ever runs on a string that is already a curated pair,
+    // and none of the pairs the lists can produce is profane — measured here
+    // over every pair rather than asserted from memory. So the guard blanks
+    // nobody today, and THIS is the tripwire: add a word to either list that the
+    // filter catches and this fails loudly, instead of that pair's players going
+    // quietly nameless in every panel.
+    const pairs = [];
+    for (const adj of CALL_ADJ) for (const noun of CALL_NOUN) {
+      const p = adj + ' ' + noun;
+      if (isGeneratedCallsign(p)) pairs.push(p);
+    }
+    const profane = pairs.filter((p) => isProfane(p));
+    if (pairs.length > 1000 && !profane.length)
+      ok(`(a5) none of the ${pairs.length} rollable pairs is caught by the engine’s profanity filter — the guard costs no honest player their name`);
+    else fail(`(a5) rollable pairs (${pairs.length}) caught by isProfane: ` + JSON.stringify(profane));
   }
 
   // ---- (b3) A BURST DRIVEN BY OTHER PEOPLE IS COLLAPSED ---------------------

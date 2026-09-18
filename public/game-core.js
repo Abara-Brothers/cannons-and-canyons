@@ -46,6 +46,37 @@ export function isGeneratedCallsign(name) {
   return CALL_ADJ.includes(parts[0]) && CALL_NOUN.includes(parts[1]);
 }
 
+// ---- Profanity ------------------------------------------------------------------
+// MOVED HERE FROM room-engine.js, and not copied: this is the filter the engine
+// applies to every name a client presents, and server/social.js now applies the
+// same pair of tests — isGeneratedCallsign plus this — to decide whether a name
+// in a FRIENDS PANEL is one the server can vouch for. Two copies of a profanity
+// list drift, and a drift here fails OPEN on the one string every other player
+// has to look at. It sits beside the two curated lists because it is the filter
+// on those lists' own output. Pure string work: no Node builtins, no DOM, so
+// game-core.js stays browser-safe (ADR-001 / house rule 6).
+//
+// The lists below are NOT the server's own term list under server/ and are not
+// meant to be: that one is substring-matched with safe words and deliberately
+// leaves out terms whose folded form appears inside innocent names. The two are
+// defence in depth for each other, which only works while they stay separate —
+// and the server's list must never be named from a file under public/, which is
+// all served verbatim (house rule 11).
+const LEET = { '0': 'o', '1': 'i', '3': 'e', '4': 'a', '5': 's', '7': 't', '8': 'b', '@': 'a', '$': 's', '!': 'i', '+': 't' };
+const BAD_SUB = ['fuck', 'shit', 'cunt', 'bitch', 'bastard', 'asshole', 'arsehole', 'dick', 'cock', 'pussy',
+  'wank', 'twat', 'slut', 'whore', 'nigg', 'negro', 'fagg', 'dyke', 'kike', 'spic', 'chink', 'gook', 'coon',
+  'paki', 'retard', 'rape', 'rapist', 'pedo', 'paedo', 'nazi', 'hitler', 'porn', 'penis', 'vagin', 'anus',
+  'semen', 'jizz', 'dildo', 'blowjob', 'handjob', 'boner', 'nutsack'];
+const BAD_WORD = ['ass', 'arse', 'tit', 'tits', 'cum', 'hoe', 'fag', 'anal', 'kkk', 'fap', 'smd', 'stfu', 'wtf', 'sex'];
+const foldLeet = (s) => String(s).toLowerCase().split('').map(c => LEET[c] || c).join('');
+const lettersOf = (s) => foldLeet(s).replace(/[^a-z]/g, '');
+export function isProfane(raw) {
+  const flat = lettersOf(raw);
+  if (BAD_SUB.some(w => flat.includes(w))) return true;
+  // Short words only count as whole tokens, so "Bass Master" and "Titan" pass.
+  return String(raw).toLowerCase().split(/[^a-z0-9@$!+]+/).map(lettersOf).some(t => BAD_WORD.includes(t));
+}
+
 // Deterministic callsign for a rejected or missing name. Deterministic on
 // purpose: if it were random, a griefer could spam names until one landed that
 // they liked, and reconnecting players would change identity mid-match.
