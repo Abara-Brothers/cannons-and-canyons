@@ -7,10 +7,12 @@
 // into a query string. server.js's one unencoded interpolation (/profiles?id=in.(…)
 // at ~line 961) is safe only because its ids come out of a uuid[] COLUMN; these come
 // from a client frame. Check (l) at the bottom walks every path this suite produced
-// and refuses a raw space or quote in any value, so a method added later that forgets
-// encodeURIComponent cannot ship quietly.
+// and refuses a raw space, quote, & = , ( ) or . in any value — the PostgREST filter
+// grammar, not just the characters that look alarming — so a method added later that
+// forgets encodeURIComponent cannot ship quietly.
 import {
   createStore, isUuid, FRIEND_CODE_ALPHABET, FRIEND_CODE_LEN, FRIEND_CODE_TRIES,
+  CALLSIGN_COL_MAX, NO_CALLSIGN,
 } from '../server/store.js';
 
 const out = { errors: [] };
@@ -164,6 +166,24 @@ function mkSb(routes = []) {
   await h5.store.clearCallsignKey(A);
   if (h5.calls[0].path === `/profiles?id=eq.${A}` && same(h5.calls[0].body, { callsign_key: null })) ok('(e) clearCallsignKey nulls the key ONLY — callsign_set_at survives, so a roll is not a fresh daily allowance');
   else fail('(e) clearCallsignKey: ' + JSON.stringify(h5.calls[0]));
+
+  // THE READ PATH AND THE WRITE PATH MUST AGREE. profileByCallsignKey refuses to
+  // look up a key outside KEY_RE; if the write does not run the same class, a key
+  // the read can never match is still STORED — and the player who owns it is
+  // permanently unfindable, with no query issued and nothing logged. Checking one
+  // half is not checking this.
+  const h6 = mkSb();
+  let t6 = null; try { await h6.store.setChosenCallsign(A, 'Ghost', 'a&b=1'); } catch (e) { t6 = e; }
+  if (t6 && t6.message === 'bad key' && h6.calls.length === 0) ok('(e) a callsign key outside the lookup class is refused on the WRITE path too, before any call');
+  else fail('(e) hostile key on write: ' + (t6 && t6.message) + ' calls=' + h6.calls.length);
+
+  // ...and the same class is wide enough to WRITE what resolution 21 made legal, so
+  // the gate above cannot be satisfied by narrowing one half into agreement.
+  const DEVANAGARI_KEY = 'हिन्दी';
+  const h7 = mkSb([[/^PATCH/, [{ id: C }]]]);
+  const r7 = await h7.store.setChosenCallsign(C, DEVANAGARI_KEY, DEVANAGARI_KEY);
+  if (r7.ok === true && h7.calls.length === 1 && h7.calls[0].body.callsign_key === DEVANAGARI_KEY) ok('(e) a key carrying combining marks still writes — the two halves agree on the WIDE class, not a narrow one');
+  else fail('(e) combining-mark write: ' + JSON.stringify(r7) + ' ' + JSON.stringify(h7.calls.map((c) => c.body)));
 }
 
 // ---- (f) ensureFriendCode -----------------------------------------------------
@@ -270,6 +290,19 @@ function mkSb(routes = []) {
   else fail('(h) addRequest: ' + JSON.stringify(h2.calls[0]));
   if (h2.calls[1].path === `/friend_requests?from_user=eq.${B}&to_user=eq.${A}`) ok('(h) deleteRequest path exact');
   else fail('(h) deleteRequest path: ' + h2.calls[1].path);
+
+  // THE OTHER HALF OF THE SWEEP CASE, AND THE ONE WITH NO CHECK ON IT UNTIL NOW.
+  // The two reads are bare awaits and correctly propagate, so this passes today —
+  // but widen the try/catch below them by two lines and a missing table becomes
+  // { incoming: [], outgoing: [] }: a wrong-looking SUCCESS on a read path, with
+  // nothing logged, which is exactly the shape the failure rule exists to forbid.
+  // The empty-array-means-the-table-is-missing path is now the one thing here that
+  // cannot regress quietly.
+  const h3 = mkSb([[/^GET/, new Error('sb GET 500')]]);
+  let t3 = null; let got3 = null;
+  try { got3 = await h3.store.requestsOf(A); } catch (e) { t3 = e; }
+  if (t3 && t3.message === 'sb GET 500') ok('(h) a failing READ rejects — only the sweep may fail quietly, never the answer');
+  else fail('(h) a failing read did not reject: threw=' + JSON.stringify(t3 && t3.message) + ' resolved=' + JSON.stringify(got3));
 }
 
 // ---- (i) blocks: direction is the whole point, never reordered ----------------
@@ -307,13 +340,74 @@ function mkSb(routes = []) {
 
   const h3 = mkSb();
   let t3 = null; try { await h3.store.reportedSince(A, B, "now' or 1=1"); } catch (e) { t3 = e; }
-  if (t3 && t3.message === 'bad since' && h3.calls.length === 0) ok('(j) an unparseable timestamp never reaches the query string');
+  if (t3 && /^bad since/.test(t3.message) && h3.calls.length === 0) ok('(j) an unparseable timestamp never reaches the query string');
   else fail('(j) bad since: ' + (t3 && t3.message) + ' calls=' + h3.calls.length);
 
   const h4 = mkSb([[/^GET/, []]]);
   await h4.store.reportedSince(A, B, Date.parse(since));
   if (h4.calls[0].path.includes('created_at=gte.2026-09-17T00%3A00%3A00.000Z')) ok('(j) a numeric timestamp is re-serialised to ISO by the store, not trusted');
   else fail('(j) numeric since: ' + h4.calls[0].path);
+
+  // THE COLUMN IS `check (char_length(callsign) between 1 and 16)`. Everything below
+  // is about a report that is refused by the DATABASE and shown to the reporter as
+  // 'unavailable' — a moderation action failing with the wrong words.
+  const h5 = mkSb();
+  const LONG = 'Ghostrider Overflowing';                 // 22 characters
+  await h5.store.addReport(A, B, LONG);
+  const clamped = h5.calls[0]?.body?.callsign ?? '';
+  if (clamped === LONG.slice(0, CALLSIGN_COL_MAX) && [...clamped].length === CALLSIGN_COL_MAX) ok('(j) a name longer than the column is clamped to 16, not sent for the CHECK to refuse');
+  else fail('(j) long name: ' + JSON.stringify(clamped));
+
+  // profiles.callsign is nullable and Task 6 passes it straight through
+  // (addReport(ws.userId, id, who.callsign)), so a player who never chose a name is
+  // the ORDINARY case here, not an edge — and '' is exactly what the CHECK refuses.
+  // If this regresses, the one player nobody can report is the one with no name.
+  const h6 = mkSb();
+  await h6.store.addReport(A, B, null);
+  await h6.store.addReport(A, C, '   ');
+  const names = h6.calls.map((c) => c.body && c.body.callsign);
+  if (names[0] === NO_CALLSIGN && names[1] === NO_CALLSIGN) ok('(j) a player with no callsign can still be reported: NO_CALLSIGN is stored, never the empty string');
+  else fail('(j) nameless report: ' + JSON.stringify(names));
+  if ([...NO_CALLSIGN].length >= 1 && [...NO_CALLSIGN].length <= CALLSIGN_COL_MAX) ok('(j) NO_CALLSIGN itself fits the 1..16 the column checks');
+  else fail('(j) NO_CALLSIGN does not fit the column: ' + JSON.stringify(NO_CALLSIGN));
+
+  // char_length() counts CHARACTERS and validateCallsign measures with
+  // [...name].length, so a clamp that counts UTF-16 units would both cut a legal
+  // astral name short and could leave half a surrogate pair — not valid UTF-8, and
+  // the insert is refused for a reason nobody would find.
+  const h7 = mkSb();
+  const ASTRAL = '\u{1D400}'.repeat(20);                  // 20 code points, 40 UTF-16 units
+  await h7.store.addReport(A, B, ASTRAL);
+  const cut = h7.calls[0]?.body?.callsign ?? '';
+  const lone = /[\uD800-\uDFFF]/.test(cut.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, ''));
+  if ([...cut].length === CALLSIGN_COL_MAX && !lone) ok('(j) the clamp counts code points like char_length() does, and never leaves half a surrogate');
+  else fail('(j) astral clamp: ' + [...cut].length + ' code points, ' + cut.length + ' units, lone surrogate=' + lone);
+
+  // Number.isFinite(-1) is true. A negative epoch is a 1969 timestamp and 0 is 1970:
+  // either makes the once-a-day window "since the dawn of time", so reportedSince
+  // answers true for any report ever filed and SUPPRESSES a legitimate one.
+  for (const [label, v] of [['a negative', -1], ['an epoch-0', 0], ['a 1969', -86400000]]) {
+    const hh = mkSb();
+    let te = null; try { await hh.store.reportedSince(A, B, v); } catch (e) { te = e; }
+    if (te && /^bad since/.test(te.message) && hh.calls.length === 0) ok(`(j) ${label} timestamp is refused before any call — a finiteness test is not a window`);
+    else fail(`(j) ${label} since: ` + (te && te.message) + ' calls=' + hh.calls.length);
+  }
+
+  // Passing a Date is the obvious thing for the next caller to do, so it must not be
+  // a trap; an Invalid Date still is not a date.
+  const h8 = mkSb([[/^GET \/name_reports/, [{ id: 7 }]]]);
+  // GUARDED: the regression this check exists for IS a rejection coming out of here,
+  // and an unguarded await would end the run with a stack trace instead of naming
+  // the check that failed.
+  let viaDate = null;
+  try { viaDate = await h8.store.reportedSince(A, B, new Date(since)); } catch (e) { viaDate = 'threw ' + e.message; }
+  if (viaDate === true && h8.calls[0]?.path.includes('created_at=gte.2026-09-17T00%3A00%3A00.000Z')) ok('(j) a Date is accepted and re-serialised to the same ISO the string form produces');
+  else fail('(j) Date since: ' + viaDate + ' ' + JSON.stringify(h8.calls.map((c) => c.path)));
+
+  const h9 = mkSb();
+  let t9 = null; try { await h9.store.reportedSince(A, B, new Date('nope')); } catch (e) { t9 = e; }
+  if (t9 && /not a real date/.test(t9.message) && h9.calls.length === 0) ok('(j) an Invalid Date is refused, and the message says what it wanted');
+  else fail('(j) invalid Date: ' + (t9 && t9.message) + ' calls=' + h9.calls.length);
 }
 
 // ---- (k) a failing sbAdmin propagates from every read-and-answer method -------
@@ -349,17 +443,73 @@ function mkSb(routes = []) {
 
 // ---- (l) the standing guard: nothing raw ever lands in a query value ---------
 {
+  // THE CHARACTERS THAT MATTER ARE NOT THE ONES THAT LOOK ALARMING. This check used
+  // to scan for [\s"'<>#\\] alone — and PostgREST filter injection is written with
+  // & = , ( ) and ., none of which were in that class. A value carrying & or , would
+  // have walked past it without a word, which is the one thing a standing guard must
+  // not do. & starts another parameter; , ( ) . are the filter grammar itself, the
+  // grammar or=(user_a.eq.X,user_b.eq.Y) is parsed with.
+  //
+  // NOTHING IN THIS SUITE CAN REACH IT TODAY: every value is enc()'d and every one
+  // is shape-gated before that. This is a standing guard being STRENGTHENED, not a
+  // live hole being closed. It exists for the method someone adds in six months that
+  // forgets encodeURIComponent, and it is worth exactly as much as the characters it
+  // knows to look for.
+  //
+  // To scan the operand, the grammar the store itself writes has to be parsed away
+  // first — the eq./gte./lt./is. prefix, the parens and commas of in.(…) and or=(…),
+  // the column list in select= — or the guard fails on its own legitimate paths. The
+  // residual limitation, stated rather than hidden: a value that injected a COMPLETE,
+  // well-formed filter into an or(…) could not be told apart from the real thing by
+  // any scan of the finished path. What stops that is the uuid gate every or(…)
+  // operand passes through before it gets here.
+  const CONST_SHAPE = {                     // built from constants in store.js…
+    select: /^[a-z_]+(?:,[a-z_]+)*$/,       // …but an injected & lands inside them
+    on_conflict: /^[a-z_]+(?:,[a-z_]+)*$/,  //    just as easily, so they are held to
+    limit: /^1$/,                           //    the exact shapes this store writes
+  };
+  // Every parameter name the store writes. An unknown one means a new method (add it
+  // here, deliberately) or a raw & that split a value into a parameter of its own.
+  const KEYS = new Set([
+    'id', 'friend_code', 'callsign_key', 'or', 'user_a', 'user_b', 'from_user',
+    'to_user', 'created_at', 'blocker', 'blocked', 'reporter', 'reported',
+    ...Object.keys(CONST_SHAPE),
+  ]);
+  const RAW = /[\s"'<>#\\&=,()]/;
+  // encodeURIComponent leaves . alone and an ISO timestamp legitimately carries one,
+  // so the dot is allowed in that one shape and nowhere else.
+  const TS = /^\d{4}-\d{2}-\d{2}T\d{2}%3A\d{2}%3A\d{2}\.\d{3}Z$/;
   const bad = [];
   for (const c of ALL) {
     const q = c.path.indexOf('?');
     if (q < 0) continue;
+    const flag = (why) => bad.push(`${c.method} ${c.path} [${why}]`);
+    const value = (v) => { if (RAW.test(v) || (v.includes('.') && !TS.test(v))) flag(`raw value "${v}"`); };
     for (const part of c.path.slice(q + 1).split('&')) {
       const eq = part.indexOf('=');
-      const v = eq < 0 ? part : part.slice(eq + 1);
-      if (/[\s"'<>#\\]/.test(v)) bad.push(c.method + ' ' + c.path);
+      const key = eq < 0 ? part : part.slice(0, eq);
+      const rest = eq < 0 ? '' : part.slice(eq + 1);
+      if (!KEYS.has(key)) { flag(`unknown parameter "${key}"`); continue; }
+      if (CONST_SHAPE[key]) { if (!CONST_SHAPE[key].test(rest)) flag(`"${key}" is not the shape this store writes: "${rest}"`); continue; }
+      if (key === 'or' || key === 'and') {
+        if (!/^\([\s\S]*\)$/.test(rest)) { flag(`malformed ${key}(): "${rest}"`); continue; }
+        for (const el of rest.slice(1, -1).split(',')) {
+          const m = /^[a-z_]+\.[a-z]+\.([\s\S]*)$/.exec(el);
+          if (!m) flag(`not a column.op.value inside ${key}(): "${el}"`); else value(m[1]);
+        }
+        continue;
+      }
+      const m = /^([a-z]+)\.([\s\S]*)$/.exec(rest);
+      if (!m) { value(rest); continue; }
+      if (m[1] === 'in') {
+        if (!/^\([\s\S]*\)$/.test(m[2])) { flag(`malformed in(): "${m[2]}"`); continue; }
+        for (const el of m[2].slice(1, -1).split(',')) value(el);
+        continue;
+      }
+      value(m[2]);
     }
   }
-  if (!bad.length) ok(`(l) none of the ${ALL.length} paths this suite produced carries a raw space, quote or angle bracket in a value`);
+  if (!bad.length) ok(`(l) none of the ${ALL.length} paths this suite produced carries a raw space, quote, & = , ( ) or . in a value`);
   else fail('(l) unencoded value in: ' + bad.join(' | '));
 }
 

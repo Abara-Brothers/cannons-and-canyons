@@ -26,6 +26,14 @@ export const FRIEND_CODE_LEN = 6;
 export const FRIEND_CODE_TRIES = 8;
 export const REQUEST_TTL_MS = 30 * 24 * 60 * 60 * 1000;                 // design section 3.2
 export const IDS_PER_CALL = 100;
+// name_reports.callsign is `check (char_length(callsign) between 1 and 16)`, the
+// same 16 as CALLSIGN_MAX in server/callsign.js. A value outside 1..16 is not a
+// long name, it is a REFUSED REPORT. See addReport.
+export const CALLSIGN_COL_MAX = 16;
+// What a report about a player who never chose a callsign stores. Parentheses are
+// the point: server/callsign.js's TOKEN is letters, digits and marks separated by
+// single spaces, so no real name can ever be this string.
+export const NO_CALLSIGN = '(no name)';
 
 const PROFILE_COLS = 'id,callsign,friend_code,callsign_key,callsign_set_at';
 
@@ -55,6 +63,10 @@ const CONFLICT_RE = /^sb [A-Z]+ 409$/;
 // The only string shape reportedSince will treat as a timestamp. See the long
 // note at its parse for why `new Date(x)` cannot be asked this question itself.
 const ISO_RE = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:?\d{2})?$/;
+// No row in name_reports can predate the table, so a `since` earlier than this is
+// not a window any caller could mean — it is the "dawn of time" bug. See the note
+// in reportedSince for why a shape check alone does not catch it.
+const SINCE_FLOOR_MS = Date.UTC(2025, 0, 1);            // 2025-01-01T00:00:00.000Z
 
 export function isUuid(v) {
   return typeof v === 'string' && UUID_RE.test(v.toLowerCase());
@@ -133,7 +145,16 @@ export function createStore({ sbAdmin } = {}) {
 
   async function setChosenCallsign(userId, name, key) {
     const id = mustUuid(userId);
-    const body = { callsign: String(name), callsign_key: String(key), callsign_set_at: new Date().toISOString() };
+    // THE SAME KEY_RE THE READ PATH USES, AND THAT IS THE WHOLE POINT.
+    // profileByCallsignKey refuses to look up a key outside this class; checking it
+    // only there would leave the write side open, so a key the read path can never
+    // match gets STORED and the player who owns it is permanently unfindable — the
+    // lookup answers null with no query issued and nothing logged, which is the
+    // exact silence this class was widened (BINDING resolution 21) to prevent.
+    // Whatever can be written must be findable: one class, tested on both halves.
+    const k = String(key);
+    if (!KEY_RE.test(k)) throw new Error('bad key');
+    const body = { callsign: String(name), callsign_key: k, callsign_set_at: new Date().toISOString() };
     let rows;
     try {
       rows = await sbAdmin('PATCH', `/profiles?id=eq.${enc(id)}`, body, 'return=representation');
@@ -219,8 +240,17 @@ export function createStore({ sbAdmin } = {}) {
   async function requestsOf(userId) {
     const id = mustUuid(userId);
     const cut = new Date(Date.now() - REQUEST_TTL_MS).toISOString();
-    const inc = await sbAdmin('GET', `/friend_requests?to_user=eq.${enc(id)}&created_at=gte.${enc(cut)}&select=from_user`);
-    const outg = await sbAdmin('GET', `/friend_requests?from_user=eq.${enc(id)}&created_at=gte.${enc(cut)}&select=to_user`);
+    // CONCURRENT, NOT SEQUENTIAL. These two reads do not depend on each other, and
+    // one Friends frame is nine round trips behind the 8s timeout Task 4 adds — a
+    // minute of a pending handler against a degraded upstream. One leg instead of
+    // two. Both are still BARE: Promise.all rejects if either does, so a missing
+    // table still reaches the caller. Only the sweep below may fail quietly.
+    // THE CALL ORDER IS UNCHANGED: the arguments are evaluated left to right and
+    // sbAdmin records before its first await, so to_user still goes out first.
+    const [inc, outg] = await Promise.all([
+      sbAdmin('GET', `/friend_requests?to_user=eq.${enc(id)}&created_at=gte.${enc(cut)}&select=from_user`),
+      sbAdmin('GET', `/friend_requests?from_user=eq.${enc(id)}&created_at=gte.${enc(cut)}&select=to_user`),
+    ]);
     try {
       // Housekeeping, not an answer: "a request older than 30 days is ignored and
       // deleted when next read" (design 3.2). The two reads above already ignored
@@ -253,8 +283,12 @@ export function createStore({ sbAdmin } = {}) {
   // ---- blocks ---------------------------------------------------------------
   async function blockIdsOf(userId) {
     const id = mustUuid(userId);
-    const mine = await sbAdmin('GET', `/blocks?blocker=eq.${enc(id)}&select=blocked`);
-    const theirs = await sbAdmin('GET', `/blocks?blocked=eq.${enc(id)}&select=blocker`);
+    // Concurrent for the same reason as requestsOf: two independent reads, one leg,
+    // same order on the wire, and a failure in either still reaches the caller.
+    const [mine, theirs] = await Promise.all([
+      sbAdmin('GET', `/blocks?blocker=eq.${enc(id)}&select=blocked`),
+      sbAdmin('GET', `/blocks?blocked=eq.${enc(id)}&select=blocker`),
+    ]);
     return {
       blocked: (mine || []).map((r) => r.blocked).filter(Boolean),
       blockedBy: (theirs || []).map((r) => r.blocker).filter(Boolean),
@@ -281,12 +315,30 @@ export function createStore({ sbAdmin } = {}) {
     const r = mustUuid(reporter);
     const t = mustUuid(reported);
     if (r === t) throw new Error('pair self');
-    // The name as seen, capped well above CALLSIGN_MAX so a lying caller cannot
-    // push a novel into the table.
-    await sbAdmin('POST', '/name_reports', { reporter: r, reported: t, callsign: String(callsign ?? '').slice(0, 64) }, 'return=minimal');
+    // THE NAME AS SEEN, CLAMPED TO THE COLUMN. name_reports.callsign is
+    // `check (char_length(callsign) between 1 and 16)`. A cap above that does not
+    // protect the table — the CHECK already does — it only turns a legitimate
+    // report into a 400 that the handler shows the reporter as 'unavailable'. The
+    // entire moderation case rests on this one call working, so the clamp is 16.
+    //
+    // CODE POINTS, NOT CODE UNITS: char_length() counts characters and
+    // validateCallsign measures with [...name].length, so slicing UTF-16 units here
+    // would cut a legal astral name short and could leave a lone surrogate, which is
+    // not valid UTF-8 for Postgres to accept.
+    //
+    // AND A PLAYER WITH NO NAME IS STILL REPORTABLE. profiles.callsign is nullable,
+    // and Task 6 passes it straight through (addReport(ws.userId, id, who.callsign)),
+    // so null arrives here as the ordinary case, not an edge. '' fails the CHECK, so
+    // the empty string is never sent: NO_CALLSIGN goes in instead and the report
+    // lands. Refusing would make a never-named player the one player nobody can
+    // report — and would need a fourth player-visible error string while BINDING
+    // resolution 16 is still open. The name is evidence, not an identifier; the
+    // reported uuid is what identifies the account.
+    const seen = [...String(callsign ?? '').trim()].slice(0, CALLSIGN_COL_MAX).join('');
+    await sbAdmin('POST', '/name_reports', { reporter: r, reported: t, callsign: seen || NO_CALLSIGN }, 'return=minimal');
   }
 
-  async function reportedSince(reporter, reported, sinceIso) {
+  async function reportedSince(reporter, reported, since) {
     const r = mustUuid(reporter);
     const t = mustUuid(reported);
     // `new Date(x)` IS NOT A VALIDATOR, and a NaN check alone is not this guard.
@@ -299,20 +351,37 @@ export function createStore({ sbAdmin } = {}) {
     // what reaches the URL is always this function's own toISOString output — but
     // the window is wrong, and wrong quietly, on the moderation path.
     //
-    // A timestamp is therefore accepted in exactly two shapes: a finite count of
-    // epoch milliseconds, or a strict ISO-8601 string. Both are what a caller in
-    // this codebase actually passes (Date.now() arithmetic, or .toISOString()).
+    // A timestamp is therefore accepted in exactly three shapes: a Date, a finite
+    // count of epoch milliseconds, or a strict ISO-8601 string — and then it is
+    // bounded below, because a shape check does not make a value sane.
+    //
+    // A DATE IS ACCEPTED because the parameter used to be named sinceIso and threw on
+    // the one thing a caller is most likely to reach for; a guard that is right and
+    // surprising is still a trap for the next task. The brand check rather than
+    // `instanceof` so a Date built in another realm (a vm context, a worker) is not
+    // refused for a reason that has nothing to do with the value.
     let d;
-    if (typeof sinceIso === 'number' && Number.isFinite(sinceIso)) d = new Date(sinceIso);
-    else if (typeof sinceIso === 'string' && ISO_RE.test(sinceIso.trim())) d = new Date(sinceIso.trim());
-    else throw new Error('bad since');
+    if (Object.prototype.toString.call(since) === '[object Date]') d = new Date(since.getTime());
+    else if (typeof since === 'number' && Number.isFinite(since)) d = new Date(since);
+    else if (typeof since === 'string' && ISO_RE.test(since.trim())) d = new Date(since.trim());
+    // The message names the three shapes, because the next thing whoever hits this
+    // does is guess at a fourth.
+    else throw new Error('bad since: want a Date, epoch milliseconds, or an ISO-8601 string');
     // Shape is not existence: '2026-13-45T00:00:00Z' passes the regex and is still
     // not a date.
-    if (Number.isNaN(d.getTime())) throw new Error('bad since');
+    const ms = d.getTime();
+    if (Number.isNaN(ms)) throw new Error('bad since: not a real date');
+    // A FLOOR, BECAUSE Number.isFinite ACCEPTS -1. A negative epoch is a 1969
+    // timestamp and 0 is 1970: either turns the once-a-day window into "since the
+    // dawn of time", so this answers true for any report ever filed and SUPPRESSES
+    // a real one — the same failure the shape gate above exists to eliminate,
+    // reached through another door. Task 6 computes the window server-side from
+    // now(), so nothing reaches this today; it is shut before something does.
+    if (ms < SINCE_FLOOR_MS) throw new Error('bad since: earlier than ' + new Date(SINCE_FLOOR_MS).toISOString() + ', which is not a window');
     // RE-SERIALISE RATHER THAN TRUST: whatever the caller passed, what reaches the
     // query string is an ISO timestamp this line produced.
-    const since = d.toISOString();
-    const rows = await sbAdmin('GET', `/name_reports?reporter=eq.${enc(r)}&reported=eq.${enc(t)}&created_at=gte.${enc(since)}&select=id&limit=1`);
+    const sinceIso = d.toISOString();
+    const rows = await sbAdmin('GET', `/name_reports?reporter=eq.${enc(r)}&reported=eq.${enc(t)}&created_at=gte.${enc(sinceIso)}&select=id&limit=1`);
     return Array.isArray(rows) && rows.length > 0;
   }
 
