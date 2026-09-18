@@ -673,10 +673,18 @@ function nextHole(room, first) {
   // golf+desert), not a pine forest — keep roughly every fifth tree. (Every
   // third still read as a treeline at the tee.)
   if (H.biome === 'desert') room.trees = room.trees.filter((_, ti) => ti % 5 === 0);
-  room.tanks = room.players.map(() => ({ x: g.tee, y: surfaceAt(room.terrain, g.tee), alive: true }));
+  // Every ball back on the tee — except a seat scuttled by a forfeit, which
+  // stays out for the rest of the round (four players made this reachable).
+  const prev = room.tanks || [];
+  room.tanks = room.players.map((p, i) => ({ x: g.tee, y: surfaceAt(room.terrain, g.tee), alive: first || !prev[i] || prev[i].alive !== false }));
   g.done.fill(false);
   room.hazards = []; room.scorch = [];
-  room.turn = first ? Math.floor(Math.random() * room.players.length) : (g.hole - 1) % room.players.length;
+  // First stroke of a hole in seat order (D14): from the wanted seat, past any
+  // scuttled seat. With every ball on the tee the distances are equal, so
+  // golfNextSeat's tie-break IS seat order from the seat before `want`.
+  const want = first ? Math.floor(Math.random() * room.players.length) : (g.hole - 1) % room.players.length;
+  const opener = golfNextSeat(room, (want - 1 + room.players.length) % room.players.length);
+  room.turn = opener >= 0 ? opener : want;   // <0 cannot happen mid-round: matchOver ends a round with no one left
   for (let i = 0; i < room.players.length; i++) {
     send(room.players[i].ws, { type: first ? 'start' : 'hole', ...snapshot(room, i) });
   }
@@ -786,11 +794,17 @@ function golfAdvance(room, by) {
 }
 
 // The round's winner from the seats' totals: lowest total wins, a tie for
-// lowest is a draw (-1). Task 3 keeps scuttled seats out of it.
+// lowest is a draw (-1). Scuttled seats are left out of the ranking.
 function golfWinner(room, totals) {
   if (totals.length <= 1) return 0;
-  const best = Math.min(...totals);
-  return totals.filter(t => t === best).length === 1 ? totals.indexOf(best) : -1;
+  // A seat scuttled by a forfeit stopped scoring early; a short card must not
+  // win. Rank only the seats still on the course; a lone survivor wins outright.
+  const live = totals.map((t, i) => (room.tanks && room.tanks[i] && room.tanks[i].alive === false ? -1 : i)).filter(i => i >= 0);
+  if (!live.length) return -1;
+  if (live.length === 1) return live[0];
+  const best = Math.min(...live.map(i => totals[i]));
+  const tied = live.filter(i => totals[i] === best);
+  return tied.length === 1 ? tied[0] : -1;
 }
 
 function finishGolf(room) {
@@ -1614,7 +1628,10 @@ function handleClose(ws) {
       if (room.turn === seat) {          // they dropped mid-turn — move the game on
         clearTimeout(room.clock);
         clearInterval(room.dotTimer); room.dotTimer = null;
-        advance(room, seat);
+        // Golf hands the turn by the honour rule and skips holed-out seats;
+        // the generic ring knows neither and could give the turn to a seat
+        // that cannot swing (golfShot refuses a done seat) — a stall.
+        if (room.mode === 'golf') golfAdvance(room, seat); else advance(room, seat);
       }
     }, room.asyncOk ? ASYNC_GRACE_MS : RESUME_GRACE_MS);
   }

@@ -18,7 +18,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const engine = await import('../public/room-engine.js');
 const { rooms, handleClientMessage, handleClose, golfNextSeat, golfWinner } = engine;
 let escaped = null;
-process.on('uncaughtException', (e) => { escaped = e; console.error('FAIL escaped: ' + e.message); process.exitCode = 1; });
+process.on('uncaughtException', (e) => { escaped = e; fail('escaped: ' + e.message); process.exitCode = 1; });
 
 const mkws = () => ({ readyState: 1, _rx: [], send(s) { this._rx.push(JSON.parse(s)); } });
 const FIVE = ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'];
@@ -83,6 +83,69 @@ const fake = (xs, done, alive) => ({
   if (golfNextSeat(overFar, 0) === 1) ok('(b) a ball far past the cup is still the farthest'); else fail('(b) overshoot far: got ' + golfNextSeat(overFar, 0));
   const short = fake([1000, 4000, 9000]); short.tanks.length = 2;   // seat 2 has no tank yet
   if (golfNextSeat(short, 1) === 0) ok('(b) a seat without a tank is not a candidate'); else fail('(b) short tanks: got ' + golfNextSeat(short, 1));
+}
+
+// ---- (e) golfWinner: a forfeited seat cannot win on a short card ---------
+{
+  const r = fake([0, 0, 0, 0], null, [false, true, true, true]);
+  if (golfWinner(r, [3, 40, 38, 41]) === 2) ok('(e) the lowest total among seats still on the course wins (seat 0 left early with 3)'); else fail('(e) winner: ' + golfWinner(r, [3, 40, 38, 41]));
+  if (golfWinner(r, [3, 38, 38, 41]) === -1) ok('(e) a tie for lowest among live seats is a draw'); else fail('(e) tie: ' + golfWinner(r, [3, 38, 38, 41]));
+  const r2 = fake([0, 0, 0, 0], null, [false, false, false, true]);
+  if (golfWinner(r2, [1, 1, 1, 99]) === 3) ok('(e) the last one standing wins whatever the card says'); else fail('(e) last standing: ' + golfWinner(r2, [1, 1, 1, 99]));
+  if (golfWinner(fake([0]), [37]) === 0) ok('(e) solo: the one seat wins its own round'); else fail('(e) solo winner');
+  const all = fake([0, 0], null, [true, true]);
+  if (golfWinner(all, [30, 31]) === 0 && golfWinner(all, [31, 30]) === 1) ok('(e) two live seats: lowest wins as before'); else fail('(e) pair');
+}
+
+// ---- (d) a forfeit mid-round: skipped, kept out on the next tee, cannot win
+{
+  const { surfaceAt } = await import('../public/game-core.js');
+  const hs = [mkws(), mkws(), mkws(), mkws()];
+  golfCreate(hs[0], 4);
+  const code = roomOf(hs[0]).code;
+  for (let i = 1; i < 4; i++) handleClientMessage(hs[i], { type: 'join', code, name: 'P' + i, skin: 'olive', loadout: FIVE });
+  handleClientMessage(hs[0], { type: 'startMatch' });
+  const room = roomOf(hs[0]);
+  if (room && room.state === 'playing' && room.players.length === 4 && hs.every((w) => frames(w, 'start').length === 1)) ok('(d) four golfers on the tee');
+  else { fail('(d) round did not start: state=' + (room && room.state)); }
+  // Drop the seat that holds the turn (hole 1's opener is random, so read it),
+  // so the mid-turn hand-off runs on every run. First place the balls so the
+  // generic ring (the next seat after the dropped one) and the honour rule
+  // (the farthest ball) disagree: the seat two after the dropped one stays on
+  // the tee, farthest; the ring's next seat is 0.6 of the way, the rest 0.4.
+  // A forfeit routed through the generic ring fails the hand-off check.
+  const n = 4, dead = room.turn, ringNext = (dead + 1) % n, far = (dead + 2) % n;
+  const live = hs[ringNext];                            // a socket that stays connected
+  const tee = room.golf.tee, span = room.golf.cup.x - tee;
+  room.tanks.forEach((t, i) => {
+    t.x = i === far ? tee : Math.round(tee + span * (i === ringNext ? 0.4 : 0.6));
+    t.y = surfaceAt(room.terrain, t.x);
+  });
+  handleClose(hs[dead]);
+  const forfeited = await until(() => frames(live, 'forfeit').some((m) => m.seat === dead), 2000);
+  if (forfeited && room.tanks[dead].alive === false) ok(`(d) after the grace the dropped seat ${dead} is scuttled`); else fail(`(d) no forfeit for seat ${dead}`);
+  if (room.state === 'playing' && room.turn === far) ok(`(d) the mid-turn forfeit handed the turn by the rule: to the farthest ball (seat ${far}), not the ring's next seat (${ringNext})`);
+  else fail(`(d) mid-turn forfeit handed the turn to ${room.turn}; the rule says ${far}, the ring would say ${ringNext}; state=${room.state}`);
+  // Play the hole out: whoever is on turn putts; the dropped seat must never come up.
+  let strokes = 0, sawDead = false, holeTwo = false;
+  const holesBefore = frames(live, 'hole').length;
+  while (strokes < 60 && !holeTwo && room.state === 'playing') {
+    const t = room.turn;
+    if (t === dead) { sawDead = true; break; }
+    const before = frames(live, 'turn').length + frames(live, 'hole').length;
+    handleClientMessage(hs[t], { type: 'fire', weapon: 'putter', angle: 30, power: 35 });
+    strokes++;
+    await until(() => frames(live, 'turn').length + frames(live, 'hole').length > before || room.state !== 'playing', 3000);
+    if (frames(live, 'hole').length > holesBefore) holeTwo = true;
+  }
+  if (!sawDead && holeTwo) ok(`(d) the scuttled seat never received a turn and hole 1 completed in ${strokes} strokes`); else fail(`(d) sawDead=${sawDead} holeTwo=${holeTwo} strokes=${strokes} state=${room.state}`);
+  if (room.tanks[dead].alive === false) ok('(d) on the next tee the scuttled seat is still out'); else fail(`(d) the next hole resurrected seat ${dead}`);
+  // Hole h wants seat (h-1)%n to open; the rule from the seat before it gives
+  // that seat, or the next in ring order when the wanted seat is out.
+  const opener = golfNextSeat(room, (room.golf.hole - 2 + n) % n);
+  if (room.turn !== dead && room.turn === opener) ok(`(d) hole 2 opened on seat ${room.turn}, the wanted seat or the next in ring order past the scuttled one`);
+  else fail(`(d) hole 2 opened on seat ${room.turn}; the rule from the seat before the wanted one says ${opener}; dead=${dead}`);
+  for (let i = 0; i < n; i++) if (i !== dead) leave(hs[i]);
 }
 
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall golf_order checks passed');
