@@ -75,7 +75,17 @@ const DAY = 86400000;
 // to another client. Keep in step with public/room-engine.js's SKINS.
 const SKIN_IDS = new Set(['olive', 'desert', 'jungle', 'midnight', 'arctic', 'gold']);
 
-export function createSocial({ store, terms, send, now }) {
+// resolveHandle(ws, handle) -> account id | null. INJECTED, and defaulting to a
+// function that resolves nothing, for the same reason `store` and `send` are:
+// the thing that knows about rooms is public/room-engine.js, which the OFFLINE
+// page imports and which must therefore gain no database and no account logic
+// (ADR-001), and this module must gain no rooms. server.js holds both and joins
+// them — it passes the engine's resolveSeatHandle straight in. With no resolver
+// (every existing test, and any host that does not wire one) a handle resolves
+// to nothing and is answered no_such_user, which is the safe direction: the
+// friends-panel route is unaffected and no target is ever guessed at.
+export function createSocial({ store, terms, send, now, resolveHandle = () => null }) {
+
   // userId -> that account's live sockets. "Online" is "the set is non-empty".
   // Presence is never persisted (design 4.1).
   const online = new Map();
@@ -727,7 +737,38 @@ export function createSocial({ store, terms, send, now }) {
   // false against every list here while still being a perfectly valid account.
   const wireId = (v) => String(v == null ? '' : v).trim().toLowerCase();
 
+  // WHO A report OR block FRAME IS ABOUT (BINDING.md resolution 24). Two routes
+  // reach these two handlers and they are different fields, never
+  // interchangeable:
+  //
+  //   `id`     — a uuid the SERVER itself handed this client, from a friends
+  //              list, a search result or a blocked list. The friends-panel
+  //              route, unchanged.
+  //   `handle` — a per-room seat token from a lobby payload. Resolved through
+  //              the room engine, in the caller's OWN room, or not at all.
+  //
+  // ONE FORM, NEVER EITHER. When `handle` is present it is the target and `id`
+  // is not read as one — it goes back to being the pure correlation echo it is
+  // on every other frame in this layer. If a raw uuid worked in `handle`, the
+  // lobby leak this whole mechanism exists to avoid would be back through the
+  // door marked exit: a modified client would send the id it was never given and
+  // only the payload would have changed.
+  //
+  // AND IT RESOLVES BEFORE THE SHAPE TEST AND BEFORE THE SELF TEST, which is the
+  // order and not a detail. A handle is not a uuid, so an isUuid ahead of this
+  // refuses every honest frame with no_such_user; and a self-check run against an
+  // unresolved handle compares a room token to an account id, is false for your
+  // own seat, and lets a player report themselves. Resolve, then wireId, then
+  // isUuid, then self, then the store.
+  //
+  // A miss — an unknown handle, an expired one, a seat with no account, a caller
+  // who has left the room — comes back as '' and is answered no_such_user, which
+  // is the honest word for it and the reason Task 8 must not offer Report on a
+  // card whose room has ended.
+  const targetId = (ws, msg) => wireId(msg.handle === undefined ? msg.id : resolveHandle(ws, msg.handle));
+
   async function handleFriends(ws, msg) {
+
     if (!rateOk(ws, 'friends', LIMITS.friends)) return reply(ws, msg, { type: 'friends', error: 'slow_down' });
     // No try/catch: handle()'s net answers { type:'friends', error:'unavailable' }
     // for a throw here, which is the right frame. Note what it does NOT do —
@@ -940,8 +981,12 @@ export function createSocial({ store, terms, send, now }) {
       catch { reply(ws, msg, { type: 'block', op: 'list', error: 'unavailable' }); }
       return;
     }
-    const id = wireId(msg.id);
+    // THE HANDLE IS RESOLVED FIRST — see targetId. Ahead of the shape test
+    // because a handle is not a uuid, and ahead of the self test because an
+    // unresolved handle never equals ws.userId.
+    const id = targetId(ws, msg);
     // THE SHAPE TEST BEFORE THE STORE, for the reason friendRequest has one:
+
     // server/store.js throws 'bad uuid' on a malformed id and the net would
     // answer 'unavailable', which is the wrong word for a frame that was simply
     // misaddressed — after a round trip spent to say it.
@@ -1022,8 +1067,12 @@ export function createSocial({ store, terms, send, now }) {
     // answered as fast as the socket limiter will carry them, with no limit of
     // its own — the exact hole the unknown friend op had before (i3) closed it.
     if (!rateOk(ws, 'report', LIMITS.report)) return reply(ws, msg, { type: 'report', error: 'slow_down' });
-    const id = wireId(msg.id);
+    // THE HANDLE IS RESOLVED FIRST — see targetId. Both orderings matter here:
+    // isUuid ahead of it refuses every honest lobby report, and the self check
+    // ahead of it lets a player report their own seat's handle.
+    const id = targetId(ws, msg);
     if (!isUuid(id)) return reply(ws, msg, { type: 'report', error: 'no_such_user' });
+
     if (id === wireId(ws.userId)) return reply(ws, msg, { type: 'report', error: 'self' });
     // NO try/catch OF ITS OWN, unlike handleBlock next door, and the difference
     // is the reply rather than the risk. A block answer has to carry the `op` a

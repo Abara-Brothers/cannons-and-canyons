@@ -18,7 +18,8 @@ import http2 from 'node:http2';
 import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import {
-  rooms, send, handleClientMessage, handleClose,
+  rooms, send, handleClientMessage, handleClose, resolveSeatHandle,
+
   setPushNudge, setAuthSink, setPushSubSink, setFaultSink, setCapacitySink, setMatchSink,
 } from './public/room-engine.js';
 // Server-only, and under server/ rather than public/ for a reason: the static
@@ -97,7 +98,15 @@ try {
   const terms = loadBlocklist(path.join(__dirname, 'server', 'blocklist.txt'));
   if (SB_URL && SB_SECRET) {
     store = createStore({ sbAdmin });
-    social = createSocial({ store, terms, send, now: Date.now });
+    // resolveSeatHandle is the JOIN, and this line is the only place the two
+    // halves meet (BINDING.md resolution 24). The room engine mints a per-room
+    // opaque handle for every occupied, accounted seat and puts it in the lobby
+    // payload; this layer resolves one back to an account, in the asking
+    // socket's own room, and only to answer a report or a block. Neither module
+    // gains the other's dependencies: the engine stays browser-safe for the
+    // offline page, and the social layer still knows nothing about rooms.
+    social = createSocial({ store, terms, send, now: Date.now, resolveHandle: resolveSeatHandle });
+
   }
 } catch (err) {
   console.error(`[boot] social off — ${err.message}`);

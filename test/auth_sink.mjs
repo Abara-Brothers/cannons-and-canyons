@@ -410,7 +410,91 @@ async function presentedName(token, typed) {
     else fail('(8b) after a guest unblock: ' + JSON.stringify(empty));
   }
 
+  // ---- 8c. REPORT A STRANGER IN A LOBBY, BY HANDLE, END TO END -------------
+  // BINDING.md resolution 24, on the path a player actually takes. Cases 8 and
+  // 8b both send an account uuid the FRIENDS PANEL handed out — which is a
+  // screen a guest cannot even open. This is the screen the moderation story
+  // rests on: two strangers in one lobby, and the only thing either client has
+  // ever been told about the other is a per-room handle.
+  //
+  // It is also the only test in this tree that can see server.js's half of the
+  // wiring. The engine's resolveSeatHandle is passed into createSocial there and
+  // nowhere else; in process the two halves can be joined by hand and pass while
+  // the real server joins nothing.
+  {
+    const before = reportPosts.length;
+    const g = await open();                       // the guest: the reporter
+    const h = await open();                       // a linked account: the target
+    // Both hellos must have SETTLED before a seat is taken, or the seat is
+    // minted with no account on the socket and carries no handle — a race that
+    // would fail in the direction that hides the bug.
+    send(g, { type: 'hello', token: 'tok-guest' });
+    send(g, { type: 'friends', id: 90 });
+    const gGate = await wait(g, 'social');
+    send(h, { type: 'hello', token: 'tok-honest' });
+    send(h, { type: 'friends', id: 91 });
+    const hGate = await wait(h, 'friends');
+    if (!gGate || !hGate) { fail('(8c) a hello never settled: ' + JSON.stringify([gGate, hGate])); }
+
+    send(g, { type: 'create', name: 'Anvil Six', skin: 'olive', mode: 'ffa', max: 4 });
+    const made = await wait(g, 'created');
+    g._rx.length = 0;
+    send(h, { type: 'join', code: made && made.code, name: HONEST, skin: 'gold' });
+    const lobby = await wait(g, 'lobby');
+    const seats = (lobby && lobby.players) || [];
+    const mine = seats[0] && seats[0].handle;
+    const theirs = seats[1] && seats[1].handle;
+
+    if (seats[1] && seats[1].name === HONEST) ok('(8c) two strangers in one lobby, the second presenting a chosen callsign');
+    else fail('(8c) the lobby did not fill: ' + JSON.stringify(seats));
+    if (/^[0-9a-f]{8}$/.test(String(theirs)) && /^[0-9a-f]{8}$/.test(String(mine)) && mine !== theirs)
+      ok('(8c) every occupied seat carries its own short handle, over the real socket');
+    else fail('(8c) handles on the wire: ' + JSON.stringify([mine, theirs]));
+    const wire = JSON.stringify(lobby);
+    if (!wire.includes(HONEST_ID) && !wire.includes(GUEST_ID))
+      ok('(8c) and NO account uuid is anywhere in the payload — which is the whole point of the handle');
+    else fail('(8c) an account id reached a real lobby payload: ' + wire);
+
+    g._rx.length = 0;
+    send(g, { type: 'report', handle: theirs, id: 92 });
+    const rep = await wait(g, 'report');
+    if (rep && rep.ok === true && rep.id === 92) ok('(8c) the guest reports the stranger by handle, through server.js\'s own wiring');
+    else fail('(8c) report by handle replied ' + JSON.stringify(rep));
+    const row = reportPosts.slice(before).find((r) => r && r.reporter === GUEST_ID);
+    if (row && row.reported === HONEST_ID && row.callsign === HONEST)
+      ok('(8c) the name_reports row really reached PostgREST, resolved to the ACCOUNT the handle stood for');
+    else fail('(8c) name_reports POSTs since the lobby: ' + JSON.stringify(reportPosts.slice(before)));
+    // THE HANDLE MUST NOT BE IN THE LOG. The line keeps the resolved uuid; a
+    // room-scoped token in a log that outlives the room makes the line and the
+    // row unreconcilable and puts the token somewhere it was never meant to go.
+    const reportLines = log.split('\n').filter((l) => l.startsWith('[report] '));
+    if (reportLines.length && !reportLines.some((l) => l.includes(String(theirs)) || l.includes(String(mine))))
+      ok('(8c) no [report] line the server has written contains a handle');
+    else fail('(8c) a handle reached the log: ' + JSON.stringify(reportLines));
+
+    // THE BACK DOOR, end to end: a raw account uuid must not work in `handle`,
+    // or the lobby leak this mechanism exists to avoid returns unchanged.
+    g._rx.length = 0;
+    send(g, { type: 'report', handle: HONEST_ID, id: 93 });
+    const raw = await wait(g, 'report');
+    if (raw && raw.error === 'no_such_user') ok('(8c) a raw account uuid in `handle` is refused by the real server too');
+    else fail('(8c) a raw uuid in handle replied ' + JSON.stringify(raw));
+
+    // AND YOUR OWN SEAT'S HANDLE IS YOU. The resolution has to run ahead of the
+    // self check or this is a player reporting themselves.
+    g._rx.length = 0;
+    send(g, { type: 'block', op: 'add', handle: mine, id: 94 });
+    const self = await wait(g, 'block');
+    if (self && self.error === 'self' && self.op === 'add') ok('(8c) blocking your own seat\'s handle is caught as self');
+    else fail('(8c) self by handle replied ' + JSON.stringify(self));
+
+    try { send(g, { type: 'leave' }); } catch {}
+    try { g.close(); } catch {}
+    try { h.close(); } catch {}
+  }
+
   // ---- 7. nothing crashed the host ------------------------------------------
+
   const stray = log.split('\n').filter((l) => /uncaught|unhandled|ERR_/i.test(l));
   if (!stray.length) ok('(7) the server logged no uncaught or unhandled failure across both flows');
   else fail('(7) server log: ' + stray.join(' / '));

@@ -281,7 +281,69 @@ const makeToken = () => {
   return Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
 };
 
+// ---- Per-room seat handles (BINDING.md resolution 24) -----------------------
+// Report and Block need a TARGET, and the only screen where a player sees a
+// name worth reporting is a lobby — where, until now, the payload carried a
+// name and a paint and nothing else, so the two moderation actions the whole
+// feature rests on were reachable only from a player's own friends list.
+//
+// Publishing the account uuid is NOT the fix. A stable id in every lobby
+// payload lets any modified client correlate a player across matches and build
+// a graph of who plays with whom — a worse privacy failure than the problem it
+// solves, and the exact thing the [report] log line's own rule ("the ids never
+// leave the log") exists to prevent.
+//
+// So each occupied seat that HAS an account carries a short random token
+// instead. It is minted here, it means nothing anywhere but this room, and
+// resolveSeatHandle below is the ONLY way back to an account — a way the host
+// injects into the social layer and nothing else can reach.
+//
+// IT LIVES ON THE SEAT, beside `token`, and that is the whole lifetime rule:
+// the room is deleted, the seat object goes with it, and the handle resolves to
+// nothing. There is no second map to sweep, no expiry to get wrong, and no way
+// for a handle to outlive the match it was minted for.
+//
+// Browser-safe, like everything else in this file: getRandomValues is the same
+// CSPRNG makeCode and makeToken already use, and the offline page mints none of
+// these at all, because no offline seat has an account. An offline lobby
+// payload is byte-for-byte what it always was.
+const HANDLE_BYTES = 4;
+// 32 bits is deliberately SHORT. A handle never has to be unguessable across
+// the server — only unique inside one room of at most seven seats, and only
+// usable by a socket already sitting in that room, which has been shown every
+// handle in it anyway. The loop is what guarantees the uniqueness; the width
+// only keeps the loop from running.
+function makeHandle(room) {
+  const b = new Uint8Array(HANDLE_BYTES);
+  for (;;) {
+    globalThis.crypto.getRandomValues(b);
+    const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+    if (!room.players.some((p) => p && p.handle === h)) return h;
+  }
+}
+// Who is on this seat, opaquely: the host hangs the account on the socket
+// (ws.userId) and handleClose carries it onto the player when the socket goes,
+// so a player who dropped can still be reported. The expression is recordMatch's
+// own, deliberately — one rule for "who is on this seat", not two that drift.
+const seatAccount = (p) => (p && ((p.ws && p.ws.userId) || p.userId)) || null;
+// A seat with NO account — a bot, or a player who never saved anything and so
+// was never minted even an anonymous account — carries NO handle at all, rather
+// than a random one that resolves to nobody. Two reasons. A report row is keyed
+// to an account, so there is nothing to file against such a seat and a control
+// offered against it could only ever fail; and absence is unambiguous for the
+// client, which shows Report exactly where there is a handle. The cost, stated:
+// the presence of the field tells other seats that this player has SOME account.
+// That is a far weaker signal than an id — it is not stable, not comparable
+// across rooms and not tied to anything — and it is what stops a player being
+// handed a button that was never going to work.
+function seatHandle(room, p) {
+  if (!seatAccount(p)) return null;
+  if (!p.handle) p.handle = makeHandle(room);
+  return p.handle;
+}
+
 function send(ws, msg) {
+
   if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg));
 }
 function broadcast(room, msg) {
@@ -320,7 +382,16 @@ function lobbyPayload(room, seat) {
   return {
     type: 'lobby', code: room.code, mode: room.mode, max: room.max,
     you: seat, host: room.hostSeat,
-    players: room.players.map(p => (p ? { name: p.name, skin: p.skin } : null)),
+    // The handle joins the name and the paint, and ONLY when there is one — a
+    // seat with no account keeps the exact two-key object it has always carried,
+    // which is what every offline seat is, so the offline page's payload does
+    // not move by a byte (ADR-001).
+    players: room.players.map((p) => {
+      if (!p) return null;
+      const h = seatHandle(room, p);
+      return h ? { name: p.name, skin: p.skin, handle: h } : { name: p.name, skin: p.skin };
+    }),
+
   };
 }
 function broadcastLobby(room) {
@@ -2019,6 +2090,37 @@ export function handleClientMessage(ws, msg) {
 // count live matches and tell everyone the lights are going out. Resist adding
 // more — every extra export is another way for the host to reach past the seam.
 export { rooms, send, handleClose };
+// The ONE way back from a seat handle to an account, and the host's only route
+// in. server.js injects it into the social layer as `resolveHandle`; report and
+// block call it and nothing else does.
+//
+// SCOPED TO THE ASKING SOCKET'S OWN ROOM, and that single decision is what makes
+// every claim about a handle true rather than merely intended:
+//
+//   * a handle from another room resolves to nothing, so two rooms may mint the
+//     same string for ever without colliding — "meaningless outside its room" is
+//     structural here, not a promise about randomness;
+//   * a handle from a room that has ended resolves to nothing, because the room
+//     is gone from `rooms` and the seat object with it;
+//   * a client cannot act on a player who is not in its own room, even holding a
+//     handle it should never have seen.
+//
+// AND THE ASKER MUST HOLD A SEAT IN IT, not merely name it. `ws.roomCode` is a
+// field on the socket that outlives leaving in some paths, and a room code is
+// reused once its room is reclaimed — so the code alone would let a stale socket
+// address a room full of strangers. Matching on the socket itself, rather than
+// on ws.seat, also survives compactRoster reindexing a lobby.
+//
+// It returns the account OPAQUELY — the engine never interprets it — and null
+// for every miss: no seat, no account on the seat, no room, not a member.
+export function resolveSeatHandle(ws, handle) {
+  if (typeof handle !== 'string' || !handle) return null;
+  const room = ws && ws.roomCode ? rooms.get(ws.roomCode) : null;
+  if (!room) return null;
+  if (!room.players.some((p) => p && p.ws === ws)) return null;
+  return seatAccount(room.players.find((p) => p && p.handle === handle));
+}
+
 // For test/golf_order.mjs only: the golf turn rule and the winner rule, pure
 // over a room shape. Not part of the host surface.
 export { golfNextSeat, golfWinner };

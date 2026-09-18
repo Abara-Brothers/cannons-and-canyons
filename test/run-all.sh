@@ -99,6 +99,15 @@ run social node test/social.mjs
 # the unique-violation-to-'taken' translation and the friend-code retry. Headless
 # — a recording fake stands in for sbAdmin, so it never reaches Supabase.
 run social_store node test/social_store.mjs
+# The per-room seat handle (BINDING.md resolution 24), both halves and the join
+# between them: the REAL room engine mints one per occupied accounted seat and
+# puts it in the lobby payload, the REAL social layer reports and blocks through
+# it, and they are wired exactly as server.js wires them. Proves no account id
+# reaches a lobby, a handle is useless in another room and dead with its own,
+# a raw uuid cannot take the handle's door, the resolution order, and that the
+# handle never reaches the [report] log line. Headless — no server, no Supabase.
+run seat_handle node test/seat_handle.mjs
+
   # The OAuth redirect contract: provider, return URL, and the anti-login-CSRF
   # guard on BOTH carriers. Headless — cloud.js is evaluated against stubs.
   run auth_redirect   node test/auth_redirect.mjs
