@@ -556,7 +556,14 @@ SCREENS.lobby = function () {
       + '<div style="display:flex;gap:' + u(8) + ';margin-top:' + u(16) + '"><button class="go cy" style="height:' + u(36) + ';font-size:' + u(15) + ';padding:0 ' + u(16) + '" data-old="copyLinkBtn">' + IC.copy + 'Copy link</button>'
       + '<button class="ghost" style="height:' + u(36) + ';font-size:' + u(13) + '" data-old="copyCodeBtn">Copy code</button></div>'
       + '<div style="margin-top:' + u(14) + ';font-size:' + u(11.5) + ';color:#8798bd;line-height:1.45;max-width:' + u(270) + ';font-weight:500">'
-      + (mode.id === 'ffa' && isHost ? 'Send the link. Start whenever you have enough players &mdash; you don&rsquo;t have to wait for a full lobby.' : hostStarts && !isHost ? 'Waiting for the host to start the battle&hellip;' : 'The battle starts the moment they join &mdash; no lobby countdown.') + '</div>';
+      // Golf with 3 or 4 seats is host-started like a free-for-all: the room
+      // auto-starts only when the LAST seat fills, so the old "starts the
+      // moment they join" line was false for those counts.
+      + (mode.id === 'ffa' && isHost ? 'Send the link. Start whenever you have enough players &mdash; you don&rsquo;t have to wait for a full lobby.'
+        : mode.id === 'golf' && isHost && max > 2 ? 'Send the link. Tee off whenever you have enough players &mdash; the round also starts when the last seat fills.'
+        : hostStarts && !isHost ? (mode.id === 'golf' ? 'Waiting for the host to tee off&hellip;' : 'Waiting for the host to start the battle&hellip;')
+        : mode.id === 'golf' ? 'The round starts the moment they join &mdash; no lobby countdown.'
+        : 'The battle starts the moment they join &mdash; no lobby countdown.') + '</div>';
   const summary = '<div style="display:flex;gap:' + u(26) + ';margin-top:' + u(16) + ';padding-top:' + u(13) + ';border-top:1px solid rgba(140,168,214,.2)">'
     + '<span class="ro"><span class="rk">Mode</span><span class="rv">' + esc(mode.name) + '</span></span>'
     + '<span class="ro"><span class="rk">Players</span><span class="rv">' + (solo ? filled : filled + ' / ' + max) + '</span></span>'
@@ -609,14 +616,17 @@ SCREENS.setup = function () {
   // Duel and Free-for-all offer the computer; each remembers its own choice.
   // With Computer picked, the count control keeps its values (ccMax 3 / 4)
   // and only its labels change to the number of CPUs that implies.
-  const oppSeg = seg('Opponent', oppKey, [['friend', m.id === 'ffa' ? 'Friends by code' : 'Friend by code'], ['cpu', 'Computer']], oppVal, !cpuMode);
+  // What "a friend by code" means depends on how many seats the mode opens:
+  // golf with one seat invites nobody at all, and golf for 3-4 invites several.
+  const byCode = m.id === 'golf' ? (s.gcount === 1 ? 'Solo round' : s.gcount > 2 ? 'Friends by code' : 'Friend by code') : m.id === 'ffa' ? 'Friends by code' : 'Friend by code';
+  const oppSeg = seg('Opponent', oppKey, [['friend', byCode], ['cpu', 'Computer']], oppVal, !cpuMode);
   const extra = seg(vsCpu ? 'CPU commanders' : 'Commanders on the ridge', 'count', vsCpu ? [[3, '2'], [4, '3']] : [[3, '3'], [4, '4']], s.count, m.id !== 'ffa')
     // Golf seats 1..4 (owner, 2026-09-18): the host opens that many; one is a
     // solo round, exactly the old Play solo path.
     + seg('Players', 'gcount', [[1, '1'], [2, '2'], [3, '3'], [4, '4']], s.gcount, m.id !== 'golf')
     + seg('Tee set', 'tees', [['champ', 'Champ'], ['mens', 'Men&rsquo;s'], ['womens', 'Women&rsquo;s'], ['junior', 'Junior']], s.tees, m.id !== 'golf')
     + seg('Difficulty', 'diff', [['easy', 'Easy'], ['medium', 'Medium'], ['hard', 'Hard']], s.diff, !vsCpu);
-  const oppText = vsCpu ? 'Computer &middot; ' + esc(cap(s.diff)) : (m.id === 'ffa' ? 'Friends by code' : 'Friend by code');
+  const oppText = vsCpu ? 'Computer &middot; ' + esc(cap(s.diff)) : byCode;
   const tall = m.id === 'ffa' && vsCpu;       // three visible option groups
 
   const body = '<div class="cols">'

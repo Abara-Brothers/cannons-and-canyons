@@ -2599,11 +2599,12 @@ function updateHud() {
     el.classList.toggle('acting', !!S.playing && S.turn === i && !dead);
     if (S.golf) {                          // golf cards show STROKES, not health
       const done = S.golf.done && S.golf.done[i];
+      const out = S.alive[i] === false;      // scuttled by a forfeit: out for the rest of the round
       el.querySelector('.score').textContent = `${(S.golf.strokes && S.golf.strokes[i]) || 0}`;
-      el.querySelector('.shots').textContent = done ? 'IN' : `STR · tot ${(S.golf.totals && S.golf.totals[i]) || 0}`;
+      el.querySelector('.shots').textContent = out ? 'OUT' : done ? 'IN' : `STR · tot ${(S.golf.totals && S.golf.totals[i]) || 0}`;
       el.querySelector('.hpbar').style.display = 'none';
-      el.classList.toggle('acting', !!S.playing && S.turn === i);
-      el.classList.remove('dead');
+      el.classList.toggle('acting', !!S.playing && S.turn === i && !out);
+      el.classList.toggle('dead', out);
       continue;
     }
     el.querySelector('.hpbar').style.display = '';
@@ -4788,7 +4789,7 @@ function golfCardHTML(g) {
         const d = strokes - pars[h]; vs += d;
         if (d < 0) cls += ' gc-under'; else if (d > 0) cls += ' gc-over';
       }
-      if (!finished && h === cur - 1 && !done[s]) cls += ' gc-now';
+      if (!finished && h === cur - 1 && !done[s] && !(S.alive && S.alive[s] === false)) cls += ' gc-now';
       cells += `<td class="${cls.trim()}">${strokes > 0 ? strokes : ''}</td>`;
     }
     const tot = (g.totals && g.totals[s] != null) ? g.totals[s]

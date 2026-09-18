@@ -51,6 +51,23 @@ const leave = (ws) => { try { handleClientMessage(ws, { type: 'leave' }); } catc
   leave(ws);
 }
 
+// ---- (a) a one-seat golf room tees off at once ------------------------------
+// Nobody can ever join a 1-seat room, so a lobby there is a dead end: the
+// create handler starts the round itself, exactly as the offline Play solo
+// path does. Two seats must still wait.
+{
+  const solo = mkws(); golfCreate(solo, 1);
+  const r1 = roomOf(solo);
+  if (r1 && r1.state === 'playing' && r1.players.length === 1 && frames(solo, 'start').length === 1) ok('(a) a one-seat golf room is playing on create: one seat, exactly one start frame');
+  else fail(`(a) one-seat golf: state=${r1 && r1.state} players=${r1 && r1.players.length} starts=${frames(solo, 'start').length}`);
+  leave(solo);
+  const pair = mkws(); golfCreate(pair, 2);
+  const r2 = roomOf(pair);
+  if (r2 && r2.state === 'waiting' && frames(pair, 'start').length === 0) ok('(a) a two-seat golf room still waits in the lobby: no start frame');
+  else fail(`(a) two-seat golf: state=${r2 && r2.state} starts=${frames(pair, 'start').length}`);
+  leave(pair);
+}
+
 // ---- (b) golfNextSeat, the rule on its own ---------------------------------
 // A fake room is enough: the rule reads players.length, golf.cup.x, golf.done
 // and tanks[i].x / alive. Distances are to the cup at x=10000.
@@ -156,6 +173,8 @@ const fake = (xs, done, alive) => ({
 // The expected seat is computed from the room's state at the moment the
 // server hands the turn over (nothing moves between a stroke settling and the
 // next `turn`), so the assertion is the rule itself, not fixed numbers.
+// (c)/(g)/(h) pin the WIRING — that the engine really hands every turn over
+// through this rule at 4, 2 and 3 seats — while (b) above pins the rule itself.
 async function playHole(n, label) {
   const hs = Array.from({ length: n }, mkws);
   golfCreate(hs[0], n);
@@ -190,6 +209,7 @@ async function playHole(n, label) {
 }
 await playHole(4, '(c) four golfers');
 await playHole(2, '(g) two golfers');
+await playHole(3, '(h) three golfers');
 
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall golf_order checks passed');
 if (escaped) { console.error('escaped exception: ' + escaped.message); process.exit(1); }

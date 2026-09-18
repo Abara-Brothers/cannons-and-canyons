@@ -79,8 +79,10 @@ run ffa_bots_pace node test/ffa_bots_pace.mjs
 # The exact offline entry points: boss/aliens/golf create+startMatch with one
 # commander, a one-seat ffa create refused, the ffa 'ai' frame starting at once.
 run solo_engine node test/solo_engine.mjs
-# Artillery Golf for four, in-process: seat cap, the honour rule (farthest
-# ball plays next), forfeits inside a four-player round, the winner rule.
+# Artillery Golf for four, in-process: seat cap (a one-seat room tees off on
+# create), the honour rule (farthest ball plays next), forfeits inside a
+# four-player round, the winner rule, and real four-, three- and two-player
+# holes played right through the engine.
 run golf_order node test/golf_order.mjs
   # The OAuth redirect contract: provider, return URL, and the anti-login-CSRF
   # guard on BOTH carriers. Headless — cloud.js is evaluated against stubs.

@@ -1721,6 +1721,9 @@ export function handleClientMessage(ws, msg) {
       r.asyncOk = r.mode === 'duel';        // invited duels are async-friendly
       send(ws, { type: 'created', code: r.code, mode: r.mode, max: r.max });
       send(ws, lobbyPayload(r, 0));
+      // A one-seat golf room is a solo round: nobody can join it, so start it
+      // now, exactly as Play solo does offline (owner, 2026-09-18).
+      if (r.mode === 'golf' && r.max === 1) { compactRoster(r); startGame(r); }
       break;
     }
     case 'join': {
