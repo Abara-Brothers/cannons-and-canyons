@@ -1,8 +1,17 @@
 -- Phase 6 (squads/friends design 2026-09-18, sections 3.1 and 3.2): chosen
 -- callsigns, the friend graph, blocks and name reports.
 --
--- Applied to project onacdpaxcqdfxikxiecy (ap-southeast-1) on <DATE> via MCP
--- apply_migration; this file is the tracked record of exactly what ran.
+-- NOT YET APPLIED at the time this file was committed. It is the tracked record
+-- of exactly what must run against project onacdpaxcqdfxikxiecy
+-- (ap-southeast-1), and it is applied BY HAND, one of two ways:
+--   * through the Supabase connector's apply_migration, which runs this SQL and
+--     records this file's name in the project's migration ledger; or
+--   * by pasting it into the dashboard SQL editor, which runs the same SQL and
+--     records NOTHING — after that route the ledger still believes this
+--     migration is pending, so a later tooling run will try it again and fail.
+-- Fill this line in when it is actually applied, and say which route:
+--
+--   APPLIED: <DATE> via <apply_migration | dashboard SQL editor>
 --
 -- WHY: a callsign today is ROLLED from two word lists and is not unique, so
 -- there is nothing one player can type to find another. Friends therefore need
@@ -55,12 +64,31 @@
 -- leaving the database exactly as it was. That is the behaviour worth having on
 -- a live database — an `if not exists` version would half-apply against a schema
 -- that had drifted and report success.
+--
+-- LOCK_TIMEOUT, the first statement below, and it is here for the live database
+-- rather than for correctness. The whole file is one transaction, so the ACCESS
+-- EXCLUSIVE lock the first ALTER takes on profiles is held until COMMIT. If any
+-- query is still running on profiles when that ALTER arrives, the ALTER WAITS —
+-- and every cloud save and sign-in that arrives after it queues behind it too,
+-- because a pending ACCESS EXCLUSIVE request blocks the readers behind it. That
+-- is the bad outcome: a migration whose real work is milliseconds turns into a
+-- live outage of unknown length. Five seconds makes it FAIL FAST instead. The
+-- transaction rolls back whole, nothing is applied, nothing is half-applied,
+-- and the answer is to run it again in a quieter moment. `set local` is scoped
+-- to this transaction and cannot leak into the connection afterwards. (Run
+-- outside a transaction block it is a no-op with a warning — the same safety as
+-- not having it, never worse.)
 
--- ONE statement, three columns: one ALTER on a live table, not three. No
--- DEFAULT and no NOT NULL, so there is no table rewrite; the two UNIQUE
--- constraints do each build an index, which is the only real work here and is
--- milliseconds at this table's size. The lock is ACCESS EXCLUSIVE either way,
--- so the thing worth minimising is how many times it is taken.
+set local lock_timeout = '5s';
+
+-- ONE statement, three columns — and NOT because it takes the lock fewer times.
+-- Inside one transaction the ACCESS EXCLUSIVE lock on profiles is taken once and
+-- held to COMMIT either way. The reason is that one statement does ONE PASS over
+-- the table: one rewrite if one were ever needed, one validation scan, one set of
+-- catalog updates, instead of three of each while that lock is held. No DEFAULT
+-- and no NOT NULL, so there is no table rewrite at all here; the two UNIQUE
+-- constraints do each build an index, which is the only real work and is
+-- milliseconds at this table's size.
 --
 -- No `callsign_key = lower(callsign_key)` check, deliberately. The key is
 -- produced by JavaScript's toLowerCase(), and Postgres lower() does not agree
@@ -185,6 +213,10 @@ alter table public.friend_requests enable row level security;
 -- covered and "requests I received" is not. The incoming list is the one a
 -- player actually looks at.
 create index friend_requests_to_user_idx on public.friend_requests (to_user);
+-- created_at is read on its OWN by the 30-day expiry described in the table
+-- comment: "older than 30 days" is a range over this column across the whole
+-- table, not within one player's rows, so neither the unique constraint nor the
+-- to_user index covers it.
 create index friend_requests_created_at_idx on public.friend_requests (created_at);
 
 -- Blocks are DIRECTIONAL and stay that way: A blocking B is not B blocking A,
@@ -220,7 +252,7 @@ create table public.name_reports (
 );
 
 comment on table public.name_reports is
-  'Player reports of an offensive callsign, with the name as it stood when reported. Service-key only (RLS, no policies). Reviewed by the owner in the Supabase dashboard; the server also logs the event. There is NO email delivery — the game has no email provider (design section 10). Rate-limited to one report per reporter per reported per day by the server.';
+  'Player reports of an offensive callsign, with the name as it stood when reported. Service-key only (RLS, no policies). Reviewed by the owner in the Supabase dashboard; the server also logs the event. There is NO email delivery — the game has no email provider (design section 10). Rate-limited to one report per reporter per reported per day by the server. BOTH user columns cascade on account deletion, so deleting a reported account also erases every report made ABOUT it — if a report is wanted as evidence, copy it out before the account goes.';
 
 alter table public.name_reports enable row level security;
 

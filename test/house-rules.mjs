@@ -703,21 +703,109 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
     if (refs.length !== 8) bad.push(`expected 8 auth.users references (2 per table), found ${refs.length}`);
     const loose = refs.filter((r) => !/on delete cascade/.test(r));
     if (loose.length) bad.push(`auth.users reference without "on delete cascade": ${loose.join(' | ')}`);
+    // ALL THREE new columns, not just the first one. If callsign_key or
+    // callsign_set_at were dropped from the ALTER, every grant check below would
+    // still pass — VACUOUSLY, because a column that does not exist cannot be
+    // named in a grant, and "neither grant names the three new columns" is then
+    // true for the emptiest possible reason. This is the assertion that stops
+    // that, so it has to come first.
+    //
+    // friend_code and callsign_key must both be UNIQUE. BINDING.md resolution 5
+    // says nullable AND unique and only the nullable half was pinned before:
+    // ensureFriendCode's retry loop exists to catch the unique violation, and
+    // callsign_key IS the uniqueness key — without the constraint two players
+    // hold the same chosen name and the server's "is it taken?" check is a race
+    // it cannot win.
+    //
     // friend_code stays NULLABLE on purpose: a NOT NULL column with no default
     // makes a data-only pg_dump taken before it existed unrestorable, and
     // tools/backup/restore-drill.sh loads exactly such a dump. The server fills
     // it on first use instead (ensureFriendCode).
-    const fc = sql.match(/add column friend_code[^,;]*/);
-    if (!fc) bad.push('no "add column friend_code" — profiles never gains a friend code');
-    else if (/not null/i.test(fc[0])) {
+    const newCols = {};
+    for (const c of ['friend_code', 'callsign_key', 'callsign_set_at']) {
+      const m = sql.match(new RegExp(`add column ${c}\\b[^,;]*`));
+      if (!m) {
+        bad.push(`no "add column ${c}" on public.profiles — the column never exists, and with it absent`
+          + ' the grant checks below pass vacuously');
+      } else newCols[c] = m[0];
+    }
+    for (const c of ['friend_code', 'callsign_key']) {
+      if (newCols[c] && !/\bunique\b/i.test(newCols[c])) {
+        bad.push(`public.profiles.${c} is not UNIQUE — two rows can hold the same value, which is the`
+          + ' one thing this column exists to prevent');
+      }
+    }
+    if (newCols.friend_code && /not null/i.test(newCols.friend_code)) {
       bad.push('friend_code is NOT NULL — every backup taken before this column existed stops restoring');
+    }
+    // Comments are stripped before anything reads a STATEMENT's shape; the note
+    // in the grants block below says why that is not cosmetic.
+    const stmts = sql.replace(/--[^\n]*/g, '');
+    // The whole file is one transaction, so the ACCESS EXCLUSIVE lock the first
+    // ALTER takes on profiles is held to COMMIT — and a WAITING exclusive request
+    // queues every cloud save and sign-in that arrives behind it. Five seconds of
+    // lock_timeout turns a possible outage into a clean rollback, but only if it
+    // runs BEFORE the ALTER it is protecting.
+    const lockAt = stmts.search(/set local lock_timeout\s*=\s*'5s'/i);
+    const firstAlterAt = stmts.search(/alter table public\.profiles/i);
+    if (lockAt < 0) {
+      bad.push('no "set local lock_timeout = \'5s\'" — if anything is mid-query on profiles when this'
+        + ' runs, the first ALTER waits instead of failing, and every cloud save and sign-in queues'
+        + ' behind it for as long as that takes');
+    } else if (firstAlterAt >= 0 && firstAlterAt < lockAt) {
+      bad.push('"set local lock_timeout" comes AFTER the first ALTER on public.profiles — the lock it'
+        + ' is meant to bound has already been taken by then');
+    }
+    // The 14 -> 16 cap swap. Nothing else in this repo can see it: the cap lives
+    // only in the database. Delete the do $$ block that drops the old unnamed
+    // 14-character CHECK, or the named 16 that replaces it, and every CHOSEN
+    // callsign of 15 or 16 characters is rejected on production — the player sees
+    // "unavailable" and nobody can explain it — while this suite stays green.
+    if (!/alter table public\.profiles drop constraint/i.test(sql)) {
+      bad.push('the old unnamed 14-character CHECK on public.profiles.callsign is never dropped —'
+        + ' every chosen callsign of 15 or 16 characters would be rejected on production');
+    }
+    if (!/add constraint profiles_callsign_len[\s\S]{0,200}?char_length\(callsign\) <= 16/i.test(sql)) {
+      bad.push('no named "profiles_callsign_len" CHECK capping public.profiles.callsign at 16 — the'
+        + ' display-name cap never moves from 14 to 16, or moves to some other number');
+    }
+    // friendships stores one row per PAIR in uuid order, and this CHECK is the
+    // only thing that makes that invariant real. Without it the same pair goes in
+    // both ways round and the unfriend path leaves the mirror row behind: two
+    // people who cannot see each other in their lists and cannot remove what is
+    // left. The migration's own comment describes this bug; nothing pinned it.
+    if (!/check \(user_a < user_b\)/i.test(sql)) {
+      bad.push('friendships has no "check (user_a < user_b)" — the same pair can then be stored both'
+        + ' ways round, and unfriending leaves the mirror row behind');
+    }
+    // The six indexes, by name. Each covers the half of a lookup that the table's
+    // primary key or unique constraint does NOT: my friendships where I am
+    // user_b, requests I RECEIVED, the 30-day expiry sweep, who has blocked ME,
+    // and the two report reads. Dropping one is invisible until the table is big
+    // enough for the sequential scan to hurt, which is the worst moment to learn.
+    const wantIdx = [
+      ['friendships_user_b_idx', 'public.friendships (user_b)'],
+      ['friend_requests_to_user_idx', 'public.friend_requests (to_user)'],
+      ['friend_requests_created_at_idx', 'public.friend_requests (created_at)'],
+      ['blocks_blocked_idx', 'public.blocks (blocked)'],
+      ['name_reports_reported_idx', 'public.name_reports (reported, created_at desc)'],
+      ['name_reports_reporter_idx', 'public.name_reports (reporter, reported, created_at desc)'],
+    ];
+    const missingIdx = wantIdx.filter(([n]) => !new RegExp(`create index ${n} on public\\.`).test(sql));
+    if (missingIdx.length) {
+      bad.push(`missing index, ${missingIdx.length} of the 6 this migration promises:`
+        + ` ${missingIdx.map(([n, d]) => `${n} on ${d}`).join(' | ')}`);
     }
     // The three new profiles columns must be OUT of what `authenticated` may
     // write, and the only mechanism that can say so is a column privilege.
     // Four separate things have to hold, because getting any one of them wrong
     // produces a migration that SUCCEEDS and changes nothing, or that breaks
     // every cloud save in the game:
-    //   1. the table-wide UPDATE grant is revoked at all;
+    //   1. the table-wide grant is revoked for BOTH verbs. Naming only UPDATE
+    //      leaves the table-wide INSERT alive, and a column grant cannot narrow
+    //      what a table grant already allows — so a modified client CREATES its
+    //      profile row with callsign_key already set, taking a name and skipping
+    //      the blocklist on the first save, the single write that matters most;
     //   2. the revoke comes BEFORE the column grants — Postgres only WARNS when
     //      a column-level revoke runs under a live table-level grant, so the
     //      wrong order is a no-op with a warning nobody reads;
@@ -728,22 +816,31 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
     //      fails the save, and a check that accepts "named in one of them" reads
     //      green while cloud saves die.
     //
-    // Comments are stripped first. This migration argues about grants at length
-    // in prose, and `[^;]*` runs happily through comment lines, which have no
-    // semicolons — so without this a paragraph that says "grant" can reach a
-    // real GRANT statement several lines later and swallow everything between.
-    // That is not hypothetical: it reported friend_code as granted, from a
-    // sentence explaining that friend_code is only ever READ by the client.
-    const stmts = sql.replace(/--[^\n]*/g, '');
-    const revokeAt = stmts.search(/revoke[^;]*\bupdate\b[^;]*on public\.profiles from authenticated/i);
+    // Comments were stripped into `stmts` above. This migration argues about
+    // grants at length in prose, and `[^;]*` runs happily through comment lines,
+    // which have no semicolons — so without that strip a paragraph that says
+    // "grant" can reach a real GRANT statement several lines later and swallow
+    // everything between. Not hypothetical: it reported friend_code as granted,
+    // from a sentence explaining that friend_code is only ever READ by the client.
+    const revoke = stmts.match(/revoke\b([^;]*?)\bon public\.profiles from authenticated/i);
+    const revokeAt = revoke ? revoke.index : -1;
     const grantAt = stmts.search(/grant\s+(?:insert|update)\b[^;]*on public\.profiles to authenticated/i);
-    if (revokeAt < 0) {
-      bad.push('no "revoke update on public.profiles from authenticated" — a modified client could'
+    if (!revoke) {
+      bad.push('no "revoke insert, update on public.profiles from authenticated" — a modified client could'
         + ' write its own callsign_key and callsign_set_at straight from the browser, taking a name'
         + ' and resetting its own daily limit without ever sending a socket frame');
-    } else if (grantAt >= 0 && grantAt < revokeAt) {
-      bad.push('the column GRANT on public.profiles comes BEFORE the table-wide REVOKE — Postgres only'
-        + ' warns on a column revoke under a table grant, so nothing is actually revoked');
+    } else {
+      const kept = ['insert', 'update'].filter((v) => !new RegExp(`\\b${v}\\b`, 'i').test(revoke[1]));
+      if (kept.length) {
+        bad.push(`the table-wide REVOKE on public.profiles does not name ${kept.join(' or ').toUpperCase()}`
+          + ' — that table-wide grant survives, and a column grant cannot narrow what a table grant already'
+          + ' allows. For INSERT that means a modified client creates its own profile row with callsign_key'
+          + ' already set, on the first save, without ever sending a socket frame');
+      }
+      if (grantAt >= 0 && grantAt < revokeAt) {
+        bad.push('the column GRANT on public.profiles comes BEFORE the table-wide REVOKE — Postgres only'
+          + ' warns on a column revoke under a table grant, so nothing is actually revoked');
+      }
     }
     for (const verb of ['insert', 'update']) {
       const g = stmts.match(new RegExp(`grant\\s+${verb}\\b([^;]*)on public\\.profiles to authenticated`, 'i'));
@@ -769,8 +866,11 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
     }
     if (bad.length) fail(`${hits[0]}:\n      ${bad.join('\n      ')}`);
     else {
-      ok(`${hits[0]}: 4 social tables, RLS on each, no policies, 8 cascading auth.users refs,`
-        + ' friend_code nullable, the 3 new profiles columns revoked from authenticated');
+      ok(`${hits[0]}: lock_timeout before the first ALTER, 4 social tables, RLS on each, no policies,`
+        + ' 8 cascading auth.users refs (2 per table), the 6 named indexes, friendships ordered by'
+        + ' check (user_a < user_b), callsign capped at 16, and the 3 new profiles columns'
+        + ' (friend_code and callsign_key unique, friend_code nullable) with INSERT and UPDATE'
+        + ' revoked table-wide from authenticated and granted back by column');
     }
   }
 }
