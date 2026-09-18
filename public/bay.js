@@ -520,6 +520,10 @@ SCREENS.lobby = function () {
   const qi = pending && G.pendingIntent && G.pendingIntent.type === 'create' ? G.pendingIntent : null;
   const max = m ? m.max : (qi && qi.max) || 2;
   const mode = m ? modeOf(m.mode) : qi ? modeOf(qi.mode) : s.mode;
+  // A one-seat online golf room is a round for one: the server starts it the
+  // moment it is created, so the share-a-code lobby would be a lie even for
+  // the single frame it is painted on.
+  const oneSeat = !pending && !solo && !searching && mode.id === 'golf' && max === 1;
   const cp = SOLO_COPY[mode.id] || SOLO_COPY.boss;
   const roster = (() => {
     if (pending) return '';                       // nothing has been created yet
@@ -552,6 +556,9 @@ SCREENS.lobby = function () {
     : searching
     ? '<span class="lbl">Quick match</span><div class="b-code" style="font-size:' + u(44) + ';letter-spacing:.05em">SEARCHING</div>'
       + '<div style="margin-top:' + u(14) + ';font-size:' + u(11.5) + ';color:#8798bd;line-height:1.45;max-width:' + u(270) + ';font-weight:500">We&rsquo;ll drop you into a battle the moment someone else is looking too.</div>'
+    : oneSeat
+    ? '<span class="lbl">Solo round</span>' + big('TEEING OFF', true)
+      + note('A round for one. It starts in a moment.')
     : '<span class="lbl">Share this code</span><div class="b-code">' + esc(code) + '</div>'
       + '<div style="display:flex;gap:' + u(8) + ';margin-top:' + u(16) + '"><button class="go cy" style="height:' + u(36) + ';font-size:' + u(15) + ';padding:0 ' + u(16) + '" data-old="copyLinkBtn">' + IC.copy + 'Copy link</button>'
       + '<button class="ghost" style="height:' + u(36) + ';font-size:' + u(13) + '" data-old="copyCodeBtn">Copy code</button></div>'
@@ -569,10 +576,10 @@ SCREENS.lobby = function () {
     + '<span class="ro"><span class="rk">Players</span><span class="rv">' + (solo ? filled : filled + ' / ' + max) + '</span></span>'
     + '<span class="ro"><span class="rk">Paint</span><span class="rv">' + esc(s.skin.name) + '</span></span></div>';
   const right = '<span class="lbl">' + (solo ? 'Deploying' : 'Roster') + '</span>' + roster
-    + '<button class="ghost' + (nudgeHidden || solo || searching || pending ? ' hidden' : '') + '" style="width:100%;margin-top:' + u(10) + ';height:' + u(34) + ';font-size:' + u(13) + ';justify-content:center" data-old="notifyBtn">Nudge me when they join</button>'
+    + '<button class="ghost' + (nudgeHidden || solo || searching || pending || oneSeat ? ' hidden' : '') + '" style="width:100%;margin-top:' + u(10) + ';height:' + u(34) + ';font-size:' + u(13) + ';justify-content:center" data-old="notifyBtn">Nudge me when they join</button>'
     + '<div style="margin-top:' + u(12) + '">' + loadout(rackPicks().slice(0, mode.draft), mode.draft, 'Rack loaded', pending || solo ? '' : '<button class="ghost" style="height:' + u(28) + ';font-size:' + u(12) + ';padding:0 ' + u(11) + '" data-go="armoury">Change</button>') + '</div>';
   const title = pending ? (st === 'offline' ? 'No connection' : st === 'connecting' ? 'Reaching the server' : 'Cannot reach the server')
-    : solo ? 'Solo run' : searching ? 'Searching' : filled >= max ? 'Bay doors opening' : 'Bay doors sealed';
+    : solo ? 'Solo run' : searching ? 'Searching' : oneSeat ? 'Teeing off' : filled >= max ? 'Bay doors opening' : 'Bay doors sealed';
   const count = solo ? '' : ' (' + filled + ')';
   const startLabel = filled < minSeats ? 'Start (need ' + minSeats + ')' : mode.id === 'boss' ? 'Engage the WARLORD' + count : mode.id === 'golf' ? 'Tee off' + count : 'Start battle' + count;
   // While the server is being reached there is nothing to offer yet; once it
@@ -581,8 +588,8 @@ SCREENS.lobby = function () {
   const foot = '<button class="ghost" data-old="cancelBtn">Cancel</button><span class="grow"></span>'
     + (pending
       ? (st === 'connecting' ? '' : '<button class="go" data-solo>' + (mode.id === 'duel' || mode.id === 'ffa' ? 'Play vs Computer' : 'Play solo') + IC.play + '</button>')
-      : '<button class="go' + (canStart ? '' : ' hidden') + '" ' + (filled < minSeats ? 'disabled' : 'data-old="startMatchBtn"') + '>' + startLabel + IC.play + '</button>');
-  return chrome(title, esc(mode.name) + ' &middot; ' + rackPicks().slice(0, mode.draft).length + ' weapons loaded', pending ? (st === 'offline' ? 'Offline' : st === 'connecting' ? 'Waiting room' : 'Retrying') : solo ? 'Solo drop' : searching ? 'Quick match' : 'Waiting room',
+      : '<button class="go' + (canStart && !oneSeat ? '' : ' hidden') + '" ' + (filled < minSeats ? 'disabled' : 'data-old="startMatchBtn"') + '>' + startLabel + IC.play + '</button>');
+  return chrome(title, esc(mode.name) + ' &middot; ' + rackPicks().slice(0, mode.draft).length + ' weapons loaded', pending ? (st === 'offline' ? 'Offline' : st === 'connecting' ? 'Waiting room' : 'Retrying') : solo ? 'Solo drop' : searching ? 'Quick match' : oneSeat ? 'Solo round' : 'Waiting room',
     '<div class="doors"><span class="door" style="left:0"></span><span class="door" style="right:0"></span></div>'
     + '<div class="cols" style="align-items:center;padding:0 ' + u(34) + '"><div style="width:' + u(420) + '">' + left + summary + '</div><div style="flex:1">' + right + '</div></div>', foot);
 };

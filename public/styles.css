@@ -1364,6 +1364,7 @@ body.golf .fuel { display: none; }
 .gc-table .gc-name { text-align: left; font-weight: 800; white-space: nowrap; }
 .gc-table .gc-name i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; background: var(--seat, var(--accent)); margin-right: 7px; vertical-align: -1px; }
 .gc-table tr.gc-parrow td, .gc-table tr.gc-parrow .gc-head { color: var(--muted); font-weight: 700; }
+.gc-table tr.gc-out td { opacity: .45; }
 .gc-table .gc-sep { border-left: 1px solid var(--line); }
 .gc-table .gc-tot { font-weight: 900; }
 .gc-table .gc-vs { font-weight: 900; }

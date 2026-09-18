@@ -99,6 +99,27 @@ if (hud.every(Boolean) && hud[0].score === '1' && hud[3].score === '4' && hud[2]
 // row, so the harness parses it into a table element.
 const card = await ev(`(() => { const html = golfCardHTML({ grid: [[4,0,0,0,0,0,0,0,0],[5,0,0,0,0,0,0,0,0],[3,0,0,0,0,0,0,0,0],[6,0,0,0,0,0,0,0,0]], pars: [4,3,5,4,4,3,5,4,4], totals: [4,5,3,6], done: [true,true,true,true], hole: 1 }); const d = document.createElement('table'); d.innerHTML = html; const rows = [...d.querySelectorAll('tr')].filter((r) => !r.classList.contains('gc-parrow') && !r.querySelector('th')); return { rows: rows.length, text: rows.map((r) => r.textContent.replace(/\\s+/g, ' ').trim().slice(0, 40)) }; })()`);
 if (card.rows === 4) ok('scorecard: four player rows'); else fail('scorecard rows: ' + JSON.stringify(card));
+// ...and the fourth seat, scuttled mid-round, must not read as a finished card:
+// its 2 strokes would otherwise be the best total on the table while the title
+// names somebody else the winner. The hole banner must leave it out too.
+const outCard = await ev(`(() => {
+  const keep = { alive: S.alive.slice(), n: S.n, names: S.names };
+  S.alive = [true, true, true, false]; S.n = 4; S.names = ['Ash', 'Bay', 'Cal', 'Dee'];
+  const html = golfCardHTML({ grid: [[4,0,0,0,0,0,0,0,0],[5,0,0,0,0,0,0,0,0],[3,0,0,0,0,0,0,0,0],[2,0,0,0,0,0,0,0,0]], pars: [4,3,5,4,4,3,5,4,4], totals: [4,5,3,2], done: [false,false,false,false], hole: 1 });
+  const d = document.createElement('table'); d.innerHTML = html;
+  const rows = [...d.querySelectorAll('tr')].filter((r) => !r.classList.contains('gc-parrow') && !r.querySelector('th'));
+  const seats = rows.map((r) => ({ now: r.children[1].classList.contains('gc-now'), out: r.classList.contains('gc-out'), tot: r.querySelector('.gc-tot').textContent.trim() }));
+  showHoleScore({ hole: 2, holes: 9, par: 3, pars: [4,3,5,4,4,3,5,4,4], grid: [[4],[5],[3],[2]] });
+  const hs = { rows: document.querySelectorAll('#holeScore .hs-row').length, text: $('holeScore').textContent.replace(/\\s+/g, ' ') };
+  clearTimeout(holeScoreTimer); $('holeScore').classList.remove('show');
+  S.alive = keep.alive; S.n = keep.n; S.names = keep.names;
+  return { seats, hs };
+})()`);
+if (outCard.seats && outCard.seats.length === 4 && outCard.seats.slice(0, 3).every((r) => r.now && !r.out)
+  && !outCard.seats[3].now && outCard.seats[3].out && outCard.seats[3].tot === 'OUT') ok('scorecard: a scuttled seat reads OUT with no live-hole highlight; the three live seats keep theirs');
+else fail('scorecard out row: ' + JSON.stringify(outCard.seats));
+if (outCard.hs && outCard.hs.rows === 3 && !/Dee/.test(outCard.hs.text)) ok('hole banner: the scuttled seat is left out of the hole score');
+else fail('hole banner: ' + JSON.stringify(outCard.hs));
 
 // 5. the ONLINE lobby, driven through the page's own create path (the real
 // intent, on this suite's own server) rather than the stub used in check 1:
@@ -116,11 +137,33 @@ await ev(`(document.querySelector('#bay [data-old="cancelBtn"]').click(), true)`
 let home = false;
 for (let i = 0; i < 60; i++) { if (await ev(`!S.code && $('bay').dataset.scr === 'home'`).catch(() => false)) { home = true; break; } await sleep(100); }
 if (!home) fail('lobby: Cancel never returned the bay to home');
+// The one-seat room is started by the server right after the lobby frame, so
+// the lobby paint can be gone before the next poll: watch the bay instead.
+// Only frames painted from the NEW room's own lobby payload count. The
+// 'created' handler shows the lobby screen one task earlier, before any
+// payload has landed, and that frame still carries the PREVIOUS room (or, on
+// a cold create, the 2-seat default) — its seat count gives it away, and no
+// copy inside SCREENS.lobby can reach it.
+await ev(`(() => {
+  window.__lobbyText = null;
+  window.__lobbyObs = new MutationObserver(() => {
+    if (window.__lobbyText) return;
+    const t = $('bay').textContent.replace(/\\s+/g, ' ');
+    if (!/Players\\s*1\\s*\\/\\s*1/.test(t)) return;          // not this room's payload yet
+    if (/Teeing off|Share this code/.test(t)) window.__lobbyText = t;
+  });
+  window.__lobbyObs.observe($('bay'), { childList: true, subtree: true, characterData: true });
+  return true;
+})()`);
 await ev(`(() => { ccGolfMax = 1; Bay.show('setup'); $('createBtn').onclick(); return true; })()`);
 let solo = null;
 for (let i = 0; i < 30; i++) { solo = await ev(`({ playing: !!S.playing, n: S.n, mode: S.mode })`).catch(() => null); if (solo && solo.playing && solo.n === 1) break; await sleep(100); }
 if (solo && solo.playing === true && solo.n === 1 && solo.mode === 'golf') ok('lobby: a one-seat golf room tees off on its own — no Tee off tap, one seat, already playing');
 else fail('one-seat golf online: ' + JSON.stringify(solo));
+const lobbyText = await ev(`window.__lobbyText`).catch(() => null);
+await ev(`(window.__lobbyObs && window.__lobbyObs.disconnect(), true)`).catch(() => null);
+if (lobbyText && /Teeing off/.test(lobbyText) && !/Share this code/.test(lobbyText)) ok('lobby: the one-seat golf room paints Teeing off, never the share-a-code lobby');
+else fail('one-seat lobby paint: ' + JSON.stringify(lobbyText && String(lobbyText).slice(0, 220)));
 await ev(`(() => { ccMode = 'duel'; ccGolfMax = 2; return true; })()`);
 } catch (e) { fail('harness: ' + e.message); }
 

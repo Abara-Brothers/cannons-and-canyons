@@ -1944,7 +1944,9 @@ function handle(m) {
         if (m.alive) S.alive = m.alive.slice();
         updateHud();
       });
-      showToast(`${S.names[m.seat] || 'A player'} left — tank scuttled`);
+      showToast(S.mode === 'golf'
+        ? `${S.names[m.seat] || 'A player'} left — out for the rest of the round`
+        : `${S.names[m.seat] || 'A player'} left — tank scuttled`);
       break;
     case 'aim':
       if (m.seat !== S.you) { S.aim[m.seat] = { angle: clampAimC(m.angle), power: Number(m.power) || 60 }; }
@@ -4527,6 +4529,7 @@ function showHoleScore(g) {
   for (let i = 0; i < S.n; i++) {
     const s = g.grid[i] && g.grid[i][hi];
     if (!s) continue;                                   // never teed off (joined late)
+    if (S.alive && S.alive[i] === false) continue;       // scuttled: stopped scoring
     const d = s - par, t = term(s, d);
     const cls = d < 0 ? 'hs-under' : d > 0 ? 'hs-over' : '';
     rows.push(`<div class="hs-row"><b>${S.names[i] || ''}</b>` +
@@ -4780,24 +4783,27 @@ function golfCardHTML(g) {
   parRow += `<td class="gc-sep gc-tot">${parTot}</td><td></td></tr>`;
   let rows = '';
   for (let s = 0; s < n; s++) {
+    // A seat scuttled mid-round stops scoring, and the server ranks only the
+    // live seats: its short total must never read as a finished card.
+    const out = !!(S.alive && S.alive[s] === false);
     let vs = 0, cells = '';
     for (let h = 0; h < H; h++) {
       const strokes = (grid[s] && grid[s][h]) || 0;
       const holeDone = finished || (h < cur - 1) || (h === cur - 1 && !!done[s]);
       let cls = h === 0 ? 'gc-sep' : '';
       if (strokes > 0 && holeDone) {
-        const d = strokes - pars[h]; vs += d;
+        const d = strokes - pars[h]; if (!out) vs += d;
         if (d < 0) cls += ' gc-under'; else if (d > 0) cls += ' gc-over';
       }
-      if (!finished && h === cur - 1 && !done[s] && !(S.alive && S.alive[s] === false)) cls += ' gc-now';
+      if (!finished && h === cur - 1 && !done[s] && !out) cls += ' gc-now';
       cells += `<td class="${cls.trim()}">${strokes > 0 ? strokes : ''}</td>`;
     }
     const tot = (g.totals && g.totals[s] != null) ? g.totals[s]
       : (grid[s] ? grid[s].reduce((a, b) => a + b, 0) : 0);
     const vsCls = vs > 0 ? 'up' : vs < 0 ? 'down' : '';
     const nm = (S.names && S.names[s]) || `P${s + 1}`;
-    rows += `<tr><td class="gc-name" style="--seat:${seatColor(s)}"><i></i>${nm}</td>${cells}` +
-      `<td class="gc-sep gc-tot">${tot}</td><td class="gc-vs ${vsCls}">${golfToPar(vs)}</td></tr>`;
+    rows += `<tr${out ? ' class="gc-out"' : ''}><td class="gc-name" style="--seat:${seatColor(s)}"><i></i>${nm}</td>${cells}` +
+      `<td class="gc-sep gc-tot">${out ? 'OUT' : tot}</td><td class="gc-vs ${vsCls}">${out ? '&mdash;' : golfToPar(vs)}</td></tr>`;
   }
   return `<thead>${head}</thead><tbody>${parRow}${rows}</tbody>`;
 }
