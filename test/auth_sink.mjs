@@ -92,6 +92,10 @@ const DELAY = { 'tok-slow': SLOW_MS, 'tok-slower': SLOWER_MS };
 const MOCK_PORT = 9931, GAME_PORT = 3106;
 const profileHits = [];
 const reportPosts = [], blockPosts = [];
+// The blocks this mock is actually holding, as `blocker>blocked`. POST adds,
+// DELETE removes and the two GETs read it, so case 8 can block, list and unblock
+// against something that remembers.
+const blockRows = new Set();
 mock = http.createServer((req, res) => {
   let body = '';
   req.on('data', (c) => { body += c; });
@@ -119,10 +123,43 @@ mock = http.createServer((req, res) => {
     }
     if (u.pathname === '/rest/v1/blocks' && req.method === 'POST') {
       try { blockPosts.push(JSON.parse(body)); } catch { blockPosts.push({ unparseable: body }); }
+      const row = blockPosts[blockPosts.length - 1];
+      if (row && row.blocker && row.blocked) blockRows.add(row.blocker + '>' + row.blocked);
+      res.writeHead(204); return res.end();
+    }
+    // A REAL LITTLE TABLE, not a write sink, because case 8 now reads its own
+    // writes back: a guest blocks, LISTS what it blocked, and lifts it. A mock
+    // that answered [] to every select would have let the list frame come back
+    // empty and pass for the wrong reason.
+    if (u.pathname === '/rest/v1/blocks' && req.method === 'GET') {
+      const mine = (u.searchParams.get('blocker') || '').replace(/^eq\./, '');
+      const theirs = (u.searchParams.get('blocked') || '').replace(/^eq\./, '');
+      const out = [];
+      for (const k of blockRows) {
+        const [a, b] = k.split('>');
+        if (mine && a === mine) out.push({ blocked: b });
+        else if (theirs && b === theirs) out.push({ blocker: a });
+      }
+      return json(200, out);
+    }
+    if (u.pathname === '/rest/v1/blocks' && req.method === 'DELETE') {
+      const a = (u.searchParams.get('blocker') || '').replace(/^eq\./, '');
+      const b = (u.searchParams.get('blocked') || '').replace(/^eq\./, '');
+      blockRows.delete(a + '>' + b);
       res.writeHead(204); return res.end();
     }
     if (u.pathname === '/rest/v1/profiles' && req.method === 'GET') {
-      const eq = (u.searchParams.get('id') || '').replace(/^eq\./, '');
+      const q = u.searchParams.get('id') || '';
+      // profileById asks id=eq.<uuid>; profilesByIds asks id=in.(<uuid>,…). The
+      // blocked list needs the second one, and answering [] to it would blank
+      // every name in the list rather than fail it.
+      const inList = /^in\.\((.*)\)$/.exec(q);
+      if (inList) {
+        const want = inList[1].split(',').map((s) => decodeURIComponent(s.trim())).filter(Boolean);
+        for (const id of want) profileHits.push(id);
+        return json(200, want.filter((id) => ROWS[id]).map((id) => ({ id, callsign: ROWS[id].callsign, callsign_key: ROWS[id].callsign_key })));
+      }
+      const eq = q.replace(/^eq\./, '');
       profileHits.push(eq);
       return json(200, ROWS[eq] ? [ROWS[eq]] : []);
     }
@@ -336,6 +373,41 @@ async function presentedName(token, typed) {
     if (refused && refused.error === 'sign_in' && !panel)
       ok('(8) the same anonymous socket is still refused the friends panel — the gate is per message type');
     else fail('(8) a guest reached the friends panel: ' + JSON.stringify(panel || refused));
+  }
+
+  // ---- 8b. AND THE GUEST CAN SEE AND LIFT WHAT IT BLOCKED -------------------
+  // The door has to open both ways. A guest could write a block row and then
+  // never reach it: the blocked list lived only inside the friends snapshot,
+  // behind requireLinked. This drives `block op:'list'` on the same anonymous
+  // account, through the real socket, the real interception seam and the real
+  // store, against a mock PostgREST that is actually holding the row.
+  {
+    const ws = await open();
+    send(ws, { type: 'hello', token: 'tok-guest' });
+    send(ws, { type: 'block', op: 'add', id: HONEST_ID, i: 1 });
+    await wait(ws, 'block');
+    ws._rx.length = 0;
+    send(ws, { type: 'block', op: 'list', id: 81 });
+    const listed = await wait(ws, 'block');
+    ws._rx.length = 0;
+    send(ws, { type: 'block', op: 'remove', id: HONEST_ID });
+    await wait(ws, 'block');
+    ws._rx.length = 0;
+    send(ws, { type: 'block', op: 'list', id: 82 });
+    const empty = await wait(ws, 'block');
+    try { ws.close(); } catch {}
+
+    const rows = (listed && listed.blocked) || [];
+    if (listed && listed.ok === true && listed.op === 'list' && listed.id === 81
+      && rows.length === 1 && rows[0].id === HONEST_ID && rows[0].callsign === HONEST)
+      ok(`(8b) a guest can LIST what it blocked, with the proven name beside it (${JSON.stringify(HONEST)})`);
+    else fail('(8b) guest blocked list: ' + JSON.stringify(listed));
+    if (listed && listed.friendCode === undefined && listed.friends === undefined && listed.requests === undefined)
+      ok('(8b) and the frame carries the blocked list alone — no friend code is minted for an anonymous account');
+    else fail('(8b) the list frame leaked panel fields: ' + JSON.stringify(Object.keys(listed || {})));
+    if (empty && empty.ok === true && ((empty.blocked || []).length === 0))
+      ok('(8b) and it can LIFT the block and watch the list empty — the one-way door is closed end to end');
+    else fail('(8b) after a guest unblock: ' + JSON.stringify(empty));
   }
 
   // ---- 7. nothing crashed the host ------------------------------------------

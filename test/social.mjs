@@ -1938,7 +1938,10 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
       catch (e) { fail(`(t6h) ${label}: handle threw out of the socket: ${e.message}`); }
     };
     const bad = [];
-    for (const m of ['profileById', 'addBlock', 'removeFriendship', 'deleteRequest']) {
+    // ONLY THE CALLS THAT RUN BEFORE THE BLOCK ROW EXISTS CAN ANSWER
+    // 'unavailable'. A failure AFTER it is a different answer and has its own
+    // section at the end of this case.
+    for (const m of ['profileById', 'addBlock']) {
       st.boom.clear(); st.boom.add(m);
       wa.rx.length = 0;
       await say(wa, { type: 'block', op: 'add', id: B }, 'block/' + m);
@@ -1987,6 +1990,39 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     st3.boom.clear();
     if (st3.friends.size === 1) ok('(t6h) and a block that could not be written at all destroys nothing');
     else fail('(t6h) a failed block still destroyed the friendship: ' + JSON.stringify([...st3.friends]));
+    // A PARTIAL TEARDOWN IS NOT A FAILURE, AND MUST NOT SAY IT IS. The block row
+    // is written FIRST, so by the time the teardown can fail the player really
+    // IS blocked: the row stands, and friendsSnapshot and flushPresence both
+    // read the blocks themselves, so the survivor is invisible either way.
+    // Answering 'unavailable' there told the player it had not worked in the one
+    // moment that matters, and suppressed both panel pushes — so their own list
+    // went on showing the person they had just blocked. Recovery converged on a
+    // retry because the writes are idempotent, but the reply was a lie. What is
+    // reported now is what actually happened.
+    const st4 = memStore(T6_ROWS);
+    await st4.addFriendship(A, B);
+    await st4.addRequest(B, A);
+    const S4 = mkSocial(st4);
+    const w4 = mkws(A), w4b = mkws(B);
+    S4.onAuth(w4); S4.onAuth(w4b);
+    w4.rx.length = 0; w4b.rx.length = 0;
+    st4.boom.add('deleteRequest');
+    await S4.handle(w4, { type: 'block', op: 'add', id: B });
+    st4.boom.clear();
+    const r4 = last(w4, 'block');
+    if (r4 && r4.ok === true && r4.op === 'add')
+      ok('(t6h) a teardown that fails AFTER the block row is written still answers ok — the player really is blocked');
+    else fail('(t6h) partial teardown replied ' + JSON.stringify(r4));
+    if (st4.blocks.has(A + '>' + B)) ok('(t6h) and the row that makes that answer true is there');
+    else fail('(t6h) a partial teardown wrote no block row: ' + JSON.stringify([...st4.blocks]));
+    if (last(w4, 'friends')) ok('(t6h) the blocker is still pushed a snapshot, so their own panel stops showing the person they blocked');
+    else fail('(t6h) a partial teardown suppressed the blocker snapshot');
+    if (last(w4b, 'friends')) ok('(t6h) and so is the blocked player, exactly as a clean block does');
+    else fail('(t6h) a partial teardown suppressed the blocked player snapshot');
+    const f4 = last(w4, 'friends');
+    if (st4.requests.has(B + '>' + A) && f4 && f4.friends.length === 0 && f4.requests.in.length === 0 && f4.blocked.length === 1)
+      ok('(t6h) and the panel it carries is right anyway — the request the teardown could not delete is filtered by the read model');
+    else fail('(t6h) the panel after a partial teardown: ' + JSON.stringify(f4) + ' requests ' + JSON.stringify([...st4.requests]));
   }
 
   // ---- (t6i) A GUEST MAY REPORT AND BLOCK. NOTHING ELSE. -------------------
@@ -2090,6 +2126,267 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     const drift = st.reports.filter((row) => reportCallsign(row.callsign) !== row.callsign);
     if (!drift.length) ok('(t6j) every stored name is already in the form server/store.js would store — one source of truth, not two');
     else fail('(t6j) the handler and the store disagree about the stored name: ' + JSON.stringify(drift));
+  }
+
+  // ---- (t6k) A BLOCK IS NOT A ONE-WAY DOOR ---------------------------------
+  // requireAccount lets a GUEST write a block row, and the blocked list lived
+  // ONLY inside the friends snapshot, behind requireLinked. So a guest could
+  // block somebody and then never see or lift it — an action a player cannot
+  // undo, which is worse than one they were never offered.
+  //
+  // `block op:'list'` is the smallest shape that closes it, and the cheapest to
+  // get right: the frame type is already in SOCIAL_TYPES, already behind
+  // requireAccount and already carries an op on every reply, so nothing about
+  // the friends gate moves, server.js needs no change, and the new path reads
+  // the blocks table and nothing else — it CANNOT widen the panel by accident.
+  // Answering the friends snapshot to a guest instead would have meant a second
+  // shape of that frame, a guest branch inside the eight round trips it makes,
+  // and a friend code minted for an account that must never be addable.
+  {
+    const st = memStore([...T6_ROWS, { id: GUEST, callsign: null, friend_code: null, callsign_key: null, callsign_set_at: null }]);
+    const S = mkSocial(st);
+    const g = mkws(GUEST, true);
+    S.onAuth(g);
+    await S.handle(g, { type: 'block', op: 'add', id: B });
+    await S.handle(g, { type: 'block', op: 'add', id: NAMELESS });
+    g.rx.length = 0;
+    await S.handle(g, { type: 'block', op: 'list', id: 9 });
+    const l = last(g, 'block');
+    const seen = l && l.blocked ? l.blocked.map((r) => r.id + '=' + JSON.stringify(r.callsign)).sort().join(',') : '';
+    if (l && l.op === 'list' && l.ok === true && seen === [B + '="Bunker Nine"', NAMELESS + '=null'].sort().join(','))
+      ok('(t6k) a GUEST can see the blocks it wrote, with the same proven name the panel would show and null for a player who has none');
+    else fail('(t6k) guest blocked list: ' + JSON.stringify(l));
+    if (l && l.id === 9) ok('(t6k) the list reply echoes the request id like every other reply in this layer');
+    else fail('(t6k) list echo: ' + JSON.stringify(l));
+    // THE FRAME CARRIES THE BLOCKED LIST AND NOTHING ELSE. No friends, no
+    // requests, no friend code — a guest must not be handed a code that would
+    // make an anonymous account addable, and this is the assertion that fails if
+    // somebody later "reuses" friendsSnapshot to build this answer.
+    if (l && JSON.stringify(Object.keys(l).sort()) === JSON.stringify(['blocked', 'id', 'ok', 'op', 'type']))
+      ok('(t6k) and it carries ONLY the blocked list — no friends, no requests, no friend code');
+    else fail('(t6k) the list frame carried: ' + JSON.stringify(l && Object.keys(l).sort()));
+    // WHO BLOCKED *YOU* IS NOT IN IT. blockIdsOf answers both directions; only
+    // the direction this account wrote is theirs to see, or the list becomes a
+    // way to enumerate who has blocked you.
+    st.blocks.add(C + '>' + GUEST);
+    g.rx.length = 0;
+    await S.handle(g, { type: 'block', op: 'list' });
+    const l2 = last(g, 'block');
+    const b2 = (l2 && l2.blocked) || [];
+    if (l2 && l2.ok === true && b2.length === 2 && !b2.some((r) => r.id === C))
+      ok('(t6k) a block written AGAINST this account is not in its list — the list is what you did, never what was done to you');
+    else fail('(t6k) blockedBy leaked into the list: ' + JSON.stringify(l2));
+    // AND THE DOOR OPENS BOTH WAYS.
+    await S.handle(g, { type: 'block', op: 'remove', id: B });
+    g.rx.length = 0;
+    await S.handle(g, { type: 'block', op: 'list' });
+    const l3 = last(g, 'block');
+    if (l3 && l3.ok === true && l3.blocked.length === 1 && l3.blocked[0].id === NAMELESS)
+      ok('(t6k) a guest can LIFT a block and watch it leave the list — the one-way door is closed');
+    else fail('(t6k) after a guest unblock: ' + JSON.stringify(l3));
+    // The gate did not move while this was added.
+    g.rx.length = 0;
+    await S.handle(g, { type: 'friends' });
+    if ((last(g, 'social') || {}).error === 'sign_in' && !last(g, 'friends'))
+      ok('(t6k) the same guest socket is STILL refused the friends panel — list did not widen the gate');
+    else fail('(t6k) a guest reached the panel after list was added: ' + JSON.stringify(g.rx));
+    // A socket with no account at all has nothing to list.
+    const nobody = mkws(null);
+    await S.handle(nobody, { type: 'block', op: 'list' });
+    if ((last(nobody, 'social') || {}).error === 'sign_in' && !last(nobody, 'block'))
+      ok('(t6k) a socket with no account at all cannot list blocks either');
+    else fail('(t6k) accountless list: ' + JSON.stringify(nobody.rx));
+    // A LINKED ACCOUNT GETS THE IDENTICAL FRAME, so Task 8 has one code path for
+    // the Blocked list rather than one per account kind.
+    const wa = mkws(A);
+    S.onAuth(wa);
+    await S.handle(wa, { type: 'block', op: 'add', id: B });
+    wa.rx.length = 0;
+    await S.handle(wa, { type: 'block', op: 'list' });
+    const l4 = last(wa, 'block');
+    if (l4 && l4.ok === true && l4.blocked.length === 1 && l4.blocked[0].id === B && l4.blocked[0].callsign === 'Bunker Nine')
+      ok('(t6k) a LINKED account is answered the identical frame — one code path for Task 8');
+    else fail('(t6k) linked list: ' + JSON.stringify(l4));
+    // LIST IS A READ, SO IT SPENDS FROM THE READ MODEL'S BUCKET. D9 leaves add
+    // and remove unlimited because a player in trouble must be able to block
+    // several people quickly; this op writes nothing and costs three PostgREST
+    // round trips, which is the friends frame's shape and is bounded its way.
+    const wd = mkws(D);
+    S.onAuth(wd);
+    const codes = [];
+    for (let i = 0; i < 21; i++) {
+      wd.rx.length = 0;
+      await S.handle(wd, { type: 'block', op: 'list' });
+      const f = last(wd, 'block');
+      codes.push(f && f.ok ? 'ok' : (f && f.error) || 'none');
+    }
+    if (codes.slice(0, 20).every((c) => c === 'ok') && codes[20] === 'slow_down')
+      ok('(t6k) list is twenty a minute, from the read model bucket — and the refusal still carries the op');
+    else fail('(t6k) list rate shape: ' + codes.join(','));
+    if ((last(wd, 'block') || {}).op === 'list') ok('(t6k) a rate-refused list says WHICH op was refused');
+    else fail('(t6k) list slow_down frame: ' + JSON.stringify(last(wd, 'block')));
+    wd.rx.length = 0;
+    await S.handle(wd, { type: 'block', op: 'add', id: E });
+    if ((last(wd, 'block') || {}).ok === true) ok('(t6k) and block ADD is untouched by it — design 4.2 rate limits no write here');
+    else fail('(t6k) list exhaustion blocked an add: ' + JSON.stringify(last(wd, 'block')));
+    const before = st.blocks.size;
+    wd.rx.length = 0;
+    await S.handle(wd, { type: 'block', op: 'list' });
+    if (st.blocks.size === before) ok('(t6k) list writes nothing');
+    else fail('(t6k) list changed the blocks table');
+  }
+
+  // ---- (t6k2) a list that cannot be read says so, and says which op ---------
+  {
+    const st = memStore(T6_ROWS);
+    const S = mkSocial(st);
+    const wa = mkws(A);
+    S.onAuth(wa);
+    await S.handle(wa, { type: 'block', op: 'add', id: B });
+    for (const m of ['blockIdsOf', 'profilesByIds']) {
+      st.boom.clear(); st.boom.add(m);
+      wa.rx.length = 0;
+      let threw = null;
+      try { await S.handle(wa, { type: 'block', op: 'list' }); } catch (e) { threw = e; }
+      const r = last(wa, 'block');
+      if (!threw && r && r.error === 'unavailable' && r.op === 'list') ok(`(t6k2) a failed list (${m}) answers unavailable WITH the op, and never throws`);
+      else fail(`(t6k2) list/${m}: ` + JSON.stringify(r) + (threw ? ' threw ' + threw.message : ''));
+    }
+    st.boom.clear();
+  }
+
+  // ---- (t6l) ONE SOCIAL FRAME AT A TIME, PER SOCKET -------------------------
+  // THE ONCE-A-DAY REPORT RULE IS A READ BEFORE A WRITE, and until now nothing
+  // made a frame wait for the one in front of it: five reports sent in ONE tick
+  // all passed reportedSince() before the first row landed, and five rows were
+  // written for the same pair on the same day. The callsign branch three hundred
+  // lines up states the standard — THE WRITE IS THE AUTHORITY, not a read before
+  // it — and name_reports has no unique index to be that authority, so the
+  // ORDERING is what restores it. Every other read-then-write in this layer sits
+  // behind the same chain.
+  {
+    const st = memStore(T6_ROWS);
+    const S = mkSocial(st);
+    const wa = mkws(A);
+    S.onAuth(wa);
+    const lines = await withLog(() => Promise.all([0, 1, 2, 3, 4].map(() => S.handle(wa, { type: 'report', id: B }))));
+    const codes = sent(wa, 'report').map((f) => (f.ok ? 'ok' : f.error));
+    if (st.reports.length === 1) ok('(t6l) five report frames in ONE tick write ONE row — the daily rule is not defeatable by pipelining');
+    else fail('(t6l) pipelined reports wrote ' + st.reports.length + ' rows: ' + JSON.stringify(st.reports));
+    if (codes.join(',') === 'ok,already,already,already,already') ok('(t6l) the first is accepted and the other four are `already`, in the order they were sent');
+    else fail('(t6l) pipelined report replies: ' + codes.join(','));
+    if (lines.length === 1) ok('(t6l) one row, one log line — the moderation log cannot be flooded through one socket either');
+    else fail('(t6l) pipelined log lines: ' + JSON.stringify(lines));
+  }
+
+  // ---- (t6l2) a rejected predecessor cannot wedge the chain -----------------
+  // The chain must survive a link that REJECTS, or one bad frame silences the
+  // socket for the rest of its life. Two things do it: the stored link is the
+  // settled promise, never the one handed to the caller, and the next frame is
+  // scheduled on BOTH settlements of the one before it.
+  {
+    const st = memStore(T6_ROWS);
+    const S = mkSocial(st);
+    const wa = mkws(A);
+    S.onAuth(wa);
+    // The no-op catch is on the FIXTURE, not on the layer: it only stops Node
+    // ending the process on an unhandled rejection before this check can report,
+    // and it attaches no handler the implementation could be credited with.
+    const rejected = Promise.reject(new Error('the frame before this one blew up'));
+    rejected.catch(() => {});
+    wa._socialQueue = rejected;
+    let threw = null;
+    try { await withLog(() => S.handle(wa, { type: 'report', id: B })); } catch (e) { threw = e; }
+    if (!threw && (last(wa, 'report') || {}).ok === true && st.reports.length === 1)
+      ok('(t6l2) a frame behind a REJECTED one is still handled — a rejection cannot wedge the socket');
+    else fail('(t6l2) after a rejected predecessor: ' + JSON.stringify(last(wa, 'report')) + (threw ? ' threw ' + threw.message : ''));
+    wa.rx.length = 0;
+    await S.handle(wa, { type: 'block', op: 'add', id: C });
+    if ((last(wa, 'block') || {}).ok === true) ok('(t6l2) and the socket keeps working for every frame after that');
+    else fail('(t6l2) the chain stayed broken: ' + JSON.stringify(last(wa, 'block')));
+  }
+
+  // ---- (t6l3) a slow frame holds ITS socket and no other --------------------
+  // The cost of serialising, stated and tested rather than assumed. A frame that
+  // is slow delays the next frame ON THE SAME SOCKET and nothing else: another
+  // player's socket has its own chain, and this socket's GAME frames never enter
+  // this layer at all. The wait is bounded — every store call goes through
+  // sbAdmin's AbortSignal.timeout(8000), so a wedged link settles and drains.
+  {
+    const base = memStore(T6_ROWS);
+    let release = () => {};
+    const gate = new Promise((r) => { release = r; });
+    let hits = 0;
+    const st = { ...base, async profileById(id) { hits += 1; if (hits === 1) await gate; return base.profileById(id); } };
+    const S = mkSocial(st);
+    const wa = mkws(A), wd = mkws(D);
+    S.onAuth(wa); S.onAuth(wd);
+    const p1 = withLog(() => S.handle(wa, { type: 'report', id: B }));
+    const p2 = S.handle(wa, { type: 'report', id: C });
+    const p3 = S.handle(wd, { type: 'report', id: E });
+    await sleep(20);
+    const held = sent(wa, 'report').length;
+    const other = sent(wd, 'report').length;
+    release();
+    await Promise.all([p1, p2, p3]);
+    if (held === 0) ok('(t6l3) a second frame on the SAME socket waits for the slow one in front of it');
+    else fail('(t6l3) a frame overtook the slow one: ' + held + ' replies while it was still in flight');
+    if (other === 1) ok('(t6l3) while ANOTHER socket is answered straight away — the chain is per socket, not per server');
+    else fail('(t6l3) the other socket was held up too: ' + other + ' replies');
+    if (sent(wa, 'report').length === 2 && base.reports.length === 3)
+      ok('(t6l3) and when the slow frame settles the queue drains — nothing is lost, only ordered');
+    else fail('(t6l3) after the release: ' + sent(wa, 'report').length + ' replies, ' + JSON.stringify(base.reports));
+  }
+
+  // ---- (t6m) A REPORT KEEPS THE NAME THE REPORTER SAW ----------------------
+  // THE ONE CASE MODERATION EXISTS FOR, and it used to invert. displayName ends
+  // with a blocklist pass, so the moment the owner added the term the offending
+  // name matched, every LATER report of that player recorded the sentinel —
+  // while the name carried on appearing in lobbies, because a lobby name is
+  // PROVED, not re-tested against a list that moved. The evidence was destroyed
+  // at exactly the moment it was needed, and the row and the log line said
+  // "(no name)" about a player whose name was on screen.
+  //
+  // So a report records what the PROOF vouches for — the key, or a curated
+  // rolled pair — and nothing else. The blocklist decides what another player is
+  // SHOWN; it never decides what the owner is TOLD.
+  {
+    const SLUR = uid(25);
+    const st = memStore([...T6_ROWS, { id: SLUR, callsign: 'Badword Ridge', friend_code: 'SPQ792', callsign_key: 'badword ridge', callsign_set_at: null }]);
+    // The term arrives AFTER the name was set, which is the only order in which
+    // this can happen: validateCallsign would have refused the name otherwise.
+    const S = mkSocial(st, ['badword']);
+    const wa = mkws(A);
+    S.onAuth(wa);
+    const l = await withLog(() => S.handle(wa, { type: 'report', id: SLUR }));
+    if ((last(wa, 'report') || {}).ok === true && st.reports.length === 1 && st.reports[0].callsign === 'Badword Ridge')
+      ok('(t6m) a name blocklisted AFTER it was set is what the report row records — the evidence outlives the blocklist');
+    else fail('(t6m) blocklisted-later report row: ' + JSON.stringify(last(wa, 'report')) + ' rows ' + JSON.stringify(st.reports));
+    if (l.length === 1 && l[0] === `[report] ${SLUR} "Badword Ridge" by ${A}`)
+      ok('(t6m) and the log line carries it, so the owner can search for the name they were told about');
+    else fail('(t6m) blocklisted-later log line: ' + JSON.stringify(l));
+    // AND THE PANEL STILL HIDES IT. The two rules are not in tension.
+    await st.addFriendship(A, SLUR);
+    wa.rx.length = 0;
+    await S.handle(wa, { type: 'friends' });
+    const f = last(wa, 'friends');
+    const row = f && f.friends.find((x) => x.id === SLUR);
+    if (row && row.callsign === null)
+      ok('(t6m) the same name is STILL null in the friends panel — the blocklist still decides what is shown');
+    else fail('(t6m) the panel showed a blocklisted name: ' + JSON.stringify(f && f.friends));
+    // THE FLOOR IS THE PROOF, not the absence of the blocklist. Without this
+    // control, "record whatever the column holds" would pass everything above.
+    const l2 = await withLog(() => S.handle(wa, { type: 'report', id: TAMPERED }));
+    if (st.reports.length === 2 && st.reports[1].callsign === NO_CALLSIGN && l2.length === 1 && !l2[0].includes('FOLLOW ME OK'))
+      ok('(t6m) dropping the blocklist pass did NOT drop the proof — free text with no key beside it is still the sentinel');
+    else fail('(t6m) tampered after the relaxation: ' + JSON.stringify(st.reports) + ' ' + JSON.stringify(l2));
+    // A REPORTER CANNOT INFLUENCE WHAT IS WRITTEN ABOUT SOMEBODY ELSE. The only
+    // thing the handler reads off the frame is the target id; there is no name,
+    // no note and no free text anywhere in the request.
+    const l3 = await withLog(() => S.handle(wa, { type: 'report', id: NAMELESS, callsign: 'PUT THIS IN THE ROW', name: 'OR THIS' }));
+    if (st.reports.length === 3 && st.reports[2].callsign === NO_CALLSIGN && l3.length === 1 && !/PUT THIS|OR THIS/.test(l3[0]))
+      ok('(t6m) a reporter cannot smuggle a name into a row about someone else — the frame carries an id and nothing else is read');
+    else fail('(t6m) a reporter influenced the row: ' + JSON.stringify(st.reports) + ' ' + JSON.stringify(l3));
   }
 }
 

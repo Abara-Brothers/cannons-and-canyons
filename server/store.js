@@ -381,8 +381,9 @@ export function createStore({ sbAdmin } = {}) {
     // vouch for — null for a player who never chose a name, and null again for a
     // display column holding text no proof stands behind — so null arrives here as
     // the ORDINARY case, not an edge. '' fails the CHECK, so the empty string is
-    // never sent: NO_CALLSIGN goes in instead and the report lands. Refusing would make a never-named player the one player nobody can
-    // report — and would need a fourth player-visible error string while BINDING
+    // never sent: NO_CALLSIGN goes in instead and the report lands. Refusing
+    // would make a never-named player the one player nobody can report — and
+    // would need a fourth player-visible error string while BINDING
     // resolution 16 is still open. The name is evidence, not an identifier; the
     // reported uuid is what identifies the account.
     await sbAdmin('POST', '/name_reports', { reporter: r, reported: t, callsign: reportCallsign(callsign) }, 'return=minimal');

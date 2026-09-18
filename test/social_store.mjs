@@ -385,7 +385,8 @@ function mkSb(routes = []) {
 
   // profiles.callsign is nullable, and server/social.js hands over only a name one
   // of its two proofs stands behind — null otherwise — so a player who never chose
-  // a name is the ORDINARY case here, not an edge — and '' is exactly what the CHECK refuses.
+  // a name is the ORDINARY case here, not an edge — and '' is exactly what the
+  // CHECK refuses.
   // If this regresses, the one player nobody can report is the one with no name.
   const h6 = mkSb();
   await h6.store.addReport(A, B, null);

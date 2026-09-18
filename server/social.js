@@ -278,7 +278,42 @@ export function createSocial({ store, terms, send, now }) {
     reply(ws, msg, { type: 'callsign', ok: true, callsign: v.name });
   }
 
-  async function handle(ws, msg) {
+  // ---- ONE SOCIAL FRAME AT A TIME, PER SOCKET -------------------------------
+  // EVERY OP IN THIS LAYER IS A READ THEN A WRITE WITH NO TRANSACTION, and until
+  // this chain existed nothing made a frame wait for the one in front of it. The
+  // once-a-day report rule was the visible casualty: five `report` frames
+  // arriving in one tick all passed reportedSince() before the first row landed,
+  // so five rows were written for the same pair on the same day. The callsign
+  // branch above states the standard this layer is held to — THE WRITE IS THE
+  // AUTHORITY, not a read before it — and name_reports has no unique index to be
+  // that authority. A partial unique index would be the textbook answer and is a
+  // second migration against a live database; restoring the ORDERING costs one
+  // promise chain and closes this race and every other read-then-write race on
+  // the same socket at once.
+  //
+  // A REJECTION CANNOT BREAK THE CHAIN, two ways. The next frame is scheduled on
+  // BOTH settlements of the one in front of it (`then(run, run)`), so a link that
+  // rejects still releases the queue; and what is STORED is the settled promise,
+  // never the one handed to the caller, so nothing here leaves an unhandled
+  // rejection behind. The caller still receives the original promise and
+  // server.js still reports a throw through reportServerError.
+  //
+  // A SLOW FRAME CANNOT WEDGE THE SOCKET FOR EVER. Every store call goes out
+  // through server.js's sbAdmin, which carries AbortSignal.timeout(8000)
+  // (RISK-014), so the longest a link can hold is that frame's store calls timing
+  // out one after another — a block's five is the worst case — and then it
+  // settles and the queue drains. The wait is per SOCKET: another player has
+  // their own chain, this socket's GAME frames never enter this layer at all, and
+  // the chain is a property of the ws object that is dropped with it on close.
+  function handle(ws, msg) {
+    const run = () => handleOne(ws, msg);
+    const prev = (ws && ws._socialQueue) || Promise.resolve();
+    const mine = prev.then(run, run);
+    if (ws) ws._socialQueue = mine.catch(() => {});
+    return mine;
+  }
+
+  async function handleOne(ws, msg) {
     try {
       switch (msg.type) {
         case 'callsign':
@@ -519,6 +554,33 @@ export function createSocial({ store, terms, send, now }) {
     const shown = provenName(row) ?? rolledName(row && row.callsign);
     return shown === null ? null : presentable(shown);
   };
+
+  // WHAT A REPORT RECORDS — the same two proofs, and NOT the blocklist pass on
+  // the end of them. displayName is what another player is SHOWN, and its last
+  // step re-tests the name against a blocklist that can move after the name was
+  // stored. For a panel that is right: a term added today must take the name off
+  // every screen today. For a REPORT it inverts the feature. The single case
+  // moderation exists for is a name that got through and was blocklisted
+  // afterwards, and running the moved list again over it made the row and the log
+  // line say "(no name)" about a player whose name was still on screen — the
+  // evidence destroyed at exactly the moment it was needed, while the lobby went
+  // on rendering the name, because a lobby name is PROVED, not re-filtered.
+  //
+  // So the row records what the PROOF vouches for and nothing else: the name that
+  // matches callsign_key (a column no client may write), or a curated rolled
+  // pair. That is the same standard the lobby applies, so a name on screen is the
+  // name in the row. null — a player who genuinely has no name, or a display
+  // column with no proof behind it — still becomes the store's sentinel, so the
+  // row lands and the reported uuid still identifies the account.
+  //
+  // THE LOG LINE IS STILL SAFE BY CONSTRUCTION, and it is the proof rather than
+  // the blocklist that makes it so. provenName returns normaliseCallsign(...) —
+  // NFC, trimmed, runs of whitespace collapsed to one space — and only when it
+  // case-folds onto a key the server itself derived from a validateCallsign SHAPE
+  // match, whose class is letters, digits, marks and single spaces. rolledName is
+  // one of 1,454 curated pairs. Neither can carry a newline or a quote, so
+  // nothing here can forge a line of its own.
+  const seenName = (row) => provenName(row) ?? rolledName(row && row.callsign);
 
   const skinOf = (row) => (row && typeof row.skin === 'string' && SKIN_IDS.has(row.skin) ? row.skin : null);
 
@@ -834,11 +896,50 @@ export function createSocial({ store, terms, send, now }) {
   // because a player in trouble must be able to block several people quickly.
   // The engine's 60 frames/s socket limiter (MSG_RATE / MSG_BURST in server.js)
   // is what bounds it.
+  // The blocked list, and NOTHING else in it. `blocked` carries the same
+  // { id, callsign } rows friendsSnapshot's own Blocked list does, resolved
+  // through the same displayName, so Task 8 renders one shape whatever kind of
+  // account is looking. blockIdsOf answers both directions and only ONE of them
+  // is sent: who blocked YOU is not yours to know, or a list becomes a way to
+  // enumerate it. No friend code, no friends, no requests.
+  async function blockList(ws, msg) {
+    // A READ, SO IT SPENDS FROM THE READ MODEL'S BUCKET. D9 leaves add and remove
+    // unlimited on purpose — a player in trouble must be able to block several
+    // people quickly, and design 4.2 rate limits no write here — but this op
+    // writes nothing and costs three PostgREST round trips (blockIdsOf's two plus
+    // one profilesByIds), which is the friends frame's shape and is bounded the
+    // way that one is. A list opens; it does not poll.
+    if (!rateOk(ws, 'friends', LIMITS.friends)) return reply(ws, msg, { type: 'block', op: 'list', error: 'slow_down' });
+    const { blocked } = await store.blockIdsOf(ws.userId);
+    const names = blocked.length ? await store.profilesByIds(blocked) : new Map();
+    reply(ws, msg, { type: 'block', op: 'list', ok: true, blocked: blocked.map((id) => ({ id, callsign: displayName(names.get(id)) })) });
+  }
+
   async function handleBlock(ws, msg) {
     const op = typeof msg.op === 'string' ? msg.op : '';
     // Answered rather than dropped, and answered the way an unknown friend op
     // is: a client that gets nothing back waits for its reply for ever.
-    if (op !== 'add' && op !== 'remove') return reply(ws, msg, { type: 'block', op: op || 'unknown', error: 'unavailable' });
+    if (op !== 'add' && op !== 'remove' && op !== 'list') return reply(ws, msg, { type: 'block', op: op || 'unknown', error: 'unavailable' });
+    // A BLOCK MUST NOT BE A ONE-WAY DOOR. requireAccount lets a GUEST write a
+    // block row, and the blocked list lived ONLY inside friendsSnapshot, behind
+    // requireLinked — so a guest could block somebody and then never see or lift
+    // it. An action a player cannot undo is worse than one they were never
+    // offered, and this is the cheapest shape that closes it: the frame type is
+    // already in SOCIAL_TYPES, already behind requireAccount and already carries
+    // an op on every reply, so server.js needs no change, the friends gate does
+    // not move, and this path reads the blocks table and nothing else. It CANNOT
+    // widen the panel by accident, which teaching friendsSnapshot to answer a
+    // guest could: that would mean a second shape of that frame, a guest branch
+    // through its eight round trips, and ensureFriendCode minting a friend code
+    // for an anonymous account that must never become addable.
+    //
+    // A catch of its own, for the reason handleFriend has one: the reply has to
+    // carry the op a client is waiting on.
+    if (op === 'list') {
+      try { await blockList(ws, msg); }
+      catch { reply(ws, msg, { type: 'block', op: 'list', error: 'unavailable' }); }
+      return;
+    }
     const id = wireId(msg.id);
     // THE SHAPE TEST BEFORE THE STORE, for the reason friendRequest has one:
     // server/store.js throws 'bad uuid' on a malformed id and the net would
@@ -851,12 +952,24 @@ export function createSocial({ store, terms, send, now }) {
     if (id === wireId(ws.userId)) return reply(ws, msg, { type: 'block', op, error: 'self' });
     let outcome;
     let alsoPush = null;
+    // THE BLOCK ROW IS THE ANSWER, AND THIS IS WHAT REMEMBERS IT LANDED. The row
+    // is written first and the teardown follows, so a failure after it leaves a
+    // player who really IS blocked — friendsSnapshot and flushPresence both read
+    // the blocks themselves, so the survivor is invisible either way. Answering
+    // 'unavailable' there told the player it had not worked in the one moment
+    // that matters and suppressed BOTH panel pushes, so their own list went on
+    // showing the person they had just blocked. Recovery converged on a retry
+    // because every write here is idempotent, but the reply was a lie. The reply
+    // now reports what actually happened: the block stands, the cleanup is what
+    // was lost, and the read model covers for it.
+    let wrote = false;
     try {
       if (op === 'add') {
         const who = await store.profileById(id);
         if (!who) outcome = { type: 'block', op, error: 'no_such_user' };
         else {
           await store.addBlock(ws.userId, id);
+          wrote = true;
           await store.removeFriendship(ws.userId, id);
           await store.deleteRequest(ws.userId, id);
           await store.deleteRequest(id, ws.userId);
@@ -871,7 +984,13 @@ export function createSocial({ store, terms, send, now }) {
         await store.removeBlock(ws.userId, id);
         outcome = { type: 'block', op, ok: true };
       }
-    } catch { outcome = { type: 'block', op, error: 'unavailable' }; }
+    } catch {
+      // Only a failure BEFORE the row landed is a failure to the player. After
+      // it, the block is in force and saying otherwise is the misleading half of
+      // a half-finished operation; the pushes go out for the same reason.
+      if (wrote) { outcome = { type: 'block', op, ok: true }; if (op === 'add') alsoPush = id; }
+      else outcome = { type: 'block', op, error: 'unavailable' };
+    }
     reply(ws, msg, outcome);
     if (!outcome.ok) return;
     await pushFriends(ws.userId);
@@ -928,7 +1047,7 @@ export function createSocial({ store, terms, send, now }) {
     // typed and write the same string into the log line below, where a
     // newline in it forges a line of its own.
     //
-    // displayName is therefore the source, not the column: it is the string
+    // seenName is therefore the source, not the column: it is the string
     // another player was ACTUALLY shown, by one of the two proofs — the
     // name matches callsign_key (a chosen name the server stored, on a
     // column no client may write) or it is a curated rolled pair. Anything
@@ -938,12 +1057,19 @@ export function createSocial({ store, terms, send, now }) {
     // be the one player nobody can report. The reported uuid is what
     // identifies the account; the name is evidence beside it.
     //
+    // NOT displayName, and the difference is the blocklist pass on the end
+    // of it — see seenName above. A name blocklisted AFTER it was set is
+    // the one case this feature exists for, and re-running the moved list
+    // here recorded the sentinel while the name went on appearing in
+    // lobbies. The blocklist decides what a player is SHOWN; the proof
+    // decides what the owner is TOLD.
+    //
     // reportCallsign is server/store.js's own function, applied here rather
     // than restated, so THE LINE IN THE LOG AND THE ROW IN THE TABLE ARE
     // THE SAME STRING — addReport applies it again on the way out and it is
     // idempotent. A log the moderation queue cannot be reconciled against
     // is worth less than no log.
-    const seen = reportCallsign(displayName(who));
+    const seen = reportCallsign(seenName(who));
     await store.addReport(ws.userId, id, seen);
     console.log(`[report] ${id} "${seen}" by ${ws.userId}`);
     reply(ws, msg, { type: 'report', ok: true });
