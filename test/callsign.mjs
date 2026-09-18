@@ -227,5 +227,28 @@ const ZWSP = String.fromCodePoint(0x200B);      // zero-width space: NOT whitesp
   rmSync(dir, { recursive: true, force: true });
 }
 
+// ---- 9. the Scunthorpe problem ---------------------------------------------
+// A folded name is tested as a SUBSTRING of a term, which is what catches a
+// spaced-out or leet-spelled evasion — but the same substring test means an
+// innocent word that happens to contain a term reads as a violation too.
+// SAFE_WORDS exempts specific innocent words from the substring test without
+// weakening it for anyone else: the bare term, and every evasion of it, is
+// still caught. (Names below are kept short to stay inside CALLSIGN_MAX.)
+{
+  const term = 'cunt';
+  const CASES = [
+    ['Scunthorpe', 'ok', 'a real English town whose name contains the bare term is accepted'],
+    ['Scunthorpe Utd', 'ok', 'the safe word is still exempt alongside another word in the name'],
+    [term, 'not_allowed', 'the bare term on its own is still rejected'],
+    [[...term].join(' '), 'not_allowed', 'a spaced-out evasion of the bare term is still rejected'],
+    ['xx' + term + 'xx', 'not_allowed', 'the term inside an unrelated, non-exempt word is still rejected'],
+  ];
+  for (const [raw, want, why] of CASES) {
+    const got = err(raw);
+    if (got === want) ok(`(9) ${why}`);
+    else fail(`(9) ${JSON.stringify(raw)} -> ${got}, want ${want}`);
+  }
+}
+
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall callsign checks passed');
 process.exit(out.errors.length ? 1 : 0);

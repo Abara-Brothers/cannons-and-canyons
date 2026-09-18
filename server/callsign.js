@@ -22,6 +22,15 @@ const SHAPE = /^[\p{L}\p{N}]+(?: [\p{L}\p{N}]+)*$/u;
 // halves are allowed to differ because they guard different things.
 const LOOKALIKE = { '0': 'o', '1': 'i', '3': 'e', '4': 'a', '5': 's', '7': 't', '@': 'a', '$': 's', '|': 'i' };
 
+// The Scunthorpe problem: BAD terms are matched as substrings of a folded form
+// with its spaces removed, which is what catches "n i g g e r" and "n.1.g.g.3.r".
+// The cost is that an innocent word can contain a term -- Scunthorpe contains one.
+// These words are removed from the folded form before the terms are tested, so
+// the innocent word passes and the bare term, and every spaced evasion of it,
+// still does not. Add a word here only when it is a real place or thing a player
+// might legitimately be called.
+const SAFE_WORDS = ['scunthorpe'];
+
 // trim() and \s both treat U+00A0 (no-break space) as whitespace, so a name
 // pasted with hard spaces normalises to ordinary ones rather than failing the
 // character check later with an error the player cannot see the cause of.
@@ -60,7 +69,15 @@ export function validateCallsign(raw, terms) {
   const n = [...name].length;              // code points: one astral letter is one character
   if (n < CALLSIGN_MIN || n > CALLSIGN_MAX) return { ok: false, error: 'length' };
   if (!SHAPE.test(name)) return { ok: false, error: 'chars' };
-  const folded = foldForBlocklist(name);
+  // foldForBlocklist() is exported and test/callsign.mjs asserts its exact
+  // output (section 5), so the Scunthorpe fix cannot live inside it without
+  // breaking that contract for every other caller. Instead, a second, private
+  // copy of the fold -- used only for the term test below -- has every
+  // SAFE_WORDS occurrence removed first, so an innocent word is exempt from
+  // the substring test while the bare term inside it, folded the exact same
+  // way, is still caught by the term loop.
+  let folded = foldForBlocklist(name);
+  for (const safe of SAFE_WORDS) folded = folded.split(safe).join('');
   for (const term of (Array.isArray(terms) ? terms : [])) {
     if (term && folded.includes(term)) return { ok: false, error: 'not_allowed' };
   }
