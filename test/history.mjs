@@ -41,7 +41,13 @@ const mock = http.createServer((req, res) => {
     ]);
   }
   if (u.pathname === '/rest/v1/profiles') {
-    hits.profiles++;
+    // Count RESOLUTION queries only. /health probes profiles too (phase 6 names
+    // the three new columns there, so one request proves the migration landed),
+    // and a probe is not an N+1 — which is the only thing this counter exists to
+    // catch. Every probe in server.js asks for limit=0, i.e. no rows at all, so
+    // that is the discriminator rather than the exact select list: a request
+    // that fetches zero rows cannot be resolving anyone's callsign.
+    if (u.searchParams.get('limit') !== '0') hits.profiles++;
     return J(200, [{ id: BOB, callsign: 'Rusty Gulch' }, { id: CAROL, callsign: 'Ashen Salvo' }]);
   }
   J(200, []);

@@ -655,5 +655,125 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   }
 }
 
+// ---- 12. THE PHASE 6 SOCIAL TABLES ARE SERVICE-KEY ONLY ----------------------
+// friendships, friend_requests, blocks and name_reports hold the social graph:
+// who knows whom, who refused whom, and who reported whom. A missing
+// `enable row level security` on any of them publishes that graph to every
+// signed-in player through PostgREST; a `create policy` does the same on
+// purpose. NEITHER shows up in any test that talks to the game server, because
+// the server holds the secret key and cannot tell the difference — it reads the
+// table happily either way. So the rule is enforced on the migration TEXT,
+// which is the only artefact a headless suite can reach at all.
+//
+// The cascades matter for the same reason account deletion does: a row that
+// outlives its auth.users row is a permanent record of a deleted account, and
+// the deletion path promises there is none.
+//
+// The column grants are here for a different reason, and it is the sharpest one
+// in this file. profiles is an EXISTING CLIENT-WRITABLE table: profiles_update_own
+// lets a signed-in player PATCH their own row straight from the browser, and
+// public/cloud.js save() does exactly that on every cloud save. An RLS policy
+// decides WHICH ROWS, never which COLUMNS. So if callsign_key or callsign_set_at
+// is still writable by `authenticated`, a modified client sets its own uniqueness
+// key and resets its own daily limit WITHOUT EVER SENDING A SOCKET FRAME, and
+// every rule the server enforces above them is decoration. Nothing else in this
+// repo can see that: the server-side tests all go through the socket path, which
+// is the path being bypassed.
+{
+  const dir = path.join(ROOT, 'supabase', 'migrations');
+  const hits = readdirSync(dir).filter((f) => /_phase6_callsigns_and_friends\.sql$/.test(f));
+  if (hits.length !== 1) {
+    fail(`expected exactly 1 supabase/migrations/*_phase6_callsigns_and_friends.sql, found ${hits.length}`);
+  } else {
+    const sql = readFileSync(path.join(dir, hits[0]), 'utf8');
+    const bad = [];
+    for (const t of ['friendships', 'friend_requests', 'blocks', 'name_reports']) {
+      if (!new RegExp(`create table public\\.${t} \\(`).test(sql)) bad.push(`${t}: no "create table public.${t} ("`);
+      if (!new RegExp(`alter table public\\.${t} enable row level security`).test(sql)) {
+        bad.push(`${t}: no "enable row level security" — every signed-in player could read the table`);
+      }
+    }
+    if (/create\s+policy/i.test(sql)) {
+      bad.push('a "create policy" — these four tables are service-key only, no client may reach a row of them');
+    }
+    // Every user column is `references auth.users (id) on delete cascade`. Match
+    // the reference and then look for the cascade on the SAME clause, so a
+    // cascade elsewhere in the file cannot vouch for one that is missing here.
+    const refs = sql.match(/references auth\.users ?\([^)]*\)[^,\n]*/g) || [];
+    if (refs.length !== 8) bad.push(`expected 8 auth.users references (2 per table), found ${refs.length}`);
+    const loose = refs.filter((r) => !/on delete cascade/.test(r));
+    if (loose.length) bad.push(`auth.users reference without "on delete cascade": ${loose.join(' | ')}`);
+    // friend_code stays NULLABLE on purpose: a NOT NULL column with no default
+    // makes a data-only pg_dump taken before it existed unrestorable, and
+    // tools/backup/restore-drill.sh loads exactly such a dump. The server fills
+    // it on first use instead (ensureFriendCode).
+    const fc = sql.match(/add column friend_code[^,;]*/);
+    if (!fc) bad.push('no "add column friend_code" — profiles never gains a friend code');
+    else if (/not null/i.test(fc[0])) {
+      bad.push('friend_code is NOT NULL — every backup taken before this column existed stops restoring');
+    }
+    // The three new profiles columns must be OUT of what `authenticated` may
+    // write, and the only mechanism that can say so is a column privilege.
+    // Four separate things have to hold, because getting any one of them wrong
+    // produces a migration that SUCCEEDS and changes nothing, or that breaks
+    // every cloud save in the game:
+    //   1. the table-wide UPDATE grant is revoked at all;
+    //   2. the revoke comes BEFORE the column grants — Postgres only WARNS when
+    //      a column-level revoke runs under a live table-level grant, so the
+    //      wrong order is a no-op with a warning nobody reads;
+    //   3. neither grant names the three new columns;
+    //   4. BOTH grants name all four columns public/cloud.js save() writes. That
+    //      is checked per grant, not across the pair: the upsert is an INSERT
+    //      with an ON CONFLICT DO UPDATE, so a column missing from EITHER list
+    //      fails the save, and a check that accepts "named in one of them" reads
+    //      green while cloud saves die.
+    //
+    // Comments are stripped first. This migration argues about grants at length
+    // in prose, and `[^;]*` runs happily through comment lines, which have no
+    // semicolons — so without this a paragraph that says "grant" can reach a
+    // real GRANT statement several lines later and swallow everything between.
+    // That is not hypothetical: it reported friend_code as granted, from a
+    // sentence explaining that friend_code is only ever READ by the client.
+    const stmts = sql.replace(/--[^\n]*/g, '');
+    const revokeAt = stmts.search(/revoke[^;]*\bupdate\b[^;]*on public\.profiles from authenticated/i);
+    const grantAt = stmts.search(/grant\s+(?:insert|update)\b[^;]*on public\.profiles to authenticated/i);
+    if (revokeAt < 0) {
+      bad.push('no "revoke update on public.profiles from authenticated" — a modified client could'
+        + ' write its own callsign_key and callsign_set_at straight from the browser, taking a name'
+        + ' and resetting its own daily limit without ever sending a socket frame');
+    } else if (grantAt >= 0 && grantAt < revokeAt) {
+      bad.push('the column GRANT on public.profiles comes BEFORE the table-wide REVOKE — Postgres only'
+        + ' warns on a column revoke under a table grant, so nothing is actually revoked');
+    }
+    for (const verb of ['insert', 'update']) {
+      const g = stmts.match(new RegExp(`grant\\s+${verb}\\b([^;]*)on public\\.profiles to authenticated`, 'i'));
+      if (!g) {
+        bad.push(`nothing is granted back: no "grant ${verb} (...) on public.profiles to authenticated"`
+          + ' — public/cloud.js save() is an upsert, so it needs both INSERT and UPDATE on its columns'
+          + ' and cloud saves would stop working for every player');
+        continue;
+      }
+      const cols = g[1];
+      const leaked = ['friend_code', 'callsign_key', 'callsign_set_at']
+        .filter((c) => new RegExp(`\\b${c}\\b`).test(cols));
+      if (leaked.length) {
+        bad.push(`granted ${verb.toUpperCase()} to authenticated on public.profiles: ${leaked.join(', ')}`
+          + ' — the client must never write these; the server with the secret key is the only writer');
+      }
+      for (const c of ['id', 'callsign', 'progression', 'progression_version']) {
+        if (!new RegExp(`\\b${c}\\b`).test(cols)) {
+          bad.push(`public.profiles.${c} is missing from the ${verb.toUpperCase()} grant —`
+            + ' public/cloud.js save() writes it on every cloud save and would start failing');
+        }
+      }
+    }
+    if (bad.length) fail(`${hits[0]}:\n      ${bad.join('\n      ')}`);
+    else {
+      ok(`${hits[0]}: 4 social tables, RLS on each, no policies, 8 cascading auth.users refs,`
+        + ' friend_code nullable, the 3 new profiles columns revoked from authenticated');
+    }
+  }
+}
+
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nALL GOOD');
 process.exit(out.errors.length ? 1 : 0);

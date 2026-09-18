@@ -793,10 +793,11 @@ if (SB_SECRET) {
 // in, one fix after the URL. Both are probed now.
 let supabaseHealth = 'unchecked';        // auth/client path: publishable key
 let supabaseAdminHealth = 'unchecked';   // privileged path: secret key
+let supabaseSocialHealth = 'unchecked';  // phase 6 tables + profiles columns: the MIGRATION
 let lastHealthCheck = 0;                 // re-probe throttle, see the /health route
 async function checkSupabase() {
   if (!SB_URL || !SB_PUB || !SB_SECRET) {
-    supabaseHealth = supabaseAdminHealth = 'unconfigured';
+    supabaseHealth = supabaseAdminHealth = supabaseSocialHealth = 'unconfigured';
     return supabaseHealth;
   }
   try {
@@ -829,10 +830,54 @@ async function checkSupabase() {
     ]);
     supabaseAdminHealth = probes.every((r) => r.ok) ? 'ok' : 'bad_secret_key';
   } catch { supabaseAdminHealth = 'unreachable'; }
+  try {
+    // Phase 6's tables, probed SEPARATELY from the two above and not folded into
+    // supabaseAdminHealth. They are equally service-key only, but they can fail
+    // in a way the others cannot: the migration that creates them is applied BY
+    // HAND, so between a deploy and that migration the tables are simply absent.
+    // Folded in, that reads 'bad_secret_key' and sends whoever is on call to
+    // rotate a key that is perfectly fine. PostgREST answers 404 for a table it
+    // cannot find in its schema cache, and that deserves a different word.
+    //
+    // EVERY new table is probed, not one of them, for exactly the reason written
+    // above the block above: watching push_subscriptions alone made a fault
+    // confined to error_reports invisible to every signal this server emits.
+    //
+    // The profiles probe names the three NEW COLUMNS rather than id, because an
+    // unknown column is a 400 — so that one request proves the column half of
+    // the migration landed as well as the table half, and the owner has one
+    // field to look at instead of a checklist.
+    const social = await Promise.all([
+      fetch(`${SB_URL}/rest/v1/profiles?select=friend_code,callsign_key,callsign_set_at&limit=0`, {
+        headers: { apikey: SB_SECRET, Authorization: `Bearer ${SB_SECRET}` },
+        signal: AbortSignal.timeout(8000),
+      }),
+      fetch(`${SB_URL}/rest/v1/friendships?select=user_a&limit=0`, {
+        headers: { apikey: SB_SECRET, Authorization: `Bearer ${SB_SECRET}` },
+        signal: AbortSignal.timeout(8000),
+      }),
+      fetch(`${SB_URL}/rest/v1/friend_requests?select=id&limit=0`, {
+        headers: { apikey: SB_SECRET, Authorization: `Bearer ${SB_SECRET}` },
+        signal: AbortSignal.timeout(8000),
+      }),
+      fetch(`${SB_URL}/rest/v1/blocks?select=blocker&limit=0`, {
+        headers: { apikey: SB_SECRET, Authorization: `Bearer ${SB_SECRET}` },
+        signal: AbortSignal.timeout(8000),
+      }),
+      fetch(`${SB_URL}/rest/v1/name_reports?select=id&limit=0`, {
+        headers: { apikey: SB_SECRET, Authorization: `Bearer ${SB_SECRET}` },
+        signal: AbortSignal.timeout(8000),
+      }),
+    ]);
+    supabaseSocialHealth = social.every((r) => r.ok) ? 'ok'
+      : social.some((r) => r.status === 404 || r.status === 400) ? 'migration_missing'
+      : 'bad_secret_key';
+  } catch { supabaseSocialHealth = 'unreachable'; }
   return supabaseHealth;
 }
 checkSupabase().then(() => {
   const line = `[boot] supabase=${supabaseHealth} supabaseAdmin=${supabaseAdminHealth}`
+    + ` supabaseSocial=${supabaseSocialHealth}`
     + ` webpush=${!!webpush} fcm=${!!fcm}`;
   // 'unconfigured' is the NORMAL state for local dev and CI, which have no
   // Supabase env by design — shouting there would train everyone to ignore
@@ -845,6 +890,11 @@ checkSupabase().then(() => {
   }
   if (supabaseAdminHealth !== 'ok' && supabaseAdminHealth !== 'unconfigured') {
     bad.push('PUSH STORAGE/ACCOUNT DELETION/CRASH REPORTS are broken: check SUPABASE_SECRET_KEY');
+  }
+  if (supabaseSocialHealth !== 'ok' && supabaseSocialHealth !== 'unconfigured') {
+    bad.push(supabaseSocialHealth === 'migration_missing'
+      ? 'FRIENDS/CALLSIGNS are dead: the phase 6 migration has not been applied to this project'
+      : 'FRIENDS/CALLSIGNS are dead: check SUPABASE_SECRET_KEY and the phase 6 tables');
   }
   if (!bad.length) console.log(line);
   else console.error(`${line}\n       <-- ${bad.join('\n       <-- ')}`);
@@ -1030,6 +1080,10 @@ function handleRequest(req, res) {
       rooms: rooms.size,
       supabase: supabaseHealth,            // ok | unconfigured | bad_key_or_url | unreachable
       supabaseAdmin: supabaseAdminHealth,  // ok | unconfigured | bad_secret_key | unreachable
+      // The phase 6 migration, watched as its own field. 'migration_missing' is
+      // the ordinary state between a deploy and the hand-applied migration —
+      // it is NOT a key fault, and the boot line says so in those words.
+      supabaseSocial: supabaseSocialHealth, // ok | unconfigured | migration_missing | bad_secret_key | unreachable
       webpush: !!webpush,
       fcm: !!fcm,
       apns: !!apns,

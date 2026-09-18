@@ -141,10 +141,31 @@ norm() { printf '%s' "$1" | tr -s ' ' ' ' | sed -e 's/^ *//' -e 's/ *$//'; }
 LIVE="$(norm "$(grep '^live_rows' "$SRC/MANIFEST.txt" 2>/dev/null | cut -d: -f2-)")"
 GOT="$(norm "$(pd -Atc "select 'auth.users='||(select count(*) from auth.users)
                     ||' profiles='||(select count(*) from public.profiles)
-                    ||' push_subs='||(select count(*) from public.push_subscriptions)")")"
+                    ||' push_subs='||(select count(*) from public.push_subscriptions)
+                    ||' friendships='||(select count(*) from public.friendships)
+                    ||' friend_requests='||(select count(*) from public.friend_requests)
+                    ||' blocks='||(select count(*) from public.blocks)
+                    ||' name_reports='||(select count(*) from public.name_reports)")")"
 echo "  at dump time : $LIVE"
 echo "  restored     : $GOT"
-[ "$LIVE" = "$GOT" ] && echo "  MATCH" || { echo "  MISMATCH"; ERRS=$((ERRS + 1)); }
+# Compare FIELD BY FIELD over the keys the manifest actually carries, not as one
+# string. A manifest written before a table existed names fewer keys, and a
+# whole-string compare would report MISMATCH for every archive taken before
+# phase 6 — a drill that cries wolf is a drill nobody runs, which costs more
+# than the check is worth. Keys the manifest does not name are still printed on
+# the line above, so a new table is visible even when the backup predates it.
+if [ -z "$LIVE" ]; then
+  echo "  NO live_rows LINE — this manifest can verify nothing"; ERRS=$((ERRS + 1))
+else
+  MISS=""
+  for kv in $LIVE; do
+    case " $GOT " in
+      *" $kv "*) ;;
+      *) MISS="$MISS $kv" ;;
+    esac
+  done
+  [ -z "$MISS" ] && echo "  MATCH" || { echo "  MISMATCH on:$MISS"; ERRS=$((ERRS + 1)); }
+fi
 
 echo
 echo "== content fidelity (hashes, never the data itself) =="
@@ -165,15 +186,29 @@ TS="$(grep '^taken_at' "$SRC/MANIFEST.txt" | cut -d: -f2- | tr -d ' ' \
 echo "  dump taken at: $TS"
 
 Q_USERS="select md5(string_agg(id::text||'|'||coalesce(role,'')||'|'||coalesce(email,'')||'|'||created_at::text||'|'||coalesce(is_anonymous::text,''), chr(10) order by id::text)) from auth.users"
-Q_PROF="select md5(string_agg(id::text||'|'||coalesce(callsign,'')||'|'||coalesce(progression::text,'')||'|'||coalesce(progression_version::text,'')||'|'||created_at::text, chr(10) order by id::text)) from public.profiles where updated_at <= '$TS'::timestamptz"
+Q_PROF="select md5(string_agg(id::text||'|'||coalesce(callsign,'')||'|'||coalesce(progression::text,'')||'|'||coalesce(progression_version::text,'')||'|'||coalesce(friend_code,'')||'|'||coalesce(callsign_key,'')||'|'||coalesce(callsign_set_at::text,'')||'|'||created_at::text, chr(10) order by id::text)) from public.profiles where updated_at <= '$TS'::timestamptz"
+# The social tables have no updated_at, so they are filtered on created_at
+# instead: a friendship made after the dump is SUPPOSED to be absent from the
+# restore, and hashing it would fail the drill for doing its job. coalesce to
+# 'no-rows' because md5(NULL) is NULL, and the comparison below treats an empty
+# prod-side answer as a failure — an empty table would otherwise read DIFFERS.
+#
+# friend_requests is deliberately absent: rows there are deleted the moment they
+# are accepted or declined, so a hash of it flaps for reasons that have nothing
+# to do with the backup. The row counts above still cover it.
+Q_FRIEND="select coalesce(md5(string_agg(user_a::text||'|'||user_b::text, chr(10) order by user_a::text, user_b::text)), 'no-rows') from public.friendships where created_at <= '$TS'::timestamptz"
+Q_BLOCKS="select coalesce(md5(string_agg(blocker::text||'|'||blocked::text, chr(10) order by blocker::text, blocked::text)), 'no-rows') from public.blocks where created_at <= '$TS'::timestamptz"
+Q_REPORTS="select coalesce(md5(string_agg(id::text||'|'||reporter::text||'|'||reported::text||'|'||callsign, chr(10) order by id)), 'no-rows') from public.name_reports where created_at <= '$TS'::timestamptz"
 
-for pair in "auth.users|$Q_USERS" "public.profiles|$Q_PROF"; do
+for pair in "auth.users|$Q_USERS" "public.profiles|$Q_PROF" \
+            "public.friendships|$Q_FRIEND" "public.blocks|$Q_BLOCKS" \
+            "public.name_reports|$Q_REPORTS"; do
   label="${pair%%|*}"; q="${pair#*|}"
   a="$(prod "$q")"; b="$(pd -Atc "$q" | tr -d '\r')"
   if [ -n "$a" ] && [ "$a" = "$b" ]; then
-    printf '  %-16s IDENTICAL  (md5 %s)\n' "$label" "$(printf '%s' "$a" | cut -c1-12)"
+    printf '  %-20s IDENTICAL  (md5 %s)\n' "$label" "$(printf '%s' "$a" | cut -c1-12)"
   else
-    printf '  %-16s DIFFERS    prod=%s restored=%s\n' "$label" "$(printf '%s' "$a" | cut -c1-12)" "$(printf '%s' "$b" | cut -c1-12)"
+    printf '  %-20s DIFFERS    prod=%s restored=%s\n' "$label" "$(printf '%s' "$a" | cut -c1-12)" "$(printf '%s' "$b" | cut -c1-12)"
     ERRS=$((ERRS + 1))
   fi
 done

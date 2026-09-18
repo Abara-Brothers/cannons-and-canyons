@@ -122,7 +122,10 @@ push to `main`.
    curl -s https://<your-host>/health
    ```
 
-   You want `"supabase":"ok"` and `"supabaseAdmin":"ok"`. **Do not check the HTTP
+   You want `"supabase":"ok"`, `"supabaseAdmin":"ok"` and `"supabaseSocial":"ok"`.
+   `"supabaseSocial":"migration_missing"` means the code is deployed but the
+   latest `supabase/migrations/` file has not been applied to the project — that
+   is a migration to apply, not a key to rotate. **Do not check the HTTP
    status or the `ok` field** — `/health` answers 200 unconditionally and `ok` is a
    hardcoded literal, so both report healthy while every backend is down. Parse the
    body.

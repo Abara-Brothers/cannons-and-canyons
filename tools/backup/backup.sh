@@ -93,6 +93,10 @@ counts="$("$PSQL" -Atc "
   select 'auth.users=' || (select count(*) from auth.users)
       || ' profiles='  || (select count(*) from public.profiles)
       || ' push_subs=' || (select count(*) from public.push_subscriptions)
+      || ' friendships=' || (select count(*) from public.friendships)
+      || ' friend_requests=' || (select count(*) from public.friend_requests)
+      || ' blocks=' || (select count(*) from public.blocks)
+      || ' name_reports=' || (select count(*) from public.name_reports)
 " 2>/dev/null || echo 'unavailable')"
 
 # The fingerprint is the check that counts cannot make: equal row counts still
