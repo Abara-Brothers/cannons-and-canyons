@@ -24,7 +24,17 @@ export const CALLSIGN_MAX = 16;
 // It widens who can play without widening what gets through: foldForBlocklist()
 // strips marks before the terms are tested, and the 16-code-point cap already
 // bounds any stack of them.
-const SHAPE = /^[\p{L}\p{N}\p{M}]+(?: [\p{L}\p{N}\p{M}]+)*$/u;
+//
+// Every TOKEN must still start with a letter or a digit, and marks may only
+// follow one. A combining mark is by definition something that attaches to a
+// base character, so a token that opens with one has no base to attach to: it
+// renders as stacked garbage, or as nothing at all, on every other player's
+// screen — which is the kind of name this file exists to keep off the board.
+// Admitting \p{M} without this would have allowed a callsign made of nothing
+// but marks. No script pays for the rule: in Devanagari, Thai and Hebrew the
+// mark follows its base in LOGICAL order even where it RENDERS to the left of
+// it, so every one of those names still begins with a letter.
+const SHAPE = /^[\p{L}\p{N}][\p{L}\p{N}\p{M}]*(?: [\p{L}\p{N}][\p{L}\p{N}\p{M}]*)*$/u;
 
 // Look-alikes, exactly the nine in the design. '8'->'b' and '!'->'i' are in the
 // engine's older LEET map but NOT here: the design fixes this map, and the two

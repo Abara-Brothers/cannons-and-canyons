@@ -316,8 +316,11 @@ const ZWSP = String.fromCodePoint(0x200B);      // zero-width space: NOT whitesp
   // Greek letter that merely LOOKS Latin is a different letter, not a
   // compatibility form, and NFKD leaves it alone. Closing it needs a confusables
   // table or a mixed-script rule — an owner decision, not a quiet one.
-  const CYR = { a: 'а', e: 'е', o: 'о', c: 'с', p: 'р', x: 'х' };
-  const homoglyph = [...term].map((c) => CYR[c] || c).join('');
+  // Code points, not glyphs: written as literals this map reads as an identity
+  // map on the page, which is the whole point of a homoglyph and no way to
+  // write a test. Cyrillic a, ie, o, es, er, ha.
+  const CYR = { a: 0x430, e: 0x435, o: 0x43E, c: 0x441, p: 0x440, x: 0x445 };
+  const homoglyph = [...term].map((c) => (CYR[c] ? String.fromCodePoint(CYR[c]) : c)).join('');
   if (homoglyph === term) fail('(10) the homoglyph fixture came out identical to the term, so it documents nothing');
   else if (err(homoglyph) === 'ok') ok('(10) KNOWN GAP, deliberate: a cross-script homoglyph spelling still passes — NFKD cannot see it, and a confusables table or a mixed-script rule is an owner decision');
   else ok('(10) a cross-script homoglyph spelling is now rejected — the known gap has been closed and this assertion can go');
@@ -359,8 +362,12 @@ const ZWSP = String.fromCodePoint(0x200B);      // zero-width space: NOT whitesp
 // cannot be written without combining marks — while section 4 above advertises
 // that a Cyrillic or Japanese callsign is legitimate.
 {
-  const COMPOSED = 'Zoé';        // precomposed LATIN SMALL LETTER E WITH ACUTE
-  const DECOMPOSED = 'Zoé';     // e + COMBINING ACUTE ACCENT: the same name
+  // ACUTE is written as a code point, never as a glyph: a bare combining mark in
+  // source attaches itself to the quote in front of it and is unreadable. Same
+  // reason EMOJI and ZWSP are code points at the top of this file.
+  const ACUTE = String.fromCodePoint(0x0301);    // COMBINING ACUTE ACCENT
+  const COMPOSED = 'Zoé';                        // precomposed LATIN SMALL LETTER E WITH ACUTE
+  const DECOMPOSED = 'Zoe' + ACUTE;              // e + the combining mark: the same name
   if (DECOMPOSED !== COMPOSED && DECOMPOSED.normalize('NFC') === COMPOSED) ok('(12) the two fixtures really are different strings that spell one name');
   else fail('(12) the composed/decomposed fixtures are not what this section assumes');
   const a = validateCallsign(COMPOSED, terms), b = validateCallsign(DECOMPOSED, terms);
@@ -381,9 +388,33 @@ const ZWSP = String.fromCodePoint(0x200B);      // zero-width space: NOT whitesp
   }
   // Marks are characters and the cap counts them, so the length rule — not the
   // character class — is what bounds a stack of them.
-  const STACK = 'a' + '́'.repeat(20);
+  const STACK = 'a' + ACUTE.repeat(20);
   if (err(STACK) === 'length') ok('(12) a stack of combining marks is still bounded by the 16-code-point cap');
   else fail(`(12) a 21-code-point stack of combining marks -> ${err(STACK)}, want length`);
+
+  // Every token must still OPEN with a letter or a digit. A combining mark
+  // attaches to a base character, so a token that starts with one has no base:
+  // it renders as stacked garbage, or as nothing at all, to every other player.
+  // Admitting \p{M} without this rule allowed a callsign made of nothing but
+  // marks — a name that is invisible on the board is exactly what this filter
+  // exists to keep off it.
+  const BASELESS = [
+    [ACUTE.repeat(3), 'a name of nothing but combining marks'],
+    [ACUTE + 'Ace', 'a name whose only token opens with a combining mark'],
+    ['Red ' + ACUTE + 'Baron', 'a later token that opens with a combining mark'],
+    ['Red ' + ACUTE.repeat(2), 'a valid token beside a marks-only token'],
+  ];
+  for (const [raw, why] of BASELESS) {
+    const got = err(raw);
+    if (got === 'chars') ok(`(12) ${why} is rejected as chars`);
+    else fail(`(12) ${why} -> ${got}, want chars`);
+  }
+  // ...and the rule costs no script anything: in Devanagari, Thai and Hebrew the
+  // mark follows its base in LOGICAL order even where it RENDERS to the left,
+  // so every name above still opens with a letter. Asserted just above; this
+  // records why it is safe rather than lucky.
+  if (NAMES.every(([n]) => /^[\p{L}\p{N}]/u.test(n.normalize('NFC')))) ok('(12) every script fixture above still opens with a letter, which is why the base-character rule costs them nothing');
+  else fail('(12) a script fixture opens with a combining mark — the base-character rule would refuse a real name');
 }
 
 // ---- 13. terms manufactured at a word junction -----------------------------
