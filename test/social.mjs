@@ -410,13 +410,18 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
   else fail('(i2) anonymous roll reached the store: ' + JSON.stringify(store.calls));
 }
 
-// ---- (j) the handlers Tasks 5 and 6 own answer rather than hang -------------
+// ---- (j) a store that cannot serve the read model answers rather than hangs --
+// Task 4 wrote this when 'friends' was a stub. It still holds, for a better
+// reason: this section's store double implements the callsign methods and none
+// of the friend ones, which is exactly the shape of a live server whose
+// PostgREST cannot see the phase 6 tables — and the frame it answers is the one
+// a client can act on instead of waiting for ever.
 {
   clock = BASE;
   const { social } = mk();
   const ws = mkws('u1');
   await social.handle(ws, { type: 'friends', id: 9 });
-  if (same(last(ws), { type: 'friends', error: 'unavailable', id: 9 })) ok('(j) an unimplemented social type answers unavailable, so no client waits for ever');
+  if (same(last(ws), { type: 'friends', error: 'unavailable', id: 9 })) ok('(j) a store with no friend methods answers unavailable, so no client waits for ever');
   else fail('(j) reply was ' + JSON.stringify(last(ws)));
 }
 
@@ -452,6 +457,674 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
   else fail('(k2) an anonymous account is in the online map: ' + JSON.stringify([...social.online.keys()]));
   social.onClose(anon);
   ok('(k2) closing an anonymous socket is a no-op');
+}
+
+// ===========================================================================
+// FRIENDS, REQUESTS AND PRESENCE (design 4.1, 4.2) — task 5
+//
+// WHY THIS EXISTS: every path here fails SILENTLY. A friendship written on one
+// side only, a search that finds the person who blocked you, two people who
+// each requested the other and stay stuck at "requested", a presence frame
+// delivered to a stranger, a snapshot that walks the profile table once per
+// friend, a name a player PATCHED into their own profile row shown verbatim in
+// somebody else's panel — none of them throws, none of them is visible in a
+// screenshot, and each one is a store-review problem rather than a bug report.
+//
+// This section brings its own store double and its own clock so it cannot be
+// broken by a change to another section's fixture.
+// ===========================================================================
+{
+  // Read INSIDE createSocial, so setting it here reaches every instance this
+  // section builds even though social.js was imported at the top of the file.
+  process.env.SOCIAL_PRESENCE_MS = '40';
+
+  // HEX LETTERS ON PURPOSE. A fixture of digits alone makes toUpperCase() a
+  // no-op, so the case-fold on ids arriving off the wire would have no test
+  // that can fail — see the upper-case remove in (e).
+  const uid = (n) => '00000000-0000-4000-8000-ab' + String(n).padStart(10, '0');
+  const A = uid(1), B = uid(2), C = uid(3), D = uid(4), E = uid(5);
+  // callsign_key is the SERVER's word — the phase 6 migration revokes update on
+  // that column from the authenticated role, so only the secret key writes it.
+  // `callsign` beside it is NOT: profiles_update_own lets the account PATCH it
+  // on every cloud save. Rows here carry both so the trust rule can be tested.
+  const ROWS = [
+    { id: A, callsign: 'Anvil Six',   friend_code: 'ABC234', callsign_key: 'anvil six',   callsign_set_at: null, skin: 'desert' },
+    { id: B, callsign: 'Bunker Nine', friend_code: 'BDF345', callsign_key: 'bunker nine', callsign_set_at: null, skin: 'gold' },
+    { id: C, callsign: 'Crater Two',  friend_code: 'CGH456', callsign_key: 'crater two',  callsign_set_at: null },
+    { id: D, callsign: 'Dune Four',   friend_code: 'DJK567', callsign_key: 'dune four',   callsign_set_at: null },
+    { id: E, callsign: 'Echo Seven',  friend_code: 'EMN678', callsign_key: 'echo seven',  callsign_set_at: null },
+  ];
+
+  // The store double. Same method set and same return shapes as server/store.js
+  // (the contract), in memory. `boom` turns any one method into the real
+  // thing's failure — sbAdmin throws `sb <METHOD> <status>` and keeps no body.
+  //
+  // profilesByIds returns { id, callsign } ONLY, exactly as server/store.js does
+  // (`select=id,callsign`): the read model gets no callsign_key for anyone but
+  // the player themselves, which is why those names go through the filter
+  // rather than through the key proof.
+  const PAIR = (a, b) => (a < b ? a + '|' + b : b + '|' + a);
+  function memStore(rows) {
+    const profiles = new Map(rows.map((p) => [p.id, { ...p }]));
+    const friends = new Set();     // PAIR(a, b)
+    const requests = new Set();    // from + '>' + to
+    const blocks = new Set();      // blocker + '>' + blocked
+    const st = {
+      profiles, friends, requests, blocks, calls: [], boom: new Set(),
+      _hit(m) { st.calls.push(m); if (st.boom.has(m)) throw new Error('sb GET 500'); },
+      async ensureFriendCode(id) { st._hit('ensureFriendCode'); const p = profiles.get(id); return p ? p.friend_code : null; },
+      async profileById(id) { st._hit('profileById'); return profiles.get(id) || null; },
+      async profileByFriendCode(code) { st._hit('profileByFriendCode'); return [...profiles.values()].find((p) => p.friend_code === code) || null; },
+      async profileByCallsignKey(k) { st._hit('profileByCallsignKey'); return [...profiles.values()].find((p) => p.callsign_key === k) || null; },
+      async profilesByIds(ids) { st._hit('profilesByIds'); const m = new Map(); for (const id of ids) { const p = profiles.get(id); if (p) m.set(id, { id, callsign: p.callsign }); } return m; },
+      async friendIdsOf(id) { st._hit('friendIdsOf'); const o = []; for (const k of friends) { const [a, b] = k.split('|'); if (a === id) o.push(b); else if (b === id) o.push(a); } return o; },
+      async requestsOf(id) { st._hit('requestsOf'); const incoming = [], outgoing = []; for (const k of requests) { const [f, t] = k.split('>'); if (t === id) incoming.push(f); else if (f === id) outgoing.push(t); } return { incoming, outgoing }; },
+      async blockIdsOf(id) { st._hit('blockIdsOf'); const blocked = [], blockedBy = []; for (const k of blocks) { const [a, b] = k.split('>'); if (a === id) blocked.push(b); else if (b === id) blockedBy.push(a); } return { blocked, blockedBy }; },
+      async addFriendship(a, b) { st._hit('addFriendship'); friends.add(PAIR(a, b)); },
+      async removeFriendship(a, b) { st._hit('removeFriendship'); friends.delete(PAIR(a, b)); },
+      async addRequest(f, t) { st._hit('addRequest'); requests.add(f + '>' + t); },
+      async deleteRequest(f, t) { st._hit('deleteRequest'); requests.delete(f + '>' + t); },
+      async addBlock(a, b) { st._hit('addBlock'); blocks.add(a + '>' + b); },
+      async removeBlock(a, b) { st._hit('removeBlock'); blocks.delete(a + '>' + b); },
+      async addReport() { st._hit('addReport'); },
+      async reportedSince() { st._hit('reportedSince'); return false; },
+    };
+    return st;
+  }
+
+  // A linked account: ws.userId set, ws.isGuest false. The guest case is a
+  // socket with a real uuid and isGuest TRUE — see (j).
+  const mkws = (userId, isGuest = false) => ({ readyState: 1, userId, isGuest, rx: [] });
+  const sent = (ws, t) => ws.rx.filter((m) => m.type === t);
+  const last = (ws, t) => sent(ws, t)[sent(ws, t).length - 1] || null;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const pair = (a, b) => PAIR(a, b);
+  let CLOCK = 1700000000000;
+  const mkSocial = (store, terms = []) => createSocial({ store, terms, send: (ws, frame) => ws.rx.push(frame), now: () => CLOCK });
+
+  // ---- (a) the read model ---------------------------------------------------
+  {
+    const st = memStore(ROWS);
+    await st.addFriendship(A, B);
+    await st.addRequest(C, A);        // incoming
+    await st.addRequest(A, D);        // outgoing
+    await st.addBlock(A, E);
+    const S = mkSocial(st);
+    const wa = mkws(A), wb = mkws(B);
+    S.onAuth(wa); S.onAuth(wb);
+    st.calls.length = 0;
+    await S.handle(wa, { type: 'friends', id: 7 });
+    const f = last(wa, 'friends');
+    if (f && f.id === 7 && f.friendCode === 'ABC234') ok('(a) friends: the request id comes back, with the friend code');
+    else fail('(a) friends frame: ' + JSON.stringify(f));
+    if (f && JSON.stringify(f.friends) === JSON.stringify([{ id: B, callsign: 'Bunker Nine', online: true }]))
+      ok('(a) friends: the callsign is resolved and online is true while B holds a socket');
+    else fail('(a) friends list: ' + JSON.stringify(f && f.friends));
+    if (f && f.requests && f.requests.in.length === 1 && f.requests.in[0].id === C && f.requests.in[0].callsign === 'Crater Two'
+        && f.requests.out.length === 1 && f.requests.out[0].id === D && f.requests.out[0].callsign === 'Dune Four')
+      ok('(a) friends: both request directions, each named');
+    else fail('(a) requests: ' + JSON.stringify(f && f.requests));
+    if (f && f.blocked && f.blocked.length === 1 && f.blocked[0].id === E && f.blocked[0].callsign === 'Echo Seven')
+      ok('(a) friends: the blocked list is named too');
+    else fail('(a) blocked: ' + JSON.stringify(f && f.blocked));
+    // BINDING resolution 13: without this a player signing in on a second
+    // device is told to choose a name they already have.
+    if (f && f.callsign === 'Anvil Six') ok('(a) friends: the frame carries the player’s OWN chosen callsign (resolution 13)');
+    else fail('(a) own callsign: ' + JSON.stringify(f && f.callsign));
+    const many = st.calls.filter((c) => c === 'profilesByIds').length;
+    const one = st.calls.filter((c) => c === 'profileById').length;
+    // ONE profilesByIds for every other player, and exactly ONE profileById —
+    // the player's own row, which is the only place callsign_key can be proved.
+    if (many === 1 && one === 1) ok('(a) friends: four other ids resolved in ONE profilesByIds; one own-row read, no per-friend lookups');
+    else fail(`(a) name lookups: profilesByIds ${many}, profileById ${one}`);
+    const wanted = new Set(['friendIdsOf', 'requestsOf', 'blockIdsOf', 'ensureFriendCode', 'profileById', 'profilesByIds']);
+    if (st.calls.every((c) => wanted.has(c)) && st.calls.length === 6) ok('(a) friends: six store reads in total, nothing repeated');
+    else fail('(a) store calls: ' + JSON.stringify(st.calls));
+  }
+
+  // ---- (a2) the own callsign is PROVEN against callsign_key ------------------
+  // profiles.callsign is a column the account PATCHes itself on every cloud
+  // save (profiles_update_own, public/cloud.js save()). callsign_key beside it
+  // is revoked from the authenticated role by the phase 6 migration, so it is
+  // the server's word. Trusting `callsign` because a key exists is the exact
+  // hole Task 4 closed in the auth sink; this frame is a second door to it.
+  {
+    const TAMPERED = [
+      { id: A, callsign: 'FOLLOW ME OK', friend_code: 'ABC234', callsign_key: 'anvil six', callsign_set_at: null },
+      { id: B, callsign: 'Bunker Nine',  friend_code: 'BDF345', callsign_key: null,        callsign_set_at: null },
+      { id: C, callsign: null,           friend_code: 'CGH456', callsign_key: null,        callsign_set_at: null },
+      { id: D, callsign: '  anvil   SIX ', friend_code: 'DJK567', callsign_key: 'anvil six', callsign_set_at: null },
+    ];
+    const st = memStore(TAMPERED);
+    const S = mkSocial(st);
+    const wa = mkws(A), wb = mkws(B), wc = mkws(C), wd = mkws(D);
+    await S.handle(wa, { type: 'friends' });
+    if ((last(wa, 'friends') || {}).callsign === null)
+      ok('(a2) own callsign: a row whose callsign does not match its callsign_key is NOT presented');
+    else fail('(a2) tampered own callsign: ' + JSON.stringify(last(wa, 'friends')));
+    await S.handle(wb, { type: 'friends' });
+    if ((last(wb, 'friends') || {}).callsign === null)
+      ok('(a2) own callsign: a rolled name (callsign_key null) reads null, so the client still offers Set callsign');
+    else fail('(a2) rolled own callsign: ' + JSON.stringify(last(wb, 'friends')));
+    await S.handle(wc, { type: 'friends' });
+    if ((last(wc, 'friends') || {}).callsign === null) ok('(a2) own callsign: no name at all is null, not a crash');
+    else fail('(a2) null own callsign: ' + JSON.stringify(last(wc, 'friends')));
+    await S.handle(wd, { type: 'friends' });
+    if ((last(wd, 'friends') || {}).callsign === 'anvil SIX')
+      ok('(a2) own callsign: an honest row is presented NORMALISED, the same shape sanitizeName compares against');
+    else fail('(a2) honest own callsign: ' + JSON.stringify(last(wd, 'friends')));
+  }
+
+  // ---- (a3) every OTHER player's name goes through the filter ----------------
+  // These names come from profilesByIds, which selects id,callsign and nothing
+  // else — there is no callsign_key to prove them against. They are therefore
+  // treated as what they are: a string the account itself wrote. The same
+  // blocklist the callsign message enforces at set time is applied here at read
+  // time, so a name PATCHed straight into the row cannot ride into a panel.
+  {
+    const DIRTY = [
+      { id: A, callsign: 'Anvil Six',    friend_code: 'ABC234', callsign_key: 'anvil six', callsign_set_at: null },
+      { id: B, callsign: 'Badword Nine', friend_code: 'BDF345', callsign_key: null,        callsign_set_at: null },
+      { id: C, callsign: 'x',            friend_code: 'CGH456', callsign_key: null,        callsign_set_at: null },
+      { id: D, callsign: 'Dune Four',    friend_code: 'DJK567', callsign_key: null,        callsign_set_at: null },
+    ];
+    const st = memStore(DIRTY);
+    await st.addFriendship(A, B);
+    await st.addFriendship(A, C);
+    await st.addFriendship(A, D);
+    const S = mkSocial(st, ['badword']);
+    const wa = mkws(A);
+    await S.handle(wa, { type: 'friends' });
+    const names = ((last(wa, 'friends') || {}).friends || []).map((x) => [x.id, x.callsign]);
+    const byId = new Map(names);
+    if (byId.get(B) === null) ok('(a3) a friend whose PATCHed name carries a blocklist term is presented as null, not verbatim');
+    else fail('(a3) dirty friend name: ' + JSON.stringify(names));
+    if (byId.get(C) === null) ok('(a3) a name outside the length rules is null too, never a raw column value');
+    else fail('(a3) short friend name: ' + JSON.stringify(names));
+    if (byId.get(D) === 'Dune Four') ok('(a3) an ordinary rolled name is untouched');
+    else fail('(a3) clean friend name: ' + JSON.stringify(names));
+  }
+
+  // ---- (b) add by code is immediate and mutual (D2) --------------------------
+  {
+    const st = memStore(ROWS);
+    const S = mkSocial(st);
+    const wa = mkws(A), wa2 = mkws(A), wb = mkws(B), wc = mkws(C);
+    S.onAuth(wa); S.onAuth(wa2); S.onAuth(wb); S.onAuth(wc);
+    await S.handle(wa, { type: 'friend', op: 'add', code: 'fr-bdf345', id: 11 });
+    const r = last(wa, 'friend');
+    if (r && r.op === 'add' && r.ok === true && r.id === 11 && r.friend && r.friend.id === B
+        && r.friend.callsign === 'Bunker Nine' && r.friend.online === true)
+      ok('(b) add: the FR- prefix and lower case are accepted, the reply names the new friend');
+    else fail('(b) add reply: ' + JSON.stringify(r));
+    if (st.friends.has(pair(A, B)) && st.friends.size === 1) ok('(b) add: exactly one friendship row, in uuid order');
+    else fail('(b) rows: ' + JSON.stringify([...st.friends]));
+    if (sent(wa, 'friends').length === 1 && sent(wa2, 'friends').length === 1 && sent(wb, 'friends').length === 1)
+      ok('(b) add: a fresh snapshot went to EVERY socket of both players');
+    else fail(`(b) fan-out: A ${sent(wa, 'friends').length} + ${sent(wa2, 'friends').length}, B ${sent(wb, 'friends').length}`);
+    if (!sent(wc, 'friends').length) ok('(b) add: a bystander is not fanned out to');
+    else fail('(b) bystander got: ' + JSON.stringify(wc.rx));
+    const snapB = last(wb, 'friends');
+    if (snapB && snapB.friends.length === 1 && snapB.friends[0].id === A && snapB.id === undefined)
+      ok('(b) add: B’s pushed snapshot lists A and carries no request id');
+    else fail('(b) B snapshot: ' + JSON.stringify(snapB));
+  }
+
+  // ---- (c) add refused: self, unknown code, already, blocked either way ------
+  {
+    const st = memStore(ROWS);
+    const S = mkSocial(st);
+    const wa = mkws(A); S.onAuth(wa);
+    await S.handle(wa, { type: 'friend', op: 'add', code: 'ABC234' });
+    if ((last(wa, 'friend') || {}).error === 'self') ok('(c) add: your own code is self');
+    else fail('(c) self: ' + JSON.stringify(last(wa, 'friend')));
+    await S.handle(wa, { type: 'friend', op: 'add', code: 'ZZZ999' });
+    if ((last(wa, 'friend') || {}).error === 'no_such_code') ok('(c) add: an unknown code is no_such_code');
+    else fail('(c) unknown: ' + JSON.stringify(last(wa, 'friend')));
+    st.calls.length = 0;
+    await S.handle(wa, { type: 'friend', op: 'add', code: 'nope' });
+    if ((last(wa, 'friend') || {}).error === 'no_such_code' && !st.calls.includes('profileByFriendCode'))
+      ok('(c) add: a malformed code is refused without touching the store');
+    else fail('(c) malformed: ' + JSON.stringify(last(wa, 'friend')) + ' calls ' + JSON.stringify(st.calls));
+    await st.addFriendship(A, B);
+    await S.handle(wa, { type: 'friend', op: 'add', code: 'BDF345' });
+    if ((last(wa, 'friend') || {}).error === 'already') ok('(c) add: an existing friend is already');
+    else fail('(c) already: ' + JSON.stringify(last(wa, 'friend')));
+    await st.addBlock(A, C);
+    await S.handle(wa, { type: 'friend', op: 'add', code: 'CGH456' });
+    if ((last(wa, 'friend') || {}).error === 'blocked') ok('(c) add: someone you blocked is blocked');
+    else fail('(c) blocked-by-me: ' + JSON.stringify(last(wa, 'friend')));
+    await st.addBlock(D, A);
+    await S.handle(wa, { type: 'friend', op: 'add', code: 'DJK567' });
+    if ((last(wa, 'friend') || {}).error === 'blocked') ok('(c) add: someone who blocked YOU is blocked too');
+    else fail('(c) blocked-me: ' + JSON.stringify(last(wa, 'friend')));
+    if (st.friends.size === 1) ok('(c) add: not one refusal wrote a row');
+    else fail('(c) rows after refusals: ' + JSON.stringify([...st.friends]));
+  }
+
+  // ---- (d) search is exact, unique, and respects blocks ----------------------
+  {
+    const st = memStore(ROWS);
+    const S = mkSocial(st);
+    const wa = mkws(A); S.onAuth(wa);
+    await S.handle(wa, { type: 'friend', op: 'search', q: '  BUNKER   nine ', id: 4 });
+    const hit = last(wa, 'friend');
+    if (hit && hit.op === 'search' && hit.id === 4 && hit.results.length === 1
+        && hit.results[0].id === B && hit.results[0].callsign === 'Bunker Nine')
+      ok('(d) search: normalised and case-folded to the key, one result, the display form back');
+    else fail('(d) search hit: ' + JSON.stringify(hit));
+    // BINDING resolution 19: spec 5.5 draws the found player's tank in their own
+    // paint, so the result has to carry one.
+    if (hit && hit.results && hit.results[0] && 'skin' in hit.results[0] && hit.results[0].skin === 'gold')
+      ok('(d) search: the result carries the paint (resolution 19)');
+    else fail('(d) search skin: ' + JSON.stringify(hit && hit.results));
+    await S.handle(wa, { type: 'friend', op: 'search', q: 'Crater Two' });
+    const noskin = last(wa, 'friend');
+    if (noskin.results && noskin.results.length === 1 && noskin.results[0].skin === null)
+      ok('(d) search: a profile with no stored paint answers skin null, so the client falls back');
+    else fail('(d) search missing skin: ' + JSON.stringify(noskin.results));
+    await S.handle(wa, { type: 'friend', op: 'search', q: 'nobody here' });
+    if (((last(wa, 'friend') || {}).results || null) && last(wa, 'friend').results.length === 0)
+      ok('(d) search: a miss is an empty list, not an error');
+    else fail('(d) search miss: ' + JSON.stringify(last(wa, 'friend')));
+    await S.handle(wa, { type: 'friend', op: 'search', q: 'Anvil Six' });
+    if (((last(wa, 'friend') || {}).results || []).length === 0) ok('(d) search: yourself is never a result');
+    else fail('(d) self in search: ' + JSON.stringify(last(wa, 'friend')));
+    st.calls.length = 0;
+    await S.handle(wa, { type: 'friend', op: 'search', q: 'x' });
+    if ((((last(wa, 'friend') || {}).results) || []).length === 0 && !st.calls.includes('profileByCallsignKey'))
+      ok('(d) search: a query shorter than the minimum never reaches the store');
+    else fail('(d) short query: ' + JSON.stringify(last(wa, 'friend')) + ' calls ' + JSON.stringify(st.calls));
+    await st.addBlock(A, C);
+    await S.handle(wa, { type: 'friend', op: 'search', q: 'Crater Two' });
+    if (((last(wa, 'friend') || {}).results || []).length === 0) ok('(d) search: someone you blocked is absent');
+    else fail('(d) blocked-by-me in search: ' + JSON.stringify(last(wa, 'friend')));
+    await st.addBlock(D, A);
+    await S.handle(wa, { type: 'friend', op: 'search', q: 'Dune Four' });
+    if (((last(wa, 'friend') || {}).results || []).length === 0) ok('(d) search: someone who blocked YOU is absent');
+    else fail('(d) blocked-me in search: ' + JSON.stringify(last(wa, 'friend')));
+  }
+
+  // ---- (d2) a search result is proven and its paint is checked --------------
+  // profileByCallsignKey selects callsign_key alongside callsign, so unlike the
+  // panel names this one CAN be proved, and is. `skin` is a client-written
+  // value too: a paint id is a fixed vocabulary, so it is checked against it.
+  {
+    const ODD = [
+      { id: A, callsign: 'Anvil Six',   friend_code: 'ABC234', callsign_key: 'anvil six',   callsign_set_at: null },
+      { id: B, callsign: 'FOLLOW ME OK', friend_code: 'BDF345', callsign_key: 'bunker nine', callsign_set_at: null, skin: 'gold' },
+      { id: C, callsign: 'Crater Two',  friend_code: 'CGH456', callsign_key: 'crater two',  callsign_set_at: null, skin: '../../etc/passwd' },
+    ];
+    const st = memStore(ODD);
+    const S = mkSocial(st);
+    const wa = mkws(A); S.onAuth(wa);
+    await S.handle(wa, { type: 'friend', op: 'search', q: 'Bunker Nine' });
+    const r1 = last(wa, 'friend');
+    if (r1.results && r1.results.length === 1 && r1.results[0].id === B && r1.results[0].callsign === null)
+      ok('(d2) search: a row whose callsign does not match its key is found but NOT named');
+    else fail('(d2) tampered search name: ' + JSON.stringify(r1.results));
+    await S.handle(wa, { type: 'friend', op: 'search', q: 'Crater Two' });
+    const r2 = last(wa, 'friend');
+    if (r2.results && r2.results.length === 1 && r2.results[0].skin === null)
+      ok('(d2) search: a paint id outside the known set is dropped, never echoed to another client');
+    else fail('(d2) junk skin: ' + JSON.stringify(r2.results));
+  }
+
+  // ---- (e) request, accept, decline, remove ---------------------------------
+  {
+    const st = memStore(ROWS);
+    const S = mkSocial(st);
+    const wa = mkws(A), wb = mkws(B);
+    S.onAuth(wa); S.onAuth(wb);
+    await S.handle(wa, { type: 'friend', op: 'request', to: B, id: 21 });
+    const req = last(wa, 'friend');
+    if (req && req.ok === true && req.state === 'requested' && req.id === 21 && st.requests.has(A + '>' + B))
+      ok('(e) request: one row, state requested, the id echoed');
+    else fail('(e) request: ' + JSON.stringify(req) + ' rows ' + JSON.stringify([...st.requests]));
+    const snapB = last(wb, 'friends');
+    if (snapB && snapB.requests.in.length === 1 && snapB.requests.in[0].id === A)
+      ok('(e) request: B’s live socket got a snapshot showing the incoming request');
+    else fail('(e) B snapshot: ' + JSON.stringify(snapB));
+    await S.handle(wa, { type: 'friend', op: 'request', to: B });
+    if ((last(wa, 'friend') || {}).error === 'already') ok('(e) request: asking twice is already');
+    else fail('(e) double request: ' + JSON.stringify(last(wa, 'friend')));
+    await S.handle(wa, { type: 'friend', op: 'request', to: A });
+    if ((last(wa, 'friend') || {}).error === 'self') ok('(e) request: to yourself is self');
+    else fail('(e) self request: ' + JSON.stringify(last(wa, 'friend')));
+    await S.handle(wa, { type: 'friend', op: 'request', to: uid(99) });
+    if ((last(wa, 'friend') || {}).error === 'no_such_user') ok('(e) request: an unknown id is no_such_user');
+    else fail('(e) unknown request: ' + JSON.stringify(last(wa, 'friend')));
+    st.calls.length = 0;
+    await S.handle(wa, { type: 'friend', op: 'request', to: 'not-a-uuid' });
+    if ((last(wa, 'friend') || {}).error === 'no_such_user' && !st.calls.includes('profileById'))
+      ok('(e) request: an id that is not a uuid is refused without a query');
+    else fail('(e) junk id request: ' + JSON.stringify(last(wa, 'friend')) + ' calls ' + JSON.stringify(st.calls));
+    await S.handle(wb, { type: 'friend', op: 'accept', from: uid(99) });
+    if ((last(wb, 'friend') || {}).error === 'no_such_request') ok('(e) accept: with no request pending, no_such_request');
+    else fail('(e) empty accept: ' + JSON.stringify(last(wb, 'friend')));
+    await S.handle(wb, { type: 'friend', op: 'accept', from: A });
+    if ((last(wb, 'friend') || {}).ok === true && st.friends.has(pair(A, B)) && st.requests.size === 0)
+      ok('(e) accept: friendship written, request gone');
+    else fail('(e) accept: ' + JSON.stringify(last(wb, 'friend')) + ' rows ' + JSON.stringify([...st.friends]) + JSON.stringify([...st.requests]));
+    await S.handle(wa, { type: 'friend', op: 'remove', id: B });
+    if ((last(wa, 'friend') || {}).ok === true && st.friends.size === 0) ok('(e) remove: the friendship row is gone');
+    else fail('(e) remove: ' + JSON.stringify(last(wa, 'friend')) + ' rows ' + JSON.stringify([...st.friends]));
+    await S.handle(wa, { type: 'friend', op: 'remove', id: C });
+    if ((last(wa, 'friend') || {}).error === 'no_such_user') ok('(e) remove: someone who is not a friend is no_such_user');
+    else fail('(e) stray remove: ' + JSON.stringify(last(wa, 'friend')));
+    // Postgres renders uuid lower-case, so every id the store hands back is
+    // lower-case. An id that came off the wire in another case is the same
+    // account and must compare equal, not silently miss every list here.
+    await st.addFriendship(A, C);
+    await S.handle(wa, { type: 'friend', op: 'remove', id: C.toUpperCase() });
+    if ((last(wa, 'friend') || {}).ok === true && st.friends.size === 0)
+      ok('(e) remove: an upper-case uuid off the wire still matches the account');
+    else fail('(e) upper-case remove: ' + JSON.stringify(last(wa, 'friend')) + ' rows ' + JSON.stringify([...st.friends]));
+    const wc = mkws(C); S.onAuth(wc);
+    await S.handle(wa, { type: 'friend', op: 'request', to: C });
+    await S.handle(wc, { type: 'friend', op: 'decline', from: A });
+    if ((last(wc, 'friend') || {}).ok === true && st.requests.size === 0 && st.friends.size === 0)
+      ok('(e) decline: the request is deleted and no friendship is written');
+    else fail('(e) decline: ' + JSON.stringify([...st.requests]) + JSON.stringify([...st.friends]));
+    st.calls.length = 0;
+    await S.handle(wc, { type: 'friend', op: 'decline', from: D });
+    if ((last(wc, 'friend') || {}).error === 'no_such_request' && !st.calls.includes('deleteRequest'))
+      ok('(e) decline: a request nobody sent is no_such_request, and costs no write');
+    else fail('(e) stray decline: ' + JSON.stringify(last(wc, 'friend')) + ' calls ' + JSON.stringify(st.calls));
+  }
+
+  // ---- (e2) a block beats a request that predates it -------------------------
+  // The fifth route in. A request sent before a block is still sitting in the
+  // panel afterwards, and accepting it would hand a blocked player a friendship
+  // through the one op that never asks about blocks. Declining it must still
+  // work — that is how the row gets cleared.
+  {
+    const st = memStore(ROWS);
+    const S = mkSocial(st);
+    const wa = mkws(A), wb = mkws(B);
+    S.onAuth(wa); S.onAuth(wb);
+    await st.addRequest(B, A);
+    await st.addBlock(A, B);                        // A blocked B afterwards
+    await S.handle(wa, { type: 'friend', op: 'accept', from: B });
+    if ((last(wa, 'friend') || {}).error === 'blocked' && st.friends.size === 0)
+      ok('(e2) accept: a pending request from someone you have since blocked is refused');
+    else fail('(e2) accept while blocking: ' + JSON.stringify(last(wa, 'friend')) + ' rows ' + JSON.stringify([...st.friends]));
+    const st2 = memStore(ROWS);
+    const S2 = mkSocial(st2);
+    const wa2 = mkws(A); S2.onAuth(wa2);
+    await st2.addRequest(B, A);
+    await st2.addBlock(B, A);                       // B blocked A afterwards
+    await S2.handle(wa2, { type: 'friend', op: 'accept', from: B });
+    if ((last(wa2, 'friend') || {}).error === 'blocked' && st2.friends.size === 0)
+      ok('(e2) accept: a pending request from someone who has since blocked YOU is refused too');
+    else fail('(e2) accept while blocked: ' + JSON.stringify(last(wa2, 'friend')) + ' rows ' + JSON.stringify([...st2.friends]));
+    await S2.handle(wa2, { type: 'friend', op: 'decline', from: B });
+    if ((last(wa2, 'friend') || {}).ok === true && st2.requests.size === 0)
+      ok('(e2) decline: clearing the row still works — a block must not strand a request in the panel');
+    else fail('(e2) decline while blocked: ' + JSON.stringify(last(wa2, 'friend')) + ' rows ' + JSON.stringify([...st2.requests]));
+    // The other direction into the same wall: a fresh request, rather than one
+    // that predates the block.
+    const st3 = memStore(ROWS);
+    const S3 = mkSocial(st3);
+    const wa3 = mkws(A); S3.onAuth(wa3);
+    await st3.addBlock(A, C);
+    await S3.handle(wa3, { type: 'friend', op: 'request', to: C });
+    if ((last(wa3, 'friend') || {}).error === 'blocked' && st3.requests.size === 0)
+      ok('(e2) request: someone you blocked cannot be asked');
+    else fail('(e2) request to blocked: ' + JSON.stringify(last(wa3, 'friend')) + ' rows ' + JSON.stringify([...st3.requests]));
+    await st3.addBlock(D, A);
+    await S3.handle(wa3, { type: 'friend', op: 'request', to: D });
+    if ((last(wa3, 'friend') || {}).error === 'blocked' && st3.requests.size === 0)
+      ok('(e2) request: someone who blocked YOU cannot be asked either');
+    else fail('(e2) request to blocker: ' + JSON.stringify(last(wa3, 'friend')) + ' rows ' + JSON.stringify([...st3.requests]));
+  }
+
+  // ---- (e3) a blocked player is not in the panel, whatever the tables say ----
+  // Task 6's block op is expected to delete the friendship and the requests as
+  // it writes the row. This asserts the read model does not DEPEND on that: a
+  // block is the last word even when the rows it should have removed survive.
+  {
+    const st = memStore(ROWS);
+    await st.addFriendship(A, B);
+    await st.addFriendship(A, C);
+    await st.addRequest(D, A);          // incoming, from someone A then blocks
+    await st.addRequest(A, E);          // outgoing, to someone who then blocks A
+    await st.addBlock(A, B);            // A blocked a friend
+    await st.addBlock(C, A);            // a friend blocked A
+    await st.addBlock(A, D);
+    await st.addBlock(E, A);
+    const S = mkSocial(st);
+    const wa = mkws(A); S.onAuth(wa);
+    await S.handle(wa, { type: 'friends' });
+    const f = last(wa, 'friends') || {};
+    if ((f.friends || ['x']).length === 0) ok('(e3) a friendship that outlived a block is not listed as a friend, in either direction');
+    else fail('(e3) blocked friend still listed: ' + JSON.stringify(f.friends));
+    if ((f.requests || {}).in && f.requests.in.length === 0 && f.requests.out.length === 0)
+      ok('(e3) a request that outlived a block is not listed either — that is them reaching you');
+    else fail('(e3) blocked requests still listed: ' + JSON.stringify(f.requests));
+    if ((f.blocked || []).length === 2 && f.blocked.every((x) => x.id === B || x.id === D))
+      ok('(e3) the Blocked list itself is the one place they still appear');
+    else fail('(e3) blocked list: ' + JSON.stringify(f.blocked));
+  }
+
+  // ---- (f) a request to someone who already requested you ACCEPTS ------------
+  {
+    const st = memStore(ROWS);
+    await st.addRequest(B, A);                      // B asked first
+    const S = mkSocial(st);
+    const wa = mkws(A), wb = mkws(B);
+    S.onAuth(wa); S.onAuth(wb);
+    await S.handle(wa, { type: 'friend', op: 'request', to: B });
+    const r = last(wa, 'friend');
+    if (r && r.ok === true && r.state === 'friends') ok('(f) mutual: the second request answers state friends, not requested');
+    else fail('(f) mutual reply: ' + JSON.stringify(r));
+    if (st.friends.has(pair(A, B)) && st.requests.size === 0) ok('(f) mutual: friendship written, both request rows cleared');
+    else fail('(f) mutual rows: ' + JSON.stringify([...st.friends]) + JSON.stringify([...st.requests]));
+    if (sent(wb, 'friends').length === 1 && (last(wb, 'friends').friends || []).length === 1)
+      ok('(f) mutual: B learns without asking');
+    else fail('(f) B fan-out: ' + JSON.stringify(wb.rx));
+  }
+
+  // ---- (g) presence reaches friends and nobody else --------------------------
+  {
+    const st = memStore(ROWS);
+    await st.addFriendship(A, B);                  // C is a stranger to both
+    const S = mkSocial(st);
+    const wa = mkws(A), wb = mkws(B), wc = mkws(C);
+    S.onAuth(wb); S.onAuth(wc);
+    await sleep(120);                              // let B's and C's own arrivals flush
+    wb.rx.length = 0; wc.rx.length = 0;
+    S.onAuth(wa);
+    // A tick, well inside the 40 ms window: long enough for every microtask a
+    // flush would queue if it ran straight away, far short of the timer.
+    await sleep(5);
+    if (!sent(wb, 'presence').length) ok('(g) presence: nothing leaves inside the window');
+    else fail('(g) presence fired early: ' + JSON.stringify(wb.rx));
+    await sleep(120);
+    const p = last(wb, 'presence');
+    if (p && p.id === A && p.online === true) ok('(g) presence: A coming online reaches their friend B');
+    else fail('(g) presence to friend: ' + JSON.stringify(wb.rx));
+    if (!sent(wc, 'presence').length) ok('(g) presence: the stranger C hears nothing');
+    else fail('(g) stranger got presence: ' + JSON.stringify(wc.rx));
+    wb.rx.length = 0;
+    S.onClose(wa);
+    await sleep(120);
+    const q = last(wb, 'presence');
+    if (q && q.id === A && q.online === false) ok('(g) presence: A closing reaches B as offline');
+    else fail('(g) offline frame: ' + JSON.stringify(wb.rx));
+    wb.rx.length = 0;
+    const wa2 = mkws(A), wa3 = mkws(A);
+    S.onAuth(wa2); await sleep(120); wb.rx.length = 0;
+    S.onAuth(wa3); S.onClose(wa3);                 // a SECOND socket opening and closing is not a change
+    await sleep(120);
+    if (!sent(wb, 'presence').length) ok('(g) presence: only the first and last socket of a player move presence');
+    else fail('(g) second socket moved presence: ' + JSON.stringify(wb.rx));
+    S.onClose(wa2);                                // A is offline again
+    await sleep(120);
+    const wa4 = mkws(A); S.onAuth(wa4);
+    await sleep(120); wb.rx.length = 0;            // B knows A is online
+    wa4.userId = null;                             // the sign-out hello clears it; the seat closes after
+    S.onClose(wa4);
+    await sleep(120);
+    const z = last(wb, 'presence');
+    if (z && z.id === A && z.online === false) ok('(g) presence: a socket that signed out still leaves the map');
+    else fail('(g) after sign-out: ' + JSON.stringify(wb.rx));
+  }
+
+  // ---- (g2) a guest has no presence, in either direction ---------------------
+  {
+    const st = memStore(ROWS);
+    await st.addFriendship(A, B);
+    const S = mkSocial(st);
+    const guest = mkws(C, true), wb = mkws(B);
+    S.onAuth(wb); S.onAuth(guest);
+    await sleep(120);
+    if (S.online.size === 1 && S.online.has(B)) ok('(g2) an anonymous account gets no entry in the online map');
+    else fail('(g2) online map: ' + JSON.stringify([...S.online.keys()]));
+    if (!sent(wb, 'presence').length) ok('(g2) a guest arriving moves nobody’s presence');
+    else fail('(g2) guest moved presence: ' + JSON.stringify(wb.rx));
+    S.onClose(guest);
+    await sleep(120);
+    ok('(g2) closing a guest socket is a no-op');
+  }
+
+  // ---- (h) the debounce collapses a flap ------------------------------------
+  {
+    const st = memStore(ROWS);
+    await st.addFriendship(A, B);
+    const S = mkSocial(st);
+    const wb = mkws(B); S.onAuth(wb);
+    const wa1 = mkws(A); S.onAuth(wa1);
+    await sleep(120);                              // B has been told A is online
+    wb.rx.length = 0;
+    S.onClose(wa1);                                // drops...
+    const wa2 = mkws(A); S.onAuth(wa2);            // ...and is back inside the window
+    await sleep(120);
+    if (!sent(wb, 'presence').length) ok('(h) debounce: a drop and a reconnect inside the window collapse to nothing');
+    else fail('(h) flap leaked: ' + JSON.stringify(wb.rx));
+    wb.rx.length = 0;
+    S.onClose(wa2);
+    const wa3 = mkws(A); S.onAuth(wa3); S.onClose(wa3);   // ends OFFLINE inside the window
+    await sleep(120);
+    const frames = sent(wb, 'presence');
+    if (frames.length === 1 && frames[0].online === false)
+      ok('(h) debounce: exactly one frame, carrying the FINAL state of the flap');
+    else fail('(h) flap end state: ' + JSON.stringify(frames));
+  }
+
+  // ---- (h2) the pending flush never holds the process open -------------------
+  // A 2 s window means there is almost always a timer in flight when the last
+  // socket goes. test/run-all.sh runs this file as a child process and waits
+  // for it to EXIT; a ref'd timer would make the suite hang for the length of
+  // the window at best, and a production server carries the same handle.
+  {
+    const prev = process.env.SOCIAL_PRESENCE_MS;
+    process.env.SOCIAL_PRESENCE_MS = '30000';
+    const S = mkSocial(memStore(ROWS));
+    process.env.SOCIAL_PRESENCE_MS = prev;
+    S.onAuth(mkws(A));                             // schedules a 30 s flush
+    const active = process.getActiveResourcesInfo();
+    if (!active.includes('Timeout')) ok('(h2) the pending presence flush is unref’d — it cannot keep the event loop alive');
+    else fail('(h2) a pending presence flush is holding the process open: ' + JSON.stringify(active));
+  }
+
+  // ---- (i) ten friend ops a minute (design 4.2) -----------------------------
+  {
+    const st = memStore(ROWS);
+    const S = mkSocial(st);
+    const wa = mkws(A), wd = mkws(D);
+    S.onAuth(wa); S.onAuth(wd);
+    for (let i = 0; i < 10; i++) await S.handle(wa, { type: 'friend', op: 'search', q: 'nobody here' });
+    const before = sent(wa, 'friend').filter((m) => m.error === 'slow_down').length;
+    await S.handle(wa, { type: 'friend', op: 'search', q: 'nobody here' });
+    const after = sent(wa, 'friend').filter((m) => m.error === 'slow_down').length;
+    if (before === 0 && after === 1) ok('(i) rate limit: ten friend ops pass, the eleventh is slow_down');
+    else fail(`(i) slow_down before ${before} after ${after}`);
+    await S.handle(wd, { type: 'friend', op: 'search', q: 'nobody here' });
+    if (!sent(wd, 'friend').filter((m) => m.error === 'slow_down').length)
+      ok('(i) rate limit: the bucket is per socket, another player is unaffected');
+    else fail('(i) other socket limited: ' + JSON.stringify(wd.rx));
+    await S.handle(wa, { type: 'friend', op: 'remove', id: B });
+    if ((last(wa, 'friend') || {}).error === 'no_such_user')
+      ok('(i) rate limit: accept, decline and remove are not in the bucket');
+    else fail('(i) remove while limited: ' + JSON.stringify(last(wa, 'friend')));
+    CLOCK += 60001;
+    await S.handle(wa, { type: 'friend', op: 'search', q: 'nobody here' });
+    const l = last(wa, 'friend');
+    if (l && l.op === 'search' && Array.isArray(l.results)) ok('(i) rate limit: the window slides, a minute later the bucket is clear');
+    else fail('(i) after the minute: ' + JSON.stringify(l));
+    CLOCK -= 60001;
+  }
+
+  // ---- (i2) the read model has a bucket of its own --------------------------
+  // Six store reads per frame and no limit in design 4.2, behind an engine
+  // socket limiter that allows 60 frames a second: one signed-in client could
+  // aim ~360 PostgREST reads a second at our own database. The allowance is
+  // deliberately far above any honest client — a panel opens, it does not poll.
+  {
+    const st = memStore(ROWS);
+    const S = mkSocial(st);
+    const wa = mkws(A); S.onAuth(wa);
+    for (let i = 0; i < 20; i++) await S.handle(wa, { type: 'friends' });
+    const before = sent(wa, 'friends').filter((m) => m.error).length;
+    await S.handle(wa, { type: 'friends', id: 'over' });
+    const l = last(wa, 'friends');
+    if (before === 0 && l && l.error === 'slow_down' && l.id === 'over')
+      ok('(i2) rate limit: twenty friends snapshots pass, the twenty-first is slow_down');
+    else fail('(i2) friends bucket: ' + before + ' early errors, then ' + JSON.stringify(l));
+    st.calls.length = 0;
+    await S.handle(wa, { type: 'friends' });
+    if (!st.calls.length) ok('(i2) rate limit: a refused snapshot costs the database nothing');
+    else fail('(i2) refused snapshot still read: ' + JSON.stringify(st.calls));
+    await S.handle(wa, { type: 'friend', op: 'search', q: 'Bunker Nine' });
+    if (Array.isArray((last(wa, 'friend') || {}).results))
+      ok('(i2) rate limit: the snapshot bucket is separate from the friend-op bucket');
+    else fail('(i2) friend op starved by the snapshot bucket: ' + JSON.stringify(last(wa, 'friend')));
+  }
+
+  // ---- (j) a guest, and a store that is down --------------------------------
+  {
+    const st = memStore(ROWS);
+    const S = mkSocial(st);
+    // A GUEST HAS A REAL ACCOUNT ID. public/cloud.js mints an anonymous
+    // Supabase account for anyone who saves anything, so a guard that reads
+    // ws.userId alone waves this socket straight through (BINDING resolution 1).
+    const g = mkws(uid(77), true);
+    await S.handle(g, { type: 'friends', id: 3 });
+    await S.handle(g, { type: 'friend', op: 'add', code: 'ABC234' });
+    const two = g.rx.filter((m) => m.type === 'social' && m.error === 'sign_in');
+    if (two.length === 2 && g.rx.length === 2) ok('(j) an ANONYMOUS account gets sign_in for both friend types and nothing else');
+    else fail('(j) guest replies: ' + JSON.stringify(g.rx));
+    if (!st.calls.length) ok('(j) a guest never reaches the store');
+    else fail('(j) guest touched the store: ' + JSON.stringify(st.calls));
+    const nobody = mkws(null);
+    await S.handle(nobody, { type: 'friends', id: 4 });
+    if ((last(nobody, 'social') || {}).error === 'sign_in') ok('(j) a socket that never said hello is refused too');
+    else fail('(j) unauthenticated reply: ' + JSON.stringify(nobody.rx));
+
+    const wa = mkws(A); S.onAuth(wa);
+    st.boom.add('friendIdsOf');
+    await S.handle(wa, { type: 'friends', id: 5 });
+    const f = last(wa, 'friends');
+    if (f && f.error === 'unavailable' && f.id === 5) ok('(j) a store fault answers unavailable, with the id, and the socket lives');
+    else fail('(j) friends under fault: ' + JSON.stringify(f));
+    if (!(f && (f.friends || f.requests || f.blocked))) ok('(j) an unavailable snapshot carries no empty list to render as "no friends"');
+    else fail('(j) unavailable snapshot looks empty rather than broken: ' + JSON.stringify(f));
+    await S.handle(wa, { type: 'friend', op: 'request', to: B });
+    const r = last(wa, 'friend');
+    if (r && r.op === 'request' && r.error === 'unavailable') ok('(j) a store fault inside an op answers unavailable too');
+    else fail('(j) request under fault: ' + JSON.stringify(r));
+    st.boom.clear();
+    await S.handle(wa, { type: 'friend', op: 'nonsense' });
+    if ((last(wa, 'friend') || {}).op === 'nonsense') ok('(j) an unknown op is answered, not ignored and not thrown');
+    else fail('(j) unknown op: ' + JSON.stringify(last(wa, 'friend')));
+    st.boom.add('friendIdsOf');
+    wa.rx.length = 0;
+    S.onClose(wa);
+    await sleep(120);
+    ok('(j) a store fault during a presence flush costs a frame, never a throw');
+    st.boom.clear();
+  }
 }
 
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall social checks passed');

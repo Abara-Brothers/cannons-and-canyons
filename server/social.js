@@ -8,7 +8,14 @@
 // Everything this module touches is injected — the store, the blocklist terms,
 // the engine's send(), and the clock — so the whole layer runs in process with
 // no Supabase, no sockets and no real time (test/social.mjs).
-import { validateCallsign } from './callsign.js';
+import { validateCallsign, normaliseCallsign, CALLSIGN_MIN, CALLSIGN_MAX } from './callsign.js';
+// isUuid only — the pure shape test, not createStore. A friend op is handed an
+// account id straight off a socket, and server/store.js THROWS 'bad uuid' on a
+// malformed one; that throw would be answered 'unavailable', which is the wrong
+// word for a request that was simply misaddressed. Checking the shape here turns
+// it into 'no_such_user' and saves the round trip, using the same regex the
+// store guards its own query strings with rather than a second copy of it.
+import { isUuid } from './store.js';
 
 // The frame types that belong here and never reach the engine. server.js
 // imports this set to decide what to intercept; keep it in step with the
@@ -19,11 +26,26 @@ export const SOCIAL_TYPES = new Set(['friends', 'friend', 'block', 'callsign', '
 // the engine's 60 frames/s socket limiter: that one stops a flood of anything,
 // these stop one signed-in client turning a single socket into a write
 // amplifier against PostgREST. friend and report are wired by Tasks 5 and 6.
-const LIMITS = { callsign: 3, friend: 10, report: 5 };
+// `friends` — the READ MODEL — is not in design 4.2's table, and it is the
+// heaviest path in this layer: six PostgREST reads per frame, behind an engine
+// socket limiter that allows 60 frames a second. Unlimited, one signed-in client
+// could aim several hundred reads a second at our own database without sending a
+// single write. Twenty a minute is far above any honest client — a panel opens,
+// it does not poll — and 'slow_down' already has copy (BINDING resolution 16).
+// Stated here because it is a deviation from the spec's list, not an oversight.
+const LIMITS = { callsign: 3, friend: 10, friends: 20, report: 5 };
 
 // The chosen-callsign cooling-off period: a rolling 24 hours since the last
 // set, not a calendar day, so there is no timezone to be wrong about.
 const DAY = 86400000;
+
+// The cosmetic paint ids public/room-engine.js validates against (its SKINS),
+// COPIED rather than imported: nothing under server/ may pull in the game
+// engine, which the OFFLINE page also loads. A search result carries the found
+// player's paint (BINDING resolution 19) and a paint id is a closed vocabulary,
+// so whatever the profile holds is checked against this set before it is echoed
+// to another client. Keep in step with public/room-engine.js's SKINS.
+const SKIN_IDS = new Set(['olive', 'desert', 'jungle', 'midnight', 'arctic', 'gold']);
 
 export function createSocial({ store, terms, send, now }) {
   // userId -> that account's live sockets. "Online" is "the set is non-empty".
@@ -103,23 +125,45 @@ export function createSocial({ store, terms, send, now }) {
   // tell FRIENDS who is about, and an anonymous account can never be anyone's
   // friend, so listing one would leak a stranger's session into a friends panel
   // and grow this map by an entry per throwaway account.
+  //
+  // The socket also REMEMBERS WHICH ACCOUNT it was counted under. server.js's
+  // sign-out branch clears ws.userId and the seat closes afterwards, so a
+  // clean-up that looked the socket up by ws.userId alone would never find it
+  // and that account would read online for the life of the process.
   function onAuth(ws) {
-    if (!ws.userId || ws.isGuest) return;
+    if (!ws || !ws.userId || ws.isGuest) return;
+    if (ws.socialUser && ws.socialUser !== ws.userId) dropPresence(ws.socialUser, ws);
+    ws.socialUser = ws.userId;
     let set = online.get(ws.userId);
     if (!set) { set = new Set(); online.set(ws.userId, set); }
     set.add(ws);
+    // Every counted change asks for a flush, rather than only the first socket.
+    // The "only the first and last socket of a player move presence" property
+    // comes from the COLLAPSE in flushPresence, which is the one place it can be
+    // right, and is tested there — a second `if (!was)` here would be a branch
+    // with no observable behaviour to fail on, and it would also make a flush
+    // that lost its store read sticky, because nothing would ask again.
+    presenceChanged(ws.userId);
   }
 
-  // Call on close, and on a sign-out hello BEFORE ws.userId is cleared — this
-  // finds the socket by ws.userId and cannot clean up after the id is gone.
+  // Call on close, and on a sign-out hello. Unlike the first version of this
+  // function it does NOT depend on ws.userId still being set.
   function onClose(ws) {
-    const set = ws && ws.userId ? online.get(ws.userId) : null;
-    if (!set) return;
-    set.delete(ws);
+    if (!ws) return;
+    dropPresence(ws.socialUser || ws.userId, ws);
+    ws.socialUser = null;
+  }
+
+  function dropPresence(id, ws) {
+    const set = id ? online.get(id) : null;
+    // Only a socket that was actually counted can move presence — delete()
+    // answering false is how a double close, or a guest, costs nothing.
+    if (!set || !set.delete(ws)) return;
     // Drop the empty set rather than leaving it behind: this Map is keyed by
     // account and would otherwise grow by one entry per account that has ever
     // connected, for the life of the process.
-    if (!set.size) online.delete(ws.userId);
+    if (!set.size) online.delete(id);
+    presenceChanged(id);
   }
 
   // ---- callsign (design 4.2, 4.5) -------------------------------------------
@@ -199,9 +243,18 @@ export function createSocial({ store, terms, send, now }) {
           await callsign(ws, msg);
           return;
         case 'friends':
+          if (!requireLinked(ws, msg)) return;
+          // AWAIT, for the same reason the callsign branch above does: returning
+          // the promise hands its rejection to the caller and the net below
+          // never runs. handleFriends deliberately has no catch of its own — a
+          // failed snapshot must answer { type:'friends', error:'unavailable' }
+          // and that is exactly what the net produces.
+          await handleFriends(ws, msg);
+          return;
         case 'friend':
           if (!requireLinked(ws, msg)) return;
-          return reply(ws, msg, { type: msg.type, error: 'unavailable' });
+          await handleFriend(ws, msg);
+          return;
         case 'block':
         case 'report':
           // Open to a guest on purpose — see requireAccount above.
@@ -219,6 +272,330 @@ export function createSocial({ store, terms, send, now }) {
       // client is left waiting for a reply that is never coming.
       try { reply(ws, msg, { type: msg.type, error: 'unavailable' }); } catch {}
     }
+  }
+
+  // ---- presence (design 4.1) -------------------------------------------------
+  // Memory only. A userId is online while at least one of its sockets is live;
+  // nothing about presence is ever written to or read from the database.
+  //
+  // The window is read PER INSTANCE rather than at module load, so a suite can
+  // shorten it immediately before it builds its social layer even though this
+  // module was imported long before. That is the house pattern for a test-only
+  // time knob — GOLF_HOLD_MS, RESUME_GRACE_MS, PICK_MS and BOT_FIRE_MS all work
+  // this way. Two seconds in production (design 4.2).
+  const envPresence = Number(process.env.SOCIAL_PRESENCE_MS);
+  const PRESENCE_MS = Number.isFinite(envPresence) && envPresence >= 0 ? envPresence : 2000;
+  const presenceTimers = new Map();   // userId -> Timeout; at most one at a time
+  const presenceLast = new Map();     // userId -> the state its friends were last TOLD
+
+  const isOnline = (id) => { const s = online.get(id); return !!(s && s.size); };
+  const socketsOf = (id) => { const s = online.get(id); return s ? [...s] : []; };
+
+  // THE DEBOUNCE, PRECISELY, because "debounced 2 s" has three plausible
+  // meanings and only one of them is this:
+  //
+  //   * The FIRST change for a player schedules the ONLY flush. A further change
+  //     inside the window neither extends it nor queues a second one — it is
+  //     simply not scheduled, because a timer is already pending for that id. So
+  //     the frame arrives at most PRESENCE_MS after the FIRST change, never
+  //     later, however much flapping happens in between.
+  //   * The flush reads the LIVE state when it fires, not the state that
+  //     scheduled it, so what friends receive is the state at the END of the
+  //     window. A player who drops and reconnects inside it is never reported
+  //     offline; a player who connects and drops inside it is never reported
+  //     online.
+  //   * If that final state is what the friends were last TOLD, nothing is sent
+  //     at all. That is the ordinary case for a phone changing network.
+  //
+  // unref(): a pending flush must never hold the process open. With a two second
+  // window there is nearly always one in flight, and test/run-all.sh waits for
+  // this file's child process to exit.
+  function presenceChanged(id) {
+    if (!id || presenceTimers.has(id)) return;
+    const t = setTimeout(() => {
+      presenceTimers.delete(id);
+      flushPresence(id).catch(() => {});
+    }, PRESENCE_MS);
+    if (typeof t.unref === 'function') t.unref();
+    presenceTimers.set(id, t);
+  }
+
+  async function flushPresence(id) {
+    const state = isOnline(id);
+    if (presenceLast.get(id) === state) return;
+    let ids;
+    // A store fault costs one presence dot and nothing else. Recording the state
+    // as delivered only AFTER the read succeeds is what makes the next change
+    // try again rather than skip.
+    try { ids = await store.friendIdsOf(id); } catch { return; }
+    presenceLast.set(id, state);
+    const frame = { type: 'presence', id, online: state };
+    // FRIENDS ONLY, and the list comes from the friendship table rather than
+    // from the online map: presence is the one frame in this layer that goes to
+    // someone who did not ask for it, so who receives it is the whole guarantee.
+    for (const fid of ids) for (const w of socketsOf(fid)) send(w, frame);
+  }
+
+  // ---- names that came out of the database -----------------------------------
+  // WHO CAN WRITE THIS COLUMN? profiles.callsign is PATCHed by the account
+  // itself on every cloud save (profiles_update_own; public/cloud.js save()).
+  // profiles.callsign_key beside it is NOT — the phase 6 migration revokes
+  // update on it from the authenticated role, so the key is the only part of
+  // that row the server is entitled to believe. Task 4 closed this exact hole in
+  // the auth sink; the friends frame and the search reply are two more doors to
+  // it, and they are shut the same way.
+  const provenName = (row) => {
+    const key = row && typeof row.callsign_key === 'string' ? row.callsign_key : '';
+    if (!key) return null;
+    // validateCallsign stored key = normaliseCallsign(name).toLowerCase(), so
+    // the SHARED normaliser is by construction the one that wrote it. A second
+    // copy could only drift open.
+    const shown = normaliseCallsign(row.callsign);
+    return shown.toLowerCase() === key ? shown : null;
+  };
+
+  // A name with no key to prove it. server/store.js's profilesByIds selects
+  // `id,callsign` alone, so every name in the panel arrives this way, and a
+  // ROLLED name legitimately has no key and cannot be refused for lacking one.
+  // It is put through the SAME rules the callsign message enforces at set time —
+  // the character class, the length, and the injected blocklist — before anybody
+  // else sees it.
+  const presentable = (raw) => { const v = validateCallsign(raw, terms); return v.ok ? v.name : null; };
+
+  // What another player is shown for a row: a proven chosen name verbatim, a
+  // rolled name filtered, and NOTHING for a row that holds a key its callsign no
+  // longer matches. null keeps the row — and the Report and Block buttons on
+  // it — in place, which dropping the entry would not.
+  const displayName = (row) => {
+    if (!row) return null;
+    return row.callsign_key ? provenName(row) : presentable(row.callsign);
+  };
+
+  const skinOf = (row) => (row && typeof row.skin === 'string' && SKIN_IDS.has(row.skin) ? row.skin : null);
+
+  // ---- the friends read model (design 4.2, row 1) ----------------------------
+  // Five independent reads in one leg, then ONE name lookup: friends, both
+  // request directions and the blocked list all resolve out of a single
+  // profilesByIds rather than one query per person in the panel.
+  //
+  // profileById is the sixth read and the only per-id one. It is the player's
+  // OWN row, and it is here because it is the only row this frame gets to see a
+  // callsign_key for — which is what BINDING resolution 13 needs.
+  async function friendsSnapshot(userId) {
+    const [ids, reqs, blocks, friendCode, self] = await Promise.all([
+      store.friendIdsOf(userId),
+      store.requestsOf(userId),
+      store.blockIdsOf(userId),
+      store.ensureFriendCode(userId),
+      store.profileById(userId),
+    ]);
+    // BLOCKED EITHER WAY IS HIDDEN EVERYWHERE BUT THE BLOCKED LIST (design 4.2).
+    // Task 6's block op is expected to tear the friendship and the requests down
+    // as it writes the row, so in ordinary operation this filter removes
+    // nothing. It costs nothing either — blockIdsOf is already read above — and
+    // it is the difference between "a blocked player cannot reach you" being a
+    // property of THIS frame and it being a property of a cleanup running
+    // somewhere else. A pending request from a blocked player is them reaching
+    // you too, so it goes as well; the store's own 30-day sweep collects the row.
+    const hidden = new Set([...blocks.blocked, ...blocks.blockedBy]);
+    const visible = (list) => list.filter((id) => !hidden.has(id));
+    const friendIds = visible(ids);
+    const incoming = visible(reqs.incoming);
+    const outgoing = visible(reqs.outgoing);
+    const wanted = [...new Set([...friendIds, ...incoming, ...outgoing, ...blocks.blocked])];
+    const names = wanted.length ? await store.profilesByIds(wanted) : new Map();
+    const nameOf = (id) => displayName(names.get(id));
+    return {
+      type: 'friends',
+      friends: friendIds.map((id) => ({ id, callsign: nameOf(id), online: isOnline(id) })),
+      requests: {
+        in: incoming.map((id) => ({ id, callsign: nameOf(id) })),
+        out: outgoing.map((id) => ({ id, callsign: nameOf(id) })),
+      },
+      blocked: blocks.blocked.map((id) => ({ id, callsign: nameOf(id) })),
+      friendCode,
+      // BINDING resolution 13. Without it a player signing in on a second device
+      // is told to choose a callsign they already hold, and the client would
+      // have to guess one out of local storage. null means "this account holds
+      // only a ROLLED name", which is precisely when the hint belongs.
+      callsign: provenName(self),
+    };
+  }
+
+  // Both sides of any change see it without asking (design 4.2). Swallows its
+  // own faults: a fan-out is a courtesy, never a reason to fail an operation
+  // that has already been written and already been answered. Carries no `id`,
+  // because it answers no request — a client must not match it to one.
+  async function pushFriends(userId) {
+    const live = socketsOf(userId);
+    if (!live.length) return;
+    let snap;
+    try { snap = await friendsSnapshot(userId); } catch { return; }
+    for (const w of live) send(w, snap);
+  }
+  const pushBoth = async (a, b) => { await pushFriends(a); await pushFriends(b); };
+
+  // ---- the friend operations -------------------------------------------------
+  // reply(ws, msg, frame) is Task 4's helper and echoes msg.id; BINDING
+  // resolution 11 fixes both the name and the argument order.
+  const friendReply = (ws, msg, op, rest) => reply(ws, msg, { type: 'friend', op, ...rest });
+
+  // Every op needs the same three facts about the other player, so read them
+  // once, concurrently, instead of three times down three branches.
+  async function relationTo(me, other) {
+    const [ids, reqs, blocks] = await Promise.all([
+      store.friendIdsOf(me), store.requestsOf(me), store.blockIdsOf(me),
+    ]);
+    return {
+      friend: ids.includes(other),
+      incoming: reqs.incoming.includes(other),
+      outgoing: reqs.outgoing.includes(other),
+      // EITHER WAY. Blocking is not a mute: the player who blocked and the
+      // player who was blocked are equally invisible to each other.
+      blocked: blocks.blocked.includes(other) || blocks.blockedBy.includes(other),
+    };
+  }
+
+  // An id off the wire, in the shape the store's own ids come back in. Postgres
+  // renders uuid lower-case, so an upper-case id from a client would compare
+  // false against every list here while still being a perfectly valid account.
+  const wireId = (v) => String(v == null ? '' : v).trim().toLowerCase();
+
+  async function handleFriends(ws, msg) {
+    if (!rateOk(ws, 'friends', LIMITS.friends)) return reply(ws, msg, { type: 'friends', error: 'slow_down' });
+    // No try/catch: handle()'s net answers { type:'friends', error:'unavailable' }
+    // for a throw here, which is the right frame. Note what it does NOT do —
+    // send empty lists. A panel that renders "no friends yet" because PostgREST
+    // was down is worse than one that says it could not load.
+    reply(ws, msg, await friendsSnapshot(ws.userId));
+  }
+
+  async function friendAdd(ws, msg) {
+    const code = String(msg.code == null ? '' : msg.code).trim().toUpperCase().replace(/^FR-/, '');
+    if (!/^[A-Z0-9]{6}$/.test(code)) return friendReply(ws, msg, 'add', { error: 'no_such_code' });
+    const them = await store.profileByFriendCode(code);
+    if (!them) return friendReply(ws, msg, 'add', { error: 'no_such_code' });
+    if (them.id === ws.userId) return friendReply(ws, msg, 'add', { error: 'self' });
+    const rel = await relationTo(ws.userId, them.id);
+    if (rel.blocked) return friendReply(ws, msg, 'add', { error: 'blocked' });
+    if (rel.friend) return friendReply(ws, msg, 'add', { error: 'already' });
+    // D2: a code or a link is mutual ON ENTRY — no request, straight to friends.
+    // Whoever holds the code was given it, so the consent already happened.
+    await store.addFriendship(ws.userId, them.id);
+    // Any request either way is now spent. Left behind, the panel would show a
+    // pending request to somebody who is already a friend.
+    if (rel.incoming) await store.deleteRequest(them.id, ws.userId);
+    if (rel.outgoing) await store.deleteRequest(ws.userId, them.id);
+    friendReply(ws, msg, 'add', { ok: true, friend: { id: them.id, callsign: displayName(them), online: isOnline(them.id) } });
+    await pushBoth(ws.userId, them.id);
+  }
+
+  // Chosen names are unique, so an exact key match is 0 or 1 rows — there is no
+  // list to page and no prefix search to abuse (design 4.2, row 3).
+  async function friendSearch(ws, msg) {
+    const none = () => friendReply(ws, msg, 'search', { results: [] });
+    const q = normaliseCallsign(msg.q);
+    // Code points, because that is how validateCallsign measured the name that
+    // was stored: one astral letter is one character on both sides.
+    const n = [...q].length;
+    if (n < CALLSIGN_MIN || n > CALLSIGN_MAX) return none();
+    const them = await store.profileByCallsignKey(q.toLowerCase());
+    if (!them || them.id === ws.userId) return none();
+    const blocks = await store.blockIdsOf(ws.userId);
+    // A MISS, not an error: "no such player" and "that player has blocked you"
+    // must be the same answer, or search becomes a way to enumerate blocks.
+    if (blocks.blocked.includes(them.id) || blocks.blockedBy.includes(them.id)) return none();
+    // BINDING resolution 19: spec 5.5 draws the found player's tank in their own
+    // paint, so the result carries one — checked, never passed through.
+    friendReply(ws, msg, 'search', { results: [{ id: them.id, callsign: displayName(them), skin: skinOf(them) }] });
+  }
+
+  async function friendRequest(ws, msg) {
+    const to = wireId(msg.to);
+    if (!isUuid(to)) return friendReply(ws, msg, 'request', { error: 'no_such_user' });
+    if (to === wireId(ws.userId)) return friendReply(ws, msg, 'request', { error: 'self' });
+    const them = await store.profileById(to);
+    if (!them) return friendReply(ws, msg, 'request', { error: 'no_such_user' });
+    const rel = await relationTo(ws.userId, to);
+    if (rel.blocked) return friendReply(ws, msg, 'request', { error: 'blocked' });
+    if (rel.friend) return friendReply(ws, msg, 'request', { error: 'already' });
+    if (rel.incoming) {
+      // THEY ASKED FIRST, SO THIS REQUEST IS THE ACCEPTANCE (design 4.2, row 4).
+      // Without this the two of them sit at "requested" for ever, each waiting
+      // for an Accept button the other one cannot see, and nothing in the
+      // product ever says why.
+      await store.addFriendship(ws.userId, to);
+      await store.deleteRequest(to, ws.userId);
+      if (rel.outgoing) await store.deleteRequest(ws.userId, to);
+      friendReply(ws, msg, 'request', { ok: true, state: 'friends' });
+      return pushBoth(ws.userId, to);
+    }
+    if (rel.outgoing) return friendReply(ws, msg, 'request', { error: 'already' });
+    await store.addRequest(ws.userId, to);
+    friendReply(ws, msg, 'request', { ok: true, state: 'requested' });
+    await pushBoth(ws.userId, to);
+  }
+
+  async function friendAccept(ws, msg) {
+    const from = wireId(msg.from);
+    if (!from) return friendReply(ws, msg, 'accept', { error: 'no_such_request' });
+    const rel = await relationTo(ws.userId, from);
+    // A BLOCK BEATS A REQUEST THAT PREDATES IT. accept is the only op that acts
+    // on a row already sitting in the panel, so without this check a request
+    // sent before a block is still a way in — for a player you blocked, and for
+    // a player who blocked you. It is checked BEFORE the request exists, so a
+    // blocked player cannot use the two answers to probe for one.
+    if (rel.blocked) return friendReply(ws, msg, 'accept', { error: 'blocked' });
+    if (!rel.incoming) return friendReply(ws, msg, 'accept', { error: 'no_such_request' });
+    await store.addFriendship(ws.userId, from);
+    await store.deleteRequest(from, ws.userId);
+    if (rel.outgoing) await store.deleteRequest(ws.userId, from);
+    friendReply(ws, msg, 'accept', { ok: true });
+    await pushBoth(ws.userId, from);
+  }
+
+  // Not gated on blocks, deliberately: declining only DELETES a row, and a
+  // player who blocks someone must still be able to clear the request they left
+  // behind rather than look at it for thirty days.
+  async function friendDecline(ws, msg) {
+    const from = wireId(msg.from);
+    const reqs = await store.requestsOf(ws.userId);
+    if (!from || !reqs.incoming.includes(from)) return friendReply(ws, msg, 'decline', { error: 'no_such_request' });
+    await store.deleteRequest(from, ws.userId);
+    friendReply(ws, msg, 'decline', { ok: true });
+    await pushBoth(ws.userId, from);
+  }
+
+  // Design 4.2 names this parameter `id`, which is also the correlation key the
+  // contract echoes — for `remove` they are deliberately the same value, so the
+  // echo comes back as the removed friend's uuid. A client must therefore match
+  // this reply on type plus op and never treat `id` as unique per request
+  // (BINDING resolution 3).
+  async function friendRemove(ws, msg) {
+    const id = wireId(msg.id);
+    const ids = await store.friendIdsOf(ws.userId);
+    if (!id || !ids.includes(id)) return friendReply(ws, msg, 'remove', { error: 'no_such_user' });
+    await store.removeFriendship(ws.userId, id);
+    friendReply(ws, msg, 'remove', { ok: true });
+    await pushBoth(ws.userId, id);
+  }
+
+  const FRIEND_OPS = { add: friendAdd, search: friendSearch, request: friendRequest, accept: friendAccept, decline: friendDecline, remove: friendRemove };
+  // Design 4.2: friend add/search/request, ten a minute per socket. accept,
+  // decline and remove act on a row already on the player's screen, cost one
+  // write each and cannot be aimed at a stranger, so they are not in the bucket.
+  const FRIEND_LIMITED = new Set(['add', 'search', 'request']);
+
+  async function handleFriend(ws, msg) {
+    const op = typeof msg.op === 'string' ? msg.op : '';
+    const fn = FRIEND_OPS[op];
+    if (!fn) return friendReply(ws, msg, op || 'unknown', { error: 'unavailable' });
+    if (FRIEND_LIMITED.has(op) && !rateOk(ws, 'friend', LIMITS.friend)) return friendReply(ws, msg, op, { error: 'slow_down' });
+    // A catch of its own BESIDE handle()'s net, because this reply has to carry
+    // the OP: a client with two friend answers outstanding cannot tell which one
+    // failed from { type:'friend', error:'unavailable' } alone.
+    try { await fn(ws, msg); }
+    catch { friendReply(ws, msg, op, { error: 'unavailable' }); }
   }
 
   return { handle, online, onAuth, onClose };
