@@ -488,7 +488,32 @@ async function presentedName(token, typed) {
     if (self && self.error === 'self' && self.op === 'add') ok('(8c) blocking your own seat\'s handle is caught as self');
     else fail('(8c) self by handle replied ' + JSON.stringify(self));
 
+    // AND THE SAME CARD IN THE MATCH. The lobby lasts seconds; the HUD carries
+    // every player's name for the whole battle, so this is the screen a report
+    // is actually decided on. Same handles, positional this time, over the real
+    // socket.
+    g._rx.length = 0; h._rx.length = 0;
+    send(g, { type: 'startMatch' });
+    const started = await wait(g, 'start');
+    const hs = (started && started.handles) || [];
+    if (started && JSON.stringify(hs) === JSON.stringify([mine, theirs]))
+      ok('(8c) the in-match snapshot carries the same handles, one per seat, in seat order');
+    else fail('(8c) snapshot handles: ' + JSON.stringify(hs) + ' wanted ' + JSON.stringify([mine, theirs]));
+    if (started && !JSON.stringify(started).includes(HONEST_ID) && !JSON.stringify(started).includes(GUEST_ID))
+      ok('(8c) and no account uuid is anywhere in the snapshot either');
+    else fail('(8c) an account id reached a real snapshot');
+    g._rx.length = 0;
+    send(g, { type: 'report', handle: hs[1], id: 95 });
+    const inMatch = await wait(g, 'report');
+    if (inMatch && inMatch.ok === true) ok('(8c) the guest reports the player beside them MID-MATCH, by the handle in the snapshot');
+    else fail('(8c) in-match report replied ' + JSON.stringify(inMatch));
+    const lines = log.split('\n').filter((l) => l.startsWith('[report] '));
+    if (lines.length && !lines.some((l) => hs.some((x) => x && l.includes(x))))
+      ok('(8c) and still no handle, in-match or lobby, has reached a log line');
+    else fail('(8c) a handle reached the log: ' + JSON.stringify(lines));
+
     try { send(g, { type: 'leave' }); } catch {}
+
     try { g.close(); } catch {}
     try { h.close(); } catch {}
   }

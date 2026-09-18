@@ -591,7 +591,32 @@ function createRoom(hostWs, name, skin, opts = {}) {
 
 // Current-state snapshot — used both for match start and for resume.
 function snapshot(room, seat) {
+  // THE SAME SEAT HANDLES THE LOBBY SHOWS, in the frame a match actually lives
+  // in. A lobby lasts seconds; a match lasts many minutes and the HUD carries
+  // every player's name the whole time, so the in-match card is where somebody
+  // reads an offensive name and decides to act on it. Leaving Report reachable
+  // only from a lobby is the same unreachability resolution 24 exists to fix,
+  // moved one screen along.
+  //
+  // THIS FRAME IS READ POSITIONALLY and the lobby payload is not: the client
+  // does `S.names = m.names` and indexes by seat, so `handles` is a PARALLEL
+  // ARRAY — index is seat — and a seat with no account holds `null` in it. It
+  // cannot be omitted the way the lobby's key is, because dropping an element
+  // would shift every seat after it. The rule is the same one, spelled the way
+  // this frame is shaped.
+  //
+  // The key itself is still omitted when NO seat has a handle, which is every
+  // offline match: startLocal's stand-in socket carries no account and never
+  // can, so an offline snapshot does not move by a byte (ADR-001). Size is not
+  // a concern beside the terrain array this frame already carries — at most
+  // seven seats of nine bytes.
+  //
+  // seatHandle only WRITES p.handle for an accounted seat, so a bot's seat
+  // literal is never mutated and test/ffa_bots.mjs's key-for-key CPU seat check
+  // still describes the same object.
+  const handles = room.players.map((p) => (p ? seatHandle(room, p) : null));
   return {
+
     world: { w: room.worldW || WORLD_W, h: WORLD_H }, lavaY: room.lavaY || LAVA_Y,
     terrain: room.terrain.map(v => Math.round(v * 10) / 10),
     trees: room.trees,
@@ -614,6 +639,8 @@ function snapshot(room, seat) {
     n: room.players.length, mode: room.mode,
     names: room.players.map(p => p.name),
     skins: room.players.map(p => p.skin),
+    ...(handles.some(Boolean) ? { handles } : {}),
+
     facing: room.facing.slice(),
     alive: aliveFlags(room),
     hp: room.hp.map(h => Math.max(0, Math.round(h))), maxHp: MAX_HP,

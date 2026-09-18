@@ -266,14 +266,26 @@ function lobbyOf(...sockets) {
   if (resolveSeatHandle(wa, 'deadbeef') === null) ok('(d) even a forged handle on an accountless seat resolves to nobody');
   else fail('(d) an accountless seat resolved to ' + resolveSeatHandle(wa, 'deadbeef'));
 
-  // AND "NO HANDLE" IS NOT A HANDLE. An 'ai' room never broadcasts a lobby, so
-  // the HUMAN seat here holds an account and no handle at all — and a lookup
-  // that did not insist on a string would match it on `undefined` and hand back
-  // a real account to anyone who could get a non-string past the wire.
-  if (seats[0] && seats[0].handle === undefined && resolveSeatHandle(wa, undefined) === null)
-    ok('(d) an unminted seat is not reachable by sending nothing');
-  else fail('(d) undefined resolved to ' + resolveSeatHandle(wa, undefined));
   leave(wa);
+
+  // AND "NO HANDLE" IS NOT A HANDLE. A player who signs in while already seated
+  // holds an account with no handle until the next frame mints one — and a
+  // lookup that did not insist on a string would match that seat on `undefined`
+  // and hand a real account to anyone who could get a non-string past the wire.
+  const wl = mkws(null), wm = mkws(B);
+  lobbyOf(wl, wm);                       // wl was accountless when the lobby went out
+  wl.userId = C;                         // signs in, still seated, not yet rebroadcast
+  const seatL = roomOf(wl).players[0];
+  if (seatL && seatL.handle === undefined && resolveSeatHandle(wl, undefined) === null)
+    ok('(d) a seat that holds an account but no handle yet is not reachable by sending nothing');
+  else fail('(d) undefined resolved to ' + resolveSeatHandle(wl, undefined));
+  // ...and the next broadcast does mint it, so signing in mid-lobby works.
+  handleClientMessage(wm, { type: 'leave' });
+  const after = wireHandle(wl, 0);
+  if (/^[0-9a-f]{8}$/.test(String(after)) && resolveSeatHandle(wl, after) === C)
+    ok('(d) and the next broadcast mints one, so signing in mid-lobby is not a dead card');
+  else fail('(d) mid-lobby sign-in never got a handle: ' + JSON.stringify(after));
+  leave(wl);
 }
 
 // ---- (e) report and block through a handle, over the real seam -------------
@@ -531,6 +543,103 @@ function lobbyOf(...sockets) {
   leave(wb); leave(wa);
 }
 
+// ---- (n) an IN-MATCH card carries the same handle -------------------------
+// A lobby lasts seconds; a match lasts many minutes and the heads-up display
+// carries every player's name the whole time. That is where somebody actually
+// reads an offensive name and decides to act on it, so leaving Report reachable
+// only from the lobby is the same unreachability this task exists to fix, moved
+// one screen along.
+//
+// snapshot() has a shape constraint the lobby payload does not: it is read
+// POSITIONALLY. The client does `S.names = m.names` and indexes by seat, so
+// `handles` is a parallel array — index IS seat — and a seat with no account
+// holds `null` in it rather than being omitted, because omitting an element
+// from a positional array shifts every seat after it.
+{
+  const wa = mkws(A), wb = mkws(B), wc = mkws(null);   // C never saved: no account
+  handleClientMessage(wa, { type: 'create', mode: 'ffa', max: 3, name: ROLLED, skin: 'olive' });
+  const code = wa.roomCode;
+  const hLobby = wireHandle(wa, 0);
+  handleClientMessage(wb, { type: 'join', code, name: ROLLED, skin: 'olive' });
+  handleClientMessage(wc, { type: 'join', code, name: ROLLED, skin: 'olive' });  // fills it, starts it
+  const room = roomOf(wa);
+  const start = lastOf(wa, 'start');
+  // Defaulted so a MISSING field fails its own check and every later one, rather
+  // than throwing out of a suite that has live timers and would then just hang.
+  const hs = (start && start.handles) || [];
+  if (room && room.state === 'playing' && start) ok('(n) a three-seat ffa filled and started, and every seat got a snapshot');
+  else fail('(n) no start frame: ' + JSON.stringify(room && room.state));
+  if (Array.isArray(hs) && hs.length === start.names.length && hs.length === start.n)
+    ok('(n) handles is positional — one entry per seat, the same length as names');
+  else fail('(n) handles: ' + JSON.stringify(hs) + ' names ' + JSON.stringify(start && start.names));
+  if (/^[0-9a-f]{8}$/.test(String(hs[0])) && /^[0-9a-f]{8}$/.test(String(hs[1])) && hs[0] !== hs[1])
+    ok('(n) each accounted seat carries its own short handle in the match too');
+  else fail('(n) in-match handles: ' + JSON.stringify(hs));
+  if (hs[2] === null) ok('(n) and a seat with no account holds null — the slot is kept, the handle is not invented');
+  else fail('(n) accountless in-match seat: ' + JSON.stringify(hs[2]));
+  // THE SAME SEAT IN THE SAME ROOM IS THE SAME HANDLE. A card that changed
+  // identity between the lobby and the first shot would mean two tokens for one
+  // player and a menu that stops working the moment the match starts.
+  if (hs[0] === hLobby) ok('(n) the in-match handle is the one the lobby already showed — one per seat, not one per frame');
+  else fail('(n) the handle changed at kickoff: ' + JSON.stringify([hLobby, hs[0]]));
+  // Every recipient sees the same array, and nobody sees an account id.
+  const theirs = lastOf(wb, 'start');
+  if (theirs && JSON.stringify(theirs.handles) === JSON.stringify(hs)) ok('(n) every seat is sent the same handles, differing only in `you`');
+  else fail('(n) per-recipient handles: ' + JSON.stringify(theirs && theirs.handles));
+  const wire = JSON.stringify(start);
+  if (!wire.includes(A) && !wire.includes(B) && !wire.includes(A.slice(0, 8)) && !wire.includes(B.slice(0, 8)))
+    ok('(n) no account uuid — and no prefix of one — is anywhere in the snapshot');
+  else fail('(n) an account id reached the snapshot');
+
+  // IT RESOLVES UNDER EXACTLY THE SAME RULES, because it IS the same handle:
+  // the asker's own room, a seat held in it, and nothing else.
+  if (resolveSeatHandle(wb, hs[0]) === A) ok('(n) a player in the match resolves an in-match handle');
+  else fail('(n) in-match resolve: ' + resolveSeatHandle(wb, hs[0]));
+  const wOut = mkws(C); lobbyOf(wOut);
+  if (resolveSeatHandle(wOut, hs[0]) === null) ok('(n) somebody in another room resolves it to nothing');
+  else fail('(n) an in-match handle crossed rooms: ' + resolveSeatHandle(wOut, hs[0]));
+  if (resolveSeatHandle(wc, hs[2]) === null && resolveSeatHandle(wc, null) === null)
+    ok('(n) the accountless seat is not reachable, by its null or by anything else');
+  else fail('(n) the accountless in-match seat resolved to ' + resolveSeatHandle(wc, hs[2]));
+
+  // A RESUME CARRIES IT TOO, so a player who backgrounds the app and comes back
+  // does not lose the menu. Same function, same array.
+  wb._rx.length = 0;
+  handleClientMessage(wb, { type: 'resume', code, token: room.players[1].token });
+  const restore = lastOf(wb, 'restore');
+  if (restore && JSON.stringify(restore.handles) === JSON.stringify(hs)) ok('(n) a restore frame carries the same handles');
+  else fail('(n) restore handles: ' + JSON.stringify(restore && restore.handles));
+
+  // AND THEY DIE WITH THE ROOM, exactly as the lobby ones do.
+  leave(wc); leave(wb); leave(wa);
+  if (!rooms.has(code) && resolveSeatHandle(wb, hs[0]) === null) ok('(n) when the match ends the in-match handles resolve to nothing');
+  else fail('(n) a finished match still resolved: ' + resolveSeatHandle(wb, hs[0]));
+  leave(wOut);
+}
+
+// ---- (o) an in-match report, over the seam --------------------------------
+{
+  const st = memStore(ROWS);
+  const S = mkSocial(st);
+  const wa = mkws(A), wb = mkws(B);
+  handleClientMessage(wa, { type: 'create', mode: 'ffa', max: 2, name: ROLLED, skin: 'olive' });
+  handleClientMessage(wb, { type: 'join', code: wa.roomCode, name: ROLLED, skin: 'olive' });
+  S.onAuth(wa);
+  const hs = (lastOf(wa, 'start') || {}).handles || [];
+  const log = await withLog(() => S.handle(wa, { type: 'report', handle: hs[1], id: 61 }));
+  const r = lastOf(wa, 'report');
+  if (r && r.ok === true && st.reports.length === 1 && st.reports[0].reported === B)
+    ok('(o) a player mid-match reports the seat beside them, by the handle in the snapshot');
+  else fail('(o) in-match report: ' + JSON.stringify([r, st.reports]));
+  if (log.length === 1 && !log[0].includes(hs[0]) && !log[0].includes(hs[1]) && log[0].includes(B))
+    ok('(o) and no in-match handle reaches the log line either');
+  else fail('(o) in-match log: ' + JSON.stringify(log));
+  await withLog(() => S.handle(wa, { type: 'report', handle: hs[0], id: 62 }));
+  if (lastOf(wa, 'report').error === 'self' && st.reports.length === 1) ok('(o) your own in-match card is still caught as self');
+  else fail('(o) in-match self: ' + JSON.stringify(lastOf(wa, 'report')));
+  leave(wb); leave(wa);
+}
+
 // ---- (m) the offline page's payload does not move by a byte ---------------
 // public/app.js's stand-in socket (startLocal, `engineLink`) carries exactly
 // two properties — readyState and send — and the engine hangs roomCode and seat
@@ -551,6 +660,28 @@ function lobbyOf(...sockets) {
     ok('(m) and the whole players array is the literal it always was');
   else fail('(m) offline players: ' + JSON.stringify(l && l.players));
   leave(link);
+
+  // AND THE SAME FOR THE SNAPSHOT, which is the frame offline play actually
+  // lives in: a solo vs-CPU match is exactly what startLocal produces. No seat
+  // has an account, so the key is omitted entirely rather than sent as an array
+  // of nulls — an offline `start` frame does not move by a byte.
+  const solo = { readyState: 1, _rx: [], send(s) { this._rx.push(JSON.parse(s)); } };
+  handleClientMessage(solo, { type: 'ai', difficulty: 'easy', name: ROLLED, skin: 'olive' });
+  const st0 = lastOf(solo, 'start');
+  if (st0 && !('handles' in st0)) ok('(m) an offline solo match gets a snapshot with no handles key at all');
+  else fail('(m) offline snapshot carries handles: ' + JSON.stringify(st0 && st0.handles));
+  if (st0 && Array.isArray(st0.names) && st0.names.length === 2) ok('(m) and the rest of the snapshot is untouched');
+  else fail('(m) offline snapshot names: ' + JSON.stringify(st0 && st0.names));
+  leave(solo);
+
+  // A SOLO GOLF ROUND takes the other snapshot path (startGolf) and must be the
+  // same. It is also the one offline mode that sends `hole` frames.
+  const golf = { readyState: 1, _rx: [], send(s) { this._rx.push(JSON.parse(s)); } };
+  handleClientMessage(golf, { type: 'create', mode: 'golf', max: 1, name: ROLLED, skin: 'olive' });
+  const g0 = lastOf(golf, 'start');
+  if (g0 && !('handles' in g0) && g0.golf) ok('(m) and a solo golf round tees off with no handles key either');
+  else fail('(m) offline golf snapshot: ' + JSON.stringify(g0 && Object.keys(g0)));
+  leave(golf);
 }
 
 // ---- (j) nothing escaped, and nothing was left behind ---------------------
