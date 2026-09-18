@@ -87,6 +87,13 @@ run solo_engine node test/solo_engine.mjs
 # four-player round, the winner rule, and real four-, three- and two-player
 # holes played right through the engine.
 run golf_order node test/golf_order.mjs
+# The social layer's callsign message, in process: the two sign-in gates (a
+# linked account for callsigns and friends, any account for report and block —
+# a guest HAS an anonymous account id), the character/length/blocklist codes,
+# the uniqueness race, the once-a-day gate against an injected clock, the 3/min
+# bucket, and any throw answering unavailable instead of crashing a socket.
+# Fake store, no server, no Supabase.
+run social node test/social.mjs
 # The social data store: the exact PostgREST path of every method, the uuid gate
 # before any value is spliced into a query string, the friendship pair ordering,
 # the unique-violation-to-'taken' translation and the friend-code retry. Headless

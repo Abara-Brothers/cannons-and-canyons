@@ -183,16 +183,42 @@ function isProfane(raw) {
   return String(raw).toLowerCase().split(/[^a-z0-9@$!+]+/).map(lettersOf).some(t => BAD_WORD.includes(t));
 }
 // Names are NOT free text (ISSUE-015). A client may only send a callsign it
-// rolled from the two curated lists in game-core.js; anything else is replaced,
-// so no player-authored string ever reaches another player's screen or the
-// shared result card. The readonly input in index.html is a convenience — THIS
-// is the boundary, because a modified client can send whatever it wants.
+// rolled from the two curated lists in game-core.js, OR the one chosen callsign
+// the SERVER has already validated and stored for that socket's account and
+// passed in as `allowed`. Everything else is replaced. The readonly input in
+// index.html is a convenience — THIS is the boundary, because a modified client
+// can send whatever it wants, and `allowed` is the only door, opened only from
+// the server side.
 //
 // Replacement is deterministic on the rejected input: random would let a
 // griefer reroll until they got something they liked, and would change a
 // reconnecting player's identity mid-match.
-function sanitizeName(raw, seat = 0) {
+function sanitizeName(raw, seat = 0, allowed = null) {
   const name = String(raw ?? '');
+  // THE ONE EXEMPTION (design 4.5). `allowed` is the display form of a CHOSEN
+  // callsign that this socket's signed-in account already owns: server.js reads
+  // it from the profile row after the account's token verifies and hangs it on
+  // the socket as ws.chosenName. It got there by passing the length, character
+  // and blocklist rules and the unique index, on the server, before it was ever
+  // stored — so it is the one player-authored string that may reach another
+  // player's screen. It is a property of the socket OBJECT: nothing a client
+  // sends can set it, and the offline page (which imports this same file) never
+  // passes it, so offline behaviour is unchanged.
+  //
+  // Normalise the incoming copy the way the server normalised the stored one —
+  // NFC, trim, collapse runs — so a stray space, or an accented letter the
+  // client spells decomposed, does not cost the player their own name. NFC is
+  // not optional here: "Zoé" is one code point on one keyboard and two on
+  // another, and without it the second spelling silently loses its callsign.
+  // This repeats server/callsign.js normaliseCallsign rather than importing it,
+  // because that module reads the blocklist off disk and this file is loaded by
+  // the OFFLINE page, which must gain no Node API (ADR-001).
+  //
+  // What is returned is `allowed` — the SERVER's stored string — never the
+  // client's copy of it. A near-miss that normalises equal still cannot smuggle
+  // a different sequence of characters onto another player's screen.
+  if (typeof allowed === 'string' && allowed
+    && name.normalize('NFC').trim().replace(/\s+/gu, ' ') === allowed) return allowed;
   if (isGeneratedCallsign(name) && !isProfane(name)) return name;
   const h = [...name].reduce((a, c) => (a * 31 + c.charCodeAt(0)) | 0, 7) + seat * 2654435761;
   return callsignFromSeed(h);
@@ -465,7 +491,7 @@ function createRoom(hostWs, name, skin, opts = {}) {
   const room = {
     code, mode, max, hostSeat: 0,
     players: [
-      { ws: hostWs, name: sanitizeName(name, 0), token: makeToken(), connected: true, dropTimer: null, skin: sanitizeSkin(skin, 0) },
+      { ws: hostWs, name: sanitizeName(name, 0, hostWs && hostWs.chosenName), token: makeToken(), connected: true, dropTimer: null, skin: sanitizeSkin(skin, 0) },
     ],
     state: 'waiting',
     terrain: null, tanks: null,
@@ -1756,7 +1782,7 @@ export function handleClientMessage(ws, msg) {
       let seat = r.players.indexOf(null);                 // reuse a lobby hole first
       if (seat < 0) { seat = r.players.length; r.players.push(null); }
       r.players[seat] = {
-        ws, name: sanitizeName(msg.name, seat), token: makeToken(), loadout: sanitizeLoadoutFor(r.mode, msg.loadout),
+        ws, name: sanitizeName(msg.name, seat, ws.chosenName), token: makeToken(), loadout: sanitizeLoadoutFor(r.mode, msg.loadout),
         connected: true, dropTimer: null, skin: sanitizeSkin(msg.skin, seat),
       };
       ws.roomCode = code; ws.seat = seat;
@@ -1776,11 +1802,11 @@ export function handleClientMessage(ws, msg) {
         }
         r.players[0].loadout = host._qloadout || null;
         releasePriorRoom(ws);            // the joiner may have been sitting in a lobby
-        r.players.push({ ws, name: sanitizeName(msg.name, 1), token: makeToken(), connected: true, dropTimer: null, skin: sanitizeSkin(msg.skin, 1), loadout: sanitizeLoadout(msg.loadout) });
+        r.players.push({ ws, name: sanitizeName(msg.name, 1, ws.chosenName), token: makeToken(), connected: true, dropTimer: null, skin: sanitizeSkin(msg.skin, 1), loadout: sanitizeLoadout(msg.loadout) });
         ws.roomCode = r.code; ws.seat = 1;
         startGame(r);
       } else {
-        waiting = ws; ws._qname = sanitizeName(msg.name, 0); ws._qskin = msg.skin; ws._qloadout = sanitizeLoadout(msg.loadout);
+        waiting = ws; ws._qname = sanitizeName(msg.name, 0, ws.chosenName); ws._qskin = msg.skin; ws._qloadout = sanitizeLoadout(msg.loadout);
         send(ws, { type: 'queued' });
       }
       break;

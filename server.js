@@ -21,6 +21,13 @@ import {
   rooms, send, handleClientMessage, handleClose,
   setPushNudge, setAuthSink, setPushSubSink, setFaultSink, setCapacitySink, setMatchSink,
 } from './public/room-engine.js';
+// Server-only, and under server/ rather than public/ for a reason: the static
+// route serves nothing outside PUBLIC (containment check below), so
+// server/blocklist.txt is not web-reachable, and the offline page's copy of the
+// engine gains no database (ADR-001).
+import { createStore } from './server/store.js';
+import { createSocial, SOCIAL_TYPES } from './server/social.js';
+import { loadBlocklist } from './server/callsign.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, 'public');
@@ -75,6 +82,27 @@ const SB_URL = process.env.SUPABASE_URL || '';
 const SB_PUB = process.env.SUPABASE_PUBLISHABLE_KEY || '';
 const SB_SECRET = process.env.SUPABASE_SECRET_KEY || '';
 
+// ---- The social layer (design 4.1, 4.2, 4.5) --------------------------------
+// Built ONCE at module load, beside the other sinks. It owns no sockets: this
+// file hands it frames and tells it when a socket authenticates or closes.
+//
+// It degrades to nothing without the secret key, exactly like the push path:
+// with no Supabase there are no accounts, so there is nobody to be friends
+// with, and every social frame is answered 'unavailable' rather than dropped.
+// A missing or malformed blocklist turns the whole layer OFF rather than
+// running it unfiltered — an unfiltered chosen callsign is the one outcome
+// this feature must never produce — and says so loudly on stderr.
+let store = null, social = null;
+try {
+  const terms = loadBlocklist(path.join(__dirname, 'server', 'blocklist.txt'));
+  if (SB_URL && SB_SECRET) {
+    store = createStore({ sbAdmin });
+    social = createSocial({ store, terms, send, now: Date.now });
+  }
+} catch (err) {
+  console.error(`[boot] social off — ${err.message}`);
+}
+
 // ---- Native app identity (Universal Links / App Links) ----------------------
 // The bundle/package id is the same string on both platforms and is FIXED: it
 // is already registered with Apple and Google and cannot be changed after the
@@ -85,9 +113,17 @@ const APPLE_TEAM_ID = (process.env.APPLE_TEAM_ID || '').trim();
 // Comma-separated; Play App Signing and an upload key can both be listed.
 const ANDROID_CERT_SHA256 = (process.env.ANDROID_CERT_SHA256 || '').trim();
 
-// Who does this access token belong to? null on any failure — a garbage or
-// expired token must cost the sender nothing but the feature.
-async function sbUserFromToken(token) {
+// Who does this access token belong to, AND what KIND of account is it? null on
+// any failure — a garbage or expired token must cost the sender nothing but the
+// feature.
+//
+// `anonymous` is the field the whole social layer turns on. public/cloud.js
+// mints an ANONYMOUS Supabase account for every player who saves anything, so
+// a guest arrives with a perfectly real uuid: "has no ws.userId" is NOT "is a
+// guest", and a gate written that way lets every guest straight through
+// (BINDING.md resolution 1). GoTrue reports it on the same GET this function
+// already makes, so the kind costs nothing extra to learn.
+async function sbAccountFromToken(token) {
   if (!SB_URL || !SB_PUB || typeof token !== 'string' || !token || token.length > 4096) return null;
   try {
     // BOUND THE WAIT. Without a signal a degraded GoTrue leaves every one of
@@ -101,13 +137,35 @@ async function sbUserFromToken(token) {
     });
     if (!res.ok) return null;
     const u = await res.json();
-    return u && typeof u.id === 'string' ? u.id : null;
+    if (!u || typeof u.id !== 'string') return null;
+    // FAIL CLOSED ON THE KIND. Anything that is not an explicit `false` counts
+    // as anonymous, so a GoTrue that stops sending the field, or sends it as a
+    // string, costs a linked player the friends panel — it never hands a guest
+    // a chosen callsign, which is the failure that ends up on other screens.
+    return { id: u.id, anonymous: u.is_anonymous !== false };
   } catch { return null; }
+}
+
+// The id alone, for the three callers that only ever needed that. Delegating
+// rather than copying keeps ONE outbound call, one timeout and one place where
+// a token is judged; this signature and its call sites are unchanged.
+async function sbUserFromToken(token) {
+  const acct = await sbAccountFromToken(token);
+  return acct ? acct.id : null;
 }
 
 // Privileged PostgREST call. Body-parsing mirrors the client's hard-won
 // lesson: return=minimal answers 2xx with an EMPTY body, so parse by content.
 async function sbAdmin(method, path, body, prefer) {
+  // BOUND THE WAIT — the same reasoning as sbUserFromToken above, and the same
+  // measured cost: 8 sockets against a hanging upstream took RSS from 64 MB to
+  // 191 MB in ten seconds with no recovery (RISK-014). This call had no signal
+  // while its only callers were push and crash reporting, which fire rarely and
+  // from the server's own timers. The social layer changes that: every social
+  // frame from every signed-in socket is a new path to this fetch, so an
+  // unbounded wait here is now reachable by anyone with an account (BINDING.md
+  // resolution 4). A timeout surfaces as a throw and becomes 'unavailable' like
+  // any other store failure, so no caller needs to know.
   const res = await fetch(`${SB_URL}/rest/v1${path}`, {
     method,
     headers: {
@@ -117,6 +175,7 @@ async function sbAdmin(method, path, body, prefer) {
       ...(prefer ? { Prefer: prefer } : {}),
     },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    signal: AbortSignal.timeout(8000),
   });
   if (!res.ok) throw new Error(`sb ${method} ${res.status}`);
   const text = await res.text();
@@ -132,7 +191,14 @@ setAuthSink((ws, token) => {
   // identity for its whole life, so a device that signed out carried on
   // receiving that account's turn nudges, and any subscription it registered
   // was filed under the wrong person.
-  if (token === null) { ws.userId = null; return; }
+  if (token === null) {
+    // Presence is dropped BEFORE the id is cleared: onClose finds the socket by
+    // ws.userId, so clearing first would strand this socket in the online map
+    // under an account it no longer speaks for (design 4.1).
+    if (social) social.onClose(ws);
+    ws.userId = null; ws.isGuest = false; ws.chosenName = null; ws.authPending = null;
+    return;
+  }
 
   // BUDGET AND DEDUPE. `hello` is unauthenticated, needs no room and no seat, and
   // relayed 1:1 to GoTrue with nothing in the way — measured at 3,976 frames
@@ -152,7 +218,41 @@ setAuthSink((ws, token) => {
   if (ws.authTokens < 1) return;
   ws.authTokens -= 1;
   ws.lastHelloToken = token;
-  sbUserFromToken(token).then((id) => { if (id) ws.userId = id; }).catch(() => {});
+  // sbAccountFromToken, not sbUserFromToken: this sink is the ONLY place that
+  // needs the account KIND, and it is the place every social gate reads from.
+  // ws.isGuest travels beside ws.userId and is cleared with it, because a stale
+  // `false` left on a socket that later hellos as a guest is a guest holding a
+  // linked account's privileges (BINDING.md resolution 1).
+  //
+  // Verification is async and a social frame can arrive in the next
+  // millisecond. `authPending` is the handle the message loop waits on, so a
+  // `friends` sent straight after `hello` is answered for the account instead
+  // of being refused with sign_in for a race the client cannot see.
+  ws.authPending = sbAccountFromToken(token).then(async (acct) => {
+    if (!acct) return;
+    const id = acct.id;
+    // A socket that hellos as a DIFFERENT account would otherwise leave the
+    // previous one's presence behind — same reason as the sign-out branch.
+    if (social && ws.userId && ws.userId !== id) social.onClose(ws);
+    ws.userId = id;
+    ws.isGuest = acct.anonymous;
+    ws.chosenName = null;
+    if (!social) return;
+    social.onAuth(ws);
+    // The one name this socket may present as free text (public/room-engine.js
+    // sanitizeName). ONLY a chosen callsign carries a key; a rolled one leaves
+    // it null and goes through the ordinary rolled-pair check like everyone
+    // else's. A guest is skipped outright: it cannot hold a chosen name, so the
+    // read would be a PostgREST round trip per throwaway account to learn null.
+    // Best-effort: if the read fails the player keeps a rolled name, which is
+    // exactly what they had before this feature existed.
+    if (ws.isGuest) return;
+    try {
+      const p = await store.profileById(id);
+      // Re-check: a second hello may have landed while this read was in flight.
+      if (ws.userId === id) ws.chosenName = p && p.callsign_key ? p.callsign : null;
+    } catch {}
+  }).catch(() => {}).finally(() => { ws.authPending = null; });
 });
 
 // A player registered a push subscription: persist it keyed to their account
@@ -1293,6 +1393,26 @@ wss.on('connection', (ws) => {
     //     take the process — and every live match — down with it
     if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
     try {
+      if (SOCIAL_TYPES.has(msg.type)) {
+        // Social frames never enter the engine: the offline page imports the
+        // same file and must gain no database (ADR-001). They also WAIT for an
+        // in-flight hello, so a frame sent immediately after sign-in is
+        // answered for the account rather than refused for a race.
+        // ECHO THE ID HERE TOO. Every reply the social layer sends carries the
+        // request's id back; this branch is the one that does not go through it,
+        // and without the echo a client correlating by id waits for ever for the
+        // one answer it was always going to get — on exactly the deploys where
+        // the layer is off (no secret key, or a blocklist that would not load).
+        if (!social) {
+          const frame = { type: msg.type, error: 'unavailable' };
+          if (msg.id !== undefined) frame.id = msg.id;
+          send(ws, frame);
+          return;
+        }
+        const run = () => social.handle(ws, msg).catch((e) => reportServerError('social', e));
+        if (ws.authPending) ws.authPending.then(run, run); else run();
+        return;
+      }
       handleClientMessage(ws, msg);
     } catch (err) {
       reportServerError('clientMessage', err);
@@ -1300,7 +1420,12 @@ wss.on('connection', (ws) => {
     }
   });
 
-  ws.on('close', () => handleClose(ws));
+  ws.on('close', () => {
+    // Presence first: handleClose may release this socket's seat and room, but
+    // it knows nothing about accounts, and ws.userId must still be readable.
+    if (social) social.onClose(ws);
+    handleClose(ws);
+  });
   ws.on('error', () => {});
 });
 

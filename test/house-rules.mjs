@@ -875,5 +875,84 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   }
 }
 
+// ---- 13. THE SOCIAL LAYER'S SERVER-SIDE WIRING -------------------------------
+// Three lines in server.js that no other test in this repo can see, because
+// every one of them is only observable against a real Supabase.
+//
+// (a) A GUEST HAS AN ACCOUNT ID. public/cloud.js mints an ANONYMOUS Supabase
+//     account for every player who saves anything, so `!ws.userId` is not
+//     "guest" (BINDING.md resolution 1). The gate in server/social.js reads
+//     ws.isGuest and test/social.mjs pins that half — but NOTHING pins the half
+//     that SETS it. If the auth sink stops reading is_anonymous, or stops
+//     recording it, every gate downstream still runs, still looks right, and
+//     lets every guest choose a callsign. Both halves were confirmed by hand
+//     against a fake GoTrue: with either line broken an anonymous account wrote
+//     `callsign_key` to the database. These assertions are what keeps that
+//     from coming back silently.
+//
+// (b) The kind must FAIL CLOSED. `u.is_anonymous !== false` treats a missing or
+//     malformed field as anonymous, so a GoTrue that stops sending it costs a
+//     linked player the friends panel rather than handing a guest a name that
+//     reaches other people's screens.
+//
+// (c) sbAdmin had NO fetch timeout while its only callers were push and crash
+//     reporting, which fire rarely and from the server's own timers. Every
+//     social frame from every signed-in socket is now a path to that fetch, and
+//     an unbounded wait there is the measured RISK-014 OOM: 8 sockets against a
+//     hanging upstream took RSS from 64 MB to 191 MB in ten seconds with no
+//     recovery (BINDING.md resolution 4). The sibling sbUserFromToken carries
+//     the signal already; this asserts sbAdmin does too.
+{
+  const src = read('server.js');
+  const bad = [];
+
+  // The sbAdmin body, from its declaration to the next top-level close, so a
+  // signal on a DIFFERENT fetch elsewhere in the file cannot vouch for this one.
+  const start = src.indexOf('async function sbAdmin(');
+  if (start < 0) {
+    bad.push('no "async function sbAdmin(" in server.js — the social store is built over it');
+  } else {
+    const end = src.indexOf('\n}', start);
+    const body = src.slice(start, end < 0 ? src.length : end);
+    if (!/signal:\s*AbortSignal\.timeout\(\s*\d+\s*\)/.test(body)) {
+      bad.push('sbAdmin\'s fetch carries no "signal: AbortSignal.timeout(...)" — a degraded PostgREST'
+        + ' leaves one pending fetch per social frame, each holding its request, response and closure'
+        + ' alive, and every signed-in socket can open them (RISK-014)');
+    }
+  }
+
+  if (!/async function sbAccountFromToken\(/.test(src)) {
+    bad.push('no "async function sbAccountFromToken(" — the auth sink has no way to learn the ACCOUNT'
+      + ' KIND, and a guest is indistinguishable from a linked player');
+  }
+  if (!/anonymous:\s*u\.is_anonymous !== false/.test(src)) {
+    bad.push('sbAccountFromToken does not read is_anonymous as "!== false" — either it ignores the'
+      + ' field (every guest reads as linked) or it fails OPEN when GoTrue omits it');
+  }
+  if (!/ws\.isGuest = acct\.anonymous;/.test(src)) {
+    bad.push('the auth sink does not set ws.isGuest from the verified account — every social gate'
+      + ' downstream then reads undefined and waves guests through');
+  }
+  // The sink must use the ACCOUNT helper, not the id-only one. Reverting this
+  // one call reinstates the whole hole with nothing else looking different.
+  if (!/ws\.authPending = sbAccountFromToken\(token\)/.test(src)) {
+    bad.push('the auth sink does not call sbAccountFromToken — sbUserFromToken returns an id and no'
+      + ' kind, so ws.isGuest would never be set from a real verification');
+  }
+  // Cleared with the id on sign-out: a stale `false` left behind is a guest
+  // holding the previous account's privileges.
+  if (!/ws\.userId = null; ws\.isGuest = false;/.test(src)) {
+    bad.push('the sign-out branch does not clear ws.isGuest beside ws.userId — a socket that signs'
+      + ' out of a linked account and back in as a guest keeps the linked account\'s privileges');
+  }
+
+  if (bad.length) fail(`server.js social wiring:\n      ${bad.join('\n      ')}`);
+  else {
+    ok('server.js social wiring: sbAdmin\'s fetch is bounded by AbortSignal.timeout, the auth sink'
+      + ' verifies through sbAccountFromToken, reads is_anonymous fail-closed, records it as'
+      + ' ws.isGuest and clears it on sign-out');
+  }
+}
+
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nALL GOOD');
 process.exit(out.errors.length ? 1 : 0);

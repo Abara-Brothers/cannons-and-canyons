@@ -22,6 +22,12 @@
 //      already in re-sends `join`.
 import WebSocket from 'ws';
 import { isGeneratedCallsign } from '../public/game-core.js';
+// Section 6 needs the engine in process as well as over the wire: the one name
+// that may pass is hung on the SOCKET by server.js after a Supabase token
+// verifies, and a local test run has no Supabase and no account. Importing the
+// engine here gives a second, independent `rooms` Map with no listeners and no
+// timers, which the section tears down when it is done.
+import { handleClientMessage } from '../public/room-engine.js';
 
 const URL = process.env.WS || 'ws://localhost:3000/ws';
 const out = { steps: [], errors: [] };
@@ -212,13 +218,26 @@ async function rateLimit() {
   try { ws2.close(); } catch {}
 }
 
-// ---- 6. NO FREE-TEXT NAMES REACH OTHER PLAYERS (ISSUE-015) ------------------
+// ---- 6. FREE TEXT REACHES NOBODY; ONE VERIFIED NAME DOES (ISSUE-015) --------
 // The readonly input in index.html stops honest players typing; it stops nobody
 // else. This asserts the SERVER boundary: a client sending an arbitrary string
 // must have it replaced with a rolled callsign, because that name is broadcast
-// to every opponent and painted into the shared result card. If this regresses,
-// the app carries user-generated content and Apple Guideline 1.2 requires
-// report, block and a staffed contact — none of which exist.
+// to every opponent and painted into the shared result card.
+//
+// The guarantee is now NARROWER BY EXACTLY ONE STRING, and this comment says so
+// rather than pretending otherwise. A player may choose a callsign; the server
+// checks its length and characters, folds it against server/blocklist.txt,
+// stores it under a unique key, and hangs the display form on the socket as
+// ws.chosenName once that account's token verifies. sanitizeName lets that one
+// string through and nothing else. So what holds now is:
+//   * an unauthenticated or guest socket still has free text replaced, always —
+//     every case below is unchanged and must keep passing;
+//   * the exemption is NOT claimable from the wire: it is a property of the
+//     socket object, set only by server.js from the profile row, so a frame
+//     carrying its own `chosenName` field buys nothing;
+//   * a verified socket may present its ONE stored name and no other string.
+// Apple Guideline 1.2 applies from the moment the first chosen name ships,
+// which is why report and block ship in the same project (design 6.4).
 async function noFreeTextNames() {
   const attempts = [
     'FOLLOW ME ON TIKTOK',        // advertising — the common real-world abuse
@@ -273,6 +292,56 @@ async function noFreeTextNames() {
   try { ws.close(); } catch {}
   if (kept === 'Iron Ridge') step('a valid rolled callsign is preserved exactly');
   else fail(`valid callsign 'Iron Ridge' was altered to ${JSON.stringify(kept)}`);
+
+  // The exemption, checked in process against the engine, because producing it
+  // over the wire needs a real account and a real Supabase and this run has
+  // neither. CHOSEN is 15 characters and is not a pair from the curated lists,
+  // so it can only get through the one door.
+  const CHOSEN = 'Marguerite Vale';
+  const mkLocal = () => ({ readyState: 1, chosenName: CHOSEN, _rx: [], send(s) { this._rx.push(JSON.parse(s)); } });
+  const nameIn = (w) => {
+    const lobby = w._rx.find((m) => m.type === 'lobby');
+    return lobby && lobby.players && lobby.players[0] && lobby.players[0].name;
+  };
+  const mine = mkLocal();
+  handleClientMessage(mine, { type: 'create', name: CHOSEN, skin: 'olive', mode: 'duel' });
+  if (nameIn(mine) === CHOSEN) step(`a server-verified chosen callsign is presented verbatim ('${CHOSEN}')`);
+  else fail(`a server-verified chosen callsign was replaced with ${JSON.stringify(nameIn(mine))}`);
+
+  // ...and ONLY that one. The same verified socket may not present a second
+  // string: the exemption is one name, not a licence to type.
+  const other = mkLocal();
+  handleClientMessage(other, { type: 'create', name: 'Someone Else Entirely', skin: 'olive', mode: 'duel' });
+  const second = nameIn(other);
+  if (second && second !== 'Someone Else Entirely' && isGeneratedCallsign(second))
+    step('a verified socket still may not present any OTHER free text');
+  else fail(`a second free-text name passed on a verified socket: ${JSON.stringify(second)}`);
+
+  // A GUEST IS NOT EXEMPT, and this is the case that actually walks in the door.
+  // public/cloud.js signs every player who saves anything into an ANONYMOUS
+  // Supabase account, so a guest socket carries a real uuid. server.js never
+  // sets chosenName for one (the auth sink skips the profile read when
+  // ws.isGuest), so the engine sees null and replaces free text as it always
+  // has. Asserting it here pins the ENGINE half: whatever the gates upstream do,
+  // a socket with no verified name gets no exemption.
+  const guest = { readyState: 1, userId: 'anon-uuid', isGuest: true, chosenName: null, _rx: [], send(s) { this._rx.push(JSON.parse(s)); } };
+  handleClientMessage(guest, { type: 'create', name: CHOSEN, skin: 'olive', mode: 'duel' });
+  const guestName = nameIn(guest);
+  if (guestName && guestName !== CHOSEN && isGeneratedCallsign(guestName))
+    step('a guest socket (anonymous account, no chosenName) gets free text replaced like anyone else');
+  else fail(`a guest presented free text: ${JSON.stringify(guestName)}`);
+  for (const w of [mine, other, guest]) { try { handleClientMessage(w, { type: 'leave' }); } catch {} }
+
+  // The exemption is not claimable from the wire. This socket has no account,
+  // and says so in the frame as loudly as it likes.
+  const liar = await open();
+  send(liar, { type: 'create', name: CHOSEN, skin: 'olive', mode: 'duel', chosenName: CHOSEN, userId: 'u1' });
+  const lm = await wait(liar, 'lobby');
+  const claimed = lm && lm.players && lm.players[0] && lm.players[0].name;
+  try { liar.close(); } catch {}
+  if (claimed && claimed !== CHOSEN && isGeneratedCallsign(claimed))
+    step('a client cannot claim a chosen callsign in the frame — replaced like any other free text');
+  else fail(`a client-claimed chosenName survived: ${JSON.stringify(claimed)}`);
 }
 
 // ---- 7. HOSTILE IDENTITY TOKENS COST NOTHING BUT THE FEATURE (8.48) ---------
