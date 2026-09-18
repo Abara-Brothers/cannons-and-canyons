@@ -87,6 +87,11 @@ run solo_engine node test/solo_engine.mjs
 # four-player round, the winner rule, and real four-, three- and two-player
 # holes played right through the engine.
 run golf_order node test/golf_order.mjs
+# The social data store: the exact PostgREST path of every method, the uuid gate
+# before any value is spliced into a query string, the friendship pair ordering,
+# the unique-violation-to-'taken' translation and the friend-code retry. Headless
+# — a recording fake stands in for sbAdmin, so it never reaches Supabase.
+run social_store node test/social_store.mjs
   # The OAuth redirect contract: provider, return URL, and the anti-login-CSRF
   # guard on BOTH carriers. Headless — cloud.js is evaluated against stubs.
   run auth_redirect   node test/auth_redirect.mjs
