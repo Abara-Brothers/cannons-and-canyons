@@ -324,7 +324,7 @@ function killDead(room) {
 // mode: 'duel'    -> exactly 2, auto-starts the moment the 2nd player joins
 //       'ffa'     -> 2..4, the HOST starts it (or it auto-starts when it fills)
 //       'boss'    -> 1..2 humans vs the WARLORD (host may start solo)
-//       'golf'    -> 1..2 humans, 9 holes, no damage
+//       'golf'    -> 1..4 humans, 9 holes, no damage; the farthest ball plays next
 //       'aliens'  -> 1..2 humans vs waves of xeno saucers
 // A loadout arrives as an array of weapon ids; anything malformed becomes null
 // and the seat falls back to the default kit at start.
@@ -457,7 +457,11 @@ function createRoom(hostWs, name, skin, opts = {}) {
   const code = makeCode();
   const MODES = ['duel', 'ffa', 'boss', 'golf', 'aliens'];
   const mode = MODES.includes(opts.mode) ? opts.mode : 'duel';
-  const max = mode === 'ffa' ? Math.max(2, Math.min(4, (opts.max | 0) || 4)) : 2;
+  // Seats: duel 2; ffa 2..4 (default 4); golf 1..4 (owner, 2026-09-18 — a
+  // pair by default, as the course always was); the co-op raids 2.
+  const max = mode === 'ffa' ? Math.max(2, Math.min(4, (opts.max | 0) || 4))
+    : mode === 'golf' ? Math.max(1, Math.min(4, (opts.max | 0) || 2))
+    : 2;
   const room = {
     code, mode, max, hostSeat: 0,
     players: [
@@ -744,7 +748,7 @@ function golfShot(room, seat, msg) {
   const ptsMs = ((result.projectiles[0] && result.projectiles[0].path.length) || 0) * 9;
   // Cap raised with the roll retune + maxT 100: the longest legal replay is
   // ~3000 points ≈ 26s of playback — the hold must outlast it.
-  room.clock = safeTimeout(() => { room.clock = null; golfAdvance(room, seat); }, 1100 + Math.min(30000, Math.round(ptsMs)));
+  room.clock = safeTimeout(() => { room.clock = null; golfAdvance(room, seat); }, GOLF_HOLD_MS || (1100 + Math.min(30000, Math.round(ptsMs))));
 }
 
 function golfAdvance(room, by) {
@@ -923,6 +927,10 @@ const CRATE_REACH = 380;
 // Every NPC holds its aim for a beat before firing — a human-readable tell.
 // Tests shrink it via the env knob so suites stay fast.
 const BOT_FIRE_MS = Number(env.BOT_FIRE_MS || 1500);
+// Golf holds the turn for the replay's length (see golfShot). Tests set a
+// fixed hold so a suite is not paced by ball flight; 0 (the default) keeps
+// the replay-length hold in every real game.
+const GOLF_HOLD_MS = Number(env.GOLF_HOLD_MS) || 0;
 
 function maybeDropCrate(room) {
   if (room.mode === 'golf' || room.state !== 'playing') return;
