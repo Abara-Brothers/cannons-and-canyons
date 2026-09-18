@@ -751,18 +751,46 @@ function golfShot(room, seat, msg) {
   room.clock = safeTimeout(() => { room.clock = null; golfAdvance(room, seat); }, GOLF_HOLD_MS || (1100 + Math.min(30000, Math.round(ptsMs))));
 }
 
+// A seat still on the course this hole: not holed out (or capped), and not
+// scuttled by a disconnect forfeit. Four players made the second half
+// reachable — with two, a forfeit ends the round before it matters.
+const golfInPlay = (room, t) => !room.golf.done[t] && !!room.tanks[t] && room.tanks[t].alive !== false;
+
+// THE HONOUR RULE (owner, 2026-09-18): after a stroke, the ball farthest from
+// the cup plays next — the seat that just played included, if it is still
+// the farthest. Ties go to seat order starting after `by`, so with every ball
+// on the tee this is plain seat order. Only seats in play are candidates;
+// -1 when there are none. Pure: the tests call it on a bare room shape.
+function golfNextSeat(room, by) {
+  const n = room.players.length, cup = room.golf.cup.x;
+  let best = -1, bestD = -1;
+  for (let k = 1; k <= n; k++) {
+    const t = (by + k) % n;
+    if (!golfInPlay(room, t)) continue;
+    const d = Math.abs(cup - room.tanks[t].x);
+    if (d > bestD) { bestD = d; best = t; }
+  }
+  return best;
+}
+
 function golfAdvance(room, by) {
   if (room.state !== 'playing') return;
   const g = room.golf;
-  if (g.done.every(Boolean)) {
+  const next = golfNextSeat(room, by);
+  if (next < 0) {                        // everyone still on the course has holed out
     if (g.hole >= GOLF_HOLES.length) return finishGolf(room);
     return nextHole(room, false);
   }
-  const n = room.players.length;
-  let t = by;
-  do { t = (t + 1) % n; } while (g.done[t]);
-  room.turn = t;
+  room.turn = next;
   beginTurn(room);
+}
+
+// The round's winner from the seats' totals: lowest total wins, a tie for
+// lowest is a draw (-1). Task 3 keeps scuttled seats out of it.
+function golfWinner(room, totals) {
+  if (totals.length <= 1) return 0;
+  const best = Math.min(...totals);
+  return totals.filter(t => t === best).length === 1 ? totals.indexOf(best) : -1;
 }
 
 function finishGolf(room) {
@@ -770,11 +798,7 @@ function finishGolf(room) {
   clearTimeout(room.clock); clearTimeout(room.botTimer);
   const totals = room.golf.strokes.map(r => r.reduce((a, b) => a + b, 0));
   const parTotal = GOLF_HOLES.reduce((a, h) => a + h.par, 0);
-  let winner = 0;
-  if (totals.length > 1) {
-    const best = Math.min(...totals);
-    winner = totals.filter(t => t === best).length === 1 ? totals.indexOf(best) : -1;
-  }
+  const winner = golfWinner(room, totals);
   const golfCard = { totals, parTotal, pars: GOLF_HOLES.map(h => h.par), strokes: room.golf.strokes, done: room.golf.done.slice() };
   broadcast(room, {
     type: 'gameover', winner, team: null,
@@ -1946,3 +1970,6 @@ export function handleClientMessage(ws, msg) {
 // count live matches and tell everyone the lights are going out. Resist adding
 // more — every extra export is another way for the host to reach past the seam.
 export { rooms, send, handleClose };
+// For test/golf_order.mjs only: the golf turn rule and the winner rule, pure
+// over a room shape. Not part of the host surface.
+export { golfNextSeat, golfWinner };

@@ -51,6 +51,34 @@ const leave = (ws) => { try { handleClientMessage(ws, { type: 'leave' }); } catc
   leave(ws);
 }
 
+// ---- (b) golfNextSeat, the rule on its own ---------------------------------
+// A fake room is enough: the rule reads players.length, golf.cup.x, golf.done
+// and tanks[i].x / alive. Distances are to the cup at x=10000.
+const fake = (xs, done, alive) => ({
+  players: xs.map(() => ({})),
+  golf: { cup: { x: 10000 }, done: done || xs.map(() => false) },
+  tanks: xs.map((x, i) => ({ x, y: 0, alive: alive ? alive[i] : true })),
+});
+{
+  const r = fake([1000, 4000, 9000, 4000]);           // distances 9000, 6000, 1000, 6000
+  if (golfNextSeat(r, 2) === 0) ok('(b) farthest ball plays next (seat 0 at 9000 away)'); else fail('(b) farthest: got ' + golfNextSeat(r, 2));
+  if (golfNextSeat(r, 0) === 0) ok('(b) the seat that just played plays again while it is still the farthest'); else fail('(b) same seat: got ' + golfNextSeat(r, 0));
+  const tie = fake([9000, 4000, 9000, 4000], [true, false, true, false]);   // seats 1 and 3 tie at 6000; 0 and 2 holed
+  if (golfNextSeat(tie, 1) === 3) ok('(b) a tie goes to seat order starting after the seat that played (after 1: 2 holed, 3)'); else fail('(b) tie after 1: got ' + golfNextSeat(tie, 1));
+  if (golfNextSeat(tie, 3) === 1) ok('(b) …and after seat 3 the tie goes to seat 1'); else fail('(b) tie after 3: got ' + golfNextSeat(tie, 3));
+  const dead = fake([1000, 4000, 9000, 4000], null, [false, true, true, true]);
+  if (golfNextSeat(dead, 2) === 3) ok('(b) a scuttled seat is never a candidate (seat 0 dead at 9000 -> seat 3, the first at 6000 after seat 2)'); else fail('(b) dead skip: got ' + golfNextSeat(dead, 2));
+  if (golfNextSeat(dead, 0) === 1) ok('(b) a scuttled seat as `by` still hands on by the rule (after 0: seat 1 at 6000)'); else fail('(b) dead by: got ' + golfNextSeat(dead, 0));
+  const all = fake([1000, 4000], [true, true]);
+  if (golfNextSeat(all, 0) === -1) ok('(b) nobody in play -> -1'); else fail('(b) all done: got ' + golfNextSeat(all, 0));
+  const solo = fake([3000]);
+  if (golfNextSeat(solo, 0) === 0) ok('(f) solo: the one seat plays on'); else fail('(f) solo: got ' + golfNextSeat(solo, 0));
+  const soloDone = fake([3000], [true]);
+  if (golfNextSeat(soloDone, 0) === -1) ok('(f) solo holed out -> -1 (next hole)'); else fail('(f) solo done: got ' + golfNextSeat(soloDone, 0));
+  const equal = fake([2000, 2000, 2000, 2000]);       // everyone on the tee
+  if (golfNextSeat(equal, 3) === 0 && golfNextSeat(equal, 0) === 1) ok('(b) all equal (the tee): seat order from the seat after `by`'); else fail('(b) equal: ' + golfNextSeat(equal, 3) + ',' + golfNextSeat(equal, 0));
+}
+
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall golf_order checks passed');
 if (escaped) { console.error('escaped exception: ' + escaped.message); process.exit(1); }
 process.exit(out.errors.length ? 1 : 0);
