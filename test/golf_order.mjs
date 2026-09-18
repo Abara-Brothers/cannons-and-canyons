@@ -18,7 +18,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const engine = await import('../public/room-engine.js');
 const { rooms, handleClientMessage, handleClose, golfNextSeat, golfWinner } = engine;
 let escaped = null;
-process.on('uncaughtException', (e) => { escaped = e; });
+process.on('uncaughtException', (e) => { escaped = e; console.error('FAIL escaped: ' + e.message); process.exitCode = 1; });
 
 const mkws = () => ({ readyState: 1, _rx: [], send(s) { this._rx.push(JSON.parse(s)); } });
 const FIVE = ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'];
@@ -77,6 +77,12 @@ const fake = (xs, done, alive) => ({
   if (golfNextSeat(soloDone, 0) === -1) ok('(f) solo holed out -> -1 (next hole)'); else fail('(f) solo done: got ' + golfNextSeat(soloDone, 0));
   const equal = fake([2000, 2000, 2000, 2000]);       // everyone on the tee
   if (golfNextSeat(equal, 3) === 0 && golfNextSeat(equal, 0) === 1) ok('(b) all equal (the tee): seat order from the seat after `by`'); else fail('(b) equal: ' + golfNextSeat(equal, 3) + ',' + golfNextSeat(equal, 0));
+  const over = fake([9000, 12000, 4000]);                 // seat 1 is 2000 past the cup; seat 2 is 6000 short
+  if (golfNextSeat(over, 0) === 2) ok('(b) distance is unsigned: a ball 2000 past the cup is nearer than one 6000 short'); else fail('(b) overshoot: got ' + golfNextSeat(over, 0));
+  const overFar = fake([9000, 17000, 4000]);              // seat 1 is 7000 past the cup: the farthest
+  if (golfNextSeat(overFar, 0) === 1) ok('(b) a ball far past the cup is still the farthest'); else fail('(b) overshoot far: got ' + golfNextSeat(overFar, 0));
+  const short = fake([1000, 4000, 9000]); short.tanks.length = 2;   // seat 2 has no tank yet
+  if (golfNextSeat(short, 1) === 0) ok('(b) a seat without a tank is not a candidate'); else fail('(b) short tanks: got ' + golfNextSeat(short, 1));
 }
 
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall golf_order checks passed');
