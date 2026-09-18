@@ -84,22 +84,39 @@ const modeOf = (id) => MODES.find((m) => m.id === id) || MODES[0];
 //
 // Where the copy comes from:
 //   design 5.6      — the rule, the hint, taken, not_allowed, too_soon
-//   BINDING res. 16 — slow_down, unavailable, sign_in, verbatim including the
-//                     full stops (which is why they read differently from 5.6's
-//                     fragments); the owner is asked to confirm them
-//   this task       — offline, checking and the catch-all `_`, all three
-//                     authored here and flagged in the report
+//   BINDING res. 16 — slow_down and sign_in, verbatim
+//   the owner       — unavailable, replacing resolution 16's wording on his
+//                     decision: it must not blame the connection for a
+//                     server-side fault (it is what EVERY player sees until the
+//                     migration is applied, and it was sending them to check
+//                     their wifi), it must not read like the genuinely-offline
+//                     sentence, and it must say plainly that names are off right
+//                     now and to come back later
+//   this task       — offline, checking, the catch-all `_` and CS_WAIT
+//
+// THE FULL STOPS ARE SETTLED. Design 5.6's fragments carried none and resolution
+// 16's sentences did, so the one error line changed style depending on which
+// code came back. Every sentence in CS_ERR now ends in a full stop. The ROW
+// descriptions still carry none, because no other settings row's does.
 const CS_RULE = '3&ndash;16 letters, digits or spaces. Unique. Once a day.';
 const CS_HINT = 'Friends find you by code until you choose a callsign';
+// THE THIRD STATE. `CC_SOCIAL === null` means the snapshot has NOT ARRIVED, not
+// that the account holds no name -- and rendering it as CS_HINT told every
+// returning player who holds a callsign that they hold none, on first paint and,
+// while the migration is unapplied and every social frame answers unavailable,
+// for their whole visit. This sentence claims nothing about the name; it says
+// what is actually true (nothing has loaded) and how to try again, which is to
+// re-enter this screen, because that is what socialNeed() hangs off.
+const CS_WAIT = 'Not loaded yet &mdash; reopen this screen to retry';
 const CS_OUT  = 'Sign in to choose a callsign.';
 const CS_ERR = {
-  taken:       'Someone has that callsign',
-  not_allowed: 'That callsign is not allowed',
+  taken:       'Someone has that callsign.',
+  not_allowed: 'That callsign is not allowed.',
   length:      CS_RULE,
   chars:       CS_RULE,
-  too_soon:    'You can change it again tomorrow',
+  too_soon:    'You can change it again tomorrow.',
   slow_down:   'Too many tries. Wait a moment.',
-  unavailable: 'Cannot reach the server. Try again shortly.',
+  unavailable: 'Callsigns are not available right now. Try again later.',
   sign_in:     CS_OUT,
   checking:    'Still checking your sign-in. Try again shortly.',
   offline:     'Not connected. Try again in a moment.',
@@ -109,6 +126,7 @@ const KBD_PAD = 6;                                  // px of air under the field
 const callsign = { open: false, busy: false, err: '' };
 let csSeq = 0;                                      // which try an answer belongs to
 let kbdOn = null;                                   // the viewport listener, only while the editor is open
+let csFocus = 0;                                    // the deferred focus/watch, cancelled if the editor closes first
 // What the pending lobby says for an invite-room mode: why it needs a
 // connection, and what one player can still do on this device.
 const SOLO_COPY = {
@@ -522,9 +540,15 @@ SCREENS.settings = function () {
   // not as a rule. They are told the rule instead, and Roll still works, because
   // rolling is local and always has been.
   const csRow = (st) => {
-    const held = st.linked && st.social && typeof st.social.callsign === 'string' ? st.social.callsign : '';
+    // THREE STATES FOR A LINKED ACCOUNT, not two: holds a name, holds none, and
+    // NOT KNOWN YET. The third is not cosmetic -- Set is withheld while it lasts,
+    // because a save made against a snapshot this client has never seen is a
+    // guess, and the row must not say "you have no callsign" on the strength of
+    // a frame that never came back.
+    const known = !!st.social;
+    const held = st.linked && known && typeof st.social.callsign === 'string' ? st.social.callsign : '';
     const max = has('CALLSIGN_MAX') ? CALLSIGN_MAX : 16;
-    const desc = !st.linked ? CS_OUT : held ? esc(held) : CS_HINT;
+    const desc = !st.linked ? CS_OUT : !known ? CS_WAIT : held ? esc(held) : CS_HINT;
     if (!st.linked) return '<div class="cs">' + row('Callsign', desc, 'Roll', 'data-roll') + '</div>';
     const body = callsign.open
       ? '<div class="csx"><input id="bayCall" class="cs-in" maxlength="' + max + '" placeholder="Your callsign"'
@@ -533,7 +557,12 @@ SCREENS.settings = function () {
         +   '<button class="sbtn on" data-cs="save"' + (callsign.busy ? ' disabled' : '') + '>' + (callsign.busy ? 'Saving' : 'Save') + '</button></div>'
         + '<p class="csr' + (callsign.err ? ' bad' : '') + '">' + (callsign.err || CS_RULE) + '</p></div>'
       : '';
-    return '<div class="cs">' + row2('Callsign', desc, 'Roll', 'data-roll', 'Set', 'data-cs="open"') + body + '</div>';
+    // ROLL IS WITHHELD WHILE A SET IS IN FLIGHT. A mis-tap there hands back the
+    // very key being paid for with the day's one change, and the answer that
+    // would have confirmed it arrives to a name the client has just rolled off.
+    return '<div class="cs">' + row2('Callsign', desc,
+      'Roll', 'data-roll' + (callsign.busy ? ' disabled' : ''),
+      'Set', 'data-cs="open"' + (known ? '' : ' disabled')) + body + '</div>';
   };
   const right = row('Account', accDesc, accState === 'out' ? 'Sign in' : 'Manage', 'data-old="accountBtn"')
     + csRow(s)
@@ -594,18 +623,37 @@ function kbdWatch(on) {
     window.removeEventListener('resize', kbdOn);
     kbdOn = null;
   }
+  // The 60 ms focus timer is part of the watch: left to run after the editor has
+  // closed it re-subscribes the listener this call just removed and lifts a
+  // frame with no field in it.
+  clearTimeout(csFocus); csFocus = 0;
   const host = $('bay');
   if (host) { host.classList.remove('kbd'); host.style.removeProperty('--kbd'); }
 }
+// A RE-MEASURE after the markup has changed. An error sentence can wrap to two
+// lines on a narrow phone, which pushes the bottom of the editor down past the
+// lift computed for the one-line rule -- so the line telling the player what went
+// wrong is the part that ends up under the keyboard. Only while the watch is
+// running: with no keyboard there is nothing to fit.
+const kbdRefit = () => { if (kbdOn) kbdFit(); };
 function openCallsign() {
+  const st = state();
   callsign.open = true; callsign.busy = false; callsign.err = ''; csSeq++;
   render(current);
   const i = $('bayCall');
   if (!i) return;
-  i.value = '';                                        // never pre-fill: Save must be a decision
+  // PRE-FILLED WITH THE NAME THEY HOLD, and selected. Changing a callsign is the
+  // common second visit, and retyping sixteen characters on a landscape phone
+  // keyboard to alter one of them is worse than any accident a blank field
+  // prevents: the selection means the first keystroke replaces the lot, so Save
+  // is still a decision, and an empty field is still refused before it is sent.
+  // Only a CHOSEN name is offered -- pre-filling the rolled pair would invite
+  // spending the day's one change to freeze a name nobody picked.
+  const pre = st.social && typeof st.social.callsign === 'string' ? st.social.callsign : '';
+  i.value = pre;
   // The focus is deferred one tick so the field exists and the entrance is over;
   // the viewport watch starts with it, because the keyboard follows the focus.
-  setTimeout(() => { try { i.focus(); } catch {} kbdWatch(true); }, 60);
+  csFocus = setTimeout(() => { try { i.focus(); if (pre) i.select(); } catch {} kbdWatch(true); }, 60);
 }
 function closeCallsign() {
   callsign.open = false; callsign.busy = false; callsign.err = ''; csSeq++;
@@ -623,7 +671,7 @@ function submitCallsign() {
   // every rule the server could ever hold. It is refused here because the set
   // allowance is three a minute and a blank tap is not worth one of them.
   const typed = (i.value || '').trim();
-  if (!typed) { callsign.err = CS_RULE; render(current); const f = $('bayCall'); if (f) f.focus(); return; }
+  if (!typed) { callsign.err = CS_RULE; render(current); kbdRefit(); const f = $('bayCall'); if (f) f.focus(); return; }
   const seq = ++csSeq;
   callsign.busy = true; render(current);
   wire(typed, (res) => {
@@ -643,6 +691,7 @@ function submitCallsign() {
     // gets a sentence, and nothing the server sent reaches innerHTML.
     callsign.err = CS_ERR[res && res.error] || CS_ERR._;
     render(current);
+    kbdRefit();
     const f = $('bayCall'); if (f) f.focus();
   });
 }
@@ -977,7 +1026,13 @@ function render(name) {
   const next = name in SCREENS ? name : 'home';
   // Leaving Bay controls closes the field: it belongs to that screen only, the
   // keyboard lift with it, and .stage is rebuilt outright on a screen change.
-  if (callsign.open && next !== 'settings') { callsign.open = false; callsign.busy = false; callsign.err = ''; csSeq++; kbdWatch(false); }
+  // Leaving Bay controls closes the field -- and so does LOSING THE ACCOUNT while
+  // it is open. csRow() returns the guest row early, before the editor markup is
+  // ever built, so the field vanished while `callsign.open` stayed true and #bay
+  // stayed in .kbd: the frame sat shoved up with no keyboard under it and no way
+  // down but leaving the screen. Closing here, at the top of the render that is
+  // about to drop the field, puts the class removal ahead of that early return.
+  if (callsign.open && (next !== 'settings' || !state().linked)) { callsign.open = false; callsign.busy = false; callsign.err = ''; csSeq++; kbdWatch(false); }
   const entering = !host.firstChild || base(next) !== base(current);
   const html = SCREENS[next]();
   current = next;

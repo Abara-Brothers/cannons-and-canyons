@@ -1467,7 +1467,15 @@ function sendMsg(m) { if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringif
 // player has already abandoned can never overwrite a newer one.
 window.CC_SOCIAL = null;                 // the last snapshot; bay.js reads, never writes
 let socialId = 0;
-const socialWait = new Map();            // String(id) -> { cb, t }
+let socialSeq = 0;                       // the waiter key, minted here and never sent
+// token -> { match, cb, t }. KEYED ON THE TOKEN, NOT ON THE FRAME'S id. BINDING
+// resolution 3 puts a TARGET uuid in `id` on block, report and friend remove,
+// and a target is not unique per request: two operations on the same player --
+// block add then block remove, which is Task 8's first use of this helper --
+// would collide in this map, and the first callback would be orphaned and never
+// run on any path. One entry per request, keyed by a number nobody else can
+// choose; `match` is the echo the server will answer with.
+const socialWait = new Map();
 const SOCIAL_TIMEOUT_MS = 12000;         // a socket that dies mid-flight must not leave a spinner up for ever
 let callsignPending = 0;                 // callsign frames in flight — see socialSnapshot
 let socialAsking = false;                // a read-model request is out
@@ -1487,11 +1495,19 @@ function socialSend(frame, cb) {
   // card's `handle` and leave `id` alone, and this is a pure correlation again.
   const own = frame.id === undefined;
   const id = own ? ++socialId : frame.id;
+  let tok = 0;
   if (cb) {
-    const t = setTimeout(() => { if (socialWait.delete(String(id))) cb({ error: 'offline' }); }, SOCIAL_TIMEOUT_MS);
-    socialWait.set(String(id), { cb, t });
+    tok = ++socialSeq;
+    const t = setTimeout(() => { if (socialWait.delete(tok)) cb({ error: 'offline' }); }, SOCIAL_TIMEOUT_MS);
+    socialWait.set(tok, { match: String(id), cb, t });
   }
-  sendMsg(own ? { ...frame, id } : frame);
+  // THE WAITER IS PARKED BEFORE THE FRAME GOES OUT, so a send that throws has to
+  // take it back out again: whatever catches the throw answers the caller, and
+  // this waiter's own timeout would otherwise answer them a SECOND time twelve
+  // seconds later. The callback runs exactly once on every path, including this
+  // one.
+  try { sendMsg(own ? { ...frame, id } : frame); }
+  catch (e) { const w = socialWait.get(tok); if (w) { socialWait.delete(tok); clearTimeout(w.t); } throw e; }
   return id;
 }
 // Every social reply and every server push lands here. A frame with no `id`, or
@@ -1504,11 +1520,28 @@ function socialReply(m) {
   // worse than one that says it could not load. Read as a snapshot it would
   // also tell a player who HAS a chosen callsign that they hold none.
   if (m.type === 'friends' && !m.error) socialSnapshot(m);
-  const w = m.id == null ? null : socialWait.get(String(m.id));
-  if (!w) return;
-  socialWait.delete(String(m.id)); clearTimeout(w.t);
-  w.cb(m);
+  if (m.id == null) return;
+  // OLDEST FIRST. A Map iterates in insertion order, so when two requests share
+  // an echo -- two ops on the same target uuid -- the first asked is the first
+  // answered and each waiter still runs exactly once.
+  const key = String(m.id);
+  for (const [tok, w] of socialWait) {
+    if (w.match !== key) continue;
+    socialWait.delete(tok); clearTimeout(w.t);
+    w.cb(m);
+    return;
+  }
 }
+// WHAT THIS CLIENT HAS BEEN TOLD, kept apart from the read model. CC_SOCIAL is
+// a snapshot that may not have arrived, may have been refused, and may be built
+// from a read the server began before this player's write landed. csHeld is the
+// narrower fact: the last chosen name this client saw the server CONFIRM.
+const CALLSIGN_HOLD_MS = 10000;          // how long a confirmed name outranks a null snapshot
+let csHeld = null;                       // that name, or null
+let csHeldAt = 0;                        // when it was confirmed -- the window runs from here
+let csCleared = false;                   // and THIS client has since had a Roll accepted
+function csHold(name) { csHeld = name; csHeldAt = Date.now(); csCleared = false; }
+function csFresh() { return !!csHeld && Date.now() - csHeldAt < CALLSIGN_HOLD_MS; }
 // The ONE place window.CC_SOCIAL is written wholesale.
 function socialSnapshot(m) {
   const cur = window.CC_SOCIAL;
@@ -1521,9 +1554,21 @@ function socialSnapshot(m) {
   // a read the server may have begun BEFORE the write this player is waiting on
   // landed, and it can arrive after the answer to it; the answer is newer, so
   // while one is outstanding this field is left alone.
-  const held = callsignPending > 0
-    ? (cur ? cur.callsign : null)
-    : (typeof m.callsign === 'string' && m.callsign ? m.callsign : null);
+  const fresh = typeof m.callsign === 'string' && m.callsign ? m.callsign : null;
+  // A NULL IS THE WEAKEST CLAIM ON THIS FIELD, and it is believed only when
+  // nothing this client knows is newer. Three things outrank it: a name the
+  // server states (which ends the window outright), a callsign frame still in
+  // flight, and a name confirmed within CALLSIGN_HOLD_MS -- a push built from a
+  // read that began before the write cannot be ordered by any frame, but it can
+  // be outlived. BOUNDED so the cross-device case still works: set on one
+  // device, roll on another, and the null push is believed once the ten seconds
+  // are out. It also ends early, the moment a snapshot carries a name or this
+  // client rolls one away itself.
+  let held;
+  if (fresh) { held = fresh; csHold(fresh); }
+  else if (callsignPending > 0) held = cur ? cur.callsign : csHeld;
+  else if (csFresh()) held = csHeld;
+  else { held = null; csHeld = null; }
   window.CC_SOCIAL = {
     friends: Array.isArray(m.friends) ? m.friends : [],
     requests: (m.requests && typeof m.requests === 'object') ? m.requests : { in: [], out: [] },
@@ -1545,8 +1590,20 @@ function socialSnapshot(m) {
 // accepted callsign reply — a string for Set, null for Roll — so the Bay is
 // right between snapshots.
 function socialCallsign(v) {
-  const s = window.CC_SOCIAL || { friends: [], requests: { in: [], out: [] }, blocked: [], friendCode: null, callsign: null };
-  s.callsign = v == null ? null : String(v);
+  // The memory is kept whether or not there is a snapshot to put it in: it is
+  // what the server has told THIS client, and both the roll guard and the
+  // bounded window above read it. A cleared key is recorded as cleared, which is
+  // the one thing that lets the roll guard stay quiet with no snapshot in hand.
+  if (v == null) { csHeld = null; csHeldAt = 0; csCleared = true; }
+  else csHold(String(v));
+  // AND NOTHING IS FABRICATED. `CC_SOCIAL === null` means NOT KNOWN YET, never
+  // "empty" -- inventing a snapshot here would tell the rest of the session that
+  // this account has no friends, no blocks and no friend code, and socialNeed()
+  // would never ask again because a snapshot exists. That is the contract this
+  // task hands Task 8; it has to hold here first.
+  const s = window.CC_SOCIAL;
+  if (!s) return;
+  s.callsign = csHeld;
   window.CC_SOCIAL = s;
   document.dispatchEvent(new Event('cc:social'));
 }
@@ -1555,7 +1612,15 @@ function socialCallsign(v) {
 // server, so it is not spent at sign-in on the chance a player opens Bay
 // controls; and it is not spent at all by a guest, who is refused it.
 function socialNeed() {
-  if (!socialSignedIn() || window.CC_SOCIAL || socialAsking) return;
+  if (window.CC_SOCIAL) return;
+  socialResync();
+}
+// Ask AGAIN, snapshot or no snapshot. One caller: a Set whose answer never
+// arrived. A lost REPLY looks exactly like a lost request, so the write may well
+// have landed -- and without this nothing in the session would ever ask a second
+// time, leaving a player told to try again in a moment about a name they hold.
+function socialResync() {
+  if (!socialSignedIn() || socialAsking) return;
   socialAsking = true;
   // A refusal leaves CC_SOCIAL null on purpose, so the next visit asks again.
   socialSend({ type: 'friends' }, () => { socialAsking = false; });
@@ -1580,6 +1645,17 @@ document.addEventListener('cc:account', () => {
   const key = accountKey();
   if (key && key === socialAccount) return;
   socialAccount = key;
+  // GIVE THE NAME UP -- the symmetric act to adopting it. socialSnapshot() makes
+  // a chosen callsign this device's name because the name belongs to the
+  // ACCOUNT; when the account goes, the name has to go with it. Without this the
+  // home screen goes on printing a chosen name while every lobby shows the
+  // rolled pair the server gives an unproven one, a mismatch that could not
+  // happen before this feature. setLocalName(), never setCallsign(): handing
+  // back a key that is no longer ours is not this client rolling, and the roll
+  // guard must not send a clearing frame on behalf of whoever is signed in now.
+  const gone = (window.CC_SOCIAL && window.CC_SOCIAL.callsign) || csHeld;
+  csHeld = null; csHeldAt = 0; csCleared = false;
+  if (gone && ($('nameInput').value || '').trim() === gone) setLocalName(rollCallsign(gone));
   if (!window.CC_SOCIAL) return;
   window.CC_SOCIAL = null;
   document.dispatchEvent(new Event('cc:social'));
@@ -1606,13 +1682,31 @@ function sendCallsign(name, cb) {
     // ask once more: the server holds the second frame on its own authPending,
     // which is a real wait rather than a guessed delay.
     if (m && m.error === 'sign_in' && !retried && socialSignedIn()) {
-      socialReHello().then(() => { callsignPending++; socialSend(frame, (m2) => settle(m2, true)); });
+      // THE ONE PATH WITH NO CATCH was here. socialReHello() adopts sendHello's
+      // promise, which awaits a token and can reject; the retry itself can throw
+      // synchronously out of the socket's send. Either one used to strand the
+      // player on a disabled Save with Cancel as the only escape. The retry is
+      // guarded and is used for BOTH settlements -- a hello that failed is no
+      // reason to abandon the frame, because the server then answers sign_in
+      // again and that is remapped to something a signed-in player can act on.
+      const retry = () => {
+        callsignPending++;
+        try { socialSend(frame, (m2) => settle(m2, true)); }
+        catch { callsignPending--; cb({ ok: false, error: 'offline' }); }
+      };
+      socialReHello().then(retry, retry);
       return;
     }
     let err = (m && m.error) || 'offline';
     // Telling a signed-in player to sign in is a lie, and the one they can do
     // nothing about. Say what is actually true of them.
     if (err === 'sign_in' && socialSignedIn()) err = 'checking';
+    // A LOST ANSWER IS NOT A LOST WRITE. 'offline' means this client stopped
+    // waiting (SOCIAL_TIMEOUT_MS) or never got to send; the server may have
+    // taken the name and be holding it. Re-read, so a SUCCESSFUL save reported
+    // as a failure repairs itself on the next snapshot instead of leaving the
+    // row wrong -- and the roll guard disarmed -- for the rest of the session.
+    if (err === 'offline') socialResync();
     cb({ ok: false, error: err });
   };
   callsignPending++;
@@ -2224,10 +2318,17 @@ function rollCallsign(prev) {
   }
   return 'Iron Ridge';
 }
-function setCallsign(name) {
+// The LOCAL write, with no roll guard on it. Renaming this device is not the
+// same act as giving a uniqueness key back, and the one caller that must never
+// be mistaken for a roll is signing out: the key being dropped there belongs to
+// an account this socket no longer speaks for.
+function setLocalName(name) {
   $('nameInput').value = name;
   try { localStorage.setItem('pt_name', name); } catch {}
   cloudQueue();          // the profile row carries the callsign too
+}
+function setCallsign(name) {
+  setLocalName(name);
   // A roll over a CHOSEN name must clear the server's uniqueness key, or the
   // name stays reserved by an account that no longer shows it. One frame per
   // chosen name, and never more: sendCallsign() and socialSnapshot() both set
@@ -2236,8 +2337,21 @@ function setCallsign(name) {
   // null, so a player mashing rerollBtn sends nothing further and never trips
   // the 3-per-minute bucket. A guest has no key to give back, hence
   // socialSignedIn().
-  if (socialSignedIn() && window.CC_SOCIAL && window.CC_SOCIAL.callsign != null
-      && name !== window.CC_SOCIAL.callsign) socialRolled();
+  //
+  // NOT KNOWING IS NOT KNOWING THERE IS NOTHING. `CC_SOCIAL === null` means the
+  // read model has not arrived -- or was refused, which is every social frame
+  // until the migration is applied -- and concluding "no key" from it is the
+  // expensive mistake: the player rolls, no clearing frame is sent, and the name
+  // stays reserved to an account that no longer shows it, with no way to learn
+  // that and no way to undo it. With no snapshot the client assumes a key MIGHT
+  // be held and gives it back. The server answers ok either way and does not
+  // even touch the database when there was nothing to clear (server/social.js,
+  // the rolled branch), so the wrong guess costs one frame and nothing else.
+  if (!socialSignedIn()) return;
+  const snap = window.CC_SOCIAL;
+  if (name === (snap ? snap.callsign : csHeld)) return;   // adopting a chosen name is not a roll
+  if (snap ? snap.callsign == null : csCleared) return;   // nothing left to give back
+  socialRolled();
 }
 $('rerollBtn').onclick = () => {
   Audio.ensure();

@@ -2265,7 +2265,10 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
 #bay .csb{display:flex;align-items:center;gap:calc(8 * var(--u));margin-top:calc(8 * var(--u))}
 #bay .csb .sbtn{flex:1}
 #bay .csb .sbtn.on{border-color:#54c8ff;color:#fff;background:rgba(84,200,255,.12)}
-#bay .csb .sbtn[disabled]{opacity:.45;cursor:default}
+/* Every .sbtn that can be disabled, not just the editor's two: Roll stands down
+   while a Set is in flight and Set stands down until the snapshot has loaded. */
+#bay .sbtn[disabled]{opacity:.45;cursor:default}
+#bay .sbtn[disabled]:hover{border-color:rgba(140,168,214,.3);color:#c0cce8;background:transparent}
 /* The rules line wraps -- it is the one place in the settings column that must
    not be truncated, because for length/chars it IS the error message. */
 #bay .csr{margin-top:calc(7 * var(--u));font-size:calc(10.5 * var(--u));line-height:1.35;

@@ -45,12 +45,18 @@
        app.js first -- the client DOM has no test coverage, so that is a
        deliberate second step, not a byproduct of this one. -->
   <div id="legacy" class="hidden" aria-hidden="true">
-    <!-- maxlength 16, not 14: a ROLLED name is still NAME_MAX=14 (the word lists
-         in game-core.js and app.js are built around it, and test/house-rules.mjs
-         section 5 fails if the two copies disagree), but a CHOSEN callsign is up
-         to CALLSIGN_MAX=16 and setCallsign() writes it straight in here. readonly
-         is gone with it: this is a value holder now, not a control that had to be
-         defended from a stray tap on a screen nobody was ever shown. -->
+    <!-- NEITHER ATTRIBUTE CONSTRAINS ANYTHING HERE, and the earlier note implying
+         they did was wrong. This field sits inside #legacy, which is display:none:
+         nobody can focus it and nobody can type into it, and `maxlength` limits
+         USER INPUT only -- a value written from script, which is the only way a
+         name ever reaches this element (setLocalName in app.js), is never
+         truncated by it. `readonly` was dropped for the same reason: it defended
+         a control that cannot be reached.
+         The 16 is documentation of the widest name this holder can be handed: a
+         ROLLED name is NAME_MAX=14 (the word lists in game-core.js and app.js are
+         built around it, and test/house-rules.mjs section 5 fails if the two
+         copies disagree) and a CHOSEN callsign is CALLSIGN_MAX=16. The real limit
+         is server/callsign.js, which is the only validator. -->
     <input id="nameInput" maxlength="16"><button id="rerollBtn" type="button"></button>
     <button id="helpHomeBtn" type="button"></button>
     <input id="codeInput" maxlength="4"><button id="joinBtn" type="button"></button>
