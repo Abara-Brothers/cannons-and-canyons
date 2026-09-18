@@ -1732,7 +1732,7 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
 #bay button{ font:inherit; color:inherit; background:none; border:0; cursor:pointer; }
 #bay img{ display:block; max-width:100%; }
 #bay svg{ display:block; }
-#bay [data-go],#bay [data-back],#bay [data-set],#bay [data-pick],#bay [data-skin],#bay [data-toggle],#bay [data-roll]{ cursor:pointer; }
+#bay [data-go],#bay [data-back],#bay [data-set],#bay [data-pick],#bay [data-skin],#bay [data-toggle],#bay [data-roll],#bay [data-cs]{ cursor:pointer; }
 /* The bay fills the screen; the stage is the design frame, centred, in design units. */
 #bay .stage{ position:absolute; width:calc(932 * var(--u)); height:calc(430 * var(--u));
              left: calc(var(--sa-l) + (var(--bay-aw) - 932 * var(--u)) / 2);
@@ -2251,6 +2251,30 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
 #bay .b-code-in:focus{border-color:#ffb46b;box-shadow:0 0 0 calc(2 * var(--u)) rgba(255,180,107,.25)}
 #bay .jerr{min-height:calc(14 * var(--u));margin-top:calc(6 * var(--u));font-size:calc(10.5 * var(--u));color:#ff8b8b}
 #bay .jrow{display:flex;align-items:center;gap:calc(8 * var(--u));margin-top:calc(8 * var(--u))}
+/* ---- Set callsign: the inline field in Bay controls (design 5.6) ---- */
+/* .cs wraps the row so the settings column's child COUNT never changes when the
+   editor opens — morphChildren() matches children by position, and a column
+   that grows a child mid-list re-morphs every row below it. */
+#bay .cs{display:block}
+#bay .csx{display:block;padding:calc(9 * var(--u)) calc(2 * var(--u));border-bottom:1px solid rgba(140,168,214,.15)}
+#bay .cs-in{display:block;width:100%;height:calc(34 * var(--u));border-radius:calc(4 * var(--u));
+  border:1px solid rgba(255,180,107,.5);background:rgba(10,14,23,.8);color:#ffb46b;
+  padding:0 calc(10 * var(--u));font-family:Rajdhani,system-ui,sans-serif;font-weight:700;
+  font-size:calc(17 * var(--u));letter-spacing:.06em;outline:none}
+#bay .cs-in:focus{border-color:#ffb46b;box-shadow:0 0 0 calc(2 * var(--u)) rgba(255,180,107,.25)}
+#bay .csb{display:flex;align-items:center;gap:calc(8 * var(--u));margin-top:calc(8 * var(--u))}
+#bay .csb .sbtn{flex:1}
+#bay .csb .sbtn.on{border-color:#54c8ff;color:#fff;background:rgba(84,200,255,.12)}
+#bay .csb .sbtn[disabled]{opacity:.45;cursor:default}
+/* The rules line wraps -- it is the one place in the settings column that must
+   not be truncated, because for length/chars it IS the error message. */
+#bay .csr{margin-top:calc(7 * var(--u));font-size:calc(10.5 * var(--u));line-height:1.35;
+  color:#7f8fb5;font-weight:500;white-space:normal}
+#bay .csr.bad{color:#ff8b8b}
+/* THE LANDSCAPE KEYBOARD. bay.js measures the overlap through visualViewport and
+   sets --kbd on #bay; the frame moves, nothing reflows, and with no keyboard the
+   class is absent so .stage carries no transform at all. */
+#bay.kbd .stage{transform:translateY(calc(-1 * var(--kbd, 0px)))}
 /* the launch-bar readouts are a button now — the route into Setup */
 #bay .ros{display:flex;align-items:center;gap:calc(14 * var(--u));padding:0 calc(6 * var(--u));height:calc(40 * var(--u));border-radius:calc(5 * var(--u));transition:.15s;text-align:left}
 #bay .ros:hover{background:rgba(84,200,255,.09)}

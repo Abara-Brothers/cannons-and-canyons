@@ -18,6 +18,8 @@ const u = (n) => 'calc(' + n + ' * var(--u))';
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const G = {
   get ccMode()        { return typeof ccMode        !== 'undefined' ? ccMode        : undefined; },
+  get CC_SOCIAL()     { return typeof CC_SOCIAL     !== 'undefined' ? CC_SOCIAL     : undefined; },
+  get CALLSIGN_MAX()  { return typeof CALLSIGN_MAX  !== 'undefined' ? CALLSIGN_MAX  : undefined; },
   get ccOpp()         { return typeof ccOpp         !== 'undefined' ? ccOpp         : undefined; },
   get ccFfaOpp()      { return typeof ccFfaOpp      !== 'undefined' ? ccFfaOpp      : undefined; },
   get pendingIntent() { return typeof pendingIntent !== 'undefined' ? pendingIntent : undefined; },
@@ -66,6 +68,47 @@ const MODES = [
     art: 'ice-wide',      card: 'ice-mid',       draft: 5 },
 ];
 const modeOf = (id) => MODES.find((m) => m.id === id) || MODES[0];
+
+/* ---- Set callsign (design 5.6) ------------------------------------------- */
+// CS_ERR is a CLOSED map from server error code to sentence: the server's own
+// words are NEVER rendered, only looked up, so a malformed or hostile error code
+// cannot put markup on the screen — and a code from a newer server still gets a
+// sentence rather than "undefined". &ndash; and &mdash; keep this file free of
+// the glyph ranges test/house-rules.mjs section 1 audits.
+//
+// KEYED BY CODE ALONE, AND CALLSIGN-ONLY. That is safe here because nothing but
+// a callsign reply is ever looked up in it. Task 8 must NOT reuse this shape for
+// a shared map: `already`, `no_such_user` and `self` all mean different things on
+// a friend frame and on a report frame — Task 6's report, F6, has the example
+// where a repeat report renders "You are already friends". Key by type AND code.
+//
+// Where the copy comes from:
+//   design 5.6      — the rule, the hint, taken, not_allowed, too_soon
+//   BINDING res. 16 — slow_down, unavailable, sign_in, verbatim including the
+//                     full stops (which is why they read differently from 5.6's
+//                     fragments); the owner is asked to confirm them
+//   this task       — offline, checking and the catch-all `_`, all three
+//                     authored here and flagged in the report
+const CS_RULE = '3&ndash;16 letters, digits or spaces. Unique. Once a day.';
+const CS_HINT = 'Friends find you by code until you choose a callsign';
+const CS_OUT  = 'Sign in to choose a callsign.';
+const CS_ERR = {
+  taken:       'Someone has that callsign',
+  not_allowed: 'That callsign is not allowed',
+  length:      CS_RULE,
+  chars:       CS_RULE,
+  too_soon:    'You can change it again tomorrow',
+  slow_down:   'Too many tries. Wait a moment.',
+  unavailable: 'Cannot reach the server. Try again shortly.',
+  sign_in:     CS_OUT,
+  checking:    'Still checking your sign-in. Try again shortly.',
+  offline:     'Not connected. Try again in a moment.',
+  _:           'That callsign could not be set.',
+};
+const KBD_PAD = 6;                                  // px of air under the field when the frame is lifted
+const callsign = { open: false, busy: false, err: '' };
+let csSeq = 0;                                      // which try an answer belongs to
+let kbdOn = null;                                   // the viewport listener, only while the editor is open
 // What the pending lobby says for an invite-room mode: why it needs a
 // connection, and what one player can still do on this device.
 const SOLO_COPY = {
@@ -156,6 +199,8 @@ function state() {
     gcount: has('ccGolfMax') ? ccGolfMax : 2,     // golf seats, 1..4
     tees: has('ccTees') ? ccTees : 'mens',
     name: has('myName') ? myName() : 'Commander',
+    social: has('CC_SOCIAL') ? CC_SOCIAL : null,      // the last social snapshot, or null before the first
+    linked: fn('socialSignedIn') ? socialSignedIn() : false,   // a LINKED account, not a guest
     wins: has('totalWins') ? totalWins() : 0,
     muted: has('Audio') ? !!Audio.muted : false,
   };
@@ -449,6 +494,11 @@ SCREENS.settings = function () {
   ].map((r) => '<div class="row"><span class="rt"><span class="rn2">' + r[1] + '</span><span class="rd">' + r[2] + '</span></span>'
     + '<button class="rk2' + (r[3] ? ' on' : '') + '" data-toggle="' + r[0] + '" aria-label="' + r[1] + '"' + (r[4] ? ' disabled style="opacity:.4"' : '') + '><i></i><u>' + (r[3] ? 'On' : 'Off') + '</u></button></div>').join('');
   const row = (n, d, btn, act) => '<div class="row"><span class="rt"><span class="rn2">' + n + '</span><span class="rd">' + d + '</span></span>' + (btn ? '<button class="sbtn" ' + act + '>' + btn + '</button>' : '') + '</div>';
+  // Two buttons in one row (design 5.6: Callsign carries Roll AND Set). Same
+  // markup as row() to the character, with one more button — so the row keeps
+  // its 52u height and every existing #bay .row rule still applies to it.
+  const row2 = (n, d, b1, a1, b2, a2) => '<div class="row"><span class="rt"><span class="rn2">' + n + '</span><span class="rd">' + d + '</span></span>'
+    + '<button class="sbtn" ' + a1 + '>' + b1 + '</button><button class="sbtn" ' + a2 + '>' + b2 + '</button></div>';
   // Signed in: one line per linked provider, mark + name + address, so Apple and
   // Google both show when both are linked. esc() on the address: provider input.
   const linked = (accState === 'in' && window.CC_ACCOUNT && window.CC_ACCOUNT.accounts) || [];
@@ -457,18 +507,152 @@ SCREENS.settings = function () {
       ? linked.map((a) => '<span class="acl">' + (IC[a.provider] || '') + (PROVIDER_NAME[a.provider] || esc(a.provider)) + ' &middot; ' + esc(a.email || 'connected') + '</span>').join('')
       : 'Signed in &mdash; progress syncs across devices')
     : accState === 'guest' ? 'Guest &mdash; sign in to keep progress across devices' : 'Sign in to keep progress across devices';
+  // CALLSIGN (design 5.6). Roll and Set in one row; Set opens the field beneath
+  // it with the rules under that. The DESCRIPTION is the fact that matters: a
+  // chosen name is the name, a rolled one is private, so the row says how
+  // friends actually find you instead of repeating a name the home screen
+  // already prints in 38u type. Putting the sentence in the existing .rd rather
+  // than in a new paragraph is deliberate — the closed row keeps its 52u height,
+  // so the settings screen is geometrically identical to the baseline
+  // test/layout.mjs holds, which this task is not allowed to rewrite.
+  //
+  // A GUEST IS NOT OFFERED SET. BINDING resolution 2 reserves chosen names for a
+  // linked account, so a Set button on a guest's row is a control that can only
+  // ever fail — and a refusal a player cannot act on reads as a broken feature,
+  // not as a rule. They are told the rule instead, and Roll still works, because
+  // rolling is local and always has been.
+  const csRow = (st) => {
+    const held = st.linked && st.social && typeof st.social.callsign === 'string' ? st.social.callsign : '';
+    const max = has('CALLSIGN_MAX') ? CALLSIGN_MAX : 16;
+    const desc = !st.linked ? CS_OUT : held ? esc(held) : CS_HINT;
+    if (!st.linked) return '<div class="cs">' + row('Callsign', desc, 'Roll', 'data-roll') + '</div>';
+    const body = callsign.open
+      ? '<div class="csx"><input id="bayCall" class="cs-in" maxlength="' + max + '" placeholder="Your callsign"'
+        +   ' autocomplete="off" autocapitalize="words" spellcheck="false" enterkeyhint="done" aria-label="Choose a callsign">'
+        + '<div class="csb"><button class="sbtn" data-cs="cancel">Cancel</button>'
+        +   '<button class="sbtn on" data-cs="save"' + (callsign.busy ? ' disabled' : '') + '>' + (callsign.busy ? 'Saving' : 'Save') + '</button></div>'
+        + '<p class="csr' + (callsign.err ? ' bad' : '') + '">' + (callsign.err || CS_RULE) + '</p></div>'
+      : '';
+    return '<div class="cs">' + row2('Callsign', desc, 'Roll', 'data-roll', 'Set', 'data-cs="open"') + body + '</div>';
+  };
   const right = row('Account', accDesc, accState === 'out' ? 'Sign in' : 'Manage', 'data-old="accountBtn"')
-    + row('Callsign', esc(s.name), 'Roll', 'data-roll')
+    + csRow(s)
     + row('Tank paint', esc(s.skin.name) + ' is fitted', 'Open', 'data-go="paint"')
     + row('How to play', 'The six-chapter field manual', 'Open', 'data-old="helpHomeBtn"')
     + row('Privacy policy', 'Opens in your browser', '&rarr;', 'data-old="privacyLink"')
-    + '<div class="card" style="margin-top:' + u(10) + ';padding:' + u(10) + ' ' + u(13) + '"><span class="lbl">Built by</span>'
+    // The credit card stands down while the field is open: the editor is about
+    // 70u tall and the right column already reaches the bottom of .pbody, so
+    // something has to give and this is the part nobody is reading mid-edit.
+    + (callsign.open ? '' : '<div class="card" style="margin-top:' + u(10) + ';padding:' + u(10) + ' ' + u(13) + '"><span class="lbl">Built by</span>'
     + '<div style="font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:' + u(19) + ';text-transform:uppercase;letter-spacing:.05em;margin-top:' + u(4) + ';color:#eef3ff">Abara Brothers</div>'
-    + '<div style="font-size:' + u(10.5) + ';color:#7f8fb5;margin-top:' + u(4) + ';font-weight:500">Cannons &amp; Canyons &mdash; landscape only, best with a friend.</div></div>';
+    + '<div style="font-size:' + u(10.5) + ';color:#7f8fb5;margin-top:' + u(4) + ';font-weight:500">Cannons &amp; Canyons &mdash; landscape only, best with a friend.</div></div>');
   const withWhom = linked.length ? ' with ' + linked.map((a) => PROVIDER_NAME[a.provider] || esc(a.provider)).join(' and ') : '';
   return chrome('Bay controls', accState === 'in' ? 'Signed in' + withWhom + ' &mdash; progress syncs across devices' : 'Guest &mdash; progress is stored on this device', 'Abara Brothers',
     '<div class="set" style="height:' + u(300) + '"><div style="flex:1">' + T + '</div><div style="flex:1">' + right + '</div></div>', '');
 };
+
+/* ---- Set callsign: opening, submitting, and the on-screen keyboard -------- */
+// THE KEYBOARD. The game is landscape-only and an iPhone's landscape keyboard
+// eats roughly two thirds of the viewport, so a field halfway down the design
+// frame is typed into blind. There is nothing to scroll — .stage is a fixed
+// 932x430 frame positioned absolutely — so the frame itself moves. visualViewport
+// reports the band still visible; lift by exactly the overlap, and never so far
+// that the field leaves the top of that band. The lift lives on #bay, the HOST
+// element, as a custom property: morphChildren() never touches the host, whereas
+// an inline style on .stage would be stripped on the next re-render (morphNode
+// removes every attribute the template does not carry).
+function kbdFit() {
+  const host = $('bay'), box = document.querySelector('#bay .csx');
+  if (!host || !box) return;
+  host.classList.remove('kbd');                       // measure where the frame really sits
+  const vv = window.visualViewport;
+  const top = vv ? vv.offsetTop : 0;
+  const bottom = top + (vv ? vv.height : window.innerHeight);
+  const r = box.getBoundingClientRect();
+  // Math.max(0, …) on the OUTER clamp: with no keyboard the overlap is a
+  // negative number, and a negative --kbd would push the frame DOWN the screen
+  // the moment anything set the class. Math.min against (r.top - top) is the
+  // other end: lifting further than that carries the field off the top of the
+  // band, which is the same blind typing by a different route.
+  const lift = Math.max(0, Math.min(Math.round(r.bottom + KBD_PAD - bottom), Math.round(r.top - top)));
+  host.style.setProperty('--kbd', lift + 'px');
+  host.classList.toggle('kbd', lift > 0);
+}
+function kbdWatch(on) {
+  const vv = window.visualViewport;
+  if (on) {
+    if (!kbdOn) {
+      kbdOn = () => kbdFit();
+      if (vv) { vv.addEventListener('resize', kbdOn); vv.addEventListener('scroll', kbdOn); }
+      window.addEventListener('resize', kbdOn);
+    }
+    kbdFit();
+    return;
+  }
+  if (kbdOn) {
+    if (vv) { vv.removeEventListener('resize', kbdOn); vv.removeEventListener('scroll', kbdOn); }
+    window.removeEventListener('resize', kbdOn);
+    kbdOn = null;
+  }
+  const host = $('bay');
+  if (host) { host.classList.remove('kbd'); host.style.removeProperty('--kbd'); }
+}
+function openCallsign() {
+  callsign.open = true; callsign.busy = false; callsign.err = ''; csSeq++;
+  render(current);
+  const i = $('bayCall');
+  if (!i) return;
+  i.value = '';                                        // never pre-fill: Save must be a decision
+  // The focus is deferred one tick so the field exists and the entrance is over;
+  // the viewport watch starts with it, because the keyboard follows the focus.
+  setTimeout(() => { try { i.focus(); } catch {} kbdWatch(true); }, 60);
+}
+function closeCallsign() {
+  callsign.open = false; callsign.busy = false; callsign.err = ''; csSeq++;
+  kbdWatch(false);
+  render(current);
+}
+function submitCallsign() {
+  const i = $('bayCall');
+  if (!i || callsign.busy) return;
+  callsign.err = '';
+  const wire = fn('sendCallsign');
+  if (!wire) { callsign.err = CS_ERR.offline; render(current); return; }
+  // An EMPTY field is the one thing this side decides, and it cannot drift: no
+  // minimum length is ever below one character, so a blank Save is refused by
+  // every rule the server could ever hold. It is refused here because the set
+  // allowance is three a minute and a blank tap is not worth one of them.
+  const typed = (i.value || '').trim();
+  if (!typed) { callsign.err = CS_RULE; render(current); const f = $('bayCall'); if (f) f.focus(); return; }
+  const seq = ++csSeq;
+  callsign.busy = true; render(current);
+  wire(typed, (res) => {
+    // A DIFFERENT TRY, OR NONE. The player may have cancelled, reopened or saved
+    // again while this was in flight; its answer belongs to a field that is gone
+    // and must not mark the one on screen. The name itself still landed —
+    // sendCallsign() writes it before this runs.
+    if (seq !== csSeq) return;
+    callsign.busy = false;
+    if (res && res.ok) {
+      callsign.open = false; callsign.err = ''; csSeq++;
+      kbdWatch(false); render(current);
+      if (fn('showToast')) showToast('Callsign set');
+      return;
+    }
+    // A LOOKUP, never an echo: an error code this build has never heard of still
+    // gets a sentence, and nothing the server sent reaches innerHTML.
+    callsign.err = CS_ERR[res && res.error] || CS_ERR._;
+    render(current);
+    const f = $('bayCall'); if (f) f.focus();
+  });
+}
+// Enter commits and Escape closes. On a phone the keyboard's Done key is the
+// only comfortable way to finish, and it arrives as Enter.
+document.addEventListener('keydown', (e) => {
+  if (!callsign.open || !e.target || e.target.id !== 'bayCall') return;
+  if (e.key === 'Enter') { e.preventDefault(); submitCallsign(); }
+  else if (e.key === 'Escape') { e.preventDefault(); closeCallsign(); }
+});
 
 // 4 — ARMOURY. Load the rack: n weapons go into the field.
 SCREENS.armoury = function () {
@@ -791,6 +975,9 @@ const base = (n) => (n === 'join' ? 'home' : n);     // the join panel is an ove
 function render(name) {
   const host = $('bay'); if (!host) return;
   const next = name in SCREENS ? name : 'home';
+  // Leaving Bay controls closes the field: it belongs to that screen only, the
+  // keyboard lift with it, and .stage is rebuilt outright on a screen change.
+  if (callsign.open && next !== 'settings') { callsign.open = false; callsign.busy = false; callsign.err = ''; csSeq++; kbdWatch(false); }
   const entering = !host.firstChild || base(next) !== base(current);
   const html = SCREENS[next]();
   current = next;
@@ -808,6 +995,12 @@ function render(name) {
     morphChildren(host, tpl);
   }
   if (current === 'join') { const i = $('bayCode'); if (i) setTimeout(() => i.focus(), 50); }
+  // The Callsign row can only be honest about a name chosen on ANOTHER device if
+  // the server is asked (BINDING resolution 13 puts it on the friends frame).
+  // Asked on ENTRY, not on every re-render: a tap on a toggle re-renders this
+  // screen and the read model is eight round trips. socialNeed() is idempotent
+  // and does nothing for a guest, so this costs a signed-out player nothing.
+  if (entering && current === 'settings' && fn('socialNeed')) socialNeed();
   if (current === 'home') loadSorties();
 }
 
@@ -833,7 +1026,7 @@ function setField(k, v) {
 
 document.addEventListener('click', (e) => {
   const host = $('bay'); if (!host || !host.classList.contains('active')) return;
-  const t = e.target.closest('[data-go],[data-back],[data-set],[data-roll],[data-toggle],[data-launch],[data-join],[data-pick],[data-old],[data-skin],[data-rematch],[data-solo]');
+  const t = e.target.closest('[data-go],[data-back],[data-set],[data-roll],[data-toggle],[data-launch],[data-join],[data-pick],[data-old],[data-skin],[data-rematch],[data-solo],[data-cs]');
   if (!t || !host.contains(t)) return;
   if (has('Audio')) Audio.ensure();
   // The lobby's Back IS Cancel. Leaving any other way strands a queued create
@@ -875,8 +1068,16 @@ document.addEventListener('click', (e) => {
     return;
   }
   if ('roll' in t.dataset) {
+    // setCallsign() also gives the server's uniqueness key back when the name
+    // being rolled over was a CHOSEN one — see public/app.js.
     if (has('setCallsign') && has('rollCallsign')) setCallsign(rollCallsign(state().name));
     render(current); return;
+  }
+  if (t.dataset.cs) {
+    if (t.dataset.cs === 'open') { openCallsign(); return; }
+    if (t.dataset.cs === 'cancel') { closeCallsign(); return; }
+    if (t.dataset.cs === 'save') { submitCallsign(); return; }
+    return;
   }
   if (t.dataset.toggle) {
     const k = t.dataset.toggle;
@@ -903,9 +1104,21 @@ window.Bay = { show: render, go, back, state, tankURL, MODES, haptic, rankFor, a
 // refreshAccountChip() fires this the moment a session changes; the two screens
 // that show the account (home chip, Bay controls row) redraw in place. Only
 // while the bay is the screen on stage: a match must never be repainted over.
+// The social snapshot lands from app.js — a reply, or a push the server made
+// when someone else changed something. The screen that reads it redraws in
+// place, and only while the bay is on stage: a match must never be repainted
+// over. (Task 8 widens this to its Friends screen.)
+document.addEventListener('cc:social', () => {
+  const host = $('bay');
+  if (host && host.classList.contains('active') && current === 'settings') render(current);
+});
 document.addEventListener('cc:account', () => {
   const host = $('bay');
   if (host && host.classList.contains('active') && (current === 'home' || current === 'settings')) render(current);
+  // A sign-in that lands WHILE Bay controls is open never re-enters the screen,
+  // so render()'s entry hook would never fire and the row would go on saying
+  // "sign in to choose a callsign" to somebody who just did.
+  if (current === 'settings' && fn('socialNeed')) socialNeed();
 });
 applyMotion();
 

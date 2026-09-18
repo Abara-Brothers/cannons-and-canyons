@@ -1457,6 +1457,188 @@ function connect() {
 }
 function sendMsg(m) { if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify(m)); }
 
+// ---------------------------------------------------------------------------
+// Social: friends, blocks, reports and CHOSEN callsigns
+// ---------------------------------------------------------------------------
+// Every social message rides the game socket (design 6.1: no client ever reads
+// or writes the new tables; the server executes every social action). One
+// outbox, one inbox: the server echoes the request's `id` on every reply, so an
+// answer is matched to the tap that asked for it and a late answer to a try the
+// player has already abandoned can never overwrite a newer one.
+window.CC_SOCIAL = null;                 // the last snapshot; bay.js reads, never writes
+let socialId = 0;
+const socialWait = new Map();            // String(id) -> { cb, t }
+const SOCIAL_TIMEOUT_MS = 12000;         // a socket that dies mid-flight must not leave a spinner up for ever
+let callsignPending = 0;                 // callsign frames in flight — see socialSnapshot
+let socialAsking = false;                // a read-model request is out
+function socialSignedIn() { return !!(window.CC_ACCOUNT && window.CC_ACCOUNT.anonymous === false); }
+
+function socialSend(frame, cb) {
+  // No socket, no frame. sendMsg() drops silently when the socket is down, and a
+  // caller left waiting on a reply that can never arrive is a dead button —
+  // exactly the failure ISSUE-031 was about.
+  if (!S.ws || S.ws.readyState !== 1) { if (cb) cb({ error: 'offline' }); return 0; }
+  // BINDING resolution 3: `block`, `report` and `friend op:'remove'` spell their
+  // TARGET in `id` and the server echoes that uuid back, so a frame that already
+  // carries an id must KEEP it — minting one over the top would address the
+  // operation at nobody. The echo is then the only correlation there is, which
+  // is why resolution 3 also tells a client to match those replies on type plus
+  // op rather than trusting `id` to be unique per request. Task 8: send a lobby
+  // card's `handle` and leave `id` alone, and this is a pure correlation again.
+  const own = frame.id === undefined;
+  const id = own ? ++socialId : frame.id;
+  if (cb) {
+    const t = setTimeout(() => { if (socialWait.delete(String(id))) cb({ error: 'offline' }); }, SOCIAL_TIMEOUT_MS);
+    socialWait.set(String(id), { cb, t });
+  }
+  sendMsg(own ? { ...frame, id } : frame);
+  return id;
+}
+// Every social reply and every server push lands here. A frame with no `id`, or
+// with an `id` nobody is waiting on, is a push (or a stale answer): it updates
+// the snapshot if it is one, and runs no callback at all.
+function socialReply(m) {
+  // AND NOT AN ERROR. `{type:'friends', error:'slow_down'|'unavailable'}` is a
+  // refusal, not an empty panel — the server's own comment on friendsSnapshot
+  // says a panel that renders "no friends yet" because PostgREST was down is
+  // worse than one that says it could not load. Read as a snapshot it would
+  // also tell a player who HAS a chosen callsign that they hold none.
+  if (m.type === 'friends' && !m.error) socialSnapshot(m);
+  const w = m.id == null ? null : socialWait.get(String(m.id));
+  if (!w) return;
+  socialWait.delete(String(m.id)); clearTimeout(w.t);
+  w.cb(m);
+}
+// The ONE place window.CC_SOCIAL is written wholesale.
+function socialSnapshot(m) {
+  const cur = window.CC_SOCIAL;
+  // BINDING resolution 13: the friends frame carries THIS account's own chosen
+  // callsign, or null when it holds only a rolled one. The server is the
+  // authority — that is what makes the row honest on a second device, and it is
+  // why nothing here reads local storage.
+  //
+  // The one exception is a callsign frame still in flight. A push is built from
+  // a read the server may have begun BEFORE the write this player is waiting on
+  // landed, and it can arrive after the answer to it; the answer is newer, so
+  // while one is outstanding this field is left alone.
+  const held = callsignPending > 0
+    ? (cur ? cur.callsign : null)
+    : (typeof m.callsign === 'string' && m.callsign ? m.callsign : null);
+  window.CC_SOCIAL = {
+    friends: Array.isArray(m.friends) ? m.friends : [],
+    requests: (m.requests && typeof m.requests === 'object') ? m.requests : { in: [], out: [] },
+    blocked: Array.isArray(m.blocked) ? m.blocked : [],
+    friendCode: m.friendCode || null,
+    callsign: held,
+  };
+  socialAccount = accountKey();
+  document.dispatchEvent(new Event('cc:social'));
+  // A CHOSEN callsign IS the player's name — that is the whole point of paying a
+  // day's quota for one — so a device that is showing something else adopts it.
+  // Without this, choosing a name on one phone and playing on another shows the
+  // rolled pair, and room-engine.js's exemption only accepts a chosen name the
+  // client actually presents. CC_SOCIAL is already written above, so the roll
+  // guard in setCallsign() sees the name it is being given and stays quiet.
+  if (held && ($('nameInput').value || '').trim() !== held) setCallsign(held);
+}
+// Whether THIS account holds a chosen callsign, and which. Written on every
+// accepted callsign reply — a string for Set, null for Roll — so the Bay is
+// right between snapshots.
+function socialCallsign(v) {
+  const s = window.CC_SOCIAL || { friends: [], requests: { in: [], out: [] }, blocked: [], friendCode: null, callsign: null };
+  s.callsign = v == null ? null : String(v);
+  window.CC_SOCIAL = s;
+  document.dispatchEvent(new Event('cc:social'));
+}
+// Ask for the read model, once, when a screen that shows it is opened and this
+// account's snapshot is not in hand. It is EIGHT PostgREST round trips on the
+// server, so it is not spent at sign-in on the chance a player opens Bay
+// controls; and it is not spent at all by a guest, who is refused it.
+function socialNeed() {
+  if (!socialSignedIn() || window.CC_SOCIAL || socialAsking) return;
+  socialAsking = true;
+  // A refusal leaves CC_SOCIAL null on purpose, so the next visit asks again.
+  socialSend({ type: 'friends' }, () => { socialAsking = false; });
+}
+// Signing out — or into a DIFFERENT account — makes this device's copy of that
+// account's social state meaningless. Drop ALL of it, not just the callsign: a
+// friends list and a blocked list belong to the account that left, and the Bay
+// must not go on drawing them. Whatever is signed in now can ask for its own.
+//
+// Keyed rather than unconditional, because refreshAccountChip() fires this event
+// every time it runs — on boot, on a resume, on a link — and throwing the
+// snapshot away each time would cost eight round trips to rebuild something that
+// never changed. A guest and a signed-out session both key to '', which is never
+// equal to a linked account's key, so both still drop it.
+let socialAccount = '';                  // whose account CC_SOCIAL belongs to
+function accountKey() {
+  const a = window.CC_ACCOUNT;
+  if (!a || a.anonymous !== false) return '';
+  return (a.email || '') + '|' + ((a.accounts || []).map((x) => x && x.provider).sort().join(','));
+}
+document.addEventListener('cc:account', () => {
+  const key = accountKey();
+  if (key && key === socialAccount) return;
+  socialAccount = key;
+  if (!window.CC_SOCIAL) return;
+  window.CC_SOCIAL = null;
+  document.dispatchEvent(new Event('cc:social'));
+});
+// SET (design 5.6). The client validates nothing about the NAME:
+// server/callsign.js is the single source (design 4.5), so the typed string goes
+// up as typed and the code that comes back is what the player is shown.
+function sendCallsign(name, cb) {
+  const frame = { type: 'callsign', name: String(name == null ? '' : name) };
+  const settle = (m, retried) => {
+    callsignPending--;
+    // A ROLLED reply is {ok:true, callsign:null} and must never reach
+    // setCallsign(): writing null into #nameInput renames the player "null" and
+    // cloudQueue() pushes that to the profile row.
+    if (m && m.ok && typeof m.callsign === 'string') {
+      socialCallsign(m.callsign);   // BEFORE setCallsign: the roll guard there compares against it
+      setCallsign(m.callsign);
+      cb({ ok: true, callsign: m.callsign });
+      return;
+    }
+    // The hello budget can answer sign_in BEFORE this socket's account has
+    // resolved (Task 4's report, concern 1), so to a client that believes it is
+    // signed in the refusal is retryable, not final. Re-introduce the socket and
+    // ask once more: the server holds the second frame on its own authPending,
+    // which is a real wait rather than a guessed delay.
+    if (m && m.error === 'sign_in' && !retried && socialSignedIn()) {
+      socialReHello().then(() => { callsignPending++; socialSend(frame, (m2) => settle(m2, true)); });
+      return;
+    }
+    let err = (m && m.error) || 'offline';
+    // Telling a signed-in player to sign in is a lie, and the one they can do
+    // nothing about. Say what is actually true of them.
+    if (err === 'sign_in' && socialSignedIn()) err = 'checking';
+    cb({ ok: false, error: err });
+  };
+  callsignPending++;
+  socialSend(frame, (m) => settle(m, false));
+}
+function socialReHello() {
+  try {
+    if (typeof sendHello === 'function' && S.ws && S.ws.readyState === 1) return Promise.resolve(sendHello(S.ws));
+  } catch {}
+  return Promise.resolve();
+}
+// ROLL (design 4.5: "setting a chosen name then rolling clears the key"). The
+// frame carries NO name — the rolled display name rides the existing
+// cloudQueue() path exactly as it always has, and the server touches only
+// callsign_key. callsign_set_at is deliberately left alone, so roll-then-set is
+// not a way around the once-a-day rule. A refusal leaves the held name in place,
+// which is the truth: the account still holds the key, and the next Roll asks
+// again.
+function socialRolled() {
+  callsignPending++;
+  socialSend({ type: 'callsign', rolled: true }, (m) => {
+    callsignPending--;
+    if (m && m.ok) socialCallsign(null);
+  });
+}
+
 // Introduce this socket's account to the server (8.48): with an identity on
 // the socket, turn nudges reach every device the player ever subscribed, not
 // just one browser's in-memory copy. create:false — merely CONNECTING must
@@ -1979,6 +2161,16 @@ function handle(m) {
       if (S.playing) clearResume();
       if (S.playing || S.code) { S.playing = false; showOverlay('Opponent left', null, 'draw', true); }
       break;
+    // SOCIAL (design 4.2). One arm for every social type: socialReply() owns the
+    // id matching and the snapshot, so nothing social reaches the engine's state
+    // and a type this build does not use yet simply finds no waiter. 'social' is
+    // the shared gate's refusal (`{type:'social', error:'sign_in'}`), not a type
+    // the client ever sends — and it is the one answer to a callsign frame that
+    // does not carry type 'callsign', so it has to be routed here by name.
+    case 'friends': case 'friend': case 'block': case 'callsign': case 'report':
+    case 'presence': case 'social':
+      socialReply(m);
+      break;
   }
 }
 
@@ -1995,7 +2187,18 @@ function handle(m) {
 // cannot import that module, so the lists are duplicated — test/house-rules.mjs
 // FAILS if they drift. Adding a word here alone means the server silently
 // renames anyone who rolls it.
-const NAME_MAX = 14;                       // must match #nameInput maxlength
+const NAME_MAX = 14;                       // ROLLED names: the word lists are built around it
+// CHOSEN callsigns (design 4.5). MIRRORED: server/callsign.js owns CALLSIGN_MAX
+// and is the only validator — this copy exists so the Bay's field can carry the
+// right maxlength, and #nameInput in index.html carries it too. The client never
+// decides whether a callsign is acceptable; it only refuses to hand the server a
+// string the field could not hold.
+//
+// #nameInput's maxlength is therefore 16, NOT NAME_MAX: it holds whichever kind
+// of name the player currently has. game-core.js:22 still says "must match
+// #nameInput maxlength" beside its own NAME_MAX — that comment predates chosen
+// callsigns and is stale; the number is right, the reason is not.
+const CALLSIGN_MAX = 16;
 const CALL_ADJ = [
   'Iron', 'Steel', 'Brass', 'Copper', 'Cobalt', 'Rusty', 'Dusty', 'Ashen',
   'Flint', 'Basalt', 'Granite', 'Jagged', 'Hollow', 'Crimson', 'Amber',
@@ -2025,6 +2228,16 @@ function setCallsign(name) {
   $('nameInput').value = name;
   try { localStorage.setItem('pt_name', name); } catch {}
   cloudQueue();          // the profile row carries the callsign too
+  // A roll over a CHOSEN name must clear the server's uniqueness key, or the
+  // name stays reserved by an account that no longer shows it. One frame per
+  // chosen name, and never more: sendCallsign() and socialSnapshot() both set
+  // CC_SOCIAL.callsign BEFORE calling this, so taking a chosen name never looks
+  // like a roll; and once the server has cleared the key CC_SOCIAL.callsign is
+  // null, so a player mashing rerollBtn sends nothing further and never trips
+  // the 3-per-minute bucket. A guest has no key to give back, hence
+  // socialSignedIn().
+  if (socialSignedIn() && window.CC_SOCIAL && window.CC_SOCIAL.callsign != null
+      && name !== window.CC_SOCIAL.callsign) socialRolled();
 }
 $('rerollBtn').onclick = () => {
   Audio.ensure();

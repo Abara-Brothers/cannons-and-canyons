@@ -45,7 +45,13 @@
        app.js first -- the client DOM has no test coverage, so that is a
        deliberate second step, not a byproduct of this one. -->
   <div id="legacy" class="hidden" aria-hidden="true">
-    <input id="nameInput" maxlength="14" readonly><button id="rerollBtn" type="button"></button>
+    <!-- maxlength 16, not 14: a ROLLED name is still NAME_MAX=14 (the word lists
+         in game-core.js and app.js are built around it, and test/house-rules.mjs
+         section 5 fails if the two copies disagree), but a CHOSEN callsign is up
+         to CALLSIGN_MAX=16 and setCallsign() writes it straight in here. readonly
+         is gone with it: this is a value holder now, not a control that had to be
+         defended from a stray tap on a screen nobody was ever shown. -->
+    <input id="nameInput" maxlength="16"><button id="rerollBtn" type="button"></button>
     <button id="helpHomeBtn" type="button"></button>
     <input id="codeInput" maxlength="4"><button id="joinBtn" type="button"></button>
     <div id="modeRow"></div><div id="oppBtns"></div>
