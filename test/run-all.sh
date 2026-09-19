@@ -69,6 +69,10 @@ start_server() {             # start_server [extra env assignments...]
 
 echo "== headless (no server needed) =="
 run house_rules node test/house-rules.mjs
+# The account data export's shape, which privacy.html describes field by field.
+# Headless: it lifts exportMyData() out of app.js by brace-matching and runs that
+# one function against stubs, because app.js itself cannot be loaded under Node.
+run export_shape node test/export_shape.mjs
 # The chosen-callsign rules (design 4.5): normalising, length, characters, the
 # folded blocklist, and the loader's own guards. Pure module, no server.
 run callsign node test/callsign.mjs

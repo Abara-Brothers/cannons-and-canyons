@@ -125,12 +125,15 @@ const UI_FILES = ['public/index.html', 'public/app.js', 'public/bay.js', 'public
 }
 
 // ---- 5. CALLSIGN WORD LISTS MUST AGREE (ISSUE-015) ---------------------------
-// Names are not free text. The client rolls from CALL_ADJ/CALL_NOUN and the
-// server accepts ONLY pairs from its own copy of those lists. The client is a
-// classic script and cannot import game-core.js, so the lists are duplicated —
-// and if they drift, the server starts silently renaming players who did
-// nothing wrong. Adding a word to one side without the other is the whole
-// failure mode this guards.
+// A ROLLED name is not free text. The client rolls from CALL_ADJ/CALL_NOUN and
+// the server accepts a rolled name ONLY as a pair from its own copy of those
+// lists. (Since 2026-09-18 a player with a linked account may also CHOOSE a
+// callsign, which the server validates and stores itself — a different path,
+// bounded by CALLSIGN_MAX in server/callsign.js, and not what this rule is
+// about.) The client is a classic script and cannot import game-core.js, so the
+// lists are duplicated — and if they drift, the server starts silently renaming
+// players who did nothing wrong. Adding a word to one side without the other is
+// the whole failure mode this guards.
 {
   const core = read('public/game-core.js'), app = read('public/app.js');
   const list = (src, name) => {
@@ -1072,6 +1075,80 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   if (bad.length) fail(`unprovable callsign reads:\n      ${bad.join('\n      ')}`);
   else ok(`all ${checked} PostgREST select lists in server.js and server/*.js are readable, and each of the ${withCallsign}`
     + ' that asks for `callsign` also asks for `callsign_key` — no name can be fetched that the server cannot prove');
+}
+
+// ---- 15. NO SHIPPED DOCUMENT MAY CLAIM THERE IS NO USER-GENERATED TEXT ------
+// ISSUE-015 (2026-08-04) removed the free-text callsign field and four documents
+// were written around that fact. This feature REVERSES it (2026-09-18): a player
+// types a name again, filtered, reportable and blockable. Every one of those
+// sentences is now either a misdeclaration on a store form or a false statement
+// in a privacy policy — the Australian Consumer Law exposure docs/LEGAL_POSITION.md
+// exists to keep an eye on. Prose has no type checker, and the last audit of
+// these files was a one-off grep by a human, so this is the grep, kept.
+//
+// SCOPE IS DELIBERATE: documents only (.md under store/, .html under public/).
+// public/game-core.js MUST still discuss free-text names — recording why the
+// decision flipped is that comment's whole job, and the file now also carries
+// the shared profanity list — so it is not scanned here.
+{
+  const walk = (rel, ext, acc = []) => {
+    for (const e of readdirSync(path.join(ROOT, rel), { withFileTypes: true })) {
+      const child = rel + '/' + e.name;
+      if (e.isDirectory()) walk(child, ext, acc);
+      else if (e.name.endsWith(ext)) acc.push(child);
+    }
+    return acc;
+  };
+  const DOCS = [...walk('store', '.md'), ...walk('public', '.html')];
+  // Each phrase is one a reviewer or a regulator would read as a promise. They
+  // are matched verbatim rather than by keyword, so ordinary prose about
+  // callsigns stays legal and only the retired claims are caught.
+  const BANNED = [
+    'no user-generated text',
+    'free-text input',
+    'free-text content',
+    'Callsign is generated, never typed',
+    'Names are rolled, not typed',
+    'The callsign field is read-only',
+    "callsigns come from the game's own word lists",
+    "callsigns are picked from the game's own word lists",
+  ];
+  const hits = [];
+  for (const rel of DOCS) {
+    read(rel).split('\n').forEach((line, i) => {
+      for (const p of BANNED) if (line.includes(p)) hits.push(`${rel}:${i + 1}: "${p}"`);
+    });
+  }
+  if (hits.length) {
+    fail(`a shipped document still says players cannot type — ISSUE-015 was reversed 2026-09-18:\n      ${hits.join('\n      ')}`);
+  } else {
+    ok(`no store or public document claims there is no user-generated text (${DOCS.length} documents scanned)`);
+  }
+}
+
+// ---- 16. THE PRIVACY PAGE MUST DESCRIBE REPORT AND BLOCK --------------------
+// Guideline 1.2 is satisfied by tools that exist AND are findable. The tools are
+// in the app; the page a reviewer, a parent and a regulator actually read is
+// this one, and it is the page both store listings point at. If a rewrite ever
+// drops the section, the product quietly becomes user-generated content with no
+// published mechanism — precisely the state ISSUE-015 deleted the field to avoid,
+// except now the field is back.
+{
+  const src = read('public/privacy.html');
+  const MUST = [
+    ['Report a callsign', 'the reporting tool'],
+    ['Block a player', 'the blocking tool'],
+    ['support@abarabrothers.com', 'the published contact'],
+    ['Name reports', 'name reports as a stored data category'],
+    ['Friend code', 'the friend code as a stored data category'],
+  ];
+  const missing = MUST.filter(([n]) => !src.includes(n));
+  if (missing.length) {
+    fail('privacy.html no longer describes the Guideline 1.2 tools:\n      '
+      + missing.map(([n, why]) => `${why} — "${n}" is not on the page`).join('\n      '));
+  } else {
+    ok('privacy.html names report, block, the contact, and the friends data categories');
+  }
 }
 
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nALL GOOD');

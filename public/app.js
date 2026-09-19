@@ -1359,18 +1359,33 @@ async function exportMyData() {
   // client cannot read by design) is named here AND in the policy, with the
   // support route for getting it.
   const who = await Cloud.whoami();
+  // Friends data is already in memory: the last snapshot the server sent, parked
+  // on window.CC_SOCIAL exactly as whoami() is parked on window.CC_ACCOUNT. No
+  // extra read — and null until the first snapshot arrives, so the three fields
+  // exist for every player and simply read null for one who has never opened
+  // Friends, is offline, or is a guest (a guest is refused the friends frame
+  // altogether, so their snapshot never arrives and their counts stay null).
+  const social = window.CC_SOCIAL || null;
   const data = {
     exported_at: new Date().toISOString(),
     account_id: Cloud.userId(),
     account_type: who ? (who.anonymous ? 'guest' : 'linked') : 'unknown',
     sign_in: who ? { google_linked: who.google, apple_linked: who.apple, email: who.email || null } : null,
     callsign: savedName() || null,
+    friend_code: social && social.friendCode ? 'FR-' + social.friendCode : null,
+    friends_count: social && Array.isArray(social.friends) ? social.friends.length : null,
+    blocked_count: social && Array.isArray(social.blocked) ? social.blocked.length : null,
     cloud_profile: row,
     local_progression: progressionSnapshot(),
     not_included: {
       push_subscriptions: 'Stored against your account but not readable by the app; '
         + 'request them via https://abarabrothers.com/support',
       crash_reports: 'Anonymous and not linked to your account; deleted after 30 days',
+      friends_list: 'The counts above are in this file, but not who your friends are; '
+        + 'request that via https://abarabrothers.com/support',
+      null_counts: 'A friends_count or blocked_count of null means this device had not '
+        + 'loaded those lists when you exported. It does NOT mean zero. Friends need a '
+        + 'signed-in account: sign in, open Friends, then export again.',
     },
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });

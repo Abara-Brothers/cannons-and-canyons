@@ -6,20 +6,58 @@ export const WORLD_W = 48000; // battlefield DOUBLED (2026-07-23, Jordan: 'gamep
 export const WORLD_H = 13500; // tall world → room for huge peaks and deep canyons (no ceiling clipping)
 
 // ---- Callsigns ------------------------------------------------------------------
-// Players do NOT type a name. They roll one from these two curated lists
-// (ISSUE-015, decided 2026-08-04). Free-text names are user-generated content,
-// which Apple Guideline 1.2 will not accept without report, block and a staffed
-// contact — an ongoing obligation a two-person studio cannot meet. Removing the
-// free-text field removes the requirement rather than satisfying it.
+// Two kinds of name, one boundary.
+//
+// ROLLED (the default, and all a player ever needs): an adjective/noun pair from
+// these two curated lists, rolled on the client. Needs no database, collides with
+// nobody, and is what every new player starts with.
+//
+// CHOSEN (2026-09-18): a player with a LINKED account may instead type their own
+// callsign. This REVERSES ISSUE-015 of 2026-08-04, which deleted the free-text
+// field on the grounds that user-generated content obliges us, under Apple
+// Guideline 1.2, to provide filtering, reporting, blocking and a published
+// contact — "an ongoing obligation a two-person studio cannot meet". The
+// obligation is now MET rather than dodged, and each half of it has an address in
+// the tree:
+//   filtering  — server/callsign.js folds the name (NFKD, diacritics stripped,
+//                look-alikes mapped, everything but a-z removed) and rejects it
+//                when the folded form CONTAINS any term in the server's own term
+//                list. That file lives under server/ and its path is deliberately
+//                NOT spelled in this file: house rules section 11 fails if
+//                anything under public/ names it, because public/ is the one
+//                directory the server will serve, and the list is real slurs
+//                verbatim. server/callsign.js is where it is loaded.
+//                The check runs BEFORE the name is stored, so a rejected name is
+//                never seen by anyone.
+//   reporting  — every player card carries Report name, including the seat of a
+//                stranger in a lobby or a match, and including for a GUEST. The
+//                report is written to name_reports with the callsign exactly as
+//                it was seen, and the server logs it. The owner reviews the table
+//                in the Supabase dashboard (there is no email provider — spec
+//                section 10).
+//   blocking   — Block writes to blocks, and is likewise open to a guest. A block
+//                stops the blocked player finding or contacting you — callsign
+//                search, add-by-code, friend requests, presence and the friends
+//                panel, in BOTH directions — and the Friends screen lists
+//                everyone blocked, with Unblock. It does NOT promise the two are
+//                never matched into a battle together (BINDING resolution 25);
+//                no document may claim it does.
+//   contact    — support@abarabrothers.com, already published in privacy.html,
+//                delete-account.html and both store documents.
+// store/REVIEW_NOTES.md carries the reviewer-facing version of this paragraph, and
+// test/house-rules.mjs sections 15 and 16 fail if either drifts back.
+//
+// WHAT DID NOT CHANGE, and must not: this module is still the boundary. A modified
+// client can send any string it likes, so a name is accepted ONLY when it is a pair
+// from these lists, OR when it is the exact name the SERVER itself validated and
+// stored for that signed-in account (room-engine's sanitizeName takes that verified
+// name as its `allowed` argument, and nothing else can supply it). An unverified
+// client still cannot push free text through.
 //
 // The client owns the same two lists (it is a classic script and cannot import
 // this module), and test/house-rules.mjs FAILS if the two copies disagree — the
 // same guard already used for the mirrored ballistics constants.
-//
-// The readonly input is cosmetic. This module is the boundary that matters: a
-// modified client can send any string it likes, so the server accepts a name
-// ONLY if it is a pair from these lists.
-export const NAME_MAX = 14;                // must match #nameInput maxlength
+export const NAME_MAX = 14;                // ROLLED pairs only — a chosen callsign is bounded by CALLSIGN_MAX (16) in server/callsign.js
 export const CALL_ADJ = [
   'Iron', 'Steel', 'Brass', 'Copper', 'Cobalt', 'Rusty', 'Dusty', 'Ashen',
   'Flint', 'Basalt', 'Granite', 'Jagged', 'Hollow', 'Crimson', 'Amber',

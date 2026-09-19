@@ -18,7 +18,7 @@
 <body>
 <main>
   <h1>Privacy Policy — Cannons &amp; Canyons</h1>
-  <p class="muted">Made by Abara Brothers · Last updated: 15 August 2026</p>
+  <p class="muted">Made by Abara Brothers · Last updated: 19 September 2026</p>
   <p class="muted">Abara Brothers is a small Australian business. This policy is written to
   meet Australian privacy law, the EU and UK GDPR where they apply to you, and the app
   stores' own privacy rules.</p>
@@ -27,7 +27,9 @@
   <p>Cannons &amp; Canyons is an online artillery game for up to four players. There are no ads,
   no analytics, no trackers, no chat, and nothing to buy. The game keeps a small cloud save so
   your progress can follow you between devices, and — only if you turn them on — push
-  subscriptions so we can tell you when it's your turn. You can download the data attached to
+  subscriptions so we can tell you when it's your turn. If you sign in you can choose your own
+  callsign and add friends: your callsign is the only thing other players ever see about you, and
+  any player can report or block another, signed in or not. You can download the data attached to
   your account, or delete all of it, from inside the game. We never sell your data and never
   share it for anyone else's purposes.</p>
 
@@ -59,16 +61,23 @@
     <tr><td>Account identifier (random)</td><td>Ties your save to you</td><td>Our database</td></tr>
     <tr><td>Email address (only if you link Google)</td><td>Signing in from another device</td><td>Our database</td></tr>
     <tr><td>Google account id, name and profile picture (only if you link Google)</td><td>Returned by Google with the sign-in and kept by our sign-in provider as part of that record</td><td>Our database</td></tr>
-    <tr><td>Callsign (chosen from the game's generated list)</td><td>Shown on your profile and in matches</td><td>Our database</td></tr>
+    <tr><td>Callsign — rolled from the game's word lists, or one you choose</td><td>Shown on your profile, in matches, and to your friends</td><td>Our database</td></tr>
+    <tr><td>Friend code (6 characters, generated for you)</td><td>So someone can add you without searching for your name</td><td>Our database</td></tr>
+    <tr><td>Friends and friend requests (which accounts, and when)</td><td>Your friends list, and adding or accepting a friend</td><td>Our database</td></tr>
+    <tr><td>Blocks (which accounts you blocked, and when)</td><td>Keeping a blocked player away from you, both ways</td><td>Our database</td></tr>
+    <tr><td>Name reports (who reported whom, the callsign as it was seen, and when)</td><td>So we can act on an offensive callsign</td><td>Our database</td></tr>
     <tr><td>Progression (wins, achievements, unlocks)</td><td>Your career, synced across devices</td><td>Our database</td></tr>
     <tr><td>Push subscription (only if you enable nudges)</td><td>Delivering "your turn" notifications</td><td>Our database</td></tr>
     <tr><td>Crash reports (no account identifier, no IP)</td><td>Finding and fixing faults</td><td>Our database, 30 days</td></tr>
   </table>
   <p class="muted"><b>Legal bases.</b> Running the game and its cloud save, including sign-in:
-  performance of the contract you enter into by playing. Turn notifications: your consent,
-  which you can withdraw at any time. Crash reports: our legitimate interest in keeping the
-  game working and diagnosing faults — the data is not linked to your account and you can
-  object at any time (see <a href="#rights">Your rights and controls</a>).</p>
+  performance of the contract you enter into by playing. Your friend code, your friends and
+  your friend requests: the same contract — they are how the feature works at all. Blocks and
+  name reports: our legitimate interest, and yours, in a game free of abusive names; a block
+  exists to protect you, so we keep it for exactly as long as you want it. Turn notifications:
+  your consent, which you can withdraw at any time. Crash reports: our legitimate interest in
+  keeping the game working and diagnosing faults — the data is not linked to your account and
+  you can object at any time (see <a href="#rights">Your rights and controls</a>).</p>
 
   <h2>Turn notifications</h2>
   <p>Off unless you turn them on. If you enable nudges, your browser or device issues a push
@@ -93,6 +102,28 @@
   the room ends or times out. Match results are not stored on the server; your own win/loss
   record is part of your progression, written by your device.</p>
 
+  <h2>Friends, blocking and reporting</h2>
+  <p>If you sign in, you can set your own callsign instead of rolling one. We check it on our
+  server against a list of banned terms before we store it, so a name that fails the check is
+  never shown to anyone. Your callsign and your 6-character friend code are the only things
+  another player can use to find you — never your email address, never the name or picture Google
+  returned when you signed in, and never your account identifier. Friends can see whether you are
+  online; nobody else can.</p>
+  <p><b>Report a callsign.</b> Wherever another player is shown — your friends list, a search
+  result, a seat in a lobby, a card in a match — there is a menu with <b>Report name</b>.
+  Reporting records the reported account, your account, and the callsign exactly as you saw it, so
+  we can act on it. Nothing is emailed anywhere: the report is stored for us to read, and we read
+  new reports as part of our routine checks and aim to act within 7 days. You can also write to
+  <a href="mailto:support@abarabrothers.com">support@abarabrothers.com</a>.</p>
+  <p><b>Block a player.</b> The same menu has <b>Block</b>. A blocked player cannot find you in a
+  search, cannot add you by your friend code, cannot send you a friend request, cannot see whether
+  you are online, and disappears from your friends panel — it works in both directions. It does
+  not keep the two of you out of the same battle, and the game says so when you block rather than
+  letting you assume otherwise. The Friends screen lists everyone you have blocked, with Unblock.</p>
+  <p><b>You do not need an account to report or block.</b> Choosing a callsign and using friends
+  need a signed-in account; reporting and blocking do not, because the player who most needs to
+  report a name is usually a stranger in a lobby.</p>
+
   <h2>On your device</h2>
   <p>Your device's local storage holds your callsign, preferences (paint, mute, difficulty,
   tees), your progression, a match-resume token, and your sign-in session. Your callsign and
@@ -106,7 +137,8 @@
     <li>No selling of personal data, and no sharing of it for anyone else's purposes — the
       providers named below act only on our instructions</li>
     <li>No location data, contacts, photos, or device files</li>
-    <li>No chat or free-text content between players — callsigns come from the game's own word lists</li>
+    <li>No chat, no messages, and no way to send text to another player — a callsign is the only
+      thing other players see about you</li>
     <li>No payment details — the game is free, with nothing to buy</li>
   </ul>
 
@@ -139,20 +171,28 @@
 
   <h2>How long we keep it</h2>
   <p>Your account and everything attached to it exist until you delete them — deleting your
-  account (below) removes the account, cloud save, sign-in identity and push subscriptions
-  immediately, in one action. Crash reports are deleted after 30 days. Match state disappears
+  account (below) removes the account, cloud save, sign-in identity, push subscriptions, friend
+  code, friends, friend requests, blocks and name reports immediately, in one action. A
+  friendship, a friend request or a block lasts until you remove it or delete your account,
+  whichever comes first; a friend request nobody answers stops counting after 30 days and is
+  deleted. A name report is kept while we may still need to act on it, and is erased when either
+  account involved is deleted. Crash reports are deleted after 30 days. Match state disappears
   with the room. Ordinary infrastructure logs (such as connection logs) are short-lived and are
   not used to build profiles.</p>
 
   <h2 id="rights">Your rights and controls</h2>
   <ul>
     <li><b>Download my data</b> — in the game's account panel: your account identifier, linked
-      email (if any), callsign, cloud save and this device's progression, as one JSON file.
-      For anything held about you that is not in that file — such as your stored push
-      subscriptions or the profile details Google returned at sign-in — ask us through the
+      email (if any), callsign, friend code, how many friends and how many blocked players you
+      have, cloud save and this device's progression, as one JSON file. If a count reads
+      <b>null</b> rather than a number, this device had not loaded those lists when you exported;
+      it does not mean zero, and the file says so. For anything held about you that is not in that
+      file — such as your stored push subscriptions, who your friends are, or the profile details
+      Google returned at sign-in — ask us through the
       <a href="https://abarabrothers.com/support">support page</a> and we will provide it.</li>
     <li><b>Delete my account</b> — in the same panel: erases the account, cloud save, sign-in
-      identity, push subscriptions and this device's local progress. It cannot be undone. If
+      identity, push subscriptions, friend code, friends, friend requests, blocks, name reports
+      and this device's local progress. It cannot be undone. If
       you no longer have the app, you can request the same deletion at
       <a href="delete-account.html">this page</a>.</li>
     <li><b>Correct or restrict</b> — ask us through the support page.</li>
@@ -160,7 +200,8 @@
     <li><b>Withdraw consent</b> — turn off notifications in your browser or device settings;
       withdrawing does not affect notifications already sent.</li>
     <li><b>Sign out</b> — any time; your account keeps its progress for your next sign-in.</li>
-    <li><b>Change your callsign</b> — re-roll it on the title screen whenever you like.</li>
+    <li><b>Change your callsign</b> — roll a new one whenever you like, or, if you are signed
+      in, set one of your own, which you can change again a day later.</li>
     <li>You have the right to complain to your local data-protection authority. In Australia
       that is the OAIC; in the EEA or UK it is your national supervisory authority.</li>
   </ul>
@@ -170,9 +211,11 @@
   profiling of any kind in the game.</p>
 
   <h2>Children</h2>
-  <p>The game is suitable for ages 9 and up. It has no chat, no ads, no tracking, and no
-  free-text input — callsigns are picked from the game's own word lists. A guest account holds
-  no personal details at all.</p>
+  <p>The game is suitable for ages 9 and up. It has no chat, no ads, no tracking, and no way to
+  send a message to another player. The one thing a player can type is their own callsign, which
+  we filter against a list of banned terms on our server before anyone else can see it, and which
+  any player can report or block without needing an account of their own. A guest account holds no
+  personal details at all.</p>
 
   <p><strong>Before anyone can sign in with Google, the game asks for a birth year.</strong> It
   tells you why it is asking — signing in shares your email address and profile with us — but it

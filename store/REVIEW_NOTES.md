@@ -22,9 +22,13 @@
 > **Save loadout** to accept the default five weapons. You always take the first shot.
 > Use ANGLE and POWER in the CONTROLS drawer, then the red **FIRE** button.
 >
-> **There is no chat and no free-text input anywhere.** Player names are chosen from the
-> game's own word lists — the field is read-only and re-rolled with the shuffle button —
-> so nothing a player types can reach another player.
+> **There is no chat. The only thing a player can type is their own callsign.** A callsign is
+> 3 to 16 characters — letters, digits and spaces — and only a signed-in player can set one; a
+> player who does not set one is given a name rolled from the game's own word lists. A typed
+> callsign is checked on our server against a blocklist before it is stored, so a rejected name
+> is never visible to anyone. Wherever another player is shown there is a menu with **Report
+> name** and **Block**, and both work without an account. There is no message field of any kind,
+> in any mode: the callsign is the whole of what one player can put in front of another.
 >
 > **The game is free.** No ads, no in-app purchases, no analytics SDKs. Every cosmetic is
 > earned by playing.
@@ -58,6 +62,33 @@ alphabet, shared as a link or typed in. A room is joinable only while it is wait
 Disconnects are covered by a 2-minute grace period; duels can be resumed asynchronously
 for 24 hours.
 
+**Chosen callsigns, friends, reporting and blocking (new in this version):** a signed-in player
+may set their own callsign instead of rolling one. It is 3 to 16 characters — Unicode letters,
+digits and spaces — unique across the game, changeable once a day, and rejected if a folded form
+of it (diacritics stripped, look-alikes mapped — 0/o, 1/i, 3/e, 4/a, 5/s, 7/t, @/a, $/s, |/i —
+and everything but a letter removed) contains any term in the server's blocklist file. The check
+runs on the server before the name is stored, so a name that fails is never shown to anyone,
+including the player's opponents. A player who has not signed in keeps a rolled name. Players add
+each other with a 6-character friend code or by searching for an exact callsign. Every player
+card — friends list, search result, lobby seat, in-match card — carries a menu with **Report
+name** and **Block**, so a player can report or block any player they are in a match with and not
+only a friend. Report files the name exactly as it was seen. Block stops the blocked player
+finding or contacting you — callsign search, add-by-code, friend requests, presence and the
+friends panel, in both directions — and the Friends screen lists blocked players with an Unblock
+control. Block does not exclude the two from being matched into the same battle, and the in-app
+copy says so rather than letting a player assume otherwise. **Reporting and blocking need no
+account**: a guest who sees an offensive name in a lobby can use both. Setting a callsign and
+using friends do need a signed-in account. The published contact for any report or complaint is
+support@abarabrothers.com.
+
+**Where do name reports actually go?** We would rather state this plainly than imply a mailbox
+we do not have. The game has no email provider, so nothing is emailed. A report is written as a
+row in our Supabase database — reporter, reported account, the callsign as seen, timestamp — and
+printed to the game server's log. The owner reads new rows in the Supabase dashboard as part of
+the same routine that checks the server, and acts within 7 days by clearing the offending
+callsign, adding the term to the blocklist, or both. The two accounts' identifiers never leave
+that table and that log.
+
 **Offline:** Vs. Computer and solo Golf run entirely on-device with no network — the same
 match engine the server runs is loaded into the app. Every other mode says plainly that
 it needs a connection rather than hanging.
@@ -67,8 +98,10 @@ it needs a connection rather than hanging.
 Worth knowing before a reviewer files them:
 
 - **Portrait renders sideways** on the web build — by design (see above).
-- **The callsign field is read-only.** Names are rolled, not typed. This is the reason
-  there is no user-generated text in the product at all.
+- **The callsign row in Bay controls carries two buttons.** **Roll** takes a new name from the
+  word lists; **Set** is how a signed-in player types one instead. A typed name goes through the
+  server's blocklist check before it is stored, and can be changed again a day later. A guest is
+  shown the rule rather than a Set button that could only ever fail.
 - **The controls drawer starts collapsed** every match; the CONTROLS tab nudges until it
   has been opened once.
 - **The camera never follows a shot** — except the end-of-match killcam. This is
