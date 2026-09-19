@@ -20,16 +20,15 @@ import { validateCallsign, normaliseCallsign, CALLSIGN_MIN, CALLSIGN_MAX } from 
 // for a player with no name — and handleReport has to log the string the store
 // stored, not the one it was handed.
 import { isUuid, reportCallsign } from './store.js';
-// THE TWO PURE CALLSIGN TESTS, from the module that owns the curated lists.
-// Imported, never copied: isGeneratedCallsign is the standard the engine already
-// applies to every name any client presents (room-engine.js's sanitizeName), and
-// a second copy of it — or of the profanity lists beside it — would drift, which
-// here fails OPEN on a name another player has to look at. game-core.js is pure
-// logic with no Node builtins and no DOM; the offline page already loads it
-// through room-engine.js, so nothing about this import reaches the browser. It
-// is NOT the room engine: server/ still pulls in no rooms, no sockets, no
-// simulation, and test/social.mjs still never loads room-engine.js.
-import { isGeneratedCallsign, isProfane } from '../public/game-core.js';
+// THE NAME PROOFS. Written here, MOVED to server/display-name.js and imported
+// back, because they now have TWO callers: this layer's panels and search
+// results, and server.js's GET /history, which paints an opponent's name in
+// the Bay's Recent sorties list (BINDING.md resolution 27). Copying the rule
+// into the second caller would leave two copies to drift, and drift here fails
+// OPEN on the one string every other player has to look at. The reasoning for
+// each proof — and the two reviews and three decisions behind them — travelled
+// with them; this layer's behaviour is unchanged.
+import { createNameProofs } from './display-name.js';
 
 // The frame types that belong here and never reach the engine. server.js
 // imports this set to decide what to intercept; keep it in step with the
@@ -478,119 +477,18 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
   }
 
   // ---- names that came out of the database -----------------------------------
-  // WHO CAN WRITE THIS COLUMN? profiles.callsign is PATCHed by the account
-  // itself on every cloud save (profiles_update_own; public/cloud.js save()).
-  // profiles.callsign_key beside it is NOT — the phase 6 migration revokes
-  // update on it from the authenticated role, so the key is the only part of
-  // that row the server is entitled to believe. Task 4 closed this exact hole in
-  // the auth sink; the friends frame and the search reply are two more doors to
-  // it, and they are shut the same way.
-  // NOT WIDENED TO ADMIT A ROLLED PAIR, deliberately, and this is the one place
-  // the distinction still matters: friendsSnapshot uses this function for the
-  // account's OWN `callsign` field, which BINDING resolution 13 fixes as the
-  // account's CHOSEN name and null when it holds only a rolled one — that null
-  // is what tells the client to offer "Set callsign" and stops a player being
-  // asked to choose a name they already hold. Widening it here would answer a
-  // rolled pair there and break both. The second proof lives in rolledName
-  // below, and displayName — what ANOTHER player is shown — takes either.
-  const provenName = (row) => {
-    const key = row && typeof row.callsign_key === 'string' ? row.callsign_key : '';
-    if (!key) return null;
-    // validateCallsign stored key = normaliseCallsign(name).toLowerCase(), so
-    // the SHARED normaliser is by construction the one that wrote it. A second
-    // copy could only drift open.
-    const shown = normaliseCallsign(row.callsign);
-    return shown.toLowerCase() === key ? shown : null;
-  };
-
-  // A second pass over a name one of the two proofs has already passed. The
-  // blocklist is read at START-UP and a term can be added to it after a name was
-  // set, so a name that was clean when it was stored is checked again at the
-  // moment it is shown. Measured against the shipping list: none of the 1,454
-  // rollable pairs is refused by it, so this costs no rolled player their name.
-  // This is belt and braces on top of the proofs, NOT a substitute for one: the
-  // character class here is letters, digits and spaces, so plenty of unwanted
-  // text passes it, and a name it passes is still only a string the account
-  // itself wrote unless a key stands behind it.
-  const presentable = (raw) => { const v = validateCallsign(raw, terms); return v.ok ? v.name : null; };
-
-  // THE SECOND PROOF: A ROLLED PAIR IS SERVER-VERIFIABLE TOO. A player does not
-  // type a name, they roll one from two curated lists (ISSUE-015), so
-  // isGeneratedCallsign proves a string is "<Adj> <Noun>" out of those lists —
-  // a SELECTION FROM A FIXED VOCABULARY, not attacker-chosen text. It is exactly
-  // the standard room-engine.js's sanitizeName already applies to every name any
-  // client presents in a lobby, and the profanity filter that guards it there
-  // guards it here, from the same module.
+  // BUILT HERE, DEFINED IN server/display-name.js. The five helpers that used to
+  // sit in this spot — provenName, presentable, rolledName, displayName and
+  // seenName — moved there whole, comments and all, because GET /history has to
+  // prove an opponent's name the same way these panels prove a friend's and a
+  // rule kept in two files drifts. Everything those comments record is still
+  // binding: the OWN-callsign narrowness of provenName (resolution 13), what a
+  // block does and does not promise (resolution 25), and why seenName skips the
+  // blocklist pass that displayName applies (resolution 26).
   //
-  // NORMALISED FIRST, then tested, and what is returned is the normalised pair.
-  // isGeneratedCallsign is deliberately strict — no trim, no case fold — and a
-  // decomposed or double-spaced copy of a legitimate rolled name must not cost
-  // that player their name in the panel. Nothing free rides in: whatever the
-  // column held, what leaves here is one of 1,454 pairs spelled the one way.
-  const rolledName = (raw) => {
-    const name = normaliseCallsign(raw);
-    return isGeneratedCallsign(name) && !isProfane(name) ? name : null;
-  };
-
-  // WHAT ANOTHER PLAYER IS SHOWN FOR A ROW: a name the server can vouch for, by
-  // ONE OF TWO PROOFS, and nothing else.
-  //
-  //   1. it matches callsign_key      -> a CHOSEN name: unique, filtered and
-  //                                      stored by the server, key not writable
-  //                                      by any client;
-  //   2. it is a rolled pair          -> one of the curated pairs above, which
-  //      (and not profane)               no client authored.
-  //
-  // Anything else is null: a display column holding free text, or holding a
-  // CHOSEN name this account does not hold the key for. That second case is the
-  // one that must stay impossible — uniqueness lives on the key, and without it
-  // an account could wear another player's chosen callsign in every panel while
-  // a name report pointed at the wrong account.
-  //
-  // IMPERSONATION, THE HONEST ANSWER (checked, not assumed): proof 2 does let an
-  // account write a rolled pair somebody else also rolled. That is not a new
-  // weakness — rolled names were never unique, two players have always been able
-  // to hold the same one, and sanitizeName shows exactly that collision in every
-  // lobby. It extends to a CHOSEN name only when that chosen name is itself a
-  // curated pair, which is a name anybody can hold by rolling and which the
-  // lobby already renders for anybody who does. A chosen name that is NOT a
-  // rollable pair — every name outside those 1,454 — cannot be worn without the
-  // key, and (a4) is the test that says so.
-  //
-  // null keeps the ROW — and Task 8's Report and Block buttons on it — in place,
-  // which dropping the entry would not. Task 8 renders the fallback copy, which
-  // is now a genuine edge case again rather than most of the panel.
-  const displayName = (row) => {
-    const shown = provenName(row) ?? rolledName(row && row.callsign);
-    return shown === null ? null : presentable(shown);
-  };
-
-  // WHAT A REPORT RECORDS — the same two proofs, and NOT the blocklist pass on
-  // the end of them. displayName is what another player is SHOWN, and its last
-  // step re-tests the name against a blocklist that can move after the name was
-  // stored. For a panel that is right: a term added today must take the name off
-  // every screen today. For a REPORT it inverts the feature. The single case
-  // moderation exists for is a name that got through and was blocklisted
-  // afterwards, and running the moved list again over it made the row and the log
-  // line say "(no name)" about a player whose name was still on screen — the
-  // evidence destroyed at exactly the moment it was needed, while the lobby went
-  // on rendering the name, because a lobby name is PROVED, not re-filtered.
-  //
-  // So the row records what the PROOF vouches for and nothing else: the name that
-  // matches callsign_key (a column no client may write), or a curated rolled
-  // pair. That is the same standard the lobby applies, so a name on screen is the
-  // name in the row. null — a player who genuinely has no name, or a display
-  // column with no proof behind it — still becomes the store's sentinel, so the
-  // row lands and the reported uuid still identifies the account.
-  //
-  // THE LOG LINE IS STILL SAFE BY CONSTRUCTION, and it is the proof rather than
-  // the blocklist that makes it so. provenName returns normaliseCallsign(...) —
-  // NFC, trimmed, runs of whitespace collapsed to one space — and only when it
-  // case-folds onto a key the server itself derived from a validateCallsign SHAPE
-  // match, whose class is letters, digits, marks and single spaces. rolledName is
-  // one of 1,454 curated pairs. Neither can carry a newline or a quote, so
-  // nothing here can forge a line of its own.
-  const seenName = (row) => provenName(row) ?? rolledName(row && row.callsign);
+  // `terms` is this layer's own injected blocklist, and server.js passes the SAME
+  // list to the same factory for /history — one file, one rule, one term list.
+  const { provenName, rolledName, displayName, seenName } = createNameProofs({ terms });
 
   const skinOf = (row) => (row && typeof row.skin === 'string' && SKIN_IDS.has(row.skin) ? row.skin : null);
 

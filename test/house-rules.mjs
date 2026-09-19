@@ -1012,5 +1012,67 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   }
 }
 
+// ---- 14. A SELECT THAT ASKS FOR `callsign` MUST ASK FOR `callsign_key` -------
+// THIS RULE EXISTS BECAUSE THIS EXACT SELECT SHIPPED AND WAS FOUND EIGHT TASKS
+// LATER. server.js's GET /history read `/profiles?...&select=id,callsign`, and
+// public/bay.js painted the result as the opponent of a recent match on another
+// player's home screen. `profiles.callsign` is writable by the account that owns
+// it — the migration keeps `grant update (id, callsign, ...)` on purpose, so a
+// cloud save can sync a rolled name — while `callsign_key` beside it is revoked
+// from the authenticated role and is the only half the server may believe. A row
+// fetched WITHOUT the key therefore cannot be proven at all: server/display-name.js
+// has nothing to compare against and either refuses every chosen name or, as the
+// shipped code did, shows whatever 16 characters the account wrote. Escaped, so
+// never injection; impersonation and an unfiltered name (BINDING.md resolution 27).
+//
+// Written to catch a NEW call site, not the one that was fixed: every `select=`
+// in server.js and server/*.js is parsed, `${CONST}` lists are expanded from the
+// same file's string constants, and a list that cannot be resolved at all FAILS
+// rather than being waved through — an unreadable select is exactly where the
+// next one would hide. Selects that name `callsign_key` or `callsign_set_at`
+// without the bare column (the /health probes) are not affected: the test is on
+// the exact token `callsign`.
+{
+  const files = ['server.js', ...readdirSync(path.join(ROOT, 'server'))
+    .filter((f) => f.endsWith('.js')).sort().map((f) => `server/${f}`)];
+  const bad = [];
+  let checked = 0, withCallsign = 0;
+  for (const rel of files) {
+    const src = read(rel);
+    // String constants in the same file, so `select=${PROFILE_COLS}` resolves to
+    // the columns it actually names instead of being unreadable.
+    const consts = new Map();
+    for (const m of src.matchAll(/const\s+([A-Za-z_$][\w$]*)\s*=\s*(['"])([^'"\n]*)\2/g)) consts.set(m[1], m[3]);
+    src.split('\n').forEach((lineText, i) => {
+      // A select list runs to the next '&' or to the end of the string literal
+      // it sits in. Backticks, quotes and whitespace all end it.
+      for (const m of lineText.matchAll(/select=([^&`'"\s]*)/g)) {
+        checked++;
+        let list = m[1];
+        for (let pass = 0; pass < 3 && list.includes('${'); pass++) {
+          list = list.replace(/\$\{([A-Za-z_$][\w$]*)\}/g, (whole, name) => (consts.has(name) ? consts.get(name) : whole));
+        }
+        if (list.includes('${')) {
+          bad.push(`${rel}:${i + 1} — a select list this rule cannot read: ${JSON.stringify(m[1])}.`
+            + ' Spell the columns, or build them from a string const in the same file, so the'
+            + ' callsign/callsign_key pairing can be checked');
+          return;
+        }
+        const cols = list.split(',').map((c) => c.trim()).filter(Boolean);
+        if (!cols.includes('callsign')) return;
+        withCallsign++;
+        if (!cols.includes('callsign_key')) {
+          bad.push(`${rel}:${i + 1} — select asks for \`callsign\` without \`callsign_key\`: ${JSON.stringify(list)}.`
+            + ' The account writes that column itself, so a row without the key cannot be proven and'
+            + ' server/display-name.js has nothing to check the name against (BINDING.md resolution 27)');
+        }
+      }
+    });
+  }
+  if (bad.length) fail(`unprovable callsign reads:\n      ${bad.join('\n      ')}`);
+  else ok(`all ${checked} PostgREST select lists in server.js and server/*.js are readable, and each of the ${withCallsign}`
+    + ' that asks for `callsign` also asks for `callsign_key` — no name can be fetched that the server cannot prove');
+}
+
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nALL GOOD');
 process.exit(out.errors.length ? 1 : 0);

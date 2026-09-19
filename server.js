@@ -29,6 +29,11 @@ import {
 import { createStore } from './server/store.js';
 import { createSocial, SOCIAL_TYPES } from './server/social.js';
 import { loadBlocklist, normaliseCallsign } from './server/callsign.js';
+// ONE proof of a name, shared with server/social.js rather than written twice.
+// GET /history paints an opponent's callsign on another player's home screen,
+// and it is the last name path in this codebase that predates chosen names
+// (BINDING.md resolution 27). See server/display-name.js for what it proves.
+import { createNameProofs } from './server/display-name.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, 'public');
@@ -93,11 +98,18 @@ const SB_SECRET = process.env.SUPABASE_SECRET_KEY || '';
 // A missing or malformed blocklist turns the whole layer OFF rather than
 // running it unfiltered — an unfiltered chosen callsign is the one outcome
 // this feature must never produce — and says so loudly on stderr.
-let store = null, social = null;
+let store = null, social = null, nameProofs = null;
 try {
   const terms = loadBlocklist(path.join(__dirname, 'server', 'blocklist.txt'));
   if (SB_URL && SB_SECRET) {
     store = createStore({ sbAdmin });
+    // THE SAME PROOFS, FROM THE SAME LIST, as the social layer's own panels --
+    // one module, imported by both (server/display-name.js). Module scope,
+    // because matchHistory below is at module scope and `terms` is a const
+    // inside this block, so the history handler could not otherwise see it.
+    // Built BEFORE createSocial so a throw out of the social layer cannot also
+    // cost /history its names.
+    nameProofs = createNameProofs({ terms });
     // resolveSeatHandle is the JOIN, and this line is the only place the two
     // halves meet (BINDING.md resolution 24). The room engine mints a per-room
     // opaque handle for every occupied, accounted seat and puts it in the lobby
@@ -1147,9 +1159,26 @@ function setSecurityHeaders(res) {
 
 // ---- /history: a player's recent ONLINE matches, from the ledger -------------
 // Bounded in every direction: one request per player every two seconds, eight
-// rows, and only the fields the panel shows. Opponents are resolved to their
-// generated callsigns -- the same names already broadcast in the match itself
-// -- so nothing here reveals anything a player did not already see.
+// rows, and only the fields the panel shows.
+//
+// OPPONENTS ARE RESOLVED TO A NAME THE SERVER CAN VOUCH FOR, by one of the two
+// proofs in server/display-name.js, and an unprovable name reads 'Commander'.
+// This comment used to say opponents were resolved to their generated callsigns,
+// the same names already broadcast in the match itself. BOTH HALVES WERE FALSE
+// once a callsign could be chosen: the select asked for `profiles.callsign`
+// alone, which is a column the account itself PATCHes on every cloud save, so
+// whatever 16 characters it wrote were painted verbatim as the opponent of a
+// recent match on another player's home screen -- a name that need never have
+// been generated and need never have been broadcast anywhere. It is escaped at
+// public/bay.js, so this was never script injection; it was impersonation and
+// an unfiltered name, and worse here than in a lobby because this panel carries
+// no seat handle, so the name could not be reported or blocked from the screen
+// showing it (BINDING.md resolution 27).
+//
+// What is true now: a name is shown only if it case-folds onto the row's
+// callsign_key -- a column no client may write -- or is one of the curated
+// rolled pairs, and only if the shipped blocklist still admits it. That is the
+// same function, on the same list, that names a friend in the Friends screen.
 const HIST_MIN_MS = 2000;
 const histLast = new Map();                // user id -> last served (ms)
 setInterval(() => { const cut = Date.now() - 60000; for (const [k, t] of histLast) if (t < cut) histLast.delete(k); }, 60000).unref();
@@ -1170,8 +1199,17 @@ async function matchHistory(req, res, cors) {
     for (const r of rows || []) for (const p of r.players || []) if (p && p !== uid) others.add(p);
     const names = new Map();
     if (others.size) {
-      const prof = await sbAdmin('GET', `/profiles?id=in.(${[...others].join(',')})&select=id,callsign`);
-      for (const p of prof || []) if (p && p.id) names.set(p.id, p.callsign || null);
+      // THREE COLUMNS, NOT ONE, for the same reason server/store.js:181 reads
+      // three: the key is what the proof compares the writable column against,
+      // and without it in the row there is no check to run.
+      const prof = await sbAdmin('GET', `/profiles?id=in.(${[...others].join(',')})&select=id,callsign,callsign_key`);
+      // FAIL CLOSED. A null nameProofs means the social layer never started --
+      // in practice the blocklist failed to load, which is the one boot fault
+      // that turns the layer off while Supabase stays configured and this route
+      // goes on serving. Falling back to the raw column there would quietly
+      // restore the exact hole this closes, so every opponent reads 'Commander'
+      // instead. A degraded name is a cosmetic loss; an unproven one is not.
+      for (const p of prof || []) if (p && p.id) names.set(p.id, nameProofs ? nameProofs.displayName(p) : null);
     }
     const out = (rows || []).map((r) => {
       const opp = (r.players || []).filter((p) => p && p !== uid);

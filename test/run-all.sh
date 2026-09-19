@@ -72,6 +72,12 @@ run house_rules node test/house-rules.mjs
 # The chosen-callsign rules (design 4.5): normalising, length, characters, the
 # folded blocklist, and the loader's own guards. Pure module, no server.
 run callsign node test/callsign.mjs
+# ONE proof of a name, for every screen that shows one: server/display-name.js,
+# imported by the social layer's panels AND by server.js's GET /history, which
+# names an opponent in Recent sorties (BINDING.md resolution 27). Drives the real
+# proofs against the REAL server/blocklist.txt -- a suite with its own term list
+# would not notice the shipped list and the rule drifting apart. No server.
+run display_name node test/display_name.mjs
 run timer_safety node test/timer_safety.mjs
 # FFA vs CPUs, in-process: the 'ai' case's duel seat stays key-for-key the
 # historical literal, and a room of plain CPUs hands the turn bot to bot.
