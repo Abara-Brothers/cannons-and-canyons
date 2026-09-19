@@ -175,7 +175,6 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M14 21H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8"/><path d="M17 16l4-4-4-4M21 12H9"/></svg>
         </button>
       </div>
-      <div id="toast"></div>
       <!-- Shown only during the killcam, and only after the impact has landed —
            the hint should not compete with the moment it interrupts. -->
       <div id="kcSkip" class="kc-skip" aria-hidden="true">Tap to skip</div>
@@ -269,6 +268,18 @@
          stage buttons. -->
     <div id="weaponPop" class="wpop" aria-hidden="true"></div>
   </section>
+
+  <!-- ============ TOAST ============ -->
+  <!-- OUTSIDE BOTH SCREENS, and that is the whole point. showScreen() makes
+       exactly one of #bay / #game `active`, and `.screen { display: none }`
+       hides everything inside the other — so while this div lived in #stage,
+       every toast raised from the Launch Bay (Reported, Blocked, Friend
+       removed, Unblocked, Friend code copied, Callsign set) was written into a
+       display:none subtree and NOBODY EVER SAW IT. #app is fixed inset:0, so
+       the pill lands over whichever screen is on stage. During a match
+       showToast() parks this host back under #stage, so the battlefield keeps
+       the exact position it has always had, clear of the HUD. -->
+  <div id="toast"></div>
 
   <!-- ============ FIELD MANUAL (how to play) ============ -->
   <!-- Six chapters in a left rail, one pane at a time — landscape-native, and

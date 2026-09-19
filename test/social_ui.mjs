@@ -81,8 +81,12 @@ const CASES = [
   ['unavailable',  'Callsigns are not available right now. Try again later.'],
   ['a_code_from_a_newer_server', 'That callsign could not be set.'],
 ];
-const LINKED = `{ anonymous: false, google: true, apple: false, email: 'me@example.com', accounts: [{ provider: 'google', email: 'me@example.com' }] }`;
-const GUEST = `{ anonymous: true, google: false, apple: false, email: null, accounts: [] }`;
+// `id` is present because Cloud.whoami() always returns one (public/cloud.js:
+// `return { id: u.id, anonymous: !!u.is_anonymous, … }`) and bay.js keys the
+// guest blocked list on it — a fixture without one would let an unkeyed reset
+// pass.
+const LINKED = `{ id: '00000000-0000-4000-8000-0000000000aa', anonymous: false, google: true, apple: false, email: 'me@example.com', accounts: [{ provider: 'google', email: 'me@example.com' }] }`;
+const GUEST = `{ id: '00000000-0000-4000-8000-0000000000bb', anonymous: true, google: false, apple: false, email: null, accounts: [] }`;
 
 // ---- page helpers ----------------------------------------------------------
 // Replace the live socket with a recorder. The real one is closed with its
@@ -95,6 +99,12 @@ const stubSocket = () => ev(`(() => {
   window.connect = () => {};
   window.__tx = [];
   S.ws = { readyState: 1, send(s) { window.__tx.push(JSON.parse(s)); } };
+  // KEEP THE REAL ONE. Every "confirmed out loud" assertion in this suite reads
+  // a recorder, which proves the function was CALLED and nothing whatever about
+  // whether a player can see anything — and that is precisely how a toast that
+  // rendered into a display:none subtree survived a full green suite. The real
+  // showToast is measured on screen further down, on both screens.
+  window.__realToast = window.showToast;
   window.showToast = () => {};
   window.__soc = 0;
   if (!window.__socHooked) { window.__socHooked = 1; document.addEventListener('cc:social', () => { window.__soc++; }); }
@@ -163,6 +173,21 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   }
   if (!ready) { fail(`${V}: page never became ready (window.Bay / handle / sendCallsign)`); continue; }
   await stubSocket();
+
+  // 0. WHERE THE TOAST HOST STARTS, before any toast has been raised. It lived
+  //    inside #stage, which is inside #game, and showScreen() makes exactly one
+  //    of #bay / #game `active` while `.screen { display: none }` hides the
+  //    other — so every confirmation the Launch Bay raised went into a hidden
+  //    subtree. showToast() parks the host where it is needed, but the MARKUP
+  //    must not start inside a screen: index.html and app.js are separately
+  //    cached assets, and a page that loads the new markup against an older
+  //    cached script (or the reverse) must still not be able to hide a report's
+  //    only confirmation.
+  const host0 = await ev(`(() => { const t = document.getElementById('toast');
+    return { parent: t && t.parentElement ? t.parentElement.id : null, inScreen: !!(t && t.closest('.screen')) }; })()`);
+  if (host0.parent === 'app' && host0.inScreen === false)
+    ok(`${V}: the toast host is a child of #app in the markup, outside both screens`);
+  else fail(`${V}: toast host parent ${JSON.stringify(host0)}`);
 
   // 1. the row carries BOTH Roll and Set, and its height still matches every
   //    other settings row — the closed screen must be geometrically identical
@@ -796,7 +821,12 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
     reqs: `{friends:[],requests:{in:[{id:'33333333-3333-4333-8333-333333333333',callsign:'Dune Four'}],out:[{id:'44444444-4444-4444-8444-444444444444',callsign:'Echo Five'}]},blocked:[],friendCode:'ABC234',callsign:'Anvil Six'}`,
     blocked: `{friends:[],requests:{in:[],out:[]},blocked:[{id:'55555555-5555-4555-8555-555555555555',callsign:'Rude Name'}],friendCode:'ABC234',callsign:'Anvil Six'}`,
     hostile: `{friends:[{id:'66666666-6666-4666-8666-666666666666',callsign:'<img src=x onerror=window.__pwned=1>',online:false}],requests:{in:[],out:[]},blocked:[],friendCode:'ABC234',callsign:'Anvil Six'}`,
+    // callsign NULL, which server/social.js really sends: displayName returns
+    // null for a name it cannot prove and for one blocklisted after it was
+    // stored — the very case the report path exists for.
+    noname: `{friends:[{id:'77777777-7777-4777-8777-777777777777',callsign:null,online:false}],requests:{in:[],out:[]},blocked:[],friendCode:'ABC234',callsign:'Anvil Six'}`,
   };
+  const NONAME = '77777777-7777-4777-8777-777777777777';
   const BOB = '11111111-1111-4111-8111-111111111111';
   const CARA = '22222222-2222-4222-8222-222222222222';
   // snapExpr may be the string 'null' — the third state, which is the whole point.
@@ -818,6 +848,11 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   };
   const toasts = () => ev('window.__toast.slice()');
   const click = (sel) => ev(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (!e) return 'NO ' + ${JSON.stringify(sel)}; e.click(); return true; })()`);
+  // A KEYBOARD PLAYER'S click: element.click() alone does not focus anything in
+  // Chrome, so focus() first — that is what tabbing to a control and pressing
+  // Enter actually does, and it is the only way to test where focus goes back to.
+  const clickFocus = (sel) => ev(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (!e) return 'NO ' + ${JSON.stringify(sel)}; e.focus(); e.click(); return true; })()`);
+  const escKey = () => ev(`(() => { (document.activeElement || document).dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); return true; })()`);
   // Answer the LAST frame matching `pred`, echoing its id exactly as the server does.
   const answer = async (pred, frame) => {
     const r = await ev(`(() => {
@@ -860,7 +895,47 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
       note: txt('.pmn'),
       err: txt('.pme'),
       acts: m ? [...m.querySelectorAll('[data-pm]')].map((e) => e.getAttribute('data-pm')) : [],
+      parent: m && m.parentElement ? m.parentElement.id : null,
+      focus: document.activeElement ? (document.activeElement.textContent || '').trim() : null,
+      focusIn: !!(m && document.activeElement && m.contains(document.activeElement)),
     };
+  })()`);
+  // THE TOAST, MEASURED, not recorded. Raises a real toast through app.js's own
+  // showToast and reads the pill off the page: a stub cannot fail while the
+  // thing it stands for is invisible.
+  const realToast = (text) => ev(`(() => {
+    const host = document.getElementById('toast');
+    host.innerHTML = '';
+    window.__realToast(${JSON.stringify(text)});
+    const t = host.lastElementChild;
+    if (!t) return { none: true };
+    const r = t.getBoundingClientRect();
+    const hud = document.getElementById('hud-top').getBoundingClientRect();
+    return {
+      parent: host.parentElement ? host.parentElement.id : null,
+      rects: t.getClientRects().length, parented: !!t.offsetParent,
+      w: Math.round(r.width), h: Math.round(r.height), top: Math.round(r.top),
+      text: t.textContent, seen: document.body.innerText.indexOf(${JSON.stringify(text)}) >= 0,
+      hudBottom: Math.round(hud.bottom),
+    };
+  })()`);
+  // The Retry button on the unknown branches: is it there, what does it say, is
+  // it live? All three change between the five states a refused read passes
+  // through, and before this pass all five rendered the same bytes.
+  // WHICH COLUMN a red sentence landed in. The screen has three and the error
+  // has to be next to the card that was tapped: before this pass every one of
+  // them wrote into the search box in column 1, and a guest — who has no column
+  // 1 — got no sentence at all.
+  const errCols = () => ev(`(() => {
+    const cols = [...document.querySelectorAll('#bay .fcol')];
+    return [...document.querySelectorAll('#bay .ferr')].filter((e) => e.textContent.trim())
+      .map((e) => ({ col: cols.findIndex((c) => c.contains(e)), text: e.textContent.trim() }));
+  })()`);
+  const waitState = () => ev(`(() => {
+    const b = [...document.querySelectorAll('#bay [data-fr="retry"]')];
+    return { n: b.length, labels: b.map((e) => e.textContent.trim()), off: b.map((e) => e.disabled),
+             errs: [...document.querySelectorAll('#bay .ferr')].map((e) => e.textContent.trim()).filter(Boolean),
+             notes: [...document.querySelectorAll('#bay .fnote')].map((e) => e.textContent.trim()) };
   })()`);
 
   // ---- 24. the empty snapshot: the spec 5.5 shell, the code, the empty lines
@@ -889,17 +964,131 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
       && !fv.lbls.includes('Your friends · 0') && fv.code === 'FR-------')
     ok(`${V}: friends — an UNKNOWN snapshot says so and never claims the lists are empty`);
   else fail(`${V}: friends unknown ${JSON.stringify(fv)}`);
-  // Settle the read socialNeed() fired on entry: socialResync() refuses a
-  // second request while one is out, so an unsettled one would make Retry look
-  // broken when it is the guard doing its job.
+  // ---- 25b. AND WHY IT IS UNKNOWN. Five states reach this screen — a read in
+  //      flight, a refusal, a retry in flight, a rate limit, and a request that
+  //      is never answered at all — and every one of them rendered BYTE-
+  //      IDENTICAL text, because the friends callback took no argument, threw
+  //      the error away and dispatched no event. 'unavailable' is not an edge
+  //      case: it is what the live server answers until the phase 6 migration
+  //      is applied, so this is the state EVERY linked player is in today.
+  //      Each state below is asserted on the rendered page, not on a variable.
+  const UNAV = 'Friends are not available right now. Try again later.';
+  const SLOW = 'Too many tries. Wait a moment.';
+  const DEAD = 'Not connected. Try again in a moment.';
+  // (1) IN FLIGHT: socialNeed() fired on entry and has not been answered.
+  let wt = await waitState();
+  if (wt.n === 2 && wt.labels.join('|') === 'Loading|Loading' && wt.off.join('|') === 'true|true' && wt.errs.length === 0)
+    ok(`${V}: friends refused — in flight, both unknown sections say Loading and offer no live Retry`);
+  else fail(`${V}: friends in flight ${JSON.stringify(wt)}`);
+  // (2) UNAVAILABLE: the server refuses. A SENTENCE, and it does not blame the
+  //     player's connection for a fault on the server (Task 7's discipline).
   await answer(`(fv) => fv.type === 'friends'`, { type: 'friends', error: 'unavailable' });
+  wt = await waitState();
+  if (wt.errs.filter((x) => x === UNAV).length === 2 && !wt.errs.includes(DEAD)
+      && wt.labels.join('|') === 'Retry|Retry' && wt.off.join('|') === 'false|false'
+      && wt.notes.filter((x) => x === 'Not loaded yet.').length === 3)
+    ok(`${V}: friends refused — 'unavailable' is said in words beside every unknown section, and Retry comes back`);
+  else fail(`${V}: friends unavailable ${JSON.stringify(wt)}`);
+  // and the false promise about a code nobody has been shown is gone with it
+  fv = await scr();
+  if (fv.code === 'FR-------' && !fv.notes.includes('Anyone who enters this code is added as a friend straight away.'))
+    ok(`${V}: friends refused — FR------- carries no promise about entering a code that is not shown`);
+  else fail(`${V}: friends code promise ${JSON.stringify(fv.notes)}`);
+  // (3) RETRY TAPPED: one frame out, the old sentence gone, the button changed.
+  //     Before this pass the tap changed nothing on screen, ever, on any tap.
   await clearTx();
   await click('#bay [data-fr="retry"]');
   await sleep(60);
   let fq = await calls('friends');
-  if (fq.length === 1) ok(`${V}: friends — Retry asks the server for the read model again`);
-  else fail(`${V}: retry ${JSON.stringify(fq)}`);
+  wt = await waitState();
+  if (fq.length === 1 && wt.errs.length === 0 && wt.labels.join('|') === 'Loading|Loading' && wt.off.join('|') === 'true|true')
+    ok(`${V}: friends refused — Retry asks again AND the screen says so: the old sentence goes, the button goes Loading`);
+  else fail(`${V}: retry ${JSON.stringify({ fq, wt })}`);
+  // (4) SLOW_DOWN: a different refusal gets a different sentence.
+  await answer(`(fv) => fv.type === 'friends'`, { type: 'friends', error: 'slow_down' });
+  wt = await waitState();
+  if (wt.errs.filter((x) => x === SLOW).length === 2 && !wt.errs.includes(UNAV))
+    ok(`${V}: friends refused — 'slow_down' reads as a rate limit, not as the server being down`);
+  else fail(`${V}: friends slow_down ${JSON.stringify(wt)}`);
+  // (5) NEVER ANSWERED: the 12-second timeout is the only thing between this
+  //     screen and a permanent Loading. setTimeout is intercepted rather than
+  //     waited on, as in section 18b.
+  await ev(`(() => { window.__t12 = null; window.__realTimeout = window.setTimeout;
+    window.setTimeout = function (f, ms) { if (ms === 12000 && !window.__t12) { window.__t12 = f; return -1; } return window.__realTimeout.apply(window, arguments); };
+    return true; })()`);
+  await clearTx();
+  await click('#bay [data-fr="retry"]');
+  await sleep(60);
+  const armed12 = await ev(`(() => { window.setTimeout = window.__realTimeout; return typeof window.__t12 === 'function'; })()`);
+  if (armed12) await ev(`(() => { window.__t12(); return true; })()`);
+  await sleep(80);
+  wt = await waitState();
+  if (armed12 && wt.errs.filter((x) => x === DEAD).length === 2
+      && wt.labels.join('|') === 'Retry|Retry' && wt.off.join('|') === 'false|false')
+    ok(`${V}: friends refused — a request that is never answered is given up at 12000 ms and says so, with Retry live again`);
+  else fail(`${V}: friends timeout ${JSON.stringify({ armed12, wt })}`);
+  // and a snapshot that finally arrives clears the sentence rather than leaving
+  // it under a list that loaded
+  await ev(`(() => { window.CC_SOCIAL_ERR = 'unavailable'; document.dispatchEvent(new Event('cc:social')); return true; })()`);
+  await clearTx();
+  await click('#bay [data-fr="retry"]');
+  await answer(`(fv) => fv.type === 'friends'`, { type: 'friends', friends: [], requests: { in: [], out: [] }, blocked: [], friendCode: 'ABC234', callsign: 'Anvil Six' });
+  wt = await waitState();
+  if (wt.errs.length === 0 && wt.n === 0 && (await ev('window.CC_SOCIAL_ERR')) === '')
+    ok(`${V}: friends refused — a snapshot that finally arrives clears the refusal that came before it`);
+  else fail(`${V}: stale sentence ${JSON.stringify({ wt, err: await ev('window.CC_SOCIAL_ERR') })}`);
+  // AND SO DOES A PUSH, which has no waiter behind it at all — the server sends
+  // one when somebody else accepts, removes or blocks. That is why the clear
+  // lives in socialSnapshot and not only in the request's callback.
+  await ev(`(() => { window.CC_SOCIAL = null; window.CC_SOCIAL_ERR = 'unavailable'; document.dispatchEvent(new Event('cc:social')); return true; })()`);
+  const pushed = await ev(`(() => {
+    const before = { err: window.CC_SOCIAL_ERR,
+                     errs: [...document.querySelectorAll('#bay .ferr')].map((e) => e.textContent.trim()).filter(Boolean).length };
+    handle({ type: 'friends', friends: [], requests: { in: [], out: [] }, blocked: [], friendCode: 'ABC234', callsign: 'Anvil Six' });
+    return { before, after: window.CC_SOCIAL_ERR };
+  })()`);
+  await sleep(60);
+  wt = await waitState();
+  if (pushed.before.err === 'unavailable' && pushed.before.errs === 2 && pushed.after === ''
+      && wt.errs.length === 0 && wt.n === 0)
+    ok(`${V}: friends refused — a snapshot that arrives as a PUSH, with no waiter, clears the refusal too`);
+  else fail(`${V}: stale sentence after a push ${JSON.stringify({ pushed, wt })}`);
+  // and a refusal does not outlive the ACCOUNT that asked for it. SIGNING OUT is
+  // the case that proves it: the clear has to happen BEFORE the early return
+  // that fires when CC_SOCIAL is already null — which is exactly the state a
+  // refusal leaves behind — and a signed-out session sends no new read that
+  // would clear it on the way past.
+  await arm('null');
   await answer(`(fv) => fv.type === 'friends'`, { type: 'friends', error: 'unavailable' });
+  const carried = await ev(`(() => {
+    const before = window.CC_SOCIAL_ERR;
+    window.CC_ACCOUNT = null;
+    $('accountBtn').dataset.state = 'out';
+    document.dispatchEvent(new CustomEvent('cc:account'));
+    return { before, after: window.CC_SOCIAL_ERR,
+             errs: [...document.querySelectorAll('#bay .ferr')].map((e) => e.textContent.trim()).filter(Boolean) };
+  })()`);
+  await sleep(60);
+  if (carried.before === 'unavailable' && carried.after === '' && carried.errs.length === 0)
+    ok(`${V}: friends refused — the sentence goes with the account that asked, and a sign-out takes it`);
+  else fail(`${V}: refusal outlived the account ${JSON.stringify(carried)}`);
+  // ---- 25c. THE LAYOUT, in the state every player is in today. The frame is
+  //      430u tall and the screen already ends at 419; three new lines must not
+  //      push it out.
+  await arm('null');
+  await answer(`(fv) => fv.type === 'friends'`, { type: 'friends', error: 'unavailable' });
+  const ugeo = await ev(`(() => {
+    const body = document.querySelector('#bay .pbody').getBoundingClientRect();
+    const cols = document.querySelector('#bay .cols').getBoundingClientRect();
+    const bay = document.querySelector('#bay');
+    return { inBody: cols.bottom <= body.bottom + 1 && cols.right <= body.right + 1,
+             colOverflow: [...document.querySelectorAll('#bay .fcol')].filter((e) => e.scrollHeight > e.clientHeight + 1).length,
+             page: [bay.scrollWidth > bay.clientWidth, bay.scrollHeight > bay.clientHeight],
+             bottom: Math.round(cols.bottom), frame: Math.round(bay.getBoundingClientRect().bottom) };
+  })()`);
+  if (ugeo.inBody && ugeo.colOverflow === 0 && ugeo.page[0] === false && ugeo.page[1] === false)
+    ok(`${V}: friends refused — the refused screen still fits the frame (ends at ${ugeo.bottom} of ${ugeo.frame})`);
+  else fail(`${V}: refused geometry ${JSON.stringify(ugeo)}`);
 
   // ---- 26. two friends, one lit, a drawn lamp and a menu on each
   await arm(FSNAP.some);
@@ -941,6 +1130,22 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   if (fq.length === 1 && fq[0].type === 'friend' && fq[0].op === 'decline' && fq[0].from === '33333333-3333-4333-8333-333333333333')
     ok(`${V}: friends — Ignore sends {friend, decline, from}`);
   else fail(`${V}: decline frame ${JSON.stringify(fq)}`);
+  // ---- 27b. AND A REFUSAL LANDS IN THE COLUMN THAT WAS TAPPED. Every one of
+  //      these wrote into fr.ferr, which only the Find-a-friend box in column 1
+  //      renders — so a failed Accept reported itself two columns away from the
+  //      card it answered.
+  await answer(`(fv) => fv.type === 'friend' && fv.op === 'decline'`, { type: 'friend', op: 'decline', error: 'no_such_request' });
+  let ec = await errCols();
+  if (ec.length === 1 && ec[0].col === 1 && ec[0].text === 'That request is already gone.')
+    ok(`${V}: friends — a refused Ignore is said in column 2, beside the request, and nowhere else`);
+  else fail(`${V}: request error column ${JSON.stringify(ec)}`);
+  // and it does not follow the player back in: entering re-reads the lists, so a
+  // sentence about a card that may no longer be there is cleared with them
+  await ev(`(() => { Bay.show('home'); Bay.show('friends'); return true; })()`);
+  await sleep(60);
+  ec = await errCols();
+  if (ec.length === 0) ok(`${V}: friends — leaving the screen and coming back clears the column errors with the lists`);
+  else fail(`${V}: error survived re-entry ${JSON.stringify(ec)}`);
 
   // ---- 28. search: the frame, 0 results, 1 result, Add friend, an error
   await arm(FSNAP.empty);
@@ -1007,6 +1212,29 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   await click('#pmenu [data-pm="close"]');
   if (!(await menu()).open) ok(`${V}: menu — Close shuts it`);
   else fail(`${V}: menu close`);
+  // ---- 30b. ESCAPE, and the keyboard. Nobody was trapped before this — there
+  //      is a Close button and a backdrop tap — but the only Escape in bay.js
+  //      served the callsign editor, and a sheet that takes focus and never
+  //      gives it back leaves a keyboard player at the top of the document.
+  await clickFocus(`#bay .pcd [data-pmenu="${BOB}"]`);
+  let mfoc = await menu();
+  if (mfoc.open && mfoc.focusIn && mfoc.focus === 'Report name')
+    ok(`${V}: menu — opening it moves the keyboard into the sheet`);
+  else fail(`${V}: menu focus ${JSON.stringify({ focus: mfoc.focus, focusIn: mfoc.focusIn })}`);
+  await click('#pmenu [data-pm="report"]');
+  await escKey();
+  mfoc = await menu();
+  if (mfoc.open && mfoc.items.length === 3 && mfoc.head === 'Bunker Nine')
+    ok(`${V}: menu — Escape on the confirm sheet hands the player back to the menu, exactly as Cancel does`);
+  else fail(`${V}: escape from sheet ${JSON.stringify(mfoc)}`);
+  await escKey();
+  const shut = await ev(`(() => {
+    const m = document.getElementById('pmenu'), a = document.activeElement;
+    return { open: !!(m && !m.hidden), back: a ? a.getAttribute('data-pmenu') : null };
+  })()`);
+  if (shut.open === false && shut.back === BOB)
+    ok(`${V}: menu — Escape on the menu closes it and hands the keyboard back to the card that opened it`);
+  else fail(`${V}: escape close ${JSON.stringify(shut)}`);
   await arm(FSNAP.empty);
   await click('#bay [data-fr="search"]');
   await answer(`(fv) => fv.type === 'friend' && fv.op === 'search'`, { type: 'friend', op: 'search', results: [{ id: CARA, callsign: 'Crater Two' }] });
@@ -1019,7 +1247,7 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
 
   // ---- 31. Report asks FIRST, then thanks (design 5.5, word for word)
   await arm(FSNAP.some);
-  await click(`#bay .pcd [data-pmenu="${BOB}"]`);
+  await clickFocus(`#bay .pcd [data-pmenu="${BOB}"]`);
   await clearTx();
   await click('#pmenu [data-pm="report"]');
   mm = await menu();
@@ -1027,6 +1255,19 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   if (fq.length === 0 && mm.head === 'Report this name' && /Bunker Nine/.test(mm.note || ''))
     ok(`${V}: report — it asks first and names the callsign; nothing is sent yet`);
   else fail(`${V}: report confirm ${JSON.stringify({ fq, mm })}`);
+  // THE COPY, and what it may claim. "Every report is read." was a moderation
+  // commitment nobody has signed off, on a path whose only destination today is
+  // a log line and a table row; and no response interval may be invented here —
+  // the privacy policy states it (Task 9).
+  if (mm.note === 'Report the callsign Bunker Nine. Reports go to Abara Brothers.'
+      && !/read|reviewed|within|hours|days/i.test(mm.note || ''))
+    ok(`${V}: report — the sheet says where a report goes and promises nothing about what happens next`);
+  else fail(`${V}: report copy ${JSON.stringify(mm.note)}`);
+  // FOCUS IS IN THE SHEET, and on CANCEL — the first control, so a stray Enter
+  // cannot send a report.
+  if (mm.focusIn && mm.focus === 'Cancel')
+    ok(`${V}: report — opening the sheet moves the keyboard into it, onto Cancel`);
+  else fail(`${V}: report focus ${JSON.stringify({ focus: mm.focus, focusIn: mm.focusIn })}`);
   await click('#pmenu [data-pm="cancel"]');
   mm = await menu();
   if ((await tx()).length === 0 && mm.open && mm.items.length === 3)
@@ -1043,6 +1284,23 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   if ((await toasts()).includes('Reported. Thank you.') && !(await menu()).open)
     ok(`${V}: report — the answer toasts exactly "Reported. Thank you." and the sheet closes`);
   else fail(`${V}: report toast ${JSON.stringify(await toasts())}`);
+  // a SENT report is a close like any other, so the keyboard goes back to the
+  // card it was sent from rather than to the top of the document
+  const sentBack = await ev(`(() => { const a = document.activeElement; return a ? a.getAttribute('data-pmenu') : null; })()`);
+  if (sentBack === BOB) ok(`${V}: report — a sent report hands the keyboard back to the card it was sent from`);
+  else fail(`${V}: report focus return ${JSON.stringify(sentBack)}`);
+  // ---- 31b. AND THE TOAST IS ACTUALLY ON SCREEN. The assertion above reads a
+  //      RECORDER, so it cannot fail while the toast is invisible — which is
+  //      exactly what it was: #toast lived inside #game, showScreen() makes
+  //      exactly one of #bay / #game active, and `.screen { display: none }`
+  //      hid every confirmation the Launch Bay ever raised. Six Task 8 actions
+  //      have a toast as their ONLY confirmation and two of them are the
+  //      Guideline 1.2 surface. Measured on the page, from the Friends screen.
+  const tbay = await realToast('Reported. Thank you.');
+  if (tbay.rects > 0 && tbay.parented && tbay.w > 0 && tbay.h > 0 && tbay.seen
+      && tbay.text === 'Reported. Thank you.' && tbay.parent === 'app')
+    ok(`${V}: report — the real toast is painted on the Friends screen: ${tbay.w}x${tbay.h} at y=${tbay.top}, and the page text carries it`);
+  else fail(`${V}: real toast on the bay ${JSON.stringify(tbay)}`);
   // and a SECOND report of the same player is told what happened, in words
   await click(`#bay .pcd [data-pmenu="${BOB}"]`);
   await click('#pmenu [data-pm="report"]');
@@ -1053,6 +1311,27 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
     ok(`${V}: report — reporting the same player twice says so instead of failing silently`);
   else fail(`${V}: report already ${JSON.stringify(mm)}`);
   await click('#pmenu [data-pm="cancel"]');
+  await click('#pmenu [data-pm="close"]');
+  // ---- 31c. A PLAYER WITH NO NAME TO QUOTE. nameOf()'s placeholder was being
+  //      read as the name itself — "Report the callsign No callsign to Abara
+  //      Brothers." The card still SAYS No callsign, because that is what the
+  //      list has to show; the sentence names the act instead.
+  await arm(FSNAP.noname);
+  fv = await scr();
+  await click(`#bay .pcd [data-pmenu="${NONAME}"]`);
+  await click('#pmenu [data-pm="report"]');
+  const anonRep = (await menu()).note;
+  await click('#pmenu [data-pm="cancel"]');
+  await click('#pmenu [data-pm="block"]');
+  const anonBlk = (await menu()).note;
+  await click('#pmenu [data-pm="cancel"]');
+  await click('#pmenu [data-pm="close"]');
+  if (fv.cards.join('|') === 'No callsign'
+      && anonRep === 'Report this player. Reports go to Abara Brothers.'
+      && /^Block this player\. They will not be able to find you/.test(anonBlk || '')
+      && !/No callsign/.test((anonRep || '') + (anonBlk || '')))
+    ok(`${V}: report — a player the server cannot name is reported and blocked as "this player", never as "the callsign No callsign"`);
+  else fail(`${V}: nameless copy ${JSON.stringify({ cards: fv.cards, anonRep, anonBlk })}`);
 
   // ---- 32. Block asks FIRST, and the copy claims exactly what resolution 25 allows
   await arm(FSNAP.some);
@@ -1110,6 +1389,14 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   await answer(`(fv) => fv.type === 'block' && fv.op === 'remove'`, { type: 'block', op: 'remove', ok: true });
   if ((await toasts()).includes('Unblocked.')) ok(`${V}: friends — an unblock is confirmed out loud`);
   else fail(`${V}: unblock toast ${JSON.stringify(await toasts())}`);
+  // and a REFUSED unblock is said in the blocked column, not two columns away
+  await click('#bay [data-fr="unblock:55555555-5555-4555-8555-555555555555"]');
+  await answer(`(fv) => fv.type === 'block' && fv.op === 'remove'`, { type: 'block', op: 'remove', error: 'unavailable' });
+  ec = await errCols();
+  const uerr = ec.filter((x) => x.text === 'Blocking is not available right now. Try again later.');
+  if (uerr.length === 1 && uerr[0].col === 2 && !ec.some((x) => x.col === 0))
+    ok(`${V}: friends — a refused Unblock is said in column 3, beside the blocked card, and never in the search box`);
+  else fail(`${V}: unblock error column ${JSON.stringify(ec)}`);
 
   // ---- 35. a callsign is player input: markup in it must not become markup
   await arm(FSNAP.hostile);
@@ -1162,6 +1449,12 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   //      (task 6b follow-up F6): a name is on screen for the whole match.
   await arm(FSNAP.empty);
   const hud = await ev(`(() => {
+    // ON STAGE, which this section never did. showScreen() makes exactly one of
+    // #bay / #game active and hides the other outright, so without this line
+    // every geometry and visibility claim below was made against a display:none
+    // subtree — "the menu opens over the battlefield" asserted about a
+    // battlefield that was not being displayed.
+    showScreen('game');
     // A REAL snapshot through applySnapshot, not a hand-set S.handles: the line
     // under test is the one that reads m.handles, and a test that writes the
     // field itself proves nothing about it.
@@ -1181,18 +1474,49 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
       cards: [...document.querySelectorAll('#scoreRow .pscore')].length,
       names: [...document.querySelectorAll('#scoreRow .pname')].map((e) => e.textContent.trim()),
       menus: [...document.querySelectorAll('#scoreRow [data-pmenu]')].map((e) => e.dataset.pmenu),
+      onStage: $('game').classList.contains('active'),
+      // the one thing a display:none subtree can never have
+      seen: [...document.querySelectorAll('#scoreRow [data-pmenu]')].filter((e) => e.getClientRects().length).length,
     };
   })()`);
   if (hud.cards === 3 && hud.names[0] === 'Anvil Six (you)' && hud.menus.join('|') === '1a2b3c4d'
-      && (hud.handles || []).length === 3 && hud.handles[2] === null)
+      && (hud.handles || []).length === 3 && hud.handles[2] === null
+      && hud.onStage === true && hud.seen === 1)
     ok(`${V}: in match — the card of the one other player with an account carries a menu, and the names are unchanged`);
   else fail(`${V}: hud cards ${JSON.stringify(hud)}`);
+  // THE TOAST THAT ALREADY WORKED, and must still. It is parked back under
+  // #stage for a match, so it stays clear of the HUD exactly as before the move.
+  const tgame = await realToast('Reported. Thank you.');
+  if (tgame.rects > 0 && tgame.parented && tgame.seen && tgame.parent === 'stage' && tgame.top >= tgame.hudBottom)
+    ok(`${V}: in match — the real toast is painted over the battlefield, below the HUD (y=${tgame.top}, HUD ends ${tgame.hudBottom})`);
+  else fail(`${V}: real toast in match ${JSON.stringify(tgame)}`);
   await clearTx();
   await click('#scoreRow [data-pmenu]');
   mm = await menu();
   if (mm.open && mm.items.join('|') === 'Report name|Block')
     ok(`${V}: in match — the menu opens over the battlefield with Report name and Block`);
   else fail(`${V}: hud menu ${JSON.stringify(mm)}`);
+  // AND A TOAST RAISED WHILE THE SHEET IS OPEN IS NOT PAINTED BEHIND IT. #pmenu
+  // carries a dimming backdrop and a blur, so "behind" is not a subtlety. The
+  // comparison is only real because both layers hang off #app: #app is
+  // position:fixed, which is a stacking context, and a toast on <body>'s side of
+  // that boundary lost to this sheet at ANY z-index. Hit-tested, not assumed.
+  const over = await ev(`(() => {
+    const host = document.getElementById('toast');
+    host.innerHTML = '';
+    window.__realToast('Reported. Thank you.');
+    const t = host.lastElementChild;
+    const r = t.getBoundingClientRect();
+    t.style.pointerEvents = 'auto';
+    const hit = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+    t.style.pointerEvents = '';
+    const m = document.getElementById('pmenu');
+    return { menu: !!(m && !m.hidden), mParent: m && m.parentElement ? m.parentElement.id : null,
+             top: hit ? (hit.className || hit.id || hit.tagName) : null };
+  })()`);
+  if (over.menu && over.mParent === 'app' && over.top === 'toast-item')
+    ok(`${V}: in match — a toast raised while the player menu is open is painted in front of it, not behind the backdrop`);
+  else fail(`${V}: toast under the menu ${JSON.stringify(over)}`);
   await click('#pmenu [data-pm="report"]');
   await click('#pmenu [data-pm="ok"]');
   await sleep(60);
@@ -1231,7 +1555,17 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   if (fq.filter((x) => x.type === 'block' && x.op === 'list').length === 1)
     ok(`${V}: guest — lifting a block re-reads the list, because no snapshot is ever pushed to a guest`);
   else fail(`${V}: guest re-read ${JSON.stringify(fq)}`);
-  await answer(`(fv) => fv.type === 'block' && fv.op === 'list'`, { type: 'block', op: 'list', ok: true, blocked: [] });
+  await answer(`(fv) => fv.type === 'block' && fv.op === 'list'`, { type: 'block', op: 'list', ok: true, blocked: [{ id: '55555555-5555-4555-8555-555555555555', callsign: 'Rude Name' }] });
+  // ---- 38b. A GUEST'S REFUSED UNBLOCK HAS SOMEWHERE TO LAND. It wrote into
+  //      fr.ferr, and a guest is never shown the column that renders it: the
+  //      button was simply dead, with no sentence anywhere on the page.
+  await click('#bay [data-fr="unblock:55555555-5555-4555-8555-555555555555"]');
+  await answer(`(fv) => fv.type === 'block' && fv.op === 'remove'`, { type: 'block', op: 'remove', error: 'unavailable' });
+  ec = await errCols();
+  const gberr = ec.filter((x) => x.text === 'Blocking is not available right now. Try again later.');
+  if (gberr.length === 1 && gberr[0].col === 1)
+    ok(`${V}: guest — a refused Unblock is said beside the blocked list, the only column a guest has`);
+  else fail(`${V}: guest unblock error ${JSON.stringify(ec)}`);
   // and a guest can report and block from a lobby seat
   await ev(`(() => { renderLobby(${LOB}); Bay.show('lobby'); window.__tx.length = 0; return true; })()`);
   await sleep(60);
@@ -1248,6 +1582,76 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
     ok(`${V}: guest — the report really is sent`);
   else fail(`${V}: guest report ${JSON.stringify(fq)}`);
   await answer(`(fv) => fv.type === 'report'`, { type: 'report', ok: true });
+
+  // ---- 38c. THE ACCOUNT EVENT. refreshAccountChip() fires cc:account on boot,
+  //      on every resume and on every token refresh, so anything it resets must
+  //      be KEYED. Unkeyed, each event nulled the guest's blocked list AND its
+  //      in-flight flag and fired another `block op:'list'` — which spends the
+  //      20-a-minute friend bucket, so a resume loop could rate-limit a guest
+  //      out of their own blocked list. app.js keys its own handler for exactly
+  //      this reason and says so in a comment; this is the copy that did not
+  //      carry the lesson.
+  // back to the Friends screen — the lobby check above left the bay on 'lobby',
+  // and this event only re-reads for the screen that shows the list
+  await arm('null', 'guest');
+  // A REAL change first — a different anonymous account on the same device.
+  // That half must keep working: the list belongs to the guest who asked for it.
+  const flip = await ev(`(() => {
+    window.__tx.length = 0;
+    window.CC_ACCOUNT = Object.assign({}, window.CC_ACCOUNT, { id: 'ffffffff-0000-4000-8000-00000000ffff' });
+    document.dispatchEvent(new CustomEvent('cc:account'));
+    return { asked: window.__tx.filter((f) => f.type === 'block' && f.op === 'list').length,
+             cards: [...document.querySelectorAll('#bay .pcd .sn')].map((e) => e.textContent.trim()) };
+  })()`);
+  await sleep(60);
+  const flipRead = flip.asked === 1 && flip.cards.length === 0;
+  // ---- 38c-i. AND THAT READ CAN BE REFUSED, which is the guest's own half of
+  //      critical 2: the third state, the sentence, and a live Retry.
+  await answer(`(fv) => fv.type === 'block' && fv.op === 'list'`, { type: 'block', op: 'list', error: 'unavailable' });
+  const gw = await waitState();
+  if (gw.notes.includes('Not loaded yet.') && gw.errs.length === 1
+      && gw.errs[0] === 'Your blocked list is not available right now. Try again later.'
+      && gw.n === 1 && gw.off[0] === false)
+    ok(`${V}: guest — a refused blocked-list read says what is unknown AND why, with Retry live and the old action error cleared`);
+  else fail(`${V}: guest list refusal ${JSON.stringify(gw)}`);
+  await clearTx();
+  await click('#bay [data-fr="retry"]');
+  await answer(`(fv) => fv.type === 'block' && fv.op === 'list'`, { type: 'block', op: 'list', ok: true, blocked: [{ id: '55555555-5555-4555-8555-555555555555', callsign: 'Rude Name' }] });
+  await clearTx();
+  const resumes = await ev(`(() => {
+    document.dispatchEvent(new CustomEvent('cc:account'));
+    document.dispatchEvent(new CustomEvent('cc:account'));
+    document.dispatchEvent(new CustomEvent('cc:account'));
+    return { asked: window.__tx.filter((f) => f.type === 'block' && f.op === 'list').length,
+             cards: [...document.querySelectorAll('#bay .pcd .sn')].map((e) => e.textContent.trim()) };
+  })()`);
+  if (flipRead && resumes.asked === 0 && resumes.cards.join('|') === 'Rude Name')
+    ok(`${V}: guest — a DIFFERENT account drops the blocked list and re-reads; three token refreshes on the SAME account re-read nothing and keep it on screen`);
+  else fail(`${V}: unkeyed account reset ${JSON.stringify({ flip, resumes })}`);
+  // ---- 38d. AND THE CONFIRM SHEET DOES NOT OUTLIVE THE ACCOUNT. pmPaint()
+  //      renders pmAsk() whenever `pa` is set and never consults pmItems(), so
+  //      a sign-out with "Report this name" open left it up over an account
+  //      that no longer exists, offering a Report the server would refuse. The
+  //      comment there claimed "every item goes when the account does"; the bug
+  //      was that the comment was false.
+  await arm(FSNAP.some);
+  await click(`#bay .pcd [data-pmenu="${BOB}"]`);
+  await click('#pmenu [data-pm="report"]');
+  const held = await menu();
+  // signed out and back in as somebody else. A brand-new id, so this is a flip
+  // whatever the checks above left behind.
+  const dropped = await ev(`(() => {
+    window.CC_ACCOUNT = Object.assign({}, ${LINKED}, { id: '00000000-0000-4000-8000-0000000000cc' });
+    document.dispatchEvent(new CustomEvent('cc:account'));
+    const m = document.getElementById('pmenu');
+    return { open: !!(m && !m.hidden), html: m ? m.innerHTML.length : -1 };
+  })()`);
+  await sleep(60);
+  if (held.head === 'Report this name' && dropped.open === false && dropped.html === 0)
+    ok(`${V}: the confirm sheet goes when the account does — an account change closes it instead of leaving it up`);
+  else fail(`${V}: sheet outlived the account ${JSON.stringify({ held: { head: held.head, open: held.open }, dropped })}`);
+  // app.js drops CC_SOCIAL on that same event, so the screen re-asks; settle it
+  await answer(`(fv) => fv.type === 'friends'`, { type: 'friends', error: 'unavailable' });
 
   // ---- 39. SIGNED OUT: every social frame is refused, so the menu says so and
   //      sends nothing rather than offering a control that can only fail.

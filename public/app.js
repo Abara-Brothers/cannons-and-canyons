@@ -1470,6 +1470,16 @@ function sendMsg(m) { if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringif
 // answer is matched to the tap that asked for it and a late answer to a try the
 // player has already abandoned can never overwrite a newer one.
 window.CC_SOCIAL = null;                 // the last snapshot; bay.js reads, never writes
+// AND WHY IT IS STILL NULL. A snapshot that never arrived and one the server
+// REFUSED look identical from CC_SOCIAL alone, and the Friends screen rendered
+// them identically: "Not loaded yet." for ever, with a Retry that changed
+// nothing on any tap. These two fields are the other half of the third state —
+// the last refusal's code ('' when there is none) and whether a read is out
+// right now. Both are written here, read by bay.js, and every write is followed
+// by a `cc:social` event so the screen repaints. This is Task 7's callsign
+// lesson one screen along: not knowing yet is not the same as being refused.
+window.CC_SOCIAL_ERR = '';               // the last friends-frame refusal code, or ''
+window.CC_SOCIAL_ASKING = false;         // a friends read is in flight right now
 let socialId = 0;
 let socialSeq = 0;                       // the waiter key, minted here and never sent
 // token -> { match, cb, t }. KEYED ON THE TOKEN, NOT ON THE FRAME'S id. BINDING
@@ -1600,6 +1610,11 @@ function socialSnapshot(m) {
     callsign: held,
   };
   socialAccount = accountKey();
+  // A SNAPSHOT ENDS THE REFUSAL THAT CAME BEFORE IT, or a sentence about a read
+  // that failed outlives the read that succeeded. Cleared here as well as in
+  // socialResync's callback, because a snapshot can also arrive as a server
+  // PUSH with no waiter behind it.
+  window.CC_SOCIAL_ERR = '';
   document.dispatchEvent(new Event('cc:social'));
   // A CHOSEN callsign IS the player's name — that is the whole point of paying a
   // day's quota for one — so a device that is showing something else adopts it.
@@ -1645,8 +1660,25 @@ function socialNeed() {
 function socialResync() {
   if (!socialSignedIn() || socialAsking) return;
   socialAsking = true;
+  // THE REFUSAL IS RECORDED AND THE PAGE IS TOLD, both here and on the way out.
+  // Without the callback's argument the error was discarded and no `cc:social`
+  // was dispatched, so nothing repainted: a player whose read was refused --
+  // which is EVERY linked player on EVERY visit until the phase 6 migration is
+  // applied, because the live server answers 'unavailable' today -- saw "Not
+  // loaded yet." and a Retry button that did nothing visible, for ever.
+  //
+  // Clearing before the send is what makes the tap itself visible: the old
+  // sentence goes, the button says Loading, and the answer writes the new one.
+  window.CC_SOCIAL_ERR = '';
+  window.CC_SOCIAL_ASKING = true;
+  document.dispatchEvent(new Event('cc:social'));
   // A refusal leaves CC_SOCIAL null on purpose, so the next visit asks again.
-  socialSend({ type: 'friends' }, () => { socialAsking = false; });
+  socialSend({ type: 'friends' }, (m) => {
+    socialAsking = false;
+    window.CC_SOCIAL_ASKING = false;
+    window.CC_SOCIAL_ERR = (m && m.error) || '';
+    document.dispatchEvent(new Event('cc:social'));
+  });
 }
 // Signing out — or into a DIFFERENT account — makes this device's copy of that
 // account's social state meaningless. Drop ALL of it, not just the callsign: a
@@ -1679,7 +1711,13 @@ document.addEventListener('cc:account', () => {
   const gone = (window.CC_SOCIAL && window.CC_SOCIAL.callsign) || csHeld;
   csHeld = null; csHeldAt = 0; csCleared = false;
   if (gone && ($('nameInput').value || '').trim() === gone) setLocalName(rollCallsign(gone));
-  if (!window.CC_SOCIAL) return;
+  // A REFUSAL BELONGS TO THE ACCOUNT THAT ASKED FOR IT, and it is cleared here
+  // BEFORE the early return below -- a refusal is precisely the case where
+  // CC_SOCIAL is still null, so returning first would step over the sentence
+  // and tell whoever signs in next that THEIR read had failed.
+  const hadErr = !!window.CC_SOCIAL_ERR;
+  window.CC_SOCIAL_ERR = '';
+  if (!window.CC_SOCIAL) { if (hadErr) document.dispatchEvent(new Event('cc:social')); return; }
   window.CC_SOCIAL = null;
   document.dispatchEvent(new Event('cc:social'));
 });
@@ -4924,10 +4962,29 @@ function showHoleScore(g) {
   holeScoreTimer = setTimeout(() => el.classList.remove('show'), 4600);
 }
 
+// THE HOST FOLLOWS THE SCREEN THAT IS ON STAGE. #toast lives in #app (see
+// index.html) because `.screen { display: none }` hid every toast the Launch
+// Bay ever raised — a Report that confirmed itself into an invisible subtree.
+// On the battlefield it is parked back under #stage, which is the ONLY way to
+// keep the pill exactly where it has always been: #stage starts below #hud-top,
+// so an #app-level `top: 12px` would slide the pill up over the scoreboard by
+// the height of the HUD (21px on every shipped landscape phone, 73-84px on a
+// desktop, where it also varies with the player count — so no fixed offset
+// could reproduce it). Moving the node is exact at every size.
+function toastHost() {
+  const el = $('toast');
+  if (!el) return null;
+  const game = $('game');
+  const want = (game && game.classList.contains('active') && $('stage')) || $('app') || document.body;
+  if (el.parentNode !== want) want.appendChild(el);
+  return el;
+}
 function showToast(text) {
+  const host = toastHost();
+  if (!host) return;
   const t = document.createElement('div');
   t.className = 'toast-item'; t.textContent = text;
-  $('toast').appendChild(t);
+  host.appendChild(t);
   setTimeout(() => t.remove(), 1900);
 }
 

@@ -432,7 +432,14 @@ body.golf .golf-only { display: flex; }
 .zbtn { width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--line); background: rgba(10,14,30,.6); color: var(--text); cursor: pointer; backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; padding: 0; }
 .zbtn svg { width: 22px; height: 22px; }
 .zbtn:active { transform: scale(.95); }
-#toast { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 6px; align-items: center; pointer-events: none; z-index: 6; }   /* above the hole banner (z 5): a disconnect notice must never hide behind it */
+/* z 90 clears the hole banner (5), the rotate prompt (20), the connection
+   banner (30) AND the player menu (#pmenu, 80) — a confirmation must never be
+   painted behind the sheet that asked for it. That comparison is only real
+   because #pmenu is mounted inside #app too: #app is position:fixed, which is
+   a stacking context, so a z-index here is measured against #app's children
+   and not against document.body's. Measured, not assumed — see the Task 8 fix
+   report. #toast is a child of #app at rest and of #stage during a match. */
+#toast { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 6px; align-items: center; pointer-events: none; z-index: 90; }
 .toast-item { background: rgba(10,14,30,.85); border: 1px solid var(--line); padding: 8px 14px; border-radius: 999px; font-weight: 700; font-size: 14px; animation: toastIn .3s ease, toastOut .3s ease 1.4s forwards; }
 
 @keyframes toastIn { from { opacity: 0; transform: translateY(-8px); } }
@@ -2263,10 +2270,14 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .seat .pmb{margin-left:calc(8 * var(--u))}
 
 /* ---- the player menu: Report name, Block, Remove friend -------------------
-   A BODY-LEVEL LAYER, not part of any screen. The menu has to open in four
+   AN #app-LEVEL LAYER, not part of any screen. The menu has to open in four
    places and only three of them are Bay screens — the fourth is the in-match
    HUD, where #bay is not on stage at all. --u lives on :root, so the design
-   units work over the battlefield exactly as they do in the bay. */
+   units work over the battlefield exactly as they do in the bay. It is mounted
+   in #app rather than on <body> so that it and #toast are in ONE stacking
+   context: #app is position:fixed, which is a stacking context, so a toast at
+   z 90 on <body>'s side of that boundary would still be painted under this
+   sheet however high its z-index went. */
 .pmb{width:calc(26 * var(--u));height:calc(26 * var(--u));flex:none;display:grid;place-items:center;border-radius:calc(4 * var(--u));
   border:1px solid rgba(140,168,214,.26);background:none;color:#8798bd;padding:0;cursor:pointer;transition:.15s}
 .pmb svg{width:calc(15 * var(--u));height:calc(15 * var(--u));fill:currentColor;display:block}

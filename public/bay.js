@@ -752,13 +752,33 @@ document.addEventListener('keydown', (e) => {
    blocked list through `block op:'list'` — an action nobody can undo is worse
    than one they were never offered. */
 const FR_MAX = 16;
-let fr = { q: '', code: '', res: null, ferr: '', cerr: '' };
+// ONE ERROR SINK PER COLUMN, because the screen has three and a red sentence
+// must appear next to the card that was tapped. `ferr` and `cerr` belong to the
+// two boxes in column 1 (Find a friend, Add by friend code); `perr` to the
+// friends and requests column; `berr` to the blocked column. They were a single
+// `ferr` until this pass, so a failed Accept in column 2 and a failed Unblock in
+// column 3 both wrote into the search box two columns away — and as a GUEST,
+// who is never shown column 1, a failed Unblock rendered nowhere at all and the
+// button was simply dead.
+let fr = { q: '', code: '', res: null, ferr: '', cerr: '', perr: '', berr: '' };
 // A GUEST'S OWN BLOCKED LIST. They are refused the friends frame, so this is
 // the one read they get. null = not known yet, exactly like CC_SOCIAL.
 let gb = { list: null, err: '', asking: false };
-let pm = null;      // the open player menu:  { key, kind:'id'|'handle', name, err, busy }
-let pa = null;      // the confirm sheet:     { act:'report'|'block', key, kind, name, err, busy }
+// WHOSE list, sheet and error sentences the state above belongs to. The ACCOUNT
+// ID, because the account this screen's guest half serves is anonymous and
+// app.js's accountKey() — built from an email and a provider list — is '' for
+// every guest alike. The kind is folded in as well, so a guest who LINKS their
+// account counts as a change and the screen re-reads as a linked one.
+let bayAccount = '';
+const bayAccountKey = () => {
+  const a = window.CC_ACCOUNT;
+  return a && a.id ? (a.anonymous === false ? 'in:' : 'guest:') + a.id : '';
+};
+let pm = null;      // the open player menu:  { key, kind:'id'|'handle', name, anon, err, busy }
+let pa = null;      // the confirm sheet:     { act:'report'|'block', key, kind, name, anon, err, busy }
 let pmEl = null;    // the overlay node
+let pmFrom = null;  // the control that opened it, to hand the keyboard back to
+let pmLayer = '';   // which layer is on screen, so focus moves once per change
 
 const snap = () => (has('CC_SOCIAL') ? G.CC_SOCIAL : null) || null;
 const acctState = () => (($('accountBtn') && $('accountBtn').dataset.state) || 'out');
@@ -766,6 +786,14 @@ const acctState = () => (($('accountBtn') && $('accountBtn').dataset.state) || '
 // carries no social code (it is the module the offline page imports), so the
 // frame would vanish and the screen would wait for an answer that cannot come.
 const wsReady = () => !!(G.S && S.connected && !S.local && S.ws && S.ws.readyState === 1);
+// WHY THE SNAPSHOT IS STILL MISSING, which `snap() === null` cannot say on its
+// own. app.js owns both fields and dispatches `cc:social` on every write; read
+// straight off window, the way CC_ACCOUNT is read above, because a name app.js
+// only ever assigns to window has no declaration for G's typeof getters to see.
+const socWait = () => ({
+  busy: !!window.CC_SOCIAL_ASKING,
+  err: window.CC_SOCIAL_ERR ? socErr('friends', window.CC_SOCIAL_ERR) : '',
+});
 
 // THE ERROR MAP IS KEYED BY TYPE AND OP AS WELL AS CODE, and it is closed.
 // Task 7's CS_ERR gets away with a code-only map because only a callsign reply
@@ -777,6 +805,17 @@ const wsReady = () => !!(G.S && S.connected && !S.local && S.ws && S.ws.readySta
 // code cannot put markup on screen, and a code from a newer server still gets
 // a sentence.
 const SOC_ERR = {
+  // THE READ MODEL ITSELF. `{type:'friends', error:…}` is the refusal EVERY
+  // linked player meets on every visit until the phase 6 migration is applied,
+  // because the live server answers 'unavailable' today — so this group is not
+  // an edge case, it is the shipped state. Task 7's wording discipline holds:
+  // an error sentence must not blame the player's connection for a fault on the
+  // server, which is why 'unavailable' falls to `friends._` and not to the
+  // 'offline' line.
+  'friends.slow_down':           'Too many tries. Wait a moment.',
+  'friends.sign_in':             'Sign in to see your friends.',
+  'friends.offline':             'Not connected. Try again in a moment.',
+  'friends._':                   'Friends are not available right now. Try again later.',
   'friend.search.slow_down':     'Too many tries. Wait a moment.',
   'friend.search.sign_in':       'Sign in to add friends.',
   'friend.search.offline':       'Not connected. Try again in a moment.',
@@ -856,15 +895,23 @@ function frPaint() {
 /* ---- one player, wherever a player is shown ------------------------------ */
 // Task 5's D3: `callsign` is null when the server cannot vouch for the name, so
 // every list renders a fallback rather than an empty card.
-const nameOf = (p) => (p && typeof p.callsign === 'string' && p.callsign ? p.callsign : 'No callsign');
+const named = (p) => !!(p && typeof p.callsign === 'string' && p.callsign);
+const nameOf = (p) => (named(p) ? p.callsign : 'No callsign');
 // THE MENU BUTTON. `key` is either an account uuid the SERVER handed this
 // client (a friends list, a search result, a blocked list) or a per-room seat
 // HANDLE (a lobby payload, an in-match snapshot). They are different fields on
 // the wire and are never interchangeable — BINDING resolution 24, and
 // task 6b section 2. Nothing here logs or stores either one.
-const menuBtn = (key, kind, name, dis) =>
+// `anon` marks a card whose name is the PLACEHOLDER, not a name — nameOf()'s
+// 'No callsign' fallback, which server/social.js really does produce (its
+// displayName returns null for an unprovable name and for one blocklisted after
+// it was stored, which is exactly the case a report exists for). The confirm
+// sheet needs to know, because "Report the callsign No callsign" is nonsense.
+// It is a separate attribute rather than a test on the text, because a player
+// may legitimately CHOOSE the callsign "No callsign".
+const menuBtn = (key, kind, name, dis, anon) =>
   '<button class="pmb" data-pmenu="' + esc(key) + '" data-pmkind="' + kind + '" data-pmname="' + esc(name)
-  + '" aria-label="More for ' + esc(name) + '"' + (dis ? ' disabled' : '') + '>' + IC.more + '</button>';
+  + '"' + (anon ? ' data-pmanon="1"' : '') + ' aria-label="More for ' + esc(name) + '"' + (dis ? ' disabled' : '') + '>' + IC.more + '</button>';
 // BINDING resolution 23: a search result carries NO tank, because the paint is
 // not stored on the profile — the card shows the callsign alone. No card here
 // draws one, so there is no half-built path for a later project to trip over.
@@ -877,33 +924,52 @@ function pcard(p, o) {
     // THE MENU IS NEVER DISABLED, only the actions are. A greyed handle offline
     // teaches nothing; the menu itself says reporting and blocking go through
     // the server, which is the sentence the player actually needs.
-    + (opt.menu === false ? '' : menuBtn(p.id, 'id', name, false))
+    + (opt.menu === false ? '' : menuBtn(p.id, 'id', name, false, !named(p)))
     + '</div>';
 }
 
 /* ---- the player menu and the two confirm sheets -------------------------- */
-// A BODY-LEVEL LAYER, not part of any screen's markup. The menu has to open in
+// AN #app-LEVEL LAYER, not part of any screen's markup. The menu has to open in
 // four places and only two of them are Bay screens: the friends list and a
 // search result are, a LOBBY SEAT is, and an IN-MATCH CARD is not — #bay is not
 // even on stage during a battle. One layer serves all four, so there is one
 // implementation of Report, Block and their confirmations.
+//
+// IT HANGS OFF #app, NOT <body>, and the reason is the toast. #app is
+// position:fixed, which makes it a stacking context, so #toast (z 90, inside
+// #app) and this sheet (z 80) can only be compared if they share one parent
+// context; on <body> this sheet won the paint at ANY z-index the toast was
+// given, and a confirmation would have been hidden behind the sheet that asked
+// for it. Measured in Chrome, not assumed. #app is fixed inset:0, the same box
+// as the viewport, so position:fixed inset:0 here renders identically.
 function pmHost() {
   if (!pmEl) {
     pmEl = document.createElement('div');
     pmEl.id = 'pmenu';
     pmEl.hidden = true;
-    document.body.appendChild(pmEl);
+    ($('app') || document.body).appendChild(pmEl);
     pmEl.addEventListener('click', pmClick);
   }
   return pmEl;
 }
-function pmOpen(key, kind, name) {
+function pmOpen(key, kind, name, anon) {
   if (has('Audio')) Audio.ensure();
-  pm = { key, kind: kind === 'handle' ? 'handle' : 'id', name: name || '', err: '', busy: '' };
+  // WHERE THE KEYBOARD CAME FROM, so it can be sent back. A sheet that takes
+  // focus and drops it on the floor leaves a keyboard player at the top of the
+  // document, hunting for the card they were on.
+  pmFrom = (document.activeElement && document.activeElement !== document.body) ? document.activeElement : null;
+  pm = { key, kind: kind === 'handle' ? 'handle' : 'id', name: name || '', anon: !!anon, err: '', busy: '' };
   pa = null;
   pmPaint();
 }
-function pmClose() { if (!pm && !pa) return; pm = null; pa = null; pmPaint(); }
+function pmClose() {
+  if (!pm && !pa) return;
+  pm = null; pa = null; pmPaint();
+  const back = pmFrom; pmFrom = null;
+  // Only if it is still on the page: the list underneath is re-rendered wholesale
+  // on every repaint, so the card that opened this may no longer exist.
+  if (back && back.isConnected && typeof back.focus === 'function') back.focus();
+}
 function pmItems() {
   const who = acctState();
   // A player with no account at all is refused every social frame, so a Report
@@ -926,12 +992,22 @@ function pmItems() {
 // stops them finding or contacting you and clears what is between you. It does
 // NOT promise the two are never matched together again, and this copy says so
 // rather than leaving a player to find out.
+// TWO CHANGES OF COPY IN THIS PASS, both narrowing a claim to what is true:
+//   * "Every report is read." was a MODERATION COMMITMENT the owner has never
+//     signed off, on a path whose only destination today is a log line and a
+//     table row. The sheet now says where a report goes and nothing about what
+//     happens next; the response interval belongs to the privacy policy, where
+//     Task 9 states it, and no number is invented here.
+//   * "Report the callsign No callsign to Abara Brothers." — nameOf()'s
+//     placeholder read as the name itself. With no name to quote, the sentence
+//     names the act instead. Same for Block, which had the same sentence.
 function pmAsk() {
   const rep = pa.act === 'report';
+  const who = pa.anon ? 'this player' : 'the callsign ' + esc(pa.name);
   return '<div class="pmw" data-pmstop><div class="pmh">' + (rep ? 'Report this name' : 'Block this player') + '</div>'
     + '<p class="pmn">' + (rep
-      ? 'Report the callsign ' + esc(pa.name) + ' to Abara Brothers. Every report is read.'
-      : 'Block ' + esc(pa.name) + '. They will not be able to find you or contact you, and any friendship or request between you is removed. You may still be matched into a battle together. You can undo this in Friends.')
+      ? 'Report ' + who + '. Reports go to Abara Brothers.'
+      : 'Block ' + (pa.anon ? 'this player' : esc(pa.name)) + '. They will not be able to find you or contact you, and any friendship or request between you is removed. You may still be matched into a battle together. You can undo this in Friends.')
     + '</p>'
     + (pa.err ? '<p class="pme">' + esc(pa.err) + '</p>' : '')
     + '<div class="pmr"><button class="pmg" data-pm="cancel">Cancel</button><span class="grow"></span>'
@@ -946,9 +1022,24 @@ function pmPaint() {
         + (pm.err ? '<p class="pme">' + esc(pm.err) + '</p>' : '')
         + '<div class="pmr"><span class="grow"></span><button class="pmg" data-pm="close">Close</button></div></div>'
     : '';
-  if (!html) { el.hidden = true; el.innerHTML = ''; return; }
+  // innerHTML DESTROYS THE FOCUSED NODE, so a repaint for a busy state, an error
+  // or a presence push would drop a keyboard player back to the top of the
+  // document mid-action. Remember whether the keyboard was in here first.
+  const had = !!(document.activeElement && el.contains(document.activeElement));
+  const layer = pa ? 'ask:' + pa.act : pm ? 'menu' : '';
+  if (!html) { pmLayer = ''; el.hidden = true; el.innerHTML = ''; return; }
   el.innerHTML = html;
   el.hidden = false;
+  // Focus moves in when the LAYER changes — the menu opening, the confirm sheet
+  // replacing it — and is restored when a repaint has just taken it away. Never
+  // on an ordinary repaint, or a friend coming online would pull the keyboard
+  // off whatever the player was on. The first button is Report name on the menu
+  // and CANCEL on either confirm sheet, so a stray Enter cannot send anything.
+  if (layer !== pmLayer || had) {
+    const f = el.querySelector('.pmw button:not([disabled])');
+    if (f) f.focus();
+  }
+  pmLayer = layer;
 }
 // The target, in the field the server reads it from. ONE FORM, NEVER EITHER:
 // a handle goes in `handle` and a uuid in `id`, and a uuid is refused in
@@ -964,7 +1055,7 @@ function pmClick(e) {
   if (a === 'cancel') { pa = null; pmPaint(); return; }
   if (a === 'report' || a === 'block') {
     if (!pm) return;
-    pa = { act: a, key: pm.key, kind: pm.kind, name: pm.name, err: '', busy: '' };
+    pa = { act: a, key: pm.key, kind: pm.kind, name: pm.name, anon: pm.anon, err: '', busy: '' };
     pmPaint(); return;
   }
   if (a === 'ok') {
@@ -976,7 +1067,10 @@ function pmClick(e) {
       if (!pa) return;
       pa.busy = '';
       if (err) { pa.err = err; pmPaint(); return; }
-      pm = null; pa = null; pmPaint();
+      // pmClose(), not a hand-cleared pm/pa: a sent report is a CLOSE like any
+      // other, and the keyboard goes back to the card it was sent from. Remove
+      // friend below already did this; this path did not.
+      pmClose();
       if (fn('showToast')) showToast(rep ? 'Reported. Thank you.' : 'Blocked.');
       if (!rep) gbRefresh();
     });
@@ -1017,11 +1111,26 @@ function frFind(on) {
     + '<p class="ferr">' + esc(fr.cerr) + '</p></div>'
     + '<p class="fnote">A friend code adds you both straight away &mdash; there is no request to accept.</p>';
 }
+// A red line for one column's own failure, or nothing at all. Rendered only
+// when there IS one: `.ferr` reserves 13u of height, and reserving it in every
+// section would cost four lines of air the 430u frame does not have.
+const errLine = (s) => (s ? '<p class="ferr">' + esc(s) + '</p>' : '');
+// THE THIRD STATE, SAID IN FULL: what is not known, WHY it is not known, and
+// what will be done about it. "Not loaded yet." on its own was all five states
+// at once — in flight, refused, refused again, rate-limited, and timed out —
+// and a Retry button that never changed by a pixel on any tap. `w` is the pair
+// app.js records (socWait), or the guest's own { busy, err } for their blocked
+// list, which is a different read with a different answer.
+function frWait(on, w) {
+  const busy = !!(w && w.busy), err = (w && w.err) || '';
+  return '<p class="fnote">Not loaded yet.</p>' + errLine(err)
+    + '<div class="frow"><button class="sbtn" data-fr="retry"' + (on && !busy ? '' : ' disabled') + '>'
+    + (busy ? 'Loading' : 'Retry') + '</button></div>';
+}
 function frPeople(sn, on) {
-  // THE THIRD STATE, spelled out. No count, no "no friends yet" — this client
-  // has no evidence either way, and saying so is the only honest thing left.
-  if (!sn) return '<span class="lbl">Your friends</span><p class="fnote">Not loaded yet.</p>'
-    + '<div class="frow"><button class="sbtn" data-fr="retry"' + (on ? '' : ' disabled') + '>Retry</button></div>';
+  // No count, no "no friends yet" — this client has no evidence either way, and
+  // saying so is the only honest thing left.
+  if (!sn) return '<span class="lbl">Your friends</span>' + frWait(on, socWait()) + errLine(fr.perr);
   const rin = (sn.requests && sn.requests.in) || [], rout = (sn.requests && sn.requests.out) || [];
   const friends = sn.friends || [];
   const reqRows = rin.map((p) => pcard(p, { dot: false, dis: !on,
@@ -1032,34 +1141,48 @@ function frPeople(sn, on) {
   // together, above the list. Left at the foot of the column the outgoing line
   // floated two hundred units under the last friend card, orphaned from the
   // thing it is about, because the list below it takes the spare height.
+  // Accept and Ignore are the controls in this column, so THIS is where their
+  // refusal is said — beside the request it answers, not in the search box two
+  // columns away.
   return (rin.length || rout.length
       ? '<span class="lbl">Requests' + (rin.length ? ' &middot; ' + rin.length : '') + '</span>'
         + (rin.length ? '<div class="frl">' + reqRows + '</div>' : '')
+        + errLine(fr.perr)
         + (rout.length ? '<p class="fnote">' + rout.length + ' request' + (rout.length === 1 ? '' : 's') + ' waiting for an answer.</p>' : '')
         + '<div class="fsec"></div>'
-      : '')
+      : errLine(fr.perr))
     + '<span class="lbl">Your friends &middot; ' + friends.length + '</span>'
     + '<div class="frl frl2">' + (rows || '<p class="fnote">No friends yet. Share your friend code, or add a friend by theirs or by callsign.</p>') + '</div>';
 }
 // The blocked list, in the one shape both kinds of account render: a linked
 // account reads it out of the friends snapshot, a guest out of block op:'list'.
-function blockedSec(list, on, known) {
-  if (!known) return '<span class="lbl">Blocked</span><p class="fnote">Not loaded yet.</p>'
-    + '<div class="frow"><button class="sbtn" data-fr="retry"' + (on ? '' : ' disabled') + '>Retry</button></div>';
+// `w` is whichever read owns this list, so the guest — for whom this section is
+// the WHOLE screen — gets the same sentence a linked account gets, and Unblock's
+// own failure (`fr.berr`) is said here rather than in a column a guest is never
+// shown.
+function blockedSec(list, on, known, w) {
+  if (!known) return '<span class="lbl">Blocked</span>' + frWait(on, w) + errLine(fr.berr);
   const rows = (list || []).map((p) => pcard(p, { dot: false, menu: false, dis: !on,
     act: '<button class="sbtn" data-fr="unblock:' + esc(p.id) + '"' + (on ? '' : ' disabled') + '>Unblock</button>' })).join('');
-  return '<span class="lbl">Blocked &middot; ' + (list || []).length + '</span>'
+  return '<span class="lbl">Blocked &middot; ' + (list || []).length + '</span>' + errLine(fr.berr)
     + '<div class="frl frl2">' + (rows || '<p class="fnote">Nobody is blocked.</p>') + '</div>';
 }
 function frCode(sn, on) {
   const code = sn && sn.friendCode ? 'FR-' + sn.friendCode : '';
   const canShare = !!(typeof navigator !== 'undefined' && navigator.share);
+  const w = socWait();
   return '<span class="lbl">Your friend code</span>'
     + '<div class="frcode">' + esc(code || 'FR-------') + '</div>'
     + '<div class="frow"><button class="ghost" data-fr="copy"' + (code ? '' : ' disabled') + '>' + IC.copy + 'Copy</button>'
     +   (canShare ? '<button class="ghost" data-fr="share"' + (code ? '' : ' disabled') + '>' + IC.share + 'Share</button>' : '') + '</div>'
-    + '<p class="fnote">Anyone who enters this code is added as a friend straight away.</p>'
-    + '<div class="fsec"></div>' + blockedSec(sn ? sn.blocked : null, on, !!sn);
+    // NOT A PROMISE ABOUT A CODE NOBODY HAS BEEN SHOWN. With no snapshot the row
+    // above is FR------- with Copy and Share dead, and "anyone who enters this
+    // code is added straight away" read as an instruction about it. The third
+    // state says what is actually true; the refusal beneath the Blocked heading
+    // a few lines down says why, once, for the whole column.
+    + (sn ? '<p class="fnote">Anyone who enters this code is added as a friend straight away.</p>'
+          : '<p class="fnote">Not loaded yet.</p>')
+    + '<div class="fsec"></div>' + blockedSec(sn ? sn.blocked : null, on, !!sn, w);
 }
 // What a player without a linked account is told, and it is honest about WHICH
 // half is shut: friends need an account, reporting and blocking do not.
@@ -1114,6 +1237,10 @@ function frNeed() {
 }
 function frRetry() {
   const who = acctState();
+  // Retry means "load this section again", so the last ACTION error in the two
+  // list columns goes with it — a sentence about an Unblock that failed before
+  // the list was re-read is about a card that may not even be there now.
+  fr.perr = ''; fr.berr = '';
   if (who === 'guest') { gb.list = null; gb.err = ''; gbNeed(); return; }
   if (fn('socialResync')) socialResync();
 }
@@ -1143,10 +1270,15 @@ function frAddCode() {
   });
   frPaint();
 }
-function frOne(frame, type, op, kind, done) {
+// `sink` NAMES THE COLUMN THE TAP CAME FROM: 'ferr' for the search box, 'perr'
+// for friends and requests, 'berr' for the blocked list. Without it every one of
+// these wrote into `fr.ferr`, which only column 1 renders — so a failed Accept
+// reported itself two columns away from the card, and a failed Unblock as a
+// GUEST, who has no column 1, reported itself nowhere and left a dead button.
+function frOne(frame, type, op, kind, sink, done) {
   socialTx(frame, type, op, kind, (m, err) => {
-    if (err) { fr.ferr = err; return frPaint(); }
-    fr.ferr = '';
+    if (err) { fr[sink] = err; return frPaint(); }
+    fr[sink] = '';
     done(m);
     frPaint();
   });
@@ -1161,13 +1293,16 @@ function frAct(v) {
   if (op === 'copy') return frShareCode(false);
   if (op === 'share') return frShareCode(true);
   if (op === 'retry') return frRetry();
-  if (op === 'req') return frOne({ type: 'friend', op: 'request', to: arg }, 'friend', 'request', 'friend.request', (m) => {
+  // Add friend acts on the SEARCH RESULT, which is in column 1 under the search
+  // box — so its refusal belongs to `ferr`, where the card is. Accept and Ignore
+  // are column 2, Unblock is column 3.
+  if (op === 'req') return frOne({ type: 'friend', op: 'request', to: arg }, 'friend', 'request', 'friend.request', 'ferr', (m) => {
     fr.res = null;
     if (fn('showToast')) showToast(m.state === 'friends' ? 'You are now friends.' : 'Request sent.');
   });
-  if (op === 'acc') return frOne({ type: 'friend', op: 'accept', from: arg }, 'friend', 'accept', 'friend.accept', () => {});
-  if (op === 'dec') return frOne({ type: 'friend', op: 'decline', from: arg }, 'friend', 'decline', 'friend.decline', () => {});
-  if (op === 'unblock') return frOne({ type: 'block', op: 'remove', id: arg }, 'block', 'remove', 'block', () => {
+  if (op === 'acc') return frOne({ type: 'friend', op: 'accept', from: arg }, 'friend', 'accept', 'friend.accept', 'perr', () => {});
+  if (op === 'dec') return frOne({ type: 'friend', op: 'decline', from: arg }, 'friend', 'decline', 'friend.decline', 'perr', () => {});
+  if (op === 'unblock') return frOne({ type: 'block', op: 'remove', id: arg }, 'block', 'remove', 'block', 'berr', () => {
     if (fn('showToast')) showToast('Unblocked.');
     gbRefresh();
   });
@@ -1206,10 +1341,11 @@ SCREENS.friends = function () {
     : who === 'guest'
     ? '<div class="cols" style="height:' + u(336) + '">'
       + '<div class="fcol" style="width:' + u(430) + '">' + frNoAccount('guest') + '</div>'
-      + '<div class="fcol" style="flex:1;min-width:0">' + (gb.err
-        ? '<span class="lbl">Blocked</span><p class="ferr">' + esc(gb.err) + '</p>'
-          + '<div class="frow"><button class="sbtn" data-fr="retry"' + (on ? '' : ' disabled') + '>Retry</button></div>'
-        : blockedSec(gb.list, on, gb.list !== null)) + '</div></div>'
+      // ONE SHAPE FOR BOTH ACCOUNTS. The guest's refusal used to replace the
+      // section wholesale, which dropped the third-state line and left Unblock's
+      // own error (fr.berr) with nowhere to render; blockedSec now carries both.
+      + '<div class="fcol" style="flex:1;min-width:0">'
+      + blockedSec(gb.list, on, gb.list !== null, { busy: gb.asking, err: gb.err }) + '</div></div>'
     : '<div class="cols" style="height:' + u(336) + '"><div class="fcol" style="width:' + u(430) + ';margin:0 auto">' + frNoAccount('out') + '</div></div>';
   return chrome('Friends', sub, on ? esc(s.name) : 'Needs a connection', body, '');
 };
@@ -1555,6 +1691,14 @@ function render(name) {
   // lift must not survive the screen it was measured on.
   if (kbdOn && current === 'friends' && next !== 'friends') kbdWatch(false);
   const entering = !host.firstChild || base(next) !== base(current);
+  // CLEARED BEFORE THE MARKUP IS BUILT. This reset used to sit below, AFTER the
+  // html had already been generated from the old state, so a stale red sentence
+  // was painted once more on the way in and only went on the next repaint —
+  // which, with a snapshot already in hand, never came. Found by the re-entry
+  // check in test/social_ui.mjs while adding the two new sinks. frNeed() stays
+  // where it was, below, because it is a request and not a render input.
+  const enterFriends = entering && next === 'friends';
+  if (enterFriends) { fr.res = null; fr.ferr = ''; fr.cerr = ''; fr.perr = ''; fr.berr = ''; }
   const html = SCREENS[next]();
   current = next;
   // Which screen is up, for CSS that must apply to one screen only (the home
@@ -1581,7 +1725,9 @@ function render(name) {
   // comes from its own frame. Asked on ENTRY, exactly like Bay controls, and
   // idempotent — a refusal leaves the snapshot null on purpose, so coming back
   // asks again, which is what Retry does by hand.
-  if (entering && current === 'friends') { fr.res = null; fr.ferr = ''; fr.cerr = ''; frNeed(); }
+  // The four error sinks are cleared with fr.res at the top of this function,
+  // where the markup can still see it.
+  if (enterFriends) frNeed();
   if (current === 'home') loadSorties();
 }
 
@@ -1707,7 +1853,19 @@ document.addEventListener('cc:social', () => {
 document.addEventListener('click', (e) => {
   const t = e.target.closest ? e.target.closest('[data-pmenu]') : null;
   if (!t) return;
-  pmOpen(t.dataset.pmenu, t.dataset.pmkind, t.dataset.pmname || '');
+  pmOpen(t.dataset.pmenu, t.dataset.pmkind, t.dataset.pmname || '', t.dataset.pmanon === '1');
+});
+// ESCAPE, and it dismisses ONE LAYER the way Cancel does: the confirm sheet
+// hands the player back to the menu, the menu closes and the keyboard goes back
+// to the card that opened it. Nobody was trapped before this — there is a Close
+// button and a backdrop tap — but the only Escape in this file served the
+// callsign editor, and a sheet over the battlefield is the last place to make a
+// player hunt for the way out.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || (!pm && !pa)) return;
+  e.preventDefault();
+  if (pa) { pa = null; pmPaint(); return; }
+  pmClose();
 });
 // A MENU MUST NOT OUTLIVE WHAT IT POINTS AT. showScreen is the game's own
 // router, so leaving a lobby, finishing a match and going back to the bay all
@@ -1739,12 +1897,34 @@ document.addEventListener('keydown', (e) => {
 });
 document.addEventListener('cc:account', () => {
   const host = $('bay');
-  // A GUEST'S BLOCKED LIST BELONGS TO THAT GUEST. app.js drops CC_SOCIAL when
-  // the account changes, for the same reason; this is the other half of it, and
-  // without it a signed-out session would keep drawing the last account's list.
-  gb = { list: null, err: '', asking: false };
+  // KEYED, because refreshAccountChip() fires this event on boot, on every
+  // resume and on every token refresh — app.js keys its own handler for exactly
+  // this reason. Unkeyed, each event nulled gb.list AND gb.asking mid-flight and
+  // the frNeed() below fired a SECOND `block op:'list'`, which spends the
+  // `friend` bucket: a resume loop could rate-limit a guest out of their own
+  // blocked list. app.js's accountKey() collapses every guest to '' (it keys on
+  // the linked identity, which a guest has none of), so it cannot be borrowed
+  // here — this list belongs to an ANONYMOUS account, and the account id is what
+  // tells one guest from the next.
+  const key = bayAccountKey();
+  const flipped = key !== bayAccount;
+  bayAccount = key;
+  if (flipped) {
+    // A GUEST'S BLOCKED LIST BELONGS TO THAT GUEST. app.js drops CC_SOCIAL when
+    // the account changes, for the same reason; this is the other half of it,
+    // and without it a signed-out session would keep drawing the last account's
+    // list.
+    gb = { list: null, err: '', asking: false };
+    fr.perr = ''; fr.berr = ''; fr.ferr = ''; fr.cerr = '';
+    // AND THE SHEET GOES WITH IT. pmPaint() renders pmAsk() whenever `pa` is
+    // set and never consults pmItems(), so a sign-out with "Report this name"
+    // open left it up, over an account that no longer exists, with a Report
+    // button the server would refuse. The comment here used to claim "every
+    // item goes when the account does"; this is what makes that true.
+    pmClose();
+  }
   // The open menu's items depend on who is asking — Remove friend is a linked
-  // account's, and every item goes when the account does.
+  // account's.
   pmPaint();
   if (host && host.classList.contains('active') && (current === 'home' || current === 'settings' || current === 'friends')) render(current);
   // A sign-in that lands WHILE Bay controls is open never re-enters the screen,
