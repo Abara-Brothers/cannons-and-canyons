@@ -41,15 +41,82 @@ run() {                      # run <name> <cmd...>
   fi
 }
 
-kill_server() {
-  pkill -f "node server.js" 2>/dev/null
-  for _ in $(seq 1 40); do                     # up to ~10s for the port to clear
-    local pids; pids=$(lsof -ti :"$PORT" 2>/dev/null)
-    [ -z "$pids" ] && return 0
-    kill -9 $pids 2>/dev/null
+# The PIDs of the servers THIS run started, space separated. kill_server() kills
+# exactly these, by PID, and never by command-line pattern. What used to stand
+# here was `pkill -f "node server.js"`, which matched EVERY process on the
+# machine whose command line contained that string — so a server someone had
+# started by hand, in this checkout or any other, died silently the next time
+# anyone ran the suite. The one long-lived server that survived did so purely by
+# accident: it had been started as `node /abs/path/server.js`, and the pattern
+# wanted the bare relative spelling.
+SERVER_PIDS=""
+REPO_DIR="$PWD"
+
+# Kill only what this run started. Nothing else can ever reach SERVER_PIDS:
+# every entry came from $! at the instant we backgrounded the job.
+kill_own_servers() {
+  [ -n "$SERVER_PIDS" ] || return 0
+  local pid alive=""
+  for pid in $SERVER_PIDS; do kill -TERM "$pid" 2>/dev/null; done
+  for _ in $(seq 1 12); do                     # ~3s for a graceful shutdown
+    alive=""
+    for pid in $SERVER_PIDS; do kill -0 "$pid" 2>/dev/null && alive="$alive $pid"; done
+    [ -z "$alive" ] && break
     sleep 0.25
   done
-  echo "  WARNING: port $PORT still busy: $(lsof -ti :"$PORT" | tr '\n' ' ')"
+  for pid in $alive; do kill -KILL "$pid" 2>/dev/null; done
+  SERVER_PIDS=""
+}
+# So an interrupted run cleans up after itself, rather than leaving behind the
+# orphan that the old machine-wide pkill existed to sweep away.
+trap kill_own_servers EXIT
+
+# Is $1 this checkout's own server? Consulted ONLY to decide whether something
+# squatting on our port may be cleared. Two ways to be sure, and both are
+# needed: the command line names this checkout's server.js outright (how an
+# absolute-path launch looks, whatever its cwd), or the process's cwd is this
+# checkout (how a bare `node server.js` from the repo root looks).
+is_our_server() {
+  local pid="$1" cmd cwd
+  cmd=$(ps -o command= -p "$pid" 2>/dev/null)
+  [ -n "$cmd" ] || return 1
+  case "$cmd" in *server.js*) ;; *) return 1 ;; esac
+  case "$cmd" in *"$REPO_DIR/server.js"*) return 0 ;; esac
+  cwd=$(lsof -a -d cwd -p "$pid" -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)
+  [ -n "${cwd:-}" ] && [ "$cwd" = "$REPO_DIR" ]
+}
+
+kill_server() {
+  kill_own_servers
+  # Safety net for an orphan left behind by a crashed earlier run. Deliberately
+  # narrow: a process qualifies only if it is holding the port THIS run needs
+  # AND is this checkout's own server. That is the entire overlap in which an
+  # outsider can still be in our way. A server on any other port, and any other
+  # program on this one, is reported and left alone — never killed, never
+  # silently. Widening either half of that test brings the old bug back.
+  local pid pids cmd seen=""
+  for _ in $(seq 1 40); do                     # up to ~10s for the port to clear
+    pids=$(lsof -ti :"$PORT" 2>/dev/null)
+    [ -z "$pids" ] && return 0
+    for pid in $pids; do
+      case " $seen " in *" $pid "*) continue ;; esac
+      cmd=$(ps -o command= -p "$pid" 2>/dev/null)
+      [ -n "$cmd" ] || continue                # already gone; the port will clear
+      seen="$seen $pid"
+      if is_our_server "$pid"; then
+        echo "  note: clearing an orphaned server holding port $PORT (pid $pid)"
+        kill -KILL "$pid" 2>/dev/null
+      else
+        echo "  WARNING: port $PORT is held by pid $pid, which this run did not"
+        echo "           start and which is not this checkout's server. Left alone:"
+        echo "           $cmd"
+        echo "           Stop it yourself, or run the suite with PORT=<a free port>."
+      fi
+    done
+    sleep 0.25
+  done
+  echo "  WARNING: port $PORT still busy: $(lsof -ti :"$PORT" 2>/dev/null | tr '\n' ' ')"
+  return 1
 }
 
 start_server() {             # start_server [extra env assignments...]
@@ -60,6 +127,9 @@ start_server() {             # start_server [extra env assignments...]
   # bare "timeout waiting for gameover" that looks like a product bug.
   : > /tmp/cc_server.log
   env "$@" node server.js >> /tmp/cc_server.log 2>&1 &
+  # Record the PID NOW: $! is clobbered by the next background job, and a server
+  # that never reports ready still has to be cleaned up.
+  SERVER_PIDS="$SERVER_PIDS $!"
   for _ in $(seq 1 40); do
     grep -q "running at" /tmp/cc_server.log 2>/dev/null && sleep 0.3 && return 0
     sleep 0.25
