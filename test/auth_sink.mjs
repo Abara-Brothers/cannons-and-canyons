@@ -390,7 +390,15 @@ async function presentedName(token, typed) {
     send(ws, { type: 'block', op: 'list', id: 81 });
     const listed = await wait(ws, 'block');
     ws._rx.length = 0;
-    send(ws, { type: 'block', op: 'remove', id: HONEST_ID });
+    // UNBLOCKED THROUGH THE KEY THE LIST GAVE BACK, which is the only id this
+    // client is ever handed now (BINDING.md resolution 24, applied to the
+    // blocked list): the row carries a per-connection unblock key instead of the
+    // account uuid, because block add accepts a lobby seat's handle and a list
+    // that answered with the account turned the one into the other. This is the
+    // end-to-end half of that — over the real socket, the real interception seam
+    // and the real store.
+    const listedKey = ((listed && listed.blocked) || [{}])[0].id;
+    send(ws, { type: 'block', op: 'remove', id: listedKey });
     await wait(ws, 'block');
     ws._rx.length = 0;
     send(ws, { type: 'block', op: 'list', id: 82 });
@@ -399,9 +407,12 @@ async function presentedName(token, typed) {
 
     const rows = (listed && listed.blocked) || [];
     if (listed && listed.ok === true && listed.op === 'list' && listed.id === 81
-      && rows.length === 1 && rows[0].id === HONEST_ID && rows[0].callsign === HONEST)
-      ok(`(8b) a guest can LIST what it blocked, with the proven name beside it (${JSON.stringify(HONEST)})`);
+      && rows.length === 1 && /^[0-9a-f]{32}$/.test(String(rows[0].id)) && rows[0].callsign === HONEST)
+      ok(`(8b) a guest can LIST what it blocked, with the proven name beside it (${JSON.stringify(HONEST)}) and an opaque unblock key in place of the account`);
     else fail('(8b) guest blocked list: ' + JSON.stringify(listed));
+    if (listed && !/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(JSON.stringify(listed)))
+      ok('(8b) and NO account uuid anywhere in the list frame — end to end, the blocked list is not a handle-to-uuid converter');
+    else fail('(8b) an account uuid reached the guest: ' + JSON.stringify(listed));
     if (listed && listed.friendCode === undefined && listed.friends === undefined && listed.requests === undefined)
       ok('(8b) and the frame carries the blocked list alone — no friend code is minted for an anonymous account');
     else fail('(8b) the list frame leaked panel fields: ' + JSON.stringify(Object.keys(listed || {})));

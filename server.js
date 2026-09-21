@@ -1181,6 +1181,11 @@ function setSecurityHeaders(res) {
 // same function, on the same list, that names a friend in the Friends screen.
 const HIST_MIN_MS = 2000;
 const histLast = new Map();                // user id -> last served (ms)
+// One stderr line a minute, at most, when the opponent-name lookup is failing.
+// The panel still serves in that state, so this is the only trace there is; it
+// is throttled because the state it reports is per-REQUEST and every player on
+// the service hits it at once.
+let lastHistNameWarn = 0;
 setInterval(() => { const cut = Date.now() - 60000; for (const [k, t] of histLast) if (t < cut) histLast.delete(k); }, 60000).unref();
 async function matchHistory(req, res, cors) {
   const json = (code, body) => { res.writeHead(code, { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)); };
@@ -1199,17 +1204,51 @@ async function matchHistory(req, res, cors) {
     for (const r of rows || []) for (const p of r.players || []) if (p && p !== uid) others.add(p);
     const names = new Map();
     if (others.size) {
-      // THREE COLUMNS, NOT ONE, for the same reason server/store.js:181 reads
-      // three: the key is what the proof compares the writable column against,
-      // and without it in the row there is no check to run.
-      const prof = await sbAdmin('GET', `/profiles?id=in.(${[...others].join(',')})&select=id,callsign,callsign_key`);
-      // FAIL CLOSED. A null nameProofs means the social layer never started --
-      // in practice the blocklist failed to load, which is the one boot fault
-      // that turns the layer off while Supabase stays configured and this route
-      // goes on serving. Falling back to the raw column there would quietly
-      // restore the exact hole this closes, so every opponent reads 'Commander'
-      // instead. A degraded name is a cosmetic loss; an unproven one is not.
-      for (const p of prof || []) if (p && p.id) names.set(p.id, nameProofs ? nameProofs.displayName(p) : null);
+      // THE NAME LOOKUP HAS ITS OWN NET, AND THE PANEL OUTLIVES IT. This read
+      // is a DECORATION on rows that are already in hand: mode, result and date
+      // need no profile at all. Inside the outer try it was load-bearing, and
+      // the state that makes that bite is the ordinary one for this release --
+      // the phase 6 migration is applied BY HAND after the deploy, and until it
+      // lands PostgREST answers this select 400 (42703, unknown column
+      // callsign_key), sbAdmin throws on any non-2xx, and the whole route
+      // answered 502. public/bay.js does `if (!r.ok) return;`, so the Recent
+      // sorties panel did not degrade, it DISAPPEARED -- silently, for every
+      // player who has ever faced a human -- and because that client only
+      // advances its 60-second throttle on success, every return to the home
+      // screen re-fired it and wrote another error_reports row.
+      //
+      // Degrading here costs exactly the names and NOTHING ELSE, and it costs
+      // them in the direction that was already chosen a few lines below: an
+      // empty map means every opponent reads the existing 'Commander' fallback.
+      // The security property is untouched -- an unproven name is still never
+      // shown, because no name is shown at all.
+      //
+      // NOT reportServerError: this path does not fail the request, and the one
+      // fault it is expected to see is the hand-applied migration being late,
+      // which would put one row per player per home-screen visit into the very
+      // table crash reporting depends on. /health's own supabaseSocial field is
+      // the signal for that state (BINDING.md resolution 7) and names it
+      // 'migration_missing' outright. One throttled stderr line is kept so the
+      // degradation is never completely silent.
+      try {
+        // THREE COLUMNS, NOT ONE, for the same reason server/store.js:181 reads
+        // three: the key is what the proof compares the writable column against,
+        // and without it in the row there is no check to run.
+        const prof = await sbAdmin('GET', `/profiles?id=in.(${[...others].join(',')})&select=id,callsign,callsign_key`);
+        // FAIL CLOSED. A null nameProofs means the social layer never started --
+        // in practice the blocklist failed to load, which is the one boot fault
+        // that turns the layer off while Supabase stays configured and this route
+        // goes on serving. Falling back to the raw column there would quietly
+        // restore the exact hole this closes, so every opponent reads 'Commander'
+        // instead. A degraded name is a cosmetic loss; an unproven one is not.
+        for (const p of prof || []) if (p && p.id) names.set(p.id, nameProofs ? nameProofs.displayName(p) : null);
+      } catch (e) {
+        names.clear();
+        if (Date.now() - lastHistNameWarn > 60000) {
+          lastHistNameWarn = Date.now();
+          console.error(`[history] opponent names unavailable, serving 'Commander' — ${e && e.message ? e.message : String(e)}`);
+        }
+      }
     }
     const out = (rows || []).map((r) => {
       const opp = (r.players || []).filter((p) => p && p !== uid);

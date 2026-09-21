@@ -40,6 +40,25 @@ const last = (ws) => ws._rx[ws._rx.length - 1];
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const DAY = 86400000;
 
+// ---- the blocked list carries NO account id ---------------------------------
+// BINDING.md resolution 24 gives a lobby seat an opaque per-room handle so a
+// modified client cannot correlate a player across matches. block add accepts
+// that handle, and while the blocked list answered `{ id: <account uuid> }` the
+// two composed into a converter: block every seat, list, read the uuids,
+// unblock. Every row now carries an UNBLOCK KEY instead — 32 hex, scoped to the
+// connection it was issued on — so these assertions check the SHAPE and the
+// BEHAVIOUR (it lifts the right block) and never an identity the client is not
+// entitled to. `bnames` exists because the callsign is what the old assertions
+// were really about; the id they compared was the leak.
+const isUnblockKey = (v) => typeof v === 'string' && /^[0-9a-f]{32}$/.test(v);
+const keysOpaque = (list) => Array.isArray(list) && list.length > 0 && list.every((r) => r && isUnblockKey(r.id));
+const bnames = (list) => (list || []).map((r) => (r ? JSON.stringify(r.callsign) : 'null')).sort().join(',');
+const bkey = (list, callsign) => { const r = (list || []).find((x) => x && x.callsign === callsign); return r ? r.id : null; };
+// Any uuid anywhere in a frame. The fixtures below are uuid-shaped for the
+// accounts and short strings for the guest, so this is used where the ids in
+// play really are uuids.
+const UUID_ANY = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
 // A two-term blocklist. The real one is server/blocklist.txt, loaded by
 // server.js and never by this suite: the rule under test is "a term in the list
 // is rejected", not which terms ship.
@@ -408,6 +427,49 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
   else fail('(i3) key after roll is ' + JSON.stringify(store.rows.get('u2').callsign_key));
 }
 
+// ---- (i4) a roll on one device does not leave another wearing the name -----
+// ws.chosenName is the ONE door through which a string that is not a rolled pair
+// reaches another player — public/room-engine.js's sanitizeName reads exactly
+// this field. It is filled per SOCKET by server.js's auth sink, and
+// store.clearCallsignKey frees the key for the whole ACCOUNT, so clearing only
+// the socket that asked left every other live socket of that account presenting
+// a callsign the account had just surrendered. The ordinary outcome is a player
+// whose own name differs between their phone and their desktop; the sharp one is
+// that somebody else then legitimately takes 'Wren Delacroix' and the stale
+// socket shows THAT player's unique callsign to strangers — and a report against
+// that seat records the '(no name)' sentinel, because seenName reads the profile
+// and finds no key, which is the evidence mismatch BINDING 26 exists to prevent.
+//
+// socketsOf is how pushFriends has always fanned a panel out to a player's
+// devices; the exemption simply never used it.
+{
+  clock = BASE;
+  const { store, social } = mk();
+  const phone = mkws('u1'), desktop = mkws('u1');
+  social.onAuth(phone); social.onAuth(desktop);
+  await social.handle(phone, { type: 'callsign', name: 'Wren Delacroix' });
+  if (phone.chosenName === 'Wren Delacroix' && desktop.chosenName === 'Wren Delacroix')
+    ok('(i4) a name SET on one device is presented by the other too — the account holds the key, so every one of its sockets may wear it');
+  else fail('(i4) after a set: ' + JSON.stringify([phone.chosenName, desktop.chosenName]));
+  clock = BASE + 1000;
+  await social.handle(phone, { type: 'callsign', rolled: true });
+  if (store.rows.get('u1').callsign_key === null) ok('(i4) the roll cleared the key for the account');
+  else fail('(i4) the key survived the roll');
+  if (phone.chosenName === null && desktop.chosenName === null)
+    ok('(i4) and NEITHER socket may present the surrendered name — not just the one that rolled');
+  else fail('(i4) a stale socket kept the surrendered name: ' + JSON.stringify([phone.chosenName, desktop.chosenName]));
+  // A SOCKET OF A DIFFERENT ACCOUNT IS NOT TOUCHED, which is the other way a
+  // loop over the wrong set fails: quietly, by stripping a name that is still
+  // proven, so an innocent player is silently demoted to a rolled pair.
+  clock = BASE + DAY + 1000;
+  const other = mkws('u2');
+  social.onAuth(other);
+  await social.handle(other, { type: 'callsign', name: 'Marguerite Vale' });
+  await social.handle(phone, { type: 'callsign', rolled: true });
+  if (other.chosenName === 'Marguerite Vale') ok('(i4) another ACCOUNT\'s socket keeps its own chosen name through all of it');
+  else fail('(i4) the fan-out reached another account: ' + JSON.stringify(other.chosenName));
+}
+
 // ---- (i2) a guest cannot roll away someone's key either --------------------
 // The roll path writes to the database before it reads anything, so if the gate
 // were only on the SET branch an anonymous socket could clear a key.
@@ -590,9 +652,12 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
         && f.requests.out.length === 1 && f.requests.out[0].id === D && f.requests.out[0].callsign === 'Dune Four')
       ok('(a) friends: both request directions, each named');
     else fail('(a) requests: ' + JSON.stringify(f && f.requests));
-    if (f && f.blocked && f.blocked.length === 1 && f.blocked[0].id === E && f.blocked[0].callsign === 'Echo Seven')
-      ok('(a) friends: the blocked list is named too');
+    if (f && f.blocked && f.blocked.length === 1 && f.blocked[0].callsign === 'Echo Seven' && keysOpaque(f.blocked))
+      ok('(a) friends: the blocked list is named too, and its id is an opaque unblock key rather than the account');
     else fail('(a) blocked: ' + JSON.stringify(f && f.blocked));
+    if (f && f.blocked && !f.blocked.some((r) => r.id === E))
+      ok('(a) friends: and E\'s account id is NOT in it — the one list a stranger can reach never carries one');
+    else fail('(a) the blocked list carried an account id: ' + JSON.stringify(f && f.blocked));
     // BINDING resolution 13: without this a player signing in on a second
     // device is told to choose a name they already have.
     if (f && f.callsign === 'Anvil Six') ok('(a) friends: the frame carries the player’s OWN chosen callsign (resolution 13)');
@@ -724,7 +789,7 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     if (outg && outg.id === E && outg.callsign === null) ok('(a4) an OUTGOING request carries no unproven name either');
     else fail('(a4) outgoing request name: ' + JSON.stringify((f.requests || {}).out));
     const blk = (f.blocked || [])[0];
-    if (blk && blk.id === F && blk.callsign === null) ok('(a4) the blocked list is no exception — the row stays, the name does not');
+    if (blk && blk.callsign === null && isUnblockKey(blk.id)) ok('(a4) the blocked list is no exception — the row stays, the name does not');
     else fail('(a4) blocked name: ' + JSON.stringify(f.blocked));
     // The ROW must survive so Task 8 still has something to hang Report and
     // Block on; dropping the entry would hide the person instead of the name.
@@ -802,7 +867,7 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     if (outg && outg.id === F && outg.callsign === null) ok('(a5) free text in the shape of a pair is still null — both halves must come from the lists');
     else fail('(a5) outgoing: ' + JSON.stringify((f.requests || {}).out));
     const blk = (f.blocked || [])[0];
-    if (blk && blk.id === E && blk.callsign === 'Frost Hawk') ok('(a5) the blocked list is named too — all four lists take either proof');
+    if (blk && blk.callsign === 'Frost Hawk' && isUnblockKey(blk.id)) ok('(a5) the blocked list is named too — all four lists take either proof');
     else fail('(a5) blocked: ' + JSON.stringify(f.blocked));
 
     // BINDING RESOLUTION 13 IS UNTOUCHED. The account's OWN `callsign` field is
@@ -1156,8 +1221,8 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     if ((f.requests || {}).in && f.requests.in.length === 0 && f.requests.out.length === 0)
       ok('(e3) a request that outlived a block is not listed either — that is them reaching you');
     else fail('(e3) blocked requests still listed: ' + JSON.stringify(f.requests));
-    if ((f.blocked || []).length === 2 && f.blocked.every((x) => x.id === B || x.id === D))
-      ok('(e3) the Blocked list itself is the one place they still appear');
+    if ((f.blocked || []).length === 2 && bnames(f.blocked) === bnames([{ callsign: 'Bunker Nine' }, { callsign: 'Dune Four' }]) && keysOpaque(f.blocked))
+      ok('(e3) the Blocked list itself is the one place they still appear — by name, behind an opaque unblock key');
     else fail('(e3) blocked list: ' + JSON.stringify(f.blocked));
   }
 
@@ -1700,7 +1765,7 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     // And the panel: the blocker sees them in the Blocked list and nowhere else.
     await S.handle(wa, { type: 'friends' });
     const f = last(wa, 'friends') || {};
-    if ((f.friends || ['x']).length === 0 && (f.blocked || []).length === 1 && f.blocked[0].id === B)
+    if ((f.friends || ['x']).length === 0 && (f.blocked || []).length === 1 && f.blocked[0].callsign === 'Bunker Nine' && keysOpaque(f.blocked))
       ok('(t6b) the panel shows the blocked player in the Blocked list and nowhere else');
     else fail('(t6b) panel after block: ' + JSON.stringify(f));
   }
@@ -2152,8 +2217,7 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     g.rx.length = 0;
     await S.handle(g, { type: 'block', op: 'list', id: 9 });
     const l = last(g, 'block');
-    const seen = l && l.blocked ? l.blocked.map((r) => r.id + '=' + JSON.stringify(r.callsign)).sort().join(',') : '';
-    if (l && l.op === 'list' && l.ok === true && seen === [B + '="Bunker Nine"', NAMELESS + '=null'].sort().join(','))
+    if (l && l.op === 'list' && l.ok === true && bnames(l.blocked) === bnames([{ callsign: 'Bunker Nine' }, { callsign: null }]) && keysOpaque(l.blocked))
       ok('(t6k) a GUEST can see the blocks it wrote, with the same proven name the panel would show and null for a player who has none');
     else fail('(t6k) guest blocked list: ' + JSON.stringify(l));
     if (l && l.id === 9) ok('(t6k) the list reply echoes the request id like every other reply in this layer');
@@ -2177,12 +2241,15 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
       ok('(t6k) a block written AGAINST this account is not in its list — the list is what you did, never what was done to you');
     else fail('(t6k) blockedBy leaked into the list: ' + JSON.stringify(l2));
     // AND THE DOOR OPENS BOTH WAYS.
-    await S.handle(g, { type: 'block', op: 'remove', id: B });
+    // LIFTED THROUGH THE KEY THE LIST HANDED BACK, which is the only id this
+    // client has: the round trip list -> Unblock is what the key exists to keep
+    // working now that the row no longer carries an account id.
+    await S.handle(g, { type: 'block', op: 'remove', id: bkey(l2.blocked, 'Bunker Nine') });
     g.rx.length = 0;
     await S.handle(g, { type: 'block', op: 'list' });
     const l3 = last(g, 'block');
-    if (l3 && l3.ok === true && l3.blocked.length === 1 && l3.blocked[0].id === NAMELESS)
-      ok('(t6k) a guest can LIFT a block and watch it leave the list — the one-way door is closed');
+    if (l3 && l3.ok === true && l3.blocked.length === 1 && l3.blocked[0].callsign === null && !st.blocks.has(GUEST + '>' + B) && st.blocks.has(GUEST + '>' + NAMELESS))
+      ok('(t6k) a guest LIFTS a block with the key the list gave them, the right row goes, and it leaves the list — the one-way door is closed');
     else fail('(t6k) after a guest unblock: ' + JSON.stringify(l3));
     // The gate did not move while this was added.
     g.rx.length = 0;
@@ -2204,7 +2271,7 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     wa.rx.length = 0;
     await S.handle(wa, { type: 'block', op: 'list' });
     const l4 = last(wa, 'block');
-    if (l4 && l4.ok === true && l4.blocked.length === 1 && l4.blocked[0].id === B && l4.blocked[0].callsign === 'Bunker Nine')
+    if (l4 && l4.ok === true && l4.blocked.length === 1 && l4.blocked[0].callsign === 'Bunker Nine' && keysOpaque(l4.blocked))
       ok('(t6k) a LINKED account is answered the identical frame — one code path for Task 8');
     else fail('(t6k) linked list: ' + JSON.stringify(l4));
     // LIST IS A READ, SO IT SPENDS FROM THE READ MODEL'S BUCKET. D9 leaves add
@@ -2253,6 +2320,121 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
       else fail(`(t6k2) list/${m}: ` + JSON.stringify(r) + (threw ? ' threw ' + threw.message : ''));
     }
     st.boom.clear();
+  }
+
+  // ---- (t6k3) THE BLOCKED LIST IS NOT A HANDLE-TO-UUID CONVERTER -----------
+  // BINDING.md resolution 24 gives a lobby seat an opaque per-room handle
+  // precisely so a modified client cannot correlate a player across matches and
+  // build a graph of who plays with whom: publishing account ids "is a privacy
+  // leak far worse than the problem", in its own words. block add ACCEPTS that
+  // handle. While the blocked list answered with the account uuid, the two
+  // composed into a converter — block every seat in the lobby (unrated, silent,
+  // the victim is never told), list, read the uuids, unblock — and the uuid it
+  // yielded is all friendRequest needs, so a stranger from one quick match could
+  // be asked for ever. public/privacy.html states in this build that another
+  // player can never learn your account identifier.
+  //
+  // FOUR PROPERTIES, and the second is the one that makes the first worth
+  // having: the id is opaque, it still LIFTS the block, it does not work as a
+  // target on any other frame, and it is scoped to the connection that was given
+  // it. Asserted here rather than left to the shape checks scattered above,
+  // because "the list no longer carries a uuid" is only half a fix if the key
+  // that replaced it is spendable somewhere else.
+  {
+    const st = memStore(T6_ROWS);
+    const S = mkSocial(st);
+    const wa = mkws(A), wa2 = mkws(A), wb = mkws(B);
+    S.onAuth(wa); S.onAuth(wa2); S.onAuth(wb);
+    await S.handle(wa, { type: 'block', op: 'add', id: B });
+    wa.rx.length = 0;
+    await S.handle(wa, { type: 'block', op: 'list' });
+    const l = last(wa, 'block');
+    const key = bkey(l.blocked, 'Bunker Nine');
+    if (key && isUnblockKey(key) && key !== B) ok('(t6k3) the blocked row carries a 32-hex unblock key, and it is not the account id');
+    else fail('(t6k3) blocked id shape: ' + JSON.stringify(l.blocked));
+    if (!UUID_ANY.test(JSON.stringify(l))) ok('(t6k3) and there is no uuid ANYWHERE in the list frame — not the target, not the viewer');
+    else fail('(t6k3) a uuid survived in the list frame: ' + JSON.stringify(l));
+
+    // STABLE WITHIN THE CONNECTION, so a rendered Unblock button still works
+    // after the client re-reads the list — which it does after every unblock.
+    wa.rx.length = 0;
+    await S.handle(wa, { type: 'block', op: 'list' });
+    if (bkey((last(wa, 'block') || {}).blocked, 'Bunker Nine') === key) ok('(t6k3) the same socket is given the SAME key twice — a rendered Unblock button does not go stale between reads');
+    else fail('(t6k3) the key changed inside one connection');
+
+    // AND DIFFERENT ON ANOTHER CONNECTION OF THE SAME ACCOUNT, which is what
+    // stops it being a stable pseudonym a client can keep and compare.
+    wa2.rx.length = 0;
+    await S.handle(wa2, { type: 'block', op: 'list' });
+    const key2 = bkey((last(wa2, 'block') || {}).blocked, 'Bunker Nine');
+    if (key2 && isUnblockKey(key2) && key2 !== key) ok('(t6k3) a SECOND connection of the same account is given a DIFFERENT key for the same person — nothing here survives the socket');
+    else fail('(t6k3) two connections shared a key: ' + JSON.stringify([key, key2]));
+
+    // AND IT IS NOT A TARGET ANYWHERE ELSE. This is the half that would make the
+    // opacity cosmetic: a key that friendRequest or report accepted would be a
+    // uuid by another name.
+    wa.rx.length = 0;
+    await S.handle(wa, { type: 'friend', op: 'request', to: key });
+    if ((last(wa, 'friend') || {}).error === 'no_such_user' && !st.requests.size) ok('(t6k3) the key cannot be spent as a friend request target');
+    else fail('(t6k3) friend request took the key: ' + JSON.stringify([last(wa, 'friend'), [...st.requests]]));
+    wa.rx.length = 0;
+    await S.handle(wa, { type: 'report', id: key });
+    if ((last(wa, 'report') || {}).error === 'no_such_user' && !st.reports.length) ok('(t6k3) nor as a report target');
+    else fail('(t6k3) report took the key: ' + JSON.stringify([last(wa, 'report'), st.reports]));
+    wa.rx.length = 0;
+    await S.handle(wa, { type: 'block', op: 'add', id: key });
+    if ((last(wa, 'block') || {}).error === 'no_such_user') ok('(t6k3) nor as a block ADD target — a key is a way OUT of a block, never a way to write a new one');
+    else fail('(t6k3) block add took the key: ' + JSON.stringify(last(wa, 'block')));
+    wa.rx.length = 0;
+    await S.handle(wa, { type: 'friend', op: 'remove', id: key });
+    if ((last(wa, 'friend') || {}).error === 'no_such_user') ok('(t6k3) nor as a friend remove target');
+    else fail('(t6k3) friend remove took the key: ' + JSON.stringify(last(wa, 'friend')));
+
+    // A KEY FROM ANOTHER SOCKET IS NOTHING HERE, which is the same statement as
+    // "it does not survive the connection", said from the receiving end.
+    wa.rx.length = 0;
+    await S.handle(wa, { type: 'block', op: 'remove', id: key2 });
+    if (st.blocks.has(A + '>' + B)) ok('(t6k3) a key issued to the OTHER connection lifts nothing on this one');
+    else fail('(t6k3) a foreign key lifted a block');
+
+    // AND A SOCKET THAT WAS NEVER GIVEN A KEY SPENDS NO ROUND TRIP LOOKING FOR
+    // ONE. `block op:'remove'` is rate limited by design 4.2 not at all, so a
+    // resolution that always read the blocks table would let any client turn
+    // junk into two PostgREST reads a frame, from a socket that has never even
+    // opened a blocked list. No salt means no key was ever issued here.
+    const wc = mkws(C);
+    S.onAuth(wc);
+    st.calls.length = 0;
+    wc.rx.length = 0;
+    await S.handle(wc, { type: 'block', op: 'remove', id: key });
+    if ((last(wc, 'block') || {}).error === 'no_such_user' && !st.calls.length)
+      ok('(t6k3) a socket that never opened a blocked list answers no_such_user WITHOUT touching the store — an unrated op is not an amplifier');
+    else fail('(t6k3) a keyless socket cost ' + JSON.stringify(st.calls) + ' -> ' + JSON.stringify(last(wc, 'block')));
+
+    // ...and then the one thing it must do.
+    wa.rx.length = 0;
+    await S.handle(wa, { type: 'block', op: 'remove', id: key });
+    if ((last(wa, 'block') || {}).ok === true && !st.blocks.has(A + '>' + B)) ok('(t6k3) and the key lifts the block it belongs to — the list stays actionable, which is the whole reason the row keeps an id');
+    else fail('(t6k3) the key did not unblock: ' + JSON.stringify([last(wa, 'block'), [...st.blocks]]));
+
+    // THE PUSHED SNAPSHOT IS MAPPED PER DEVICE, not once for the account. One
+    // read builds the frame and every socket gets its own blocked array; a fan-
+    // out that forgot to remap would hand one device another's keys, which
+    // resolve to nothing there and leave Unblock permanently inert.
+    await S.handle(wa, { type: 'block', op: 'add', id: B });
+    wa.rx.length = 0; wa2.rx.length = 0;
+    await S.handle(wa, { type: 'friends' });
+    const ownKey = bkey((last(wa, 'friends') || {}).blocked, 'Bunker Nine');
+    wa2.rx.length = 0;
+    await S.handle(wa2, { type: 'friends' });
+    const ownKey2 = bkey((last(wa2, 'friends') || {}).blocked, 'Bunker Nine');
+    if (ownKey && ownKey2 && ownKey !== ownKey2) ok('(t6k3) the friends snapshot carries per-connection keys too — the leak had TWO mouths and both are shut');
+    else fail('(t6k3) snapshot keys: ' + JSON.stringify([ownKey, ownKey2]));
+    wa2.rx.length = 0;
+    await S.handle(wa2, { type: 'block', op: 'remove', id: ownKey2 });
+    if ((last(wa2, 'block') || {}).ok === true && !st.blocks.has(A + '>' + B))
+      ok('(t6k3) and the key from the SNAPSHOT lifts the block on the device that received it');
+    else fail('(t6k3) the snapshot key did not unblock: ' + JSON.stringify([last(wa2, 'block'), [...st.blocks]]));
   }
 
   // ---- (t6l) ONE SOCIAL FRAME AT A TIME, PER SOCKET -------------------------

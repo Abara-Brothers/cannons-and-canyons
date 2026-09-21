@@ -29,6 +29,13 @@ import { isUuid, reportCallsign } from './store.js';
 // each proof — and the two reviews and three decisions behind them — travelled
 // with them; this layer's behaviour is unchanged.
 import { createNameProofs } from './display-name.js';
+// THE ONLY NODE API IN THIS FILE, and it is a pure computation rather than I/O:
+// the blocked list has to carry something a client can hand back to Unblock and
+// nothing a client can keep. See blockKey below. randomBytes/createHmac are
+// synchronous, need no wiring and are not mockable state, so the "everything is
+// injected" rule this module is built on is untouched — there is still no
+// Supabase, no socket and no real clock here.
+import { createHmac, randomBytes } from 'node:crypto';
 
 // The frame types that belong here and never reach the engine. server.js
 // imports this set to decide what to intercept; keep it in step with the
@@ -74,6 +81,52 @@ const DAY = 86400000;
 // to another client. Keep in step with public/room-engine.js's SKINS.
 const SKIN_IDS = new Set(['olive', 'desert', 'jungle', 'midnight', 'arctic', 'gold']);
 
+// ---- UNBLOCK KEYS (BINDING.md resolution 24, applied to the blocked list) ----
+// THE HOLE THIS CLOSES. A lobby seat carries a per-room opaque handle instead of
+// an account id precisely so a modified client cannot correlate a player across
+// matches and build a graph of who plays with whom — resolution 24's own words
+// are that publishing account ids "is a privacy leak far worse than the
+// problem". block add ACCEPTS that handle (targetId below) and the blocked list
+// used to answer `{ id: <the account uuid>, callsign }` for every row. Compose
+// the two and the handle is trivially convertible, from a socket the attacker
+// already owns and with no rate limit on add or remove: block every seat in the
+// lobby, list, read the uuids, unblock. The uuid is not inert either — a uuid is
+// all friendRequest needs, so a stranger from one quick match could then be
+// asked for ever, and public/privacy.html states in this build that another
+// player can never learn your account identifier.
+//
+// WHAT REPLACES IT. The list still has to be ACTIONABLE — Unblock is the only
+// way out of a block, and a guest's blocked list is the whole Friends screen for
+// them — so the row cannot simply lose its id. It carries an UNBLOCK KEY:
+// HMAC(process secret, this connection's salt + the account id), 32 hex
+// characters. The properties are the seat handle's, on purpose:
+//
+//   * NOT DERIVABLE from the account: without the process secret and the
+//     socket's salt there is nothing to compute, and neither ever leaves here.
+//   * MEANINGLESS ANYWHERE ELSE: it fails isUuid, so it cannot be spent as
+//     `friend op:'request' to:`, as a report target, or as a block target; and
+//     it is 32 hex where a seat handle is 8, so it cannot be spent as a handle.
+//   * DOES NOT SURVIVE THE CONNECTION: the salt is minted per socket, so the
+//     same account seen on a new connection is a different key, and a key kept
+//     from a previous session resolves to nothing.
+//   * STABLE WITHIN one connection, which is what keeps a rendered Unblock
+//     button working — including after the list is re-read, which the client
+//     does after every unblock.
+//
+// WHAT IT DOES NOT CLOSE, said plainly rather than left to be discovered: block
+// add is idempotent and the list is enumerable, so a modified client can still
+// ask "is this seat someone I have already blocked?" by watching the list's
+// LENGTH, and narrow which one by unblocking selectively. That oracle survives
+// any id scheme, including no id at all, because the block itself is a durable
+// per-pair relation. What is gone is the cheap part: a permanent, global,
+// cross-account identifier that is also a valid target on three other frames.
+//
+// ONE SECRET PER PROCESS, and a restart rotates every key in flight. That is
+// harmless: a key is only ever spent seconds after the list that carried it, and
+// a restart drops every socket anyway.
+const BLOCK_KEY_SECRET = randomBytes(32);
+const BLOCK_KEY_RE = /^[0-9a-f]{32}$/;
+
 // resolveHandle(ws, handle) -> account id | null. INJECTED, and defaulting to a
 // function that resolves nothing, for the same reason `store` and `send` are:
 // the thing that knows about rooms is public/room-engine.js, which the OFFLINE
@@ -110,6 +163,47 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
   // handleFriend's catch and emitted a second frame saying it had failed, while
   // the remaining sockets and the other player got no snapshot at all.
   const safeSend = (ws, frame) => { try { send(ws, frame); } catch { /* one dead socket, not the loop */ } };
+
+  // The unblock key for THIS socket, for one account. See the long note above
+  // BLOCK_KEY_SECRET for why the blocked list carries this instead of a uuid.
+  // The salt rides on the ws object the way the rate buckets and socialUser do,
+  // and is minted on first use rather than at auth, so a socket that never opens
+  // a blocked list never pays for one.
+  function blockKey(ws, id) {
+    const salt = ws.blockSalt || (ws.blockSalt = randomBytes(16).toString('hex'));
+    return createHmac('sha256', BLOCK_KEY_SECRET).update(`${salt}|${id}`).digest('hex').slice(0, 32);
+  }
+
+  // The reverse, and it is a SEARCH rather than a lookup on purpose: nothing is
+  // stored, so there is no table to grow, nothing to expire, and no way for a
+  // key to resolve to an account this socket's own account has not blocked. The
+  // candidates are exactly the blocker's own rows.
+  async function resolveBlockKey(ws, key) {
+    // NO SALT MEANS NO KEY WAS EVER ISSUED ON THIS SOCKET, so nothing 32 hex
+    // characters long that arrives on it can be one and there is nothing to look
+    // up. Without this, `block op:'remove'` — which design 4.2 rate limits not
+    // at all — would spend blockIdsOf's two PostgREST round trips on every junk
+    // id a client cared to send, tripling the cost of an unrated write path for
+    // a socket that has never even opened a blocked list. The answer is
+    // no_such_user either way, so nothing is observable but the round trip.
+    if (!ws.blockSalt) return '';
+    const { blocked } = await store.blockIdsOf(ws.userId);
+    return blocked.find((id) => blockKey(ws, id) === key) || '';
+  }
+
+  // A friends snapshot as ONE SOCKET must see it. friendsSnapshot builds the
+  // frame once for an account and sendSnapshot fans it out to every device, but
+  // an unblock key belongs to a CONNECTION — so the blocked array is remapped
+  // per destination. Everything else in the frame is shared and is not copied.
+  //
+  // `friends` and `requests` keep their uuids, and that is not an oversight: a
+  // friend and a pending request are people this account reached deliberately,
+  // by friend code or by searching a unique callsign, and the client has to be
+  // able to name them on the next frame it sends. The blocked list is the one
+  // list a STRANGER can be put on without ever being found.
+  const forSocket = (ws, snap) => (snap && Array.isArray(snap.blocked)
+    ? { ...snap, blocked: snap.blocked.map((b) => ({ ...b, id: blockKey(ws, b.id) })) }
+    : snap);
 
   // ---- The two gates (BINDING.md resolutions 1 and 18) ----------------------
   // A GUEST HAS AN ACCOUNT ID. public/cloud.js mints an ANONYMOUS Supabase
@@ -248,6 +342,23 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
       // client can tell the difference.
       if (ws.chosenName) {
         await store.clearCallsignKey(ws.userId);
+        // EVERY SOCKET OF THE ACCOUNT, not just the one that asked.
+        // clearCallsignKey frees the key for the ACCOUNT, but ws.chosenName is
+        // the per-socket copy and it is the single door through which a string
+        // that is not a rolled pair reaches another player (room-engine's
+        // sanitizeName reads exactly this field). Clearing only the caller left
+        // a player's other device presenting a callsign the account had just
+        // surrendered — and once somebody else legitimately takes that name,
+        // presenting THEIR unique callsign to strangers, with seenName then
+        // recording the '(no name)' sentinel for a report against a seat that
+        // visibly had one (the evidence mismatch BINDING 26 exists to prevent).
+        // socketsOf is already how pushFriends fans out; the exemption simply
+        // never used it.
+        //
+        // ws is set BESIDE the loop rather than inside it: a socket is in
+        // `online` only once onAuth has counted it, and this must not depend on
+        // the caller being there to clear the caller.
+        for (const w of socketsOf(ws.userId)) w.chosenName = null;
         ws.chosenName = null;
       }
       return reply(ws, msg, { type: 'callsign', ok: true, callsign: null });
@@ -283,6 +394,14 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
     // From here this socket may present this name in a lobby: server.js passes
     // ws.chosenName to sanitizeName, which is the ONLY way a string that is not
     // a rolled pair reaches another player's screen.
+    //
+    // THE MATCHING HALF OF THE ROLL BRANCH ABOVE, and the same loop. The account
+    // holds the key now, so every one of its sockets is entitled to present the
+    // name; without this a player who sets a callsign on their phone goes on
+    // joining lobbies from their desktop under a rolled pair until that socket
+    // re-hellos. It changes no seat already sitting in a room — server.js reads
+    // this field when a socket joins — so nobody is renamed mid-match.
+    for (const w of socketsOf(ws.userId)) w.chosenName = v.name;
     ws.chosenName = v.name;
     reply(ws, msg, { type: 'callsign', ok: true, callsign: v.name });
   }
@@ -585,7 +704,9 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
     pushAt.set(userId, Date.now());
     let snap;
     try { snap = await friendsSnapshot(userId); } catch { return; }
-    for (const w of live) safeSend(w, snap);
+    // PER DESTINATION, because the unblock keys in it are per connection. One
+    // read, one build, one cheap remap each — no extra round trip.
+    for (const w of live) safeSend(w, forSocket(w, snap));
   }
   async function pushFriends(userId) {
     if (!userId) return;
@@ -672,7 +793,7 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
     // for a throw here, which is the right frame. Note what it does NOT do —
     // send empty lists. A panel that renders "no friends yet" because PostgREST
     // was down is worse than one that says it could not load.
-    reply(ws, msg, await friendsSnapshot(ws.userId));
+    reply(ws, msg, forSocket(ws, await friendsSnapshot(ws.userId)));
   }
 
   async function friendAdd(ws, msg) {
@@ -851,7 +972,11 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
     if (!rateOk(ws, 'friends', LIMITS.friends)) return reply(ws, msg, { type: 'block', op: 'list', error: 'slow_down' });
     const { blocked } = await store.blockIdsOf(ws.userId);
     const names = blocked.length ? await store.profilesByIds(blocked) : new Map();
-    reply(ws, msg, { type: 'block', op: 'list', ok: true, blocked: blocked.map((id) => ({ id, callsign: displayName(names.get(id)) })) });
+    // THE ID IS AN UNBLOCK KEY, NOT THE ACCOUNT — see BLOCK_KEY_SECRET. This
+    // reply and friendsSnapshot's own blocked array are the two places a
+    // stranger's account id used to leave the server, and they are the same
+    // shape on purpose so the client renders one card for both kinds of account.
+    reply(ws, msg, { type: 'block', op: 'list', ok: true, blocked: blocked.map((id) => ({ id: blockKey(ws, id), callsign: displayName(names.get(id)) })) });
   }
 
   async function handleBlock(ws, msg) {
@@ -882,7 +1007,28 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
     // THE HANDLE IS RESOLVED FIRST — see targetId. Ahead of the shape test
     // because a handle is not a uuid, and ahead of the self test because an
     // unresolved handle never equals ws.userId.
-    const id = targetId(ws, msg);
+    let id = targetId(ws, msg);
+    // AND AN UNBLOCK KEY IS RESOLVED WITH IT, on remove only, before the same
+    // shape test. The blocked list no longer hands out account ids (see
+    // BLOCK_KEY_SECRET), so the id the client sends back from a Blocked card is
+    // this connection's key and would otherwise fail isUuid as no_such_user.
+    //
+    // ONLY ON REMOVE, and only when the value is not already a uuid. `add` is
+    // never reached this way: a key is issued only for an account this socket
+    // has ALREADY blocked, so it can add nothing new, and leaving it out of add
+    // keeps the two routes in resolution 24 — a uuid the server handed out, or a
+    // seat handle — as the only ways to acquire a target. A uuid is still
+    // accepted here too, because a client that legitimately holds one (the
+    // friends panel's own lists) must still be able to lift a block.
+    //
+    // THE STORE CALL NEEDS THE NET that the shape test sits in front of, so it
+    // carries its own: a throw here is 'unavailable', exactly as a throw inside
+    // the main try below is, and a key that matches no row of this account's is
+    // no_such_user — the same word an unknown uuid gets.
+    if (op === 'remove' && !isUuid(id) && BLOCK_KEY_RE.test(id)) {
+      try { id = await resolveBlockKey(ws, id); }
+      catch { return reply(ws, msg, { type: 'block', op, error: 'unavailable' }); }
+    }
     // THE SHAPE TEST BEFORE THE STORE, for the reason friendRequest has one:
 
     // server/store.js throws 'bad uuid' on a malformed id and the net would

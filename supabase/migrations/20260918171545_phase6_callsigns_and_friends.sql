@@ -94,13 +94,34 @@ set local lock_timeout = '5s';
 -- produced by JavaScript's toLowerCase(), and Postgres lower() does not agree
 -- with it on every Unicode letter (dotted capitals are the classic case). A
 -- CHECK that disagrees with its producer rejects a legitimate name at write
--- time — a live failure for one player and impossible to explain. Length is the
--- part both sides compute identically, so length is what is checked.
+-- time — a live failure for one player and impossible to explain.
+--
+-- THE KEY IS CAPPED AT 32, NOT AT 16, AND THAT IS THE SAME LESSON APPLIED TWICE.
+-- The sentence that stood here said "length is the part both sides compute
+-- identically", and it was FALSE FOR THE VERY CHARACTER IT NAMES. The NAME is
+-- capped at 16 code points by server/callsign.js (CALLSIGN_MAX); the KEY is
+-- `name.toLowerCase()`, and JavaScript applies Unicode SpecialCasing, under
+-- which 'İ' (U+0130) lowercases to TWO code points, U+0069 + U+0307. So the
+-- 16-character Turkish name "İzmirli Kaptanım" produces a 17-character key,
+-- char_length() counts 17, and a `between 3 and 16` CHECK rejects it — as
+-- PostgREST 400/23514, which server/store.js's isConflict (anchored to 409) does
+-- not recognise, so the player is told "Cannot reach the server", for ever, for
+-- every name of that shape, with nothing in the log and /health reading ok.
+-- Exactly the outcome the paragraph above says the design was avoiding.
+--
+-- 32 is the TIGHT bound, not a guess: a sweep of the entire Unicode code space
+-- on this Node finds U+0130 to be the ONLY code point whose toLowerCase()
+-- expands at all, and it expands to exactly two, so a 16-code-point name can
+-- produce at most a 32-code-point key. toLowerCase() never shortens, so the
+-- lower bound of 3 still follows from the name's own minimum. The cap the
+-- PLAYER sees stays 16 and is enforced where a player can be told about it, in
+-- the producer; this CHECK is the backstop against a runaway key, and a backstop
+-- that refuses legitimate names is not one.
 alter table public.profiles
   add column friend_code text unique
     check (friend_code is null or friend_code ~ '^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$'),
   add column callsign_key text unique
-    check (callsign_key is null or char_length(callsign_key) between 3 and 16),
+    check (callsign_key is null or char_length(callsign_key) between 3 and 32),
   add column callsign_set_at timestamptz;
 
 comment on column public.profiles.friend_code is

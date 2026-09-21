@@ -51,12 +51,38 @@ export const CALLSIGN_MAX = 16;
 // but marks. No script pays for the rule: in Devanagari, Thai and Hebrew the
 // mark follows its base in LOGICAL order even where it RENDERS to the left of
 // it, so every one of those names still begins with a letter.
+// NOTHING THAT RENDERS AS NOTHING, on either side of the class, and the rule is
+// Unicode's own rather than a list somebody remembered. \p{L} includes the
+// HANGUL FILLERS — U+115F, U+1160, U+3164 and the halfwidth U+FFA0 — which are
+// category Lo and draw NO PIXELS on any platform; they are the standard trick
+// for a blank username. \p{Mn} includes U+034F, U+17B4, U+17B5 and U+180B-U+180F,
+// which are equally invisible. The consequence that matters is not the blank
+// name, it is UNIQUENESS: callsign_key is the unique index, so 'Iron Ridge' and
+// 'Iron Ridge'+U+3164 are two DIFFERENT keys and the SAME PIXELS — an account
+// holding its OWN legitimate key for a string indistinguishable on screen from
+// another player's. server/display-name.js states the impersonation defence as
+// "a chosen name that is NOT a rollable pair cannot be worn without the key";
+// an invisible letter defeats it WITH a key rather than around it, which the
+// look-alike table (a different letter of the same shape) cannot touch.
+//
+// \p{Default_Ignorable_Code_Point} is the property Unicode defines for exactly
+// "should render as nothing", so it cannot be under-enumerated the way a hand
+// list can — an audit of this file named three of the four fillers and none of
+// the four mark ranges. A scan of the whole code space against the class as it
+// stood found these ELEVEN code points and no others, so this excludes the
+// invisible and nothing else; no writing system loses a character it spells a
+// name with. The variation selectors stay NAMED beside it even though they are
+// Default_Ignorable too, and U+20E3 stays named even though it is \p{Me}: a
+// belt-and-braces list costs nothing and a future widening of either category
+// cannot re-admit them in silence.
+//
 // Composed from parts rather than written as one literal: the token pattern
 // appears twice in the anchored rule (first token, then every later one), and
 // two hand-copied versions of a nested quantifier are two chances to edit one
 // and not the other.
-const MARK = '(?:(?![\\uFE00-\\uFE0F\\u{20E3}\\u{E0100}-\\u{E01EF}])[\\p{Mn}\\p{Mc}])';
-const TOKEN = `(?:[\\p{L}\\p{N}]${MARK}{0,2})+`;
+const INVISIBLE = '\\p{Default_Ignorable_Code_Point}';
+const MARK = `(?:(?![${INVISIBLE}\\uFE00-\\uFE0F\\u{20E3}\\u{E0100}-\\u{E01EF}])[\\p{Mn}\\p{Mc}])`;
+const TOKEN = `(?:(?![${INVISIBLE}])[\\p{L}\\p{N}]${MARK}{0,2})+`;
 const SHAPE = new RegExp(`^${TOKEN}(?: ${TOKEN})*$`, 'u');
 
 // Look-alikes, exactly the nine in the design. '8'->'b' and '!'->'i' are in the

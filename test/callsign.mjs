@@ -8,7 +8,7 @@
 // Each of its rules fails silently in a different direction — a length counted
 // in UTF-16 units quietly rejects a legitimate name, a blocklist line of digits
 // quietly rejects EVERY name, and a missing fold quietly lets the slur through.
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -503,6 +503,62 @@ const ZWSP = String.fromCodePoint(0x200B);      // zero-width space: NOT whitesp
     if (got === 'ok') ok(`(12) ${why} still passes the narrowed class`);
     else fail(`(12) ${why} -> ${got}, want ok`);
   }
+
+  // ---- NOTHING THAT RENDERS AS NOTHING ------------------------------------
+  // \p{L} includes the HANGUL FILLERS and \p{Mn} includes a handful of Mongolian
+  // and Khmer characters that draw no pixels at all. The blank name is the
+  // obvious half; the half that matters is UNIQUENESS. callsign_key is the
+  // unique index, so 'Iron Ridge' and 'Iron Ridge' + an invisible letter are two
+  // DIFFERENT keys and the SAME PIXELS — an impostor holding their OWN
+  // legitimate key for a string nobody can tell apart from the first player's,
+  // which is a different failure from a Cyrillic homoglyph (BINDING 22) because
+  // it defeats the proof WITH a key rather than around it. Both halves are
+  // pinned, so a later widening of the class cannot re-admit them in silence,
+  // exactly as the keycap exclusion above is pinned.
+  //
+  // CODE POINTS, never pasted characters: an invisible character pasted into
+  // this file would read as an empty string on the page, which is the whole
+  // point of it. The list is every code point in the whole code space that the
+  // class admitted before this rule and that Unicode marks
+  // Default_Ignorable_Code_Point — found by scanning, not by recall, because an
+  // audit of this hole named three of the four fillers and none of the marks.
+  const INVIS_BASE = [0x115F, 0x1160, 0x3164, 0xFFA0];
+  const INVIS_MARK = [0x034F, 0x17B4, 0x17B5, 0x180B, 0x180C, 0x180D, 0x180F];
+  for (const cp of INVIS_BASE) {
+    const hex = 'U+' + cp.toString(16).toUpperCase().padStart(4, '0');
+    const blank = String.fromCodePoint(cp).repeat(3);
+    if (err(blank) === 'chars') ok(`(12) three ${hex} on their own — a callsign that renders as NOTHING — is rejected as chars`);
+    else fail(`(12) a blank callsign of ${hex} -> ${err(blank)}, want chars`);
+    const twin = 'Iron Ridge' + String.fromCodePoint(cp);
+    if (err(twin) === 'chars') ok(`(12) 'Iron Ridge' + ${hex} — a different callsign_key and the same pixels — is rejected as chars`);
+    else fail(`(12) the invisible twin of a taken name via ${hex} -> ${err(twin)}, want chars`);
+  }
+  for (const cp of INVIS_MARK) {
+    const hex = 'U+' + cp.toString(16).toUpperCase().padStart(4, '0');
+    const twin = 'Iron Ridge' + String.fromCodePoint(cp);
+    if (err(twin) === 'chars') ok(`(12) 'Iron Ridge' + the invisible mark ${hex} is rejected as chars`);
+    else fail(`(12) the invisible twin of a taken name via mark ${hex} -> ${err(twin)}, want chars`);
+  }
+  // AND THE RULE IS THE PROPERTY, NOT THIS LIST. The two arrays above are what
+  // the scan found today; this asserts that no OTHER Default_Ignorable code
+  // point is admitted either, so a Unicode table update that adds one cannot
+  // walk in behind a list that was complete when it was written.
+  {
+    // Pre-filtered on the categories the class draws from, so the sweep costs a
+    // regex per code point and validateCallsign runs only on the handful that
+    // could possibly reach it.
+    const DI = /\p{Default_Ignorable_Code_Point}/u;
+    const CAT = /[\p{L}\p{N}\p{Mn}\p{Mc}]/u;
+    const admitted = [];
+    for (let cp = 0; cp <= 0x10FFFF; cp++) {
+      if (cp >= 0xD800 && cp <= 0xDFFF) continue;
+      const ch = String.fromCodePoint(cp);
+      if (!DI.test(ch) || !CAT.test(ch)) continue;
+      if (err('Ab' + ch) === 'ok' || err(ch + ch + ch) === 'ok') admitted.push(cp);
+    }
+    if (!admitted.length) ok('(12) no Default_Ignorable code point anywhere in Unicode passes the class — the rule is the property, not a remembered list');
+    else fail('(12) invisible code points still pass the class: ' + admitted.map((c) => 'U+' + c.toString(16).toUpperCase()).join(' '));
+  }
 }
 
 // ---- 13. terms manufactured at a word junction -----------------------------
@@ -726,6 +782,61 @@ const ZWSP = String.fromCodePoint(0x200B);      // zero-width space: NOT whitesp
   if (built >= entries.length && !missed.length) ok(`(15) ${built} single-substitution respellings of shipped terms — one for every (look-alike, term) pair the table can reach — are all refused`);
   else if (missed.length) fail(`(15) ${missed.length} respelling(s) still accepted: ${missed.slice(0, 8).join('; ')}`);
   else fail(`(15) only ${built} respellings were built from ${entries.length} entries — the generator is not reaching the terms`);
+}
+
+// ---- 16. the KEY this file produces must fit the column that stores it -----
+// THE CHECK IN THE MIGRATION AND THE RULE IN THIS FILE HAVE TO AGREE, and they
+// did not. The migration's own comment dropped a `callsign_key = lower(...)`
+// CHECK because "Postgres lower() does not agree with [toLowerCase()] on every
+// Unicode letter (dotted capitals are the classic case)" and then kept a LENGTH
+// check on the grounds that "length is the part both sides compute identically"
+// — which is false for the very character it names. JavaScript applies Unicode
+// SpecialCasing, and 'İ' (U+0130) lowercases to TWO code points. So the
+// 16-character Turkish name "İzmirli Kaptanım" passes every rule here and
+// produces a 17-character key; a `between 3 and 16` CHECK rejects it as
+// PostgREST 400/23514, which server/store.js's isConflict (anchored to 409) does
+// not recognise, so setChosenCallsign rethrows and the player is told "Cannot
+// reach the server" — for ever, for every name of that shape, with nothing in
+// the log and /health reading ok.
+//
+// This asserts the agreement from BOTH ends: the worst expansion this engine can
+// produce, swept over the entire code space rather than recalled, and the cap
+// actually written in the shipped migration. Either one moving without the other
+// fails here, in the file that produces the key, rather than on production.
+{
+  const sqlDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'supabase', 'migrations');
+  const file = readdirSync(sqlDir).filter((f) => /phase6_callsigns_and_friends\.sql$/.test(f))[0];
+  const sql = file ? readFileSync(path.join(sqlDir, file), 'utf8') : '';
+  const m = sql.match(/add column callsign_key[^;]*?char_length\(callsign_key\)\s+between\s+(\d+)\s+and\s+(\d+)/i);
+  if (m) ok(`(16) the shipped migration caps callsign_key at ${m[1]}..${m[2]}`);
+  else fail('(16) no char_length CHECK on callsign_key found in the phase 6 migration — this section cannot prove anything');
+
+  // The worst case, MEASURED. toLowerCase() maps a code point to one or more
+  // code points; the sweep finds every one that expands and how far.
+  let worst = 1;
+  for (let cp = 0; cp <= 0x10FFFF; cp++) {
+    if (cp >= 0xD800 && cp <= 0xDFFF) continue;
+    const n = [...String.fromCodePoint(cp).toLowerCase()].length;
+    if (n > worst) worst = n;
+  }
+  if (m) {
+    const cap = Number(m[2]);
+    if (CALLSIGN_MAX * worst <= cap)
+      ok(`(16) a ${CALLSIGN_MAX}-code-point name can produce a key of at most ${CALLSIGN_MAX * worst} (the worst lowercase expansion in Unicode is x${worst}), and the column allows ${cap} — the producer and the CHECK agree`);
+    else
+      fail(`(16) A LEGITIMATE NAME CANNOT BE STORED: ${CALLSIGN_MAX} code points can lowercase to ${CALLSIGN_MAX * worst}, and the migration's CHECK allows only ${cap}`);
+    if (Number(m[1]) <= CALLSIGN_MIN)
+      ok(`(16) and the lower bound agrees too — toLowerCase() never shortens, so a ${CALLSIGN_MIN}-character name cannot fall under the column's ${m[1]}`);
+    else
+      fail(`(16) the column's lower bound is ${m[1]} but a name may be as short as ${CALLSIGN_MIN}`);
+  }
+  // The named case, end to end through the real validator, so the arithmetic
+  // above is anchored to a name a real player types rather than to a bound.
+  const TR = 'İzmirli Kaptanım';
+  const v = validateCallsign(TR, terms);
+  if (v.ok && [...v.name].length === CALLSIGN_MAX && [...v.key].length > CALLSIGN_MAX)
+    ok(`(16) "${TR}" — ${CALLSIGN_MAX} characters — is accepted and produces a ${[...v.key].length}-character key, which is the case the disagreement was about`);
+  else fail(`(16) the dotted-capital fixture no longer has the shape this section needs: ${JSON.stringify(v)}`);
 }
 
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall callsign checks passed');
