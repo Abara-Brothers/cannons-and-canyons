@@ -38,7 +38,12 @@
 # step that produced a leaked credential on 2026-08-17.
 set -euo pipefail
 
-OUT_ROOT="${1:-$(cd "$(dirname "$0")/../.." && pwd)/backups}"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+# Sourced rather than inlined so the suite can exercise it: these are pure string
+# functions with no database, and tools/backup/test-validate.sh runs them.
+. "$HERE/lib-counts.sh"
+
+OUT_ROOT="${1:-$(cd "$HERE/../.." && pwd)/backups}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT="$OUT_ROOT/$STAMP"
 
@@ -89,15 +94,36 @@ echo "  dumping public data..."
 # Row counts make a restore VERIFIABLE instead of hopeful, and catch the
 # failure mode that matters most: a dump that "succeeds" while containing
 # nothing. A backup nobody has counted is a backup nobody has checked.
-counts="$("$PSQL" -Atc "
-  select 'auth.users=' || (select count(*) from auth.users)
-      || ' profiles='  || (select count(*) from public.profiles)
-      || ' push_subs=' || (select count(*) from public.push_subscriptions)
-      || ' friendships=' || (select count(*) from public.friendships)
-      || ' friend_requests=' || (select count(*) from public.friend_requests)
-      || ' blocks=' || (select count(*) from public.blocks)
-      || ' name_reports=' || (select count(*) from public.name_reports)
-" 2>/dev/null || echo 'unavailable')"
+#
+# WHICH TABLES ARE ACTUALLY THERE, asked before anything counts them. The phase 6
+# migration is applied by hand and the deploy is separate, so this script has to
+# be right in both windows. to_regclass answers NULL for a relation that does not
+# exist instead of raising 42P01, so this probe can never be the thing that fails,
+# and it names the gap instead of guessing at it. See lib-counts.sh for what the
+# single-statement version cost.
+probe="$("$PSQL" -Atc "
+  select 'ok:' || coalesce(string_agg(t.n, ' ' order by t.n), '')
+    from unnest(array['friendships','friend_requests','blocks','name_reports']) as t(n)
+   where to_regclass('public.' || t.n) is not null
+" 2>/dev/null || echo '')"
+case "$probe" in
+  # The 'ok:' prefix is what separates "the answer is none" from "there was no
+  # answer". An unreachable database must not be recorded as a database without
+  # tables: that would write a fact into the manifest that nobody established.
+  ok:*) present="${probe#ok:}"; absent="$(counts_absent $present)" ;;
+  *)    present=""; absent="unknown" ;;
+esac
+
+counts="$("$PSQL" -Atc "$(counts_sql $present)" 2>/dev/null || echo 'unavailable')"
+
+case "$absent" in
+  "")      absent_note="none — every table this tooling knows about existed and was counted" ;;
+  unknown) absent_note="unknown — the schema probe did not answer, so this backup cannot say which tables existed" ;;
+  *)       absent_note="$absent — not in the database at dump time (the phase 6 migration is not applied yet). They are not counted above and hold nothing to dump; nothing that EXISTS is missing from this backup." ;;
+esac
+if [ -n "$absent" ]; then
+  echo "  note: $absent_note"
+fi
 
 # The fingerprint is the check that counts cannot make: equal row counts still
 # hide corrupted progression JSON. It is computed HERE, at dump time, and written
@@ -124,6 +150,7 @@ host       : $PGHOST:$PGPORT  (password not recorded)
 database   : $PGDATABASE as $PGUSER
 dumped_by  : $("$DUMP" --version)
 live_rows  : $counts
+absent_tables : $absent_note
 profiles_fingerprint : $fingerprint
   (md5 over id + callsign + progression, ordered by id, computed with PGTZ=UTC.
    After a restore, re-run the same query and compare against THIS value —

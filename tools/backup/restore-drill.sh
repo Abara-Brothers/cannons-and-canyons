@@ -35,6 +35,10 @@ export PGTZ=UTC
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
+# The same list of phase 6 tables backup.sh counts, and the same function that
+# says which of them are missing. Written twice, the two would drift, and the
+# drill would be judging a manifest against a different idea of the schema.
+. "$HERE/lib-counts.sh"
 # Filter to STAMP-SHAPED directories. backups/ also holds offsite/, whose mtime
 # jumps to newest every time an archive is written — after which this selector
 # picked offsite/ and the command aborted with "no usable backup found", which
@@ -154,8 +158,12 @@ echo "  restored     : $GOT"
 # phase 6 — a drill that cries wolf is a drill nobody runs, which costs more
 # than the check is worth. Keys the manifest does not name are still printed on
 # the line above, so a new table is visible even when the backup predates it.
-if [ -z "$LIVE" ]; then
-  echo "  NO live_rows LINE — this manifest can verify nothing"; ERRS=$((ERRS + 1))
+# 'unavailable' is what backup.sh wrote whenever the counts query failed, and
+# every backup taken between the phase 6 commit and this fix carries it. Reading
+# it as a key and reporting "MISMATCH on: unavailable" told an operator his
+# restore was wrong when what is wrong is that this manifest never counted.
+if [ -z "$LIVE" ] || [ "$LIVE" = "unavailable" ]; then
+  echo "  live_rows is '${LIVE:-(no such line)}' — this manifest can verify nothing"; ERRS=$((ERRS + 1))
 else
   MISS=""
   for kv in $LIVE; do
@@ -185,8 +193,61 @@ TS="$(grep '^taken_at' "$SRC/MANIFEST.txt" | cut -d: -f2- | tr -d ' ' \
       | sed -E 's/^([0-9]{4})([0-9]{2})([0-9]{2})T([0-9]{2})([0-9]{2})([0-9]{2})Z$/\1-\2-\3 \4:\5:\6+00/')"
 echo "  dump taken at: $TS"
 
+# WHAT SCHEMA DOES PRODUCTION ACTUALLY HAVE? The phase 6 migration is applied by
+# hand, after the deploy, so for the whole window between the two, production has
+# neither the three new profile columns nor the four new tables — while the
+# restored side, which step 3 built from supabase/migrations/*.sql, has both.
+# Asking production for a column it does not have is 42703 and for a table it
+# does not have is 42P01; prod() discards stderr, so either one comes back as an
+# empty string and the comparison below prints DIFFERS. Four of them, on the one
+# command the owner runs to decide whether his backup is sound BEFORE a risky
+# migration — and nothing in the output would tell him that the backup is fine
+# and only the production schema is a migration behind.
+#
+# A drill that cries wolf is a drill nobody runs: the sentence the row-count
+# block above was written for, applied to the hashes that did not get it.
+#
+# The 'ok:' prefix separates "the answer is none" from "there was no answer".
+# An unreachable production must keep failing loudly — never be quietly
+# rewritten as "not migrated yet", which would turn this guard into a way of
+# passing a drill that proved nothing.
+P6_COLS="$(prod "select 'ok:' || count(*) from information_schema.columns
+                  where table_schema = 'public' and table_name = 'profiles'
+                    and column_name in ('friend_code','callsign_key','callsign_set_at')")"
+P6_PROBE="$(prod "select 'ok:' || coalesce(string_agg(c.relname, ' ' order by c.relname), '')
+                    from pg_class c join pg_namespace n on n.oid = c.relnamespace
+                   where n.nspname = 'public' and c.relkind = 'r'
+                     and c.relname in ('friendships','friend_requests','blocks','name_reports')")"
+case "$P6_PROBE" in
+  ok:*) P6_ABSENT="$(counts_absent ${P6_PROBE#ok:})" ;;
+  *)    P6_ABSENT="" ;;
+esac
+[ -n "$P6_ABSENT" ] && echo "  production has not been migrated yet: $P6_ABSENT (those hashes are SKIPPED below, not failed)"
+
 Q_USERS="select md5(string_agg(id::text||'|'||coalesce(role,'')||'|'||coalesce(email,'')||'|'||created_at::text||'|'||coalesce(is_anonymous::text,''), chr(10) order by id::text)) from auth.users"
 Q_PROF="select md5(string_agg(id::text||'|'||coalesce(callsign,'')||'|'||coalesce(progression::text,'')||'|'||coalesce(progression_version::text,'')||'|'||coalesce(friend_code,'')||'|'||coalesce(callsign_key,'')||'|'||coalesce(callsign_set_at::text,'')||'|'||created_at::text, chr(10) order by id::text)) from public.profiles where updated_at <= '$TS'::timestamptz"
+# Before the migration the three new columns do not exist on the production side,
+# so the hash is computed WITHOUT them — the same query on both sides, still
+# comparing every byte that exists in both schemas. Dropping the profiles pair
+# entirely would throw away the one check this drill exists to make; it is the
+# fingerprint, not a nice-to-have.
+Q_PROF_PRE="select md5(string_agg(id::text||'|'||coalesce(callsign,'')||'|'||coalesce(progression::text,'')||'|'||coalesce(progression_version::text,'')||'|'||created_at::text, chr(10) order by id::text)) from public.profiles where updated_at <= '$TS'::timestamptz"
+PROF_NOTE=""
+case "$P6_COLS" in
+  ok:3) ;;
+  ok:0) Q_PROF="$Q_PROF_PRE"; PROF_NOTE="  (without the phase 6 columns — production is not migrated)" ;;
+  # One or two of three is not a window to tolerate, it is a HALF-APPLIED
+  # migration, which is the state the owner steps promise cannot happen. Say so
+  # in the loudest words this script has, and still compare what both sides do
+  # have so the run is not wasted.
+  ok:*) Q_PROF="$Q_PROF_PRE"
+        PROF_NOTE="  (without the phase 6 columns — SCHEMA IS HALF APPLIED)"
+        echo "  WARNING: production has ${P6_COLS#ok:} of the 3 phase 6 profile columns."
+        echo "           The migration is HALF APPLIED. Stop and look before trusting anything below."
+        ERRS=$((ERRS + 1)) ;;
+  *) ;;
+esac
+
 # The social tables have no updated_at, so they are filtered on created_at
 # instead: a friendship made after the dump is SUPPOSED to be absent from the
 # restore, and hashing it would fail the drill for doing its job. coalesce to
@@ -204,11 +265,20 @@ for pair in "auth.users|$Q_USERS" "public.profiles|$Q_PROF" \
             "public.friendships|$Q_FRIEND" "public.blocks|$Q_BLOCKS" \
             "public.name_reports|$Q_REPORTS"; do
   label="${pair%%|*}"; q="${pair#*|}"
+  # A table production does not have yet is a known state with a name, not a
+  # mismatch. It is NOT counted as an error: the restored side is right, the
+  # backup is intact, and the schema is simply one hand-applied migration behind.
+  case " $P6_ABSENT " in
+    *" ${label#public.} "*)
+      printf '  %-20s SKIPPED    (not in production yet — the phase 6 migration is unapplied)\n' "$label"
+      continue ;;
+  esac
+  note=""; [ "$label" = "public.profiles" ] && note="$PROF_NOTE"
   a="$(prod "$q")"; b="$(pd -Atc "$q" | tr -d '\r')"
   if [ -n "$a" ] && [ "$a" = "$b" ]; then
-    printf '  %-20s IDENTICAL  (md5 %s)\n' "$label" "$(printf '%s' "$a" | cut -c1-12)"
+    printf '  %-20s IDENTICAL  (md5 %s)%s\n' "$label" "$(printf '%s' "$a" | cut -c1-12)" "$note"
   else
-    printf '  %-20s DIFFERS    prod=%s restored=%s\n' "$label" "$(printf '%s' "$a" | cut -c1-12)" "$(printf '%s' "$b" | cut -c1-12)"
+    printf '  %-20s DIFFERS    prod=%s restored=%s%s\n' "$label" "$(printf '%s' "$a" | cut -c1-12)" "$(printf '%s' "$b" | cut -c1-12)" "$note"
     ERRS=$((ERRS + 1))
   fi
 done
