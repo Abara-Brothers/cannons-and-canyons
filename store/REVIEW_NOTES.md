@@ -4,11 +4,20 @@
 > 2026-08-15 from the shipping code, not from the marketing copy. Keep it short in the
 > field itself — the detail below is here so whoever submits can answer follow-ups.
 
+> **OWNER — read this before you paste.** Two things ARE behind Google sign-in from this release:
+> a callsign the player types, and the Friends screen. Apple Guideline 2.1 expects working demo
+> credentials for anything behind a login, so decide before submitting whether to supply a test
+> Google account or to say you will provide one on request, and add that line to the block below.
+> The sentence that used to stand here — "there is no review test account because there is nothing
+> to unlock" — was true before 2026-09-18 and is false now.
+
 ## The short version (safe to paste as-is)
 
-> **No account is needed.** Every mode is reachable without signing in. Sign-in is
-> optional and only saves progress across devices — there is no review test account
-> because there is nothing to unlock.
+> **No account is needed to play**, and none is needed to report a callsign or block a player
+> either. Every mode is reachable without signing in. Signing in with Google is optional. It
+> saves progress across devices and it adds exactly two things: a callsign the player types instead
+> of one rolled for them, and the Friends screen. No mode, weapon, level or gameplay feature is
+> behind it.
 >
 > **The game is landscape-only by design.** Both builds are locked to landscape at the
 > OS level, so the device will rotate the app for you.
@@ -27,8 +36,10 @@
 > player who does not set one is given a name rolled from the game's own word lists. A typed
 > callsign is checked on our server against a blocklist before it is stored, so a rejected name
 > is never visible to anyone. Wherever another player is shown there is a menu with **Report
-> name** and **Block**, and both work without an account. There is no message field of any kind,
-> in any mode: the callsign is the whole of what one player can put in front of another.
+> name** and **Block**, and neither needs a signed-in account: the automatic account the game
+> gives every player once they start playing is enough, so a guest can use both. There is no
+> message field of any kind, in any mode: the callsign is the whole of what one player can put in
+> front of another.
 >
 > **The game is free.** No ads, no in-app purchases, no analytics SDKs. Every cosmetic is
 > earned by playing.
@@ -49,13 +60,22 @@ never at launch and never before play. It asks for a birth year, neutrally. The 
 **never stored and never transmitted** — only a local "this was answered" flag. Under 13,
 the app explains that the player can keep playing as a guest.
 
-**What data does the app collect?** For a guest: nothing personal — a random identifier,
-a generated callsign, and gameplay counters. If a player links a Google account, the
-OAuth scope also returns their email, Google id, name and picture; the scope cannot be
-narrowed, and the name and picture are never displayed anywhere in the app. Crash reports
-carry no account id and no IP address, and are deleted after 30 days. Match state lives
-in server memory only and is never written to a database. Export and deletion are both
-available in-app, and the deletion page is reachable without signing in.
+**What data does the app collect?** For a player who never signs in: a random account identifier,
+their callsign, and gameplay counters — nothing that identifies a person. That account can also
+hold the blocks and the name reports that player made, since both tools work without signing in.
+If a player links a Google account, the OAuth scope also returns their email, Google id, name and
+picture; the scope cannot be narrowed, and the name and picture are never displayed anywhere in
+the app. A signed-in account additionally holds a 6-character friend code, the callsign they set
+and the day they set it, their friends, their pending friend requests, their blocks, and any name
+reports they filed or that were filed about them. Crash reports carry no account id and no IP
+address, and are deleted after 30 days. The live match relay — shots, aim, movement and the names
+on the seats — is held in server memory only and is discarded when the room ends; the RESULT of an
+ONLINE match is a row in a server-side ledger, carrying the account identifier of every player who
+had one (a guest's automatic account included) and who won, kept permanently, and read back to the
+player as the Recent sorties panel on the home screen. Offline Vs. Computer and solo Golf never
+reach a server and leave no row. Export and deletion are both available in-app, and the deletion
+page is reachable without signing in; deletion erases everything except those ledger rows, which
+keep the random identifier once everything that could join it to a person has gone.
 
 **Multiplayer:** matches are joined with a 4-character code from an ambiguity-free
 alphabet, shared as a link or typed in. A room is joinable only while it is waiting.
@@ -76,9 +96,13 @@ only a friend. Report files the name exactly as it was seen. Block stops the blo
 finding or contacting you — callsign search, add-by-code, friend requests, presence and the
 friends panel, in both directions — and the Friends screen lists blocked players with an Unblock
 control. Block does not exclude the two from being matched into the same battle, and the in-app
-copy says so rather than letting a player assume otherwise. **Reporting and blocking need no
-account**: a guest who sees an offensive name in a lobby can use both. Setting a callsign and
-using friends do need a signed-in account. The published contact for any report or complaint is
+copy says so rather than letting a player assume otherwise. **Reporting and blocking do not need a
+signed-in account**: the automatic account the game creates for every player is enough, so a guest
+who sees an offensive name in a lobby can use both without ever signing in. That automatic account
+is created lazily, on the first shot a player takes, so someone who has just installed the game and
+joined a room without firing yet does not have one and the menu asks them to sign in until they do
+— see the note in "Things that look like bugs and are not". Setting a callsign and using friends do
+need a signed-in account. The published contact for any report or complaint is
 support@abarabrothers.com.
 
 **Where do name reports actually go?** We would rather state this plainly than imply a mailbox
@@ -113,6 +137,16 @@ Worth knowing before a reviewer files them:
 - **The Railgun never appears in the Armoury** — it only drops from supply crates.
 - **Three tank paints start locked** and explain their unlock condition when tapped.
 - **Supply crates can be shot open** to deny them to an opponent.
+- **Report and Block can ask a brand-new player to sign in.** The game creates its automatic
+  account lazily — on the first shot that resolves — so a player who installed the game, joined an
+  online room and has not fired yet has no account at all, and the seat menu says "Sign in to report
+  or block a player." rather than offering a button that could only fail. After the first shot both
+  work with no sign-in. **OWNER, BEFORE SUBMITTING:** in that same first-run state on ANDROID the
+  "Sign in" button that menu offers does nothing, because `SIGNIN_PLATFORMS` is `['web','ios']` and
+  `accountBtn.onclick` returns immediately when it cannot sign in (`public/app.js`). A dead control
+  in the Guideline 1.2 path is the one a reviewer is most likely to press. The fix is client-side and
+  was not in this group's scope: either mint the automatic account when a player joins an online
+  room, or hide the button where it cannot work.
 - **Sign-out and account deletion use the system confirm dialog** — deliberate, because
   they are destructive.
 - **Answering "under 13" is recoverable** — re-opening sign-in restores the option, so a

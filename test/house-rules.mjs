@@ -13,8 +13,13 @@ const ok = (m) => console.log('  ok — ' + m);
 const fail = (m) => { out.errors.push(m); console.error('FAIL ' + m); };
 const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8');
 
+// public/privacy.html and public/delete-account.html are here because they are
+// player-visible pages, they are in the service-worker shell, and they carry the
+// Guideline 1.2 copy — every reason the no-emoji rule exists applies to them,
+// and they were simply never added (audit 2026-09-21, M14b).
 const UI_FILES = ['public/index.html', 'public/app.js', 'public/bay.js', 'public/styles.css', 'server.js',
-  'public/game-core.js', 'public/room-engine.js', 'public/cloud.js', 'public/errors.js'];
+  'public/game-core.js', 'public/room-engine.js', 'public/cloud.js', 'public/errors.js',
+  'public/privacy.html', 'public/delete-account.html'];
 
 // ---- 1. NO EMOJI ANYWHERE IN THE UI -----------------------------------------
 // Every glyph is hand-drawn inline SVG or canvas art. Both forms must be
@@ -1077,19 +1082,57 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
     + ' that asks for `callsign` also asks for `callsign_key` — no name can be fetched that the server cannot prove');
 }
 
-// ---- 15. NO SHIPPED DOCUMENT MAY CLAIM THERE IS NO USER-GENERATED TEXT ------
+// ---- 15. NO SHIPPED DOCUMENT MAY CLAIM PLAYERS CANNOT TYPE ------------------
 // ISSUE-015 (2026-08-04) removed the free-text callsign field and four documents
 // were written around that fact. This feature REVERSES it (2026-09-18): a player
 // types a name again, filtered, reportable and blockable. Every one of those
 // sentences is now either a misdeclaration on a store form or a false statement
 // in a privacy policy — the Australian Consumer Law exposure docs/LEGAL_POSITION.md
-// exists to keep an eye on. Prose has no type checker, and the last audit of
-// these files was a one-off grep by a human, so this is the grep, kept.
+// exists to keep an eye on.
+//
+// THIS RULE USED TO BE A LIST OF EXACT PHRASES, AND IT FAILED ITS FIRST REAL
+// TEST. store/STORE_LISTING.md:85 survived task 9 AND this rule because it said
+// "no user-AUTHORED text" where the list said "no user-GENERATED text", "the
+// input is readonly" where the list said "The callsign field is read-only", and
+// "callsigns ARE GENERATED FROM the game's own word lists" where the list said
+// "callsigns COME FROM" and "callsigns ARE PICKED FROM". Three near misses, zero
+// hits, a green tick, and a false age-rating declaration one paste away from
+// Apple and Google. A list of remembered phrasings is not a guard; it is a
+// record of the mistakes somebody already found.
+//
+// So the rule tests the SHAPE of the claim instead, in three parts:
+//
+//   15a  a NEGATION standing next to the idea of a player AUTHORING TEXT
+//        ("no user-authored text", "nobody can type a name", "never come from
+//        the keyboard"). Proximity, not sentence-wide co-occurrence: a true
+//        sentence may hold a negation AND the word "type" far apart, and does.
+//   15b  a READ-ONLY claim about the name field, in any wording. This needs its
+//        own rule because it carries no negation word at all.
+//   15c  a claim about where callsigns COME FROM that does not, in the same
+//        sentence, admit that a player may type one. This is the "require the
+//        opposite claim to be present" half, and it is the only part that
+//        catches a false sentence written with no negation anywhere, e.g.
+//        "Every callsign is drawn automatically from the game word lists."
+//
+// Scanning is BY BLOCK, not by line: both file types hard-wrap their prose, so
+// a claim written across a line break would walk past a line-by-line scan --
+// which is the same class of hole as the phrase list, reached from the other
+// direction. Two of the specimens below exist because a fault injection found
+// exactly that, after this rule was first written.
+//
+// AND IT PROVES ITSELF ON EVERY RUN. The specimens below are the acceptance
+// test: nine false claims, written nine different ways, that must all be
+// caught, and eight true sentences from these same documents that must all
+// pass. Weaken a pattern to let a new false sentence through and the self-test
+// goes red; widen one until honest prose fails and it goes red too. That is the
+// property the phrase list never had.
 //
 // SCOPE IS DELIBERATE: documents only (.md under store/, .html under public/).
 // public/game-core.js MUST still discuss free-text names — recording why the
 // decision flipped is that comment's whole job, and the file now also carries
-// the shared profanity list — so it is not scanned here.
+// the shared profanity list — so it is not scanned here. HTML comments are
+// blanked first (M14): a claim nobody renders is not a declaration, and a
+// commented-out sentence must not be able to satisfy 15c either.
 {
   const walk = (rel, ext, acc = []) => {
     for (const e of readdirSync(path.join(ROOT, rel), { withFileTypes: true })) {
@@ -1100,29 +1143,122 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
     return acc;
   };
   const DOCS = [...walk('store', '.md'), ...walk('public', '.html')];
-  // Each phrase is one a reviewer or a regulator would read as a promise. They
-  // are matched verbatim rather than by keyword, so ordinary prose about
-  // callsigns stays legal and only the retired claims are caught.
-  const BANNED = [
-    'no user-generated text',
-    'free-text input',
-    'free-text content',
-    'Callsign is generated, never typed',
-    'Names are rolled, not typed',
-    'The callsign field is read-only',
-    "callsigns come from the game's own word lists",
-    "callsigns are picked from the game's own word lists",
+
+  // Vocabularies, not phrasings. Each is the set of words English gives you for
+  // one idea, so rewording inside the idea does not escape.
+  const NEG = '\\b(?:no|not|never|none|nothing|nobody|no-one|neither|nor|cannot|can\'t|without|unable|impossible|prevents?|prevented|disallow(?:s|ed)?|forbid(?:s|den)?)\\b';
+  // "a person putting words in" — the compound forms first, then the bare verbs.
+  const AUTHORING = /(?:(?:users?|players?|people|anyone|someone|human)[-\s](?:generated|authored|written|supplied|entered|created|provided|submitted|typed|chosen|picked)|free[-\s]?(?:text|form)|\btyp(?:e|es|ed|ing)\b|\bwrit(?:e|es|ing|ten)\b|\benter(?:s|ed|ing)?\b|\binputs?\b|\bauthors?(?:ed|ing)?\b|\beditable\b|\bedits?\b|\bkeyboard\b|\bsuppl(?:y|ies|ied|ying)\b|\bsubmit(?:s|ted|ting)?\b|\bcompose(?:s|d|ing)?\b|\bcontribute(?:s|d|ing)?\b|\bprovide(?:s|d)?\b)/i;
+  // The thing authored. Deliberately NOT "field", "box" or "message": a true
+  // sentence says "no message field" right beside "a typed callsign", and that
+  // pairing is honest prose, not the claim this rule is about.
+  const TEXTNOUN = /\b(?:text|content|names?|callsigns?|words?|strings?|characters?|letters?)\b/i;
+  const READONLY = /read[-\s]?only|readonly|non-?editable|uneditable|not editable|cannot be (?:edited|typed|changed|written)/i;
+  const NEARNAME = /\b(?:callsigns?|names?|inputs?|fields?|box|textbox)\b/i;
+  const ORIGIN = /\bword[-\s]lists?\b/i;
+  // What an origin claim must also say for it to be true today.
+  const ADMITS_TYPING = /\btyp(?:e|es|ed|ing)\b|\bchoose\b|\bchoos(?:es|ing)\b|\bchose\b|\bchosen\b|\bset (?:one|their own|your own|a callsign|his own|her own)\b|\bown callsign\b/i;
+
+  // A negation 30 characters before / 60 after the words for authoring text.
+  // The window IS the rule: adjacency is what makes it a claim about typing
+  // rather than two unrelated clauses that happen to share a sentence.
+  // A negation governs its own CLAUSE, so ", and", ", so", ", but" end the
+  // window too. Without that, "there is no message field in any mode, and a
+  // typed callsign is checked on our server" reads as the claim and it is not
+  // one — it is a sentence this project actually wants to be able to write.
+  const CLAUSE = /,\s+(?:and|but|so|or|yet|while|whereas|though|although)\s+/i;
+  const claims = (text) => {
+    const hits = [];
+    for (const s of text.split(/(?<=[.!?;:])\s+/).flatMap((x) => x.split(CLAUSE))) {
+      const neg = new RegExp(NEG, 'gi');
+      let m;
+      while ((m = neg.exec(s))) {
+        const win = s.slice(Math.max(0, m.index - 30), m.index + m[0].length + 60);
+        if (AUTHORING.test(win) && TEXTNOUN.test(win)) { hits.push(['15a', win.trim()]); break; }
+      }
+    }
+    const ro = new RegExp(READONLY.source, 'gi');
+    let r;
+    while ((r = ro.exec(text))) {
+      const win = text.slice(Math.max(0, r.index - 60), r.index + r[0].length + 60);
+      if (NEARNAME.test(win)) { hits.push(['15b', win.replace(/\s+/g, ' ').trim()]); break; }
+    }
+    for (const s of text.split(/(?<=[.!?])\s+/)) {
+      if (ORIGIN.test(s) && !ADMITS_TYPING.test(s)) hits.push(['15c', s.replace(/\s+/g, ' ').trim()]);
+    }
+    return hits;
+  };
+
+  // --- the rule proves itself before it is trusted on the documents ---------
+  const MUST_CATCH = [
+    'There is no player-written text anywhere in the game; every callsign is issued by the game itself.',
+    'Nobody can type a name of their own — the callsign box cannot be edited, so no words a person writes are ever shown to anyone else.',
+    'Callsigns are assembled from our built-in word lists and never come from the keyboard, so the game carries no free-form content.',
+    'Every callsign is drawn automatically from the game word lists.',
+    // The sentence that actually got through, verbatim as it stood at 87bca14.
+    "No gambling, no user chat, **no user-authored text of any kind** — callsigns are generated from the game's own word lists and the input is readonly (ISSUE-015), so nothing a player types can reach another player.",
+    // The four phrasings the old list DID hold, so nothing it caught is lost.
+    'The product contains no user-generated text.',
+    'The callsign field is read-only.',
+    'Names are rolled, not typed.',
+    // Found by fault injection AFTER the vocabularies were first written: the
+    // bare verbs stopped at type/write/enter, and this walked straight past.
+    'Players never supply any text of their own.',
   ];
+  const MUST_PASS = [
+    'There is no chat and no message field of any kind; the only thing a player can type is their own callsign, which the server filters before anyone sees it.',
+    "A callsign is either rolled from the game's word lists or typed by the player.",
+    'A player who has not signed in keeps a rolled name and cannot set one of their own.',
+    'Reporting and blocking do not need a signed-in account.',
+    'You do not need to sign in to report or block.',
+    'Roll takes a new name from the word lists; Set is how a signed-in player types one instead.',
+    'There is no message field in any mode, and a typed callsign is checked on our server before it is stored.',
+    // Pins the 30/60 window: a negation and a typing word in ONE clause, far
+    // apart and unrelated. Sentence-wide co-occurrence reads this as the claim.
+    'There is no review test account, because the only thing a signed-in player can type is a callsign and we can supply one on request.',
+  ];
+  const selfFail = [];
+  MUST_CATCH.forEach((s, i) => { if (!claims(s).length) selfFail.push(`specimen ${i + 1} was NOT caught: ${JSON.stringify(s)}`); });
+  MUST_PASS.forEach((s, i) => {
+    const h = claims(s);
+    if (h.length) selfFail.push(`true sentence ${i + 1} was wrongly caught by ${h[0][0]}: ${JSON.stringify(s)}`);
+  });
+  if (selfFail.length) {
+    fail('the no-user-generated-text rule can no longer tell the claim from honest prose:\n      ' + selfFail.join('\n      '));
+  }
+
+  // BY BLOCK, NOT BY LINE. Both file types hard-wrap their prose, so a claim
+  // written across a line break would walk past a line-by-line scan — the same
+  // class of hole as the phrase list, arrived at from the other direction. A
+  // block is a run of non-blank lines; it is reported by its first line number.
+  // Markup is replaced by a space first, so `.</p>` cannot glue two sentences
+  // into one and `**bold**` cannot split a word.
+  const blocks = (rel) => {
+    const src = read(rel).replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, ' '));
+    const lines = (rel.endsWith('.html') ? src.replace(/<[^>]*>/g, ' ') : src.replace(/\*\*|__|`/g, '')).split('\n');
+    const out = [];
+    let start = -1, buf = [];
+    const flush = () => { if (buf.length) out.push([start + 1, buf.join(' ').replace(/\s+/g, ' ').trim()]); start = -1; buf = []; };
+    lines.forEach((line, i) => {
+      if (!line.trim()) { flush(); return; }
+      if (start < 0) start = i;
+      buf.push(line);
+    });
+    flush();
+    return out;
+  };
   const hits = [];
   for (const rel of DOCS) {
-    read(rel).split('\n').forEach((line, i) => {
-      for (const p of BANNED) if (line.includes(p)) hits.push(`${rel}:${i + 1}: "${p}"`);
-    });
+    for (const [line, text] of blocks(rel)) {
+      for (const [which, what] of claims(text)) hits.push(`${rel}:${line} (${which}) ${JSON.stringify(what)}`);
+    }
   }
   if (hits.length) {
-    fail(`a shipped document still says players cannot type — ISSUE-015 was reversed 2026-09-18:\n      ${hits.join('\n      ')}`);
-  } else {
-    ok(`no store or public document claims there is no user-generated text (${DOCS.length} documents scanned)`);
+    fail('a shipped document still says players cannot type their own callsign — ISSUE-015 was reversed 2026-09-18:\n      '
+      + hits.join('\n      '));
+  } else if (!selfFail.length) {
+    ok(`no store or public document denies user-generated text (${DOCS.length} documents scanned by shape, not by phrase;`
+      + ` ${MUST_CATCH.length} false specimens caught and ${MUST_PASS.length} true sentences passed on this run)`);
   }
 }
 
@@ -1133,8 +1269,12 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
 // drops the section, the product quietly becomes user-generated content with no
 // published mechanism — precisely the state ISSUE-015 deleted the field to avoid,
 // except now the field is back.
+//
+// COMMENTS ARE BLANKED FIRST. `<!-- Report a callsign -->` renders nothing, so a
+// rewrite that comments the section out rather than deleting it left this rule
+// green while the page a reviewer reads had lost the mechanism (audit M14a).
 {
-  const src = read('public/privacy.html');
+  const src = read('public/privacy.html').replace(/<!--[\s\S]*?-->/g, ' ');
   const MUST = [
     ['Report a callsign', 'the reporting tool'],
     ['Block a player', 'the blocking tool'],
