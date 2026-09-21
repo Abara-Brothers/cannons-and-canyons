@@ -1291,5 +1291,51 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   }
 }
 
+// ---- 17. THE PHASE 6 MIGRATION MUST STAY ONE TRANSACTION --------------------
+// Added 2026-09-21, after measuring what the file did WITHOUT the wrapper it now
+// has. Sent one statement at a time -- which is what the dashboard SQL editor
+// may do, and the dashboard is one of the two routes the owner's own numbered
+// steps offer him -- a failure part-way through COMMITTED the three new profiles
+// columns and left all four tables absent. There is no `if not exists` anywhere
+// in the file, so the next run cannot repair that: it is a half-applied schema a
+// human has to unpick by hand, against a live production database.
+//
+// It survived every earlier review because task 2 verified the file with
+// `psql --single-transaction`, which SUPPLIES THE VERY WRAPPER THE FILE LACKED.
+// The test proved a property of the harness, not of the file. That is the same
+// shape as the two suites this project already caught doing it, and it is why
+// this rule reads the file itself rather than trusting how anyone ran it.
+//
+// COMMENTS ARE STRIPPED FIRST, on purpose. Section 12's positive assertions read
+// the raw text, so a commented-out line satisfies them -- a hole the audit found
+// and this rule must not copy.
+{
+  const dir = path.join(ROOT, 'supabase', 'migrations');
+  const hits = readdirSync(dir).filter((f) => /_phase6_callsigns_and_friends\.sql$/.test(f));
+  if (hits.length !== 1) {
+    fail(`section 17: expected exactly 1 phase 6 migration, found ${hits.length}`);
+  } else {
+    // Strip `--` line comments and blank lines, so only EXECUTABLE SQL is tested.
+    const lines = readFileSync(path.join(dir, hits[0]), 'utf8')
+      .split('\n').map((l) => l.replace(/--.*$/, '').trim()).filter(Boolean);
+    const begins = lines.filter((l) => /^begin\s*;$/i.test(l)).length;
+    const commits = lines.filter((l) => /^commit\s*;$/i.test(l)).length;
+    const problems = [];
+    if (begins !== 1) problems.push(`expected exactly 1 executable "begin;", found ${begins}`);
+    if (commits !== 1) problems.push(`expected exactly 1 executable "commit;", found ${commits}`);
+    if (begins === 1 && commits === 1) {
+      // The wrapper only wraps if nothing executable escapes either end.
+      if (!/^begin\s*;$/i.test(lines[0])) problems.push(`"begin;" is not the first executable statement (that is "${lines[0].slice(0, 60)}")`);
+      if (!/^commit\s*;$/i.test(lines[lines.length - 1])) problems.push(`"commit;" is not the last executable statement (that is "${lines[lines.length - 1].slice(0, 60)}")`);
+    }
+    // No `if not exists` anywhere is WHY the wrapper is load-bearing: without it
+    // a half-applied schema cannot be repaired by running the file again. If a
+    // later edit adds one, this rule's reasoning changes and should be revisited
+    // rather than silently left in place.
+    if (problems.length) fail(`section 17: the phase 6 migration is not one transaction — ${problems.join('; ')}`);
+    else ok('the phase 6 migration is wrapped in exactly one transaction, begin; first and commit; last');
+  }
+}
+
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nALL GOOD');
 process.exit(out.errors.length ? 1 : 0);
