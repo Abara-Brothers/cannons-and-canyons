@@ -59,14 +59,28 @@
 -- on a unique violation is one catch block.
 --
 -- RUNNING THIS TWICE does nothing and says so: there is no `if not exists`
--- anywhere below, deliberately. Supabase runs a migration inside a transaction,
--- so a second run fails on the first ALTER and rolls the whole thing back,
--- leaving the database exactly as it was. That is the behaviour worth having on
--- a live database — an `if not exists` version would half-apply against a schema
--- that had drifted and report success.
+-- anywhere below, deliberately. This file opens its OWN transaction (the
+-- `begin;` below), so a second run fails on the first ALTER and rolls the whole
+-- thing back, leaving the database exactly as it was. That is the behaviour
+-- worth having on a live database — an `if not exists` version would half-apply
+-- against a schema that had drifted and report success.
 --
--- LOCK_TIMEOUT, the first statement below, and it is here for the live database
--- rather than for correctness. The whole file is one transaction, so the ACCESS
+-- THAT USED TO DEPEND ON THE ROUTE, WHICH IS WHY THE `begin;` IS THERE AT ALL.
+-- The paragraph above was written when apply_migration was the assumed route:
+-- it wraps what it runs, so the file did not have to. But the dashboard SQL
+-- editor is the OTHER route, named at the head of this file, and a client that
+-- sends these statements ONE AT A TIME commits each of them on its own.
+-- MEASURED, on PostgreSQL 17, with the do-block below forced to raise: run
+-- unwrapped and statement-at-a-time, the three new profiles columns were
+-- COMMITTED and all four tables were absent — a half-applied schema that the
+-- next run cannot repair, because the first ALTER then fails on columns that
+-- already exist. Run wrapped, the identical forced failure left nothing behind.
+-- So the wrapper is not belt and braces: it is what makes the paragraph above
+-- true on EVERY route the file offers, instead of on one of the two.
+--
+-- LOCK_TIMEOUT, the first thing the transaction below does, and it is here for
+-- the live database rather than for correctness. The file is one transaction,
+-- opened by the `begin;` below and closed at the foot, so the ACCESS
 -- EXCLUSIVE lock the first ALTER takes on profiles is held until COMMIT. If any
 -- query is still running on profiles when that ALTER arrives, the ALTER WAITS —
 -- and every cloud save and sign-in that arrives after it queues behind it too,
@@ -75,9 +89,27 @@
 -- live outage of unknown length. Five seconds makes it FAIL FAST instead. The
 -- transaction rolls back whole, nothing is applied, nothing is half-applied,
 -- and the answer is to run it again in a quieter moment. `set local` is scoped
--- to this transaction and cannot leak into the connection afterwards. (Run
--- outside a transaction block it is a no-op with a warning — the same safety as
--- not having it, never worse.)
+-- to this transaction and cannot leak into the connection afterwards — and
+-- because the `begin;` immediately below is now part of the file, there is
+-- always a transaction for it to be scoped TO. That last part used not to hold:
+-- reached outside a transaction block, `set local` is a no-op with a warning,
+-- and the ACCESS EXCLUSIVE lock this whole paragraph is about would then have
+-- been taken with no timeout on it at all.
+
+-- ONE TRANSACTION, WHICHEVER ROUTE RUNS THIS. Nesting is safe, and that was
+-- measured rather than assumed: run inside a transaction apply_migration had
+-- already opened, PostgreSQL 17 answers this `begin` with "WARNING: there is
+-- already a transaction in progress", ignores it, and the file still applies in
+-- full. The one thing that warning does cost is that the `commit;` at the foot
+-- then ends the CALLER's transaction rather than one of this file's own, so
+-- whatever the caller does afterwards — apply_migration's write to the migration
+-- ledger, for instance — lands in a new transaction instead of this one. The DDL
+-- below is still all-or-nothing, which is the property being promised here; only
+-- the ledger entry stops being atomic with it. A ledger that disagrees with the
+-- schema is the recoverable, visible failure this file already describes at the
+-- top for the dashboard route, and it is a far smaller thing than a schema that
+-- is half-applied.
+begin;
 
 set local lock_timeout = '5s';
 
@@ -315,3 +347,7 @@ create index name_reports_reporter_idx on public.name_reports (reporter, reporte
 revoke insert, update on public.profiles from authenticated;
 grant insert (id, callsign, progression, progression_version) on public.profiles to authenticated;
 grant update (id, callsign, progression, progression_version) on public.profiles to authenticated;
+
+-- Closes the `begin;` at the head of the file. Everything above this line either
+-- applies together or not at all, on whichever of the two routes runs it.
+commit;

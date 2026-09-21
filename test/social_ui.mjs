@@ -194,17 +194,33 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   //      back -- Retry included -- and nothing on the page said that leaving and
   //      returning was the only thing that worked. Driven on the REAL socket,
   //      before it is stubbed: a real close, the real 1.5s retry, a real open.
-  await ev(`(() => { window.__conn = 0; document.addEventListener('cc:social', () => { window.__conn++; }); S.ws.close(); return true; })()`);
-  // DOWN FIRST, THEN UP. close() is asynchronous: for a tick or two S.connected
-  // is still true and the dying socket still reads readyState 1, so a single
-  // "is it up again" poll can be satisfied by the socket that has not finished
-  // closing and the check would pass or fail on timing rather than on behaviour.
-  let down = false, back = false;
-  for (let i = 0; i < 40; i++) { if (await ev('!S.connected')) { down = true; break; } await sleep(100); }
-  for (let i = 0; i < 60; i++) { if (await ev('!!(S.connected && S.ws && S.ws.readyState === 1)')) { back = true; break; } await sleep(200); }
-  const conn = await ev('window.__conn');
-  if (down && back && conn >= 2) ok(`${V}: a socket that drops and comes back repaints the screens that disable themselves (${conn} cc:social)`);
-  else fail(`${V}: reconnect repaint ${JSON.stringify({ down, back, conn })}`);
+  // UP BEFORE DOWN, OR THE DROP IS NOT A DROP. The readiness gate above waits
+  // for this page's SCRIPTS, not for its SOCKET, and about one boot in ten
+  // cleared it with the first WebSocket still CONNECTING. Closing there measured
+  // nothing: app.js's onclose dispatches `cc:social` only `if (wasUp)`, so a
+  // socket that never opened closes silently; `!S.connected` below was then
+  // satisfied by a state that had never been left, `down` read true for the
+  // wrong reason, and the reconnect's own dispatch was the only one counted --
+  // exactly the {"down":true,"back":true,"conn":1} this suite failed with about
+  // once in ten runs. Reproduced deterministically by closing at readyState 0.
+  // The cure is to wait for the open that makes the close REAL, not to sleep
+  // longer: a longer sleep is only a slower flake.
+  let up = false;
+  for (let i = 0; i < 100; i++) { if (await ev('!!(S.connected && S.ws && S.ws.readyState === 1)')) { up = true; break; } await sleep(100); }
+  if (!up) fail(`${V}: reconnect repaint — the socket never opened, so there was no drop to measure`);
+  else {
+    await ev(`(() => { window.__conn = 0; document.addEventListener('cc:social', () => { window.__conn++; }); S.ws.close(); return true; })()`);
+    // DOWN FIRST, THEN UP. close() is asynchronous: for a tick or two S.connected
+    // is still true and the dying socket still reads readyState 1, so a single
+    // "is it up again" poll can be satisfied by the socket that has not finished
+    // closing and the check would pass or fail on timing rather than on behaviour.
+    let down = false, back = false;
+    for (let i = 0; i < 40; i++) { if (await ev('!S.connected')) { down = true; break; } await sleep(100); }
+    for (let i = 0; i < 60; i++) { if (await ev('!!(S.connected && S.ws && S.ws.readyState === 1)')) { back = true; break; } await sleep(200); }
+    const conn = await ev('window.__conn');
+    if (down && back && conn >= 2) ok(`${V}: a socket that drops and comes back repaints the screens that disable themselves (${conn} cc:social)`);
+    else fail(`${V}: reconnect repaint ${JSON.stringify({ down, back, conn })}`);
+  }
   // AND A SIGN-IN ASKS FOR THE ACCOUNT'S OWN NAME. A CHOSEN CALLSIGN BELONGS TO
   // THE ACCOUNT, and the friends frame is the only channel that carries it
   // (BINDING resolution 13) -- until this existed the only two callers of
