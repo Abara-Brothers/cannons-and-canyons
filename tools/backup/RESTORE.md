@@ -45,6 +45,68 @@
 > password field back into the terminal**, and the credential had to be rotated.
 > The editing step was the defect, so it no longer exists.
 
+## How you find out it is failing
+
+> **Added 2026-09-21, after a month of silent failure.** Three of the four
+> scheduled runs from 2026-08-30 onward produced no usable backup, and the
+> fourth — 2026-09-13 — logged `done (8 kept)` over a **zero-byte `roles.sql`**.
+> Every one of those failures was a transient dropped connection to the pooler,
+> not a misconfiguration. The only trace was a line in `backups/backup.log`,
+> which is a file nobody reads, because the entire point of a scheduled job is
+> that you stop thinking about it. It was found by hand, 29 days after the last
+> backup that was actually complete.
+
+Three things changed, and only the third is something you will ever see:
+
+1. **A dropped connection is retried.** Four attempts, waiting 15s, 60s then
+   180s. The *whole* dump is retried, never a partial one.
+2. **A partial backup is a failure.** All three files — `roles.sql`,
+   `auth.sql`, `public.sql` — must exist and be non-empty, and the row counts
+   must come back from a live connection, or the run fails. Nothing is ever
+   written into a directory with a backup's name: each attempt dumps into
+   `.incomplete-<stamp>/`, which is renamed into place only when it is
+   complete. **A failed run leaves no directory behind at all.**
+3. **A failure is put on your screen**, not in a log: a critical alert window,
+   a Notification Center entry, and a file —
+
+   ```
+   backups/BACKUP-IS-FAILING.txt
+   ```
+
+   That file is the alarm, and it is the part that matters. While it exists,
+   **every** run raises the alarm again — including a run that *succeeds*,
+   which tells you how long the gap was before clearing it. So an alert you
+   missed on Sunday comes back the next Sunday, and the one after that.
+
+   **It clears only when a complete backup succeeds.** Deleting it by hand
+   removes the warning, not the problem.
+
+If you see that alarm, run one by hand and read why:
+
+```bash
+bash tools/backup/backup-auto.sh
+```
+
+### Prove the alarm still works
+
+It is failure-path code, so it is worth making it fail on purpose. This uses a
+host that cannot resolve, writes into a scratch directory, and captures what
+would have been shown instead of putting a window on your screen:
+
+```bash
+d=$(mktemp -d); printf 'PGHOST=unreachable.invalid
+PGPORT=5432
+PGUSER=postgres.x
+PGDATABASE=postgres
+' > "$d/conf"
+CC_BACKUP_CONF="$d/conf" CC_BACKUP_DIR="$d/b" CC_ALERT_SINK="$d/alert" CC_BACKUP_ATTEMPTS=2 CC_BACKUP_BACKOFF=1 bash tools/backup/backup-auto.sh; echo "exit=$?"
+cat "$d/alert"; ls -A "$d/b"
+```
+
+Expect: two attempts, `exit=1`, the alert text, and **no stamped directory** in
+`$d/b` — only the marker file. The `CC_*` variables above exist for this drill
+and for the suite; never set them in normal use.
+
 ## Is this backup restorable? Run the drill and find out
 
 ```bash
