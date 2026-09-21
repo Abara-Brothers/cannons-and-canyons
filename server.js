@@ -969,6 +969,50 @@ let supabaseHealth = 'unchecked';        // auth/client path: publishable key
 let supabaseAdminHealth = 'unchecked';   // privileged path: secret key
 let supabaseSocialHealth = 'unchecked';  // phase 6 tables + profiles columns: the MIGRATION
 let lastHealthCheck = 0;                 // re-probe throttle, see the /health route
+// THE VERDICT RULE FOR A SET OF PROBES, IN ONE PLACE.
+//
+// It lives here as one function because it shipped as two near-copies that
+// disagreed, and the disagreement is the bug: the admin verdict collapsed EVERY
+// non-2xx into 'bad_secret_key' — a 500, a 503, a 429, a 404, a 403 — while the
+// social verdict, written later, discriminated 404/400 and then collapsed the
+// rest exactly the same way. Only a 401 means the key is wrong. Observed live on
+// 2026-09-21: one probe read 'bad_secret_key' on a process whose key had not
+// changed (same uptime, no restart), and eleven samples over the next minutes
+// all read 'ok'. It was a transient upstream failure reported as a credential
+// failure — and the deploy procedure tells the owner to read these fields and
+// act on them at the exact moment boot probes run into connection churn.
+//
+// Returns a CATEGORY. Each caller says it in its own field's words, because a
+// 404 means "the hand-applied migration is not there yet" for the phase 6
+// tables, "this privileged table is not there" for the other two, and "the URL
+// is wrong" for the auth endpoint, which is not a table at all.
+//
+// PRECEDENCE IS DELIBERATE — ok, then 401, then 404/400, then 5xx/429:
+//   - 401 first: it is the only status here that means the secret itself is
+//     refused, and it is the only verdict that asks the owner to change one. If
+//     one probe is refused and another is merely having a bad second, the
+//     refusal is the actionable truth. It also makes the other answers
+//     untrustworthy — you cannot tell whether a table exists through a key that
+//     is not allowed to look.
+//   - 404/400 above 5xx/429: PostgREST answers exactly that for a relation or
+//     column missing from its schema cache, and that answer is DURABLE — it will
+//     still be 404 in a minute, where a 503 will not. supabaseSocial's
+//     'migration_missing' is the single field the ship procedure reads to decide
+//     the hand-applied migration landed, so letting one coincident blip mask it
+//     would blind that gate. This also keeps today's behaviour byte for byte:
+//     the old expression already reported migration_missing for a 404 mixed
+//     with anything else.
+//   - anything else — a 403 from a grant or an RLS fault, a 3xx, an oddity —
+//     stays with the key. That is the conservative answer and it is the one that
+//     shipped; this change narrows what gets blamed on the key, it does not
+//     widen what gets excused.
+function probeVerdict(responses) {
+  if (responses.every((r) => r.ok)) return 'ok';
+  if (responses.some((r) => r.status === 401)) return 'bad_key';
+  if (responses.some((r) => r.status === 404 || r.status === 400)) return 'schema';
+  if (responses.some((r) => r.status >= 500 || r.status === 429)) return 'upstream';
+  return 'bad_key';
+}
 async function checkSupabase() {
   if (!SB_URL || !SB_PUB || !SB_SECRET) {
     supabaseHealth = supabaseAdminHealth = supabaseSocialHealth = 'unconfigured';
@@ -980,7 +1024,10 @@ async function checkSupabase() {
     // it answers 401 either way when there is no user token, which is exactly
     // the false negative this check was written wrong with the first time.)
     const res = await fetch(`${SB_URL}/auth/v1/health`, { headers: { apikey: SB_PUB } });
-    supabaseHealth = res.ok ? 'ok' : 'bad_key_or_url';
+    // A 404 here IS a URL fault — /auth/v1/health is a fixed endpoint, not a
+    // table — so 'schema' keeps the existing word. Only 5xx/429 is carved out.
+    const v = probeVerdict([res]);
+    supabaseHealth = v === 'ok' ? 'ok' : v === 'upstream' ? 'upstream_error' : 'bad_key_or_url';
   } catch { supabaseHealth = 'unreachable'; }
   try {
     // A zero-row read of a table whose RLS has NO policies: only a key that
@@ -1002,7 +1049,14 @@ async function checkSupabase() {
         signal: AbortSignal.timeout(8000),
       }),
     ]);
-    supabaseAdminHealth = probes.every((r) => r.ok) ? 'ok' : 'bad_secret_key';
+    // 'tables_missing' names the TABLE, not the key: these two are created by the
+    // base migration, so a 404 here is a schema fault on this project and no
+    // amount of rotating SUPABASE_SECRET_KEY will move it.
+    const v = probeVerdict(probes);
+    supabaseAdminHealth = v === 'ok' ? 'ok'
+      : v === 'upstream' ? 'upstream_error'
+      : v === 'schema' ? 'tables_missing'
+      : 'bad_secret_key';
   } catch { supabaseAdminHealth = 'unreachable'; }
   try {
     // Phase 6's tables, probed SEPARATELY from the two above and not folded into
@@ -1043,8 +1097,13 @@ async function checkSupabase() {
         signal: AbortSignal.timeout(8000),
       }),
     ]);
-    supabaseSocialHealth = social.every((r) => r.ok) ? 'ok'
-      : social.some((r) => r.status === 404 || r.status === 400) ? 'migration_missing'
+    // 'migration_missing' is unchanged and load-bearing: it is what the ship
+    // procedure reads to decide the hand-applied migration landed, and the
+    // precedence above keeps a coincident 5xx from masking it.
+    const v = probeVerdict(social);
+    supabaseSocialHealth = v === 'ok' ? 'ok'
+      : v === 'upstream' ? 'upstream_error'
+      : v === 'schema' ? 'migration_missing'
       : 'bad_secret_key';
   } catch { supabaseSocialHealth = 'unreachable'; }
   return supabaseHealth;
@@ -1058,17 +1117,32 @@ checkSupabase().then(() => {
   // this line, which is precisely the failure being fixed. The states that
   // mean something is WIRED WRONG get stderr and an instruction naming the
   // variable to check, because "supabase is broken" cost two round trips.
+  //
+  // 'upstream_error' is the one state here that names NO variable to change.
+  // Supabase answered with a fault of its own — 5xx or 429 — which a boot probe
+  // is unusually likely to catch, because a deploy restarts this process and the
+  // probes fire into the connection churn that follows. Telling the reader to go
+  // and check a secret key at that moment sends them hunting for a fault that
+  // will not reproduce; the honest instruction is to look again.
   const bad = [];
   if (supabaseHealth !== 'ok' && supabaseHealth !== 'unconfigured') {
-    bad.push('SIGN-IN/CLOUD SAVES are broken: check SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY');
+    bad.push(supabaseHealth === 'upstream_error'
+      ? 'SIGN-IN/CLOUD SAVES could not be verified: Supabase answered with an error of its own. Nothing here needs changing — read /health again in a minute'
+      : 'SIGN-IN/CLOUD SAVES are broken: check SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY');
   }
   if (supabaseAdminHealth !== 'ok' && supabaseAdminHealth !== 'unconfigured') {
-    bad.push('PUSH STORAGE/ACCOUNT DELETION/CRASH REPORTS are broken: check SUPABASE_SECRET_KEY');
+    bad.push(supabaseAdminHealth === 'upstream_error'
+      ? 'PUSH STORAGE/ACCOUNT DELETION/CRASH REPORTS could not be verified: Supabase answered with an error of its own. Nothing here needs changing — read /health again in a minute'
+      : supabaseAdminHealth === 'tables_missing'
+        ? 'PUSH STORAGE/ACCOUNT DELETION/CRASH REPORTS are broken: push_subscriptions and/or error_reports are missing from this project'
+        : 'PUSH STORAGE/ACCOUNT DELETION/CRASH REPORTS are broken: check SUPABASE_SECRET_KEY');
   }
   if (supabaseSocialHealth !== 'ok' && supabaseSocialHealth !== 'unconfigured') {
     bad.push(supabaseSocialHealth === 'migration_missing'
       ? 'FRIENDS/CALLSIGNS are dead: the phase 6 migration has not been applied to this project'
-      : 'FRIENDS/CALLSIGNS are dead: check SUPABASE_SECRET_KEY and the phase 6 tables');
+      : supabaseSocialHealth === 'upstream_error'
+        ? 'FRIENDS/CALLSIGNS could not be verified: Supabase answered with an error of its own. Nothing here needs changing — read /health again in a minute'
+        : 'FRIENDS/CALLSIGNS are dead: check SUPABASE_SECRET_KEY and the phase 6 tables');
   }
   if (!bad.length) console.log(line);
   else console.error(`${line}\n       <-- ${bad.join('\n       <-- ')}`);
@@ -1317,12 +1391,30 @@ function handleRequest(req, res) {
       // cannot be re-observed later.
       ledgerDropped,
       rooms: rooms.size,
-      supabase: supabaseHealth,            // ok | unconfigured | bad_key_or_url | unreachable
-      supabaseAdmin: supabaseAdminHealth,  // ok | unconfigured | bad_secret_key | unreachable
+      // THE THREE FIELDS THE DEPLOY PROCEDURE READS. Every value each one can
+      // take is listed, because this comment is the only documentation of that
+      // contract and a stale list here is how the next reader guesses wrong.
+      //
+      // Two states are NOT faults and must not be acted on as if they were:
+      //   'unchecked'      the boot probe has not answered yet. The listener is
+      //                    up before it resolves, so a fast enough curl sees
+      //                    this. Read again rather than concluding anything.
+      //   'upstream_error' Supabase answered 5xx or 429 — its trouble, not this
+      //                    project's configuration. NOTHING here needs changing.
+      //                    Read again after a minute; the /health re-probe
+      //                    throttle is 60s, so a second read inside that minute
+      //                    returns the same latched value.
+      // A transient upstream failure and a wrong key are not the same thing, and
+      // one of them needs no action at all: before 2026-09-21 every one of these
+      // collapsed into a verdict blaming the key.
+      supabase: supabaseHealth,            // ok | unconfigured | unchecked | bad_key_or_url | upstream_error | unreachable
+      supabaseAdmin: supabaseAdminHealth,  // ok | unconfigured | unchecked | bad_secret_key | tables_missing | upstream_error | unreachable
       // The phase 6 migration, watched as its own field. 'migration_missing' is
       // the ordinary state between a deploy and the hand-applied migration —
-      // it is NOT a key fault, and the boot line says so in those words.
-      supabaseSocial: supabaseSocialHealth, // ok | unconfigured | migration_missing | bad_secret_key | unreachable
+      // it is NOT a key fault, and the boot line says so in those words. It also
+      // OUTRANKS 'upstream_error' on purpose: this field is the gate the ship
+      // procedure reads, so a coincident blip must not hide a missing migration.
+      supabaseSocial: supabaseSocialHealth, // ok | unconfigured | unchecked | migration_missing | bad_secret_key | upstream_error | unreachable
       webpush: !!webpush,
       fcm: !!fcm,
       apns: !!apns,

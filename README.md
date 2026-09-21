@@ -125,7 +125,29 @@ push to `main`.
    You want `"supabase":"ok"`, `"supabaseAdmin":"ok"` and `"supabaseSocial":"ok"`.
    `"supabaseSocial":"migration_missing"` means the code is deployed but the
    latest `supabase/migrations/` file has not been applied to the project — that
-   is a migration to apply, not a key to rotate. **Do not check the HTTP
+   is a migration to apply, not a key to rotate.
+
+   **Not every value that isn't `ok` is something to fix.** Two of them mean
+   "read it again", and one reading is never authoritative:
+   - `"upstream_error"` (any of the three) — Supabase answered with a fault of its
+     own, a 5xx or a 429. **Nothing here needs changing.** A deploy restarts the
+     server and its probes fire into the connection churn that follows, which is
+     exactly when this is most likely. Wait a minute and curl again; the re-probe
+     throttle is 60 seconds, so a second read *inside* that minute just returns
+     the same latched value.
+   - `"unchecked"` (any of the three) — the first probe has not answered yet. The
+     server is listening before it resolves, so a fast curl can catch this. Read
+     again.
+   - `"bad_key_or_url"` / `"bad_secret_key"` — **this** is the one that means a
+     variable is wrong: a 401 from Supabase, or any answer the probe could not
+     classify (a 403 from a grant or row-level-security fault lands here too).
+   - `"tables_missing"` (`supabaseAdmin`) — `push_subscriptions` and/or
+     `error_reports` are absent from this project. A schema fault, not a key.
+   - `"unreachable"` — the probe never got an answer at all (DNS, timeout).
+
+   Before 2026-09-21 every one of these collapsed into the "your key is wrong"
+   verdict, so a transient Supabase blip during a deploy told you your key was
+   broken — and it would not reproduce when you went looking. **Do not check the HTTP
    status or the `ok` field** — `/health` answers 200 unconditionally and `ok` is a
    hardcoded literal, so both report healthy while every backend is down. Parse the
    body.
