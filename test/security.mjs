@@ -621,7 +621,19 @@ async function pushSubBounds() {
 // `angle` is clamped and `power` is clamped, and between them `weapon` was
 // forwarded verbatim — the only field on this wire that was neither validated nor
 // bounded. Two modified clients could pass arbitrary strings through it, against
-// privacy.html's promise of "no free-text input" and no chat between players.
+// privacy.html's promise of "No chat, no messages, and no message field of any
+// kind" (:152).
+//
+// THE JUSTIFICATION CHANGED ON 2026-09-21 AND THE RULE GOT STRONGER, NOT WEAKER.
+// This comment used to cite a promise of "no free-text input", which was true
+// when ISSUE-015 removed the typed callsign field. That promise is GONE from
+// privacy.html — this project gives players a typed name back — so citing it
+// would have been citing a sentence that no longer exists. What replaced it
+// matters more: a callsign is typed, but it passes a blocklist, a character
+// class and a daily limit, and it can be reported and blocked from any screen
+// that shows it. A string smuggled through `weapon` passes none of that and can
+// be reported by nobody. The one text channel players have is moderated; this
+// test exists so it stays the only one.
 // Measured before the fix: a 60-character sentence arrived at the opponent intact.
 async function aimRelay() {
   const host = await open();
