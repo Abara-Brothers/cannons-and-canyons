@@ -111,7 +111,21 @@ const stubSocket = () => ev(`(() => {
   window.CC_SOCIAL = null;
   window.CC_ACCOUNT = ${LINKED};
   document.dispatchEvent(new CustomEvent('cc:account'));
-  return true;
+  // AND SETTLE THE READ THAT SIGN-IN NOW STARTS. app.js asks for the friends
+  // frame once per connection and once per sign-in, because a CHOSEN CALLSIGN
+  // BELONGS TO THE ACCOUNT and that frame is the only channel carrying it -- a
+  // second device used to boot to the home screen and play its whole session
+  // under its own rolled pair. The line above is a sign-in, so a request is now
+  // in flight; left unanswered it holds socialAsking for twelve seconds and
+  // every socialResync in this suite would return without sending. Settled here
+  // the way the server would, and the refusal is wiped so the page starts in
+  // exactly the state it started in before: no snapshot, no read out, no
+  // sentence.
+  const boot = window.__tx.filter((f) => f.type === 'friends');
+  if (boot.length) handle({ type: 'friends', error: 'unavailable', id: boot[boot.length - 1].id });
+  window.CC_SOCIAL_ERR = '';
+  window.__tx.length = 0;
+  return boot.length;
 })()`);
 const tx = () => ev('window.__tx.slice()');
 const clearTx = () => ev('(window.__tx.length = 0, true)');
@@ -172,7 +186,35 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
     await sleep(200);
   }
   if (!ready) { fail(`${V}: page never became ready (window.Bay / handle / sendCallsign)`); continue; }
-  await stubSocket();
+  // ---- I9: A SOCKET THAT COMES BACK MUST REPAINT THE SCREENS THAT GREYED
+  //      THEMSELVES OUT. bay.js's Friends screen captures wsReady() once per
+  //      render and threads it into every control's `disabled` attribute; its
+  //      only repaint is `cc:social`, and connect() dispatched nothing. So a
+  //      screen opened in a tunnel stayed entirely grey after the signal came
+  //      back -- Retry included -- and nothing on the page said that leaving and
+  //      returning was the only thing that worked. Driven on the REAL socket,
+  //      before it is stubbed: a real close, the real 1.5s retry, a real open.
+  await ev(`(() => { window.__conn = 0; document.addEventListener('cc:social', () => { window.__conn++; }); S.ws.close(); return true; })()`);
+  // DOWN FIRST, THEN UP. close() is asynchronous: for a tick or two S.connected
+  // is still true and the dying socket still reads readyState 1, so a single
+  // "is it up again" poll can be satisfied by the socket that has not finished
+  // closing and the check would pass or fail on timing rather than on behaviour.
+  let down = false, back = false;
+  for (let i = 0; i < 40; i++) { if (await ev('!S.connected')) { down = true; break; } await sleep(100); }
+  for (let i = 0; i < 60; i++) { if (await ev('!!(S.connected && S.ws && S.ws.readyState === 1)')) { back = true; break; } await sleep(200); }
+  const conn = await ev('window.__conn');
+  if (down && back && conn >= 2) ok(`${V}: a socket that drops and comes back repaints the screens that disable themselves (${conn} cc:social)`);
+  else fail(`${V}: reconnect repaint ${JSON.stringify({ down, back, conn })}`);
+  // AND A SIGN-IN ASKS FOR THE ACCOUNT'S OWN NAME. A CHOSEN CALLSIGN BELONGS TO
+  // THE ACCOUNT, and the friends frame is the only channel that carries it
+  // (BINDING resolution 13) -- until this existed the only two callers of
+  // socialNeed() were entering Bay controls and entering Friends, so a second
+  // device, a reinstall or cleared site data booted to the home screen and
+  // played the whole session under its own rolled pair. stubSocket() signs in;
+  // the read it starts is settled there so the rest of the suite is unaffected.
+  const bootRead = await stubSocket();
+  if (bootRead === 1) ok(`${V}: signing in asks for the read model once, without waiting for a screen that draws it`);
+  else fail(`${V}: sign-in read ${JSON.stringify(bootRead)}`);
 
   // 0. WHERE THE TOAST HOST STARTS, before any toast has been raised. It lived
   //    inside #stage, which is inside #game, and showScreen() makes exactly one
@@ -270,9 +312,17 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   // 4. Set opens the field with the rules under it
   await openEditor();
   let e = await editor();
-  if (e && e.max === 16 && e.focused && e.rule === RULE && !e.bad && e.kids === 0
+  // maxLength IS 32, NOT 16, AND THAT IS THE RULE BEING KEPT, not broken.
+  // server/callsign.js counts CODE POINTS ([...name].length, 3 to 16); HTML
+  // maxlength counts UTF-16 code UNITS. For every BMP script they agree; for a
+  // non-BMP letter -- a CJK Extension B ideograph, Gothic, Deseret -- each
+  // character is two units, so 16 stopped the player at 8 characters under a
+  // rules line promising 16, with no error and nothing to act on. 16 code points
+  // can never exceed 32 units, so doubling is exact, and the server still
+  // answers 'length' for anything past the real rule.
+  if (e && e.max === 32 && e.focused && e.rule === RULE && !e.bad && e.kids === 0
       && e.btns.join('|') === 'Cancel|Save' && !e.card && e.inStage)
-    ok(`${V}: Set opens a focused 16-character field, the rules under it, Cancel and Save, all inside the design frame`);
+    ok(`${V}: Set opens a focused field capped at 32 UTF-16 units (= 16 code points), the rules under it, Cancel and Save, all inside the design frame`);
   else fail(`${V}: editor ${JSON.stringify(e)}`);
 
   // 5. a valid name reaches the socket as exactly the Set frame, nothing more
@@ -606,8 +656,15 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   await sleep(120);
   e = await editor();
   t = await calls('friends');
-  if (armed && e && e.rule === 'Not connected. Try again in a moment.' && e.bad === true && t.length === 1)
-    ok(`${V}: a reply that never comes is answered at 12000 ms, and the snapshot is re-asked`);
+  // AND IT DOES NOT BLAME THE PLAYER'S CONNECTION. The stub socket is open
+  // (readyState 1), so this timeout is a server that did not answer in time --
+  // which it can legitimately be, with social frames serialised per socket and
+  // five store calls behind an 8s abort each. 'Not connected. Try again in a
+  // moment.' sent a player with perfect signal to check their wifi for a fault
+  // on the server. The re-read still has to happen: the write may have landed,
+  // and that is the only thing in the session that would ever correct it.
+  if (armed && e && e.rule === 'Callsigns are not available right now. Try again later.' && e.bad === true && t.length === 1)
+    ok(`${V}: a reply that never comes on a LIVE socket is answered at 12000 ms in server-side words, and the snapshot is re-asked`);
   else fail(`${V}: timeout ${JSON.stringify({ armed, rule: e && e.rule, bad: e && e.bad, t })}`);
   // the repair lands: the server HAD taken the name the player was told to try
   // again for, and the row, the device name and pt_name all catch up.
@@ -1023,9 +1080,11 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   if (armed12) await ev(`(() => { window.__t12(); return true; })()`);
   await sleep(80);
   wt = await waitState();
-  if (armed12 && wt.errs.filter((x) => x === DEAD).length === 2
+  // UNAV, NOT DEAD: the socket in this fixture is open, so a request that was
+  // never answered is the SERVER's silence and is said in the server's words.
+  if (armed12 && wt.errs.filter((x) => x === UNAV).length === 2
       && wt.labels.join('|') === 'Retry|Retry' && wt.off.join('|') === 'false|false')
-    ok(`${V}: friends refused — a request that is never answered is given up at 12000 ms and says so, with Retry live again`);
+    ok(`${V}: friends refused — a request that is never answered on a live socket is given up at 12000 ms and said as the server's fault, with Retry live again`);
   else fail(`${V}: friends timeout ${JSON.stringify({ armed12, wt })}`);
   // and a snapshot that finally arrives clears the sentence rather than leaving
   // it under a list that loaded
@@ -1312,6 +1371,29 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   else fail(`${V}: report already ${JSON.stringify(mm)}`);
   await click('#pmenu [data-pm="cancel"]');
   await click('#pmenu [data-pm="close"]');
+  // ---- 31b-ii. A LATE ANSWER SETTLES THE SHEET IT WAS SENT FROM, OR NOTHING.
+  //      The callbacks guarded with `if (!pa) return;`, which only asks whether
+  //      SOME sheet is open. Cancel a slow Report, open a Block on another card,
+  //      and the report's answer closed THAT sheet and raised "Reported. Thank
+  //      you." over an action the player had abandoned -- or wrote the report's
+  //      red sentence into it.
+  await arm(FSNAP.some);
+  await click(`#bay .pcd [data-pmenu="${BOB}"]`);
+  await click('#pmenu [data-pm="report"]');
+  await click('#pmenu [data-pm="ok"]');
+  await sleep(60);
+  await click('#pmenu [data-pm="cancel"]');     // the report is still in flight
+  await click('#pmenu [data-pm="block"]');      // a different sheet, a different act
+  const opened = await menu();
+  await answer(`(fv) => fv.type === 'report'`, { type: 'report', ok: true });
+  const still = await menu();
+  if (opened.head === 'Block this player' && still.open && still.head === 'Block this player'
+      && !still.err && !(await toasts()).includes('Reported. Thank you.'))
+    ok(`${V}: report — an answer to a sheet the player cancelled does not close, settle or toast over the sheet they are reading now`);
+  else fail(`${V}: stale sheet ${JSON.stringify({ opened: opened.head, still, toasts: await toasts() })}`);
+  await click('#pmenu [data-pm="cancel"]');
+  await click('#pmenu [data-pm="close"]');
+
   // ---- 31c. A PLAYER WITH NO NAME TO QUOTE. nameOf()'s placeholder was being
   //      read as the name itself — "Report the callsign No callsign to Abara
   //      Brothers." The card still SAYS No callsign, because that is what the
@@ -1393,9 +1475,14 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   await click('#bay [data-fr="unblock:55555555-5555-4555-8555-555555555555"]');
   await answer(`(fv) => fv.type === 'block' && fv.op === 'remove'`, { type: 'block', op: 'remove', error: 'unavailable' });
   ec = await errCols();
-  const uerr = ec.filter((x) => x.text === 'Blocking is not available right now. Try again later.');
+  // AND IT IS SAID AS AN UNBLOCK. 'block' was passed as the error kind for
+  // op:'remove', so every failure fell through to 'block._' and a player who had
+  // just tapped Unblock was told "Blocking is not available right now" -- the
+  // game appearing to refuse to UNDO a block, which is what every player sees
+  // while the migration is unapplied and the blocks table 404s.
+  const uerr = ec.filter((x) => x.text === 'Unblocking is not available right now. Try again later.');
   if (uerr.length === 1 && uerr[0].col === 2 && !ec.some((x) => x.col === 0))
-    ok(`${V}: friends — a refused Unblock is said in column 3, beside the blocked card, and never in the search box`);
+    ok(`${V}: friends — a refused Unblock is said in column 3 beside the blocked card, in unblocking words, and never in the search box`);
   else fail(`${V}: unblock error column ${JSON.stringify(ec)}`);
 
   // ---- 35. a callsign is player input: markup in it must not become markup
@@ -1538,11 +1625,34 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
       && fq.filter((x) => x.type === 'block' && x.op === 'list').length === 1)
     ok(`${V}: guest — no friends panel and no friend code, but their own blocked list IS asked for`);
   else fail(`${V}: guest screen ${JSON.stringify({ fv, fq })}`);
+  // ---- 38a. AND WHILE THAT READ IS OUT, THE BUTTON SAYS SO. gbNeed() set
+  //      gb.asking and sent without repainting, so the screen kept rendering
+  //      "Not loaded yet." over an ENABLED Retry with the request already in
+  //      flight -- and gbNeed's own guard returned at once on every further tap.
+  //      A guest, for whom this list is the whole screen, could tap it four
+  //      times on a slow connection and see nothing change by a pixel, while a
+  //      linked account in the same position watched the button read Loading.
+  const inflight = await waitState();
+  // NOT clearTx() here: the answer below finds the frame it is replying to by
+  // reading __tx, and emptying it would leave the read unanswerable.
+  const sentBefore = (await tx()).length;
+  await click('#bay [data-fr="retry"]');
+  await sleep(60);
+  if (inflight.labels.join('|') === 'Loading' && inflight.off.join('|') === 'true' && (await tx()).length === sentBefore)
+    ok(`${V}: guest — while the blocked-list read is in flight Retry reads Loading and is dead, and a tap sends nothing`);
+  else fail(`${V}: guest in-flight retry ${JSON.stringify({ inflight, sentBefore, tx: await tx() })}`);
   await answer(`(fv) => fv.type === 'block' && fv.op === 'list'`, { type: 'block', op: 'list', ok: true, blocked: [{ id: '55555555-5555-4555-8555-555555555555', callsign: 'Rude Name' }] });
   fv = await scr();
   if (fv.cards.includes('Rude Name') && fv.lbls.includes('Blocked · 1'))
     ok(`${V}: guest — the blocked list is rendered from block op:'list'`);
   else fail(`${V}: guest blocked ${JSON.stringify(fv)}`);
+  // M3's other half: the ONE number the export needs out of a list app.js can
+  // never see. A guest is refused the friends frame for ever, so CC_SOCIAL stays
+  // null and blocked_count was exported as null under a sentence in the file
+  // saying the device had not loaded it -- while this screen was showing it.
+  if ((await ev('window.CC_SOCIAL_BLOCKED')) === 1)
+    ok(`${V}: guest — the blocked list's size is published for exportMyData, which has no snapshot to count`);
+  else fail(`${V}: guest blocked count ${JSON.stringify(await ev('window.CC_SOCIAL_BLOCKED'))}`);
   await clearTx();
   await click('#bay [data-fr="unblock:55555555-5555-4555-8555-555555555555"]');
   await sleep(60);
@@ -1562,7 +1672,7 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   await click('#bay [data-fr="unblock:55555555-5555-4555-8555-555555555555"]');
   await answer(`(fv) => fv.type === 'block' && fv.op === 'remove'`, { type: 'block', op: 'remove', error: 'unavailable' });
   ec = await errCols();
-  const gberr = ec.filter((x) => x.text === 'Blocking is not available right now. Try again later.');
+  const gberr = ec.filter((x) => x.text === 'Unblocking is not available right now. Try again later.');
   if (gberr.length === 1 && gberr[0].col === 1)
     ok(`${V}: guest — a refused Unblock is said beside the blocked list, the only column a guest has`);
   else fail(`${V}: guest unblock error ${JSON.stringify(ec)}`);

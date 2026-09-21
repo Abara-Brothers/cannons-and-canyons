@@ -1374,7 +1374,10 @@ async function exportMyData() {
     callsign: savedName() || null,
     friend_code: social && social.friendCode ? 'FR-' + social.friendCode : null,
     friends_count: social && Array.isArray(social.friends) ? social.friends.length : null,
-    blocked_count: social && Array.isArray(social.blocked) ? social.blocked.length : null,
+    // A guest never gets `social`, so their count comes from the one read they
+    // DO get. Still null when nothing has loaded, for either kind of account.
+    blocked_count: social && Array.isArray(social.blocked) ? social.blocked.length
+      : typeof window.CC_SOCIAL_BLOCKED === 'number' ? window.CC_SOCIAL_BLOCKED : null,
     cloud_profile: row,
     local_progression: progressionSnapshot(),
     not_included: {
@@ -1383,9 +1386,16 @@ async function exportMyData() {
       crash_reports: 'Anonymous and not linked to your account; deleted after 30 days',
       friends_list: 'The counts above are in this file, but not who your friends are; '
         + 'request that via https://abarabrothers.com/support',
+      // AND WHAT A GUEST'S NULL ACTUALLY MEANS. The old sentence explained every
+      // null as "had not loaded", which is false for a guest: they are refused
+      // the friends frame outright, so friends_count and friend_code can never
+      // arrive however long they wait. Their BLOCKED list is a different read
+      // and is now counted, so the "had not loaded" half is true again wherever
+      // it is still said.
       null_counts: 'A friends_count or blocked_count of null means this device had not '
-        + 'loaded those lists when you exported. It does NOT mean zero. Friends need a '
-        + 'signed-in account: sign in, open Friends, then export again.',
+        + 'loaded that list when you exported. It does NOT mean zero. Friends and a friend '
+        + 'code need a signed-in account and a guest has neither, so those stay null until '
+        + 'you sign in: sign in, open Friends, then export again.',
     },
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -1460,10 +1470,29 @@ function connect() {
     const r = loadResume();
     if (r && (S.playing || !S.code)) sendMsg({ type: 'resume', code: r.code, token: r.token });
     flushIntent();
-    sendHello(ws);
+    // THE SCREENS THAT GREY THEMSELVES OUT WHILE THE SOCKET IS DOWN HAVE TO
+    // LEARN THAT IT CAME BACK. bay.js's Friends screen captures wsReady() once
+    // per render and threads it into every control's `disabled` attribute, and
+    // the only repaint it has is `cc:social` -- so a screen opened in a tunnel
+    // stayed entirely grey after the signal returned, Retry included, with
+    // nothing on the page saying that leaving and coming back was the one thing
+    // that worked. CC_SOCIAL is untouched here; this is a repaint, not a read.
+    document.dispatchEvent(new Event('cc:social'));
+    // THE HELLO FIRST, THEN THE READ MODEL. The server answers `friends` on
+    // ws.userId, which only the hello sets; sendHello resolves after its frame
+    // is queued and a socket keeps order, so the server sees the hello first and
+    // holds this one on its own authPending while the token is verified. Both
+    // settlements ask: a hello that failed is answered `sign_in`, which is a
+    // refusal this client can see rather than a frame it never sent.
+    sendHello(ws).then(socialBoot, socialBoot);
   };
   ws.onclose = () => {
+    const wasUp = S.connected;
     S.connected = false; if (S.playing) $('connErr').classList.remove('hidden');
+    // Only on a real transition. ws.onclose also fires on every failed attempt
+    // of the 1.5s retry loop below, and repainting the Friends screen every
+    // 1.5s would rebuild the search field under a player typing into it.
+    if (wasUp) document.dispatchEvent(new Event('cc:social'));
     // The socket opened, flushIntent sent and nulled the create, and the socket
     // died before 'created': without this the pending lobby's spinner (or its
     // Play solo button, with nothing left to start) sits there for good. While
@@ -1495,6 +1524,14 @@ window.CC_SOCIAL = null;                 // the last snapshot; bay.js reads, nev
 // lesson one screen along: not knowing yet is not the same as being refused.
 window.CC_SOCIAL_ERR = '';               // the last friends-frame refusal code, or ''
 window.CC_SOCIAL_ASKING = false;         // a friends read is in flight right now
+// A GUEST'S BLOCKED LIST HAS NO SNAPSHOT BEHIND IT, and the export needs one
+// number out of it. `friends` is refused to a guest for ever (requireLinked), so
+// CC_SOCIAL stays null for them and exportMyData() reported blocked_count: null
+// under a sentence in the same file saying the device had not loaded the list --
+// while the Friends screen was showing it. bay.js owns that read (`block
+// op:'list'`) and is the one writer of this slot; it is declared here so the
+// export has a stable place to look. null still means NOT LOADED.
+window.CC_SOCIAL_BLOCKED = null;         // how many that read found, or null
 let socialId = 0;
 let socialSeq = 0;                       // the waiter key, minted here and never sent
 // token -> { match, cb, t }. KEYED ON THE TOKEN, NOT ON THE FRAME'S id. BINDING
@@ -1527,7 +1564,24 @@ function socialSend(frame, cb) {
   let tok = 0;
   if (cb) {
     tok = ++socialSeq;
-    const t = setTimeout(() => { if (socialWait.delete(tok)) cb({ error: 'offline' }); }, SOCIAL_TIMEOUT_MS);
+    // 'offline' MEANS THIS CLIENT'S SOCKET IS DOWN, AND NOTHING ELSE. bay.js
+    // maps every *.offline code to "Not connected. Try again in a moment.",
+    // so a reply that never arrived sent the player to check their wifi for a
+    // fault on the server -- and the server can outlast this timer with the
+    // socket perfectly healthy: social frames are serialised per socket and a
+    // block performs up to five store calls, each bounded by its own 8s abort.
+    // A live socket means the fault is the server's and it is reported as the
+    // server's. No new copy: every kind's `_` fallback is already written in
+    // server-side words, and the write may well have landed, which is what
+    // those sentences leave room for and 'Not connected' did not.
+    // `timedOut` MARKS THE SHAPE, NOT THE COPY. The code above is what the
+    // player is shown; this flag is what sendCallsign needs to tell a reply that
+    // NEVER CAME from one the server sent -- a lost answer may sit on top of a
+    // write that landed, a server-sent 'unavailable' is a failure it reported
+    // for itself. Nothing renders it: bay.js reads `error` alone.
+    const t = setTimeout(() => {
+      if (socialWait.delete(tok)) cb({ error: S.ws && S.ws.readyState === 1 ? 'unavailable' : 'offline', timedOut: true });
+    }, SOCIAL_TIMEOUT_MS);
     socialWait.set(tok, { match: String(id), cb, t });
   }
   // THE WAITER IS PARKED BEFORE THE FRAME GOES OUT, so a send that throws has to
@@ -1668,6 +1722,26 @@ function socialNeed() {
   if (window.CC_SOCIAL) return;
   socialResync();
 }
+// THE ACCOUNT'S OWN NAME, ASKED FOR ONCE PER CONNECTION AND ONCE PER SIGN-IN,
+// rather than only from the two screens that draw it.
+//
+// A CHOSEN CALLSIGN BELONGS TO THE ACCOUNT, NOT TO THE DEVICE, and the friends
+// frame is the only channel that carries it (BINDING resolution 13). Until this
+// existed the only callers of socialNeed() were entering Bay controls and
+// entering Friends, so a second device -- or a reinstall, or cleared site data --
+// booted to the home screen and played its whole session under its own rolled
+// pair while the account held a name the player had paid a day's quota for.
+// socialSnapshot() is what adopts it; this is what makes the snapshot arrive.
+//
+// It is the eight round trips the comment above socialNeed() declines to spend
+// speculatively, now spent once, for a LINKED account only, because the feature
+// this project exists for does not work without them. Idempotent twice over: a
+// snapshot already in hand returns at once, and socialResync refuses a second
+// request while one is out.
+function socialBoot() {
+  if (!socialSignedIn()) return;    // a guest is refused the frame; a signed-out socket has no account
+  socialNeed();
+}
 // Ask AGAIN, snapshot or no snapshot. One caller: a Set whose answer never
 // arrived. A lost REPLY looks exactly like a lost request, so the write may well
 // have landed -- and without this nothing in the session would ever ask a second
@@ -1732,9 +1806,13 @@ document.addEventListener('cc:account', () => {
   // and tell whoever signs in next that THEIR read had failed.
   const hadErr = !!window.CC_SOCIAL_ERR;
   window.CC_SOCIAL_ERR = '';
-  if (!window.CC_SOCIAL) { if (hadErr) document.dispatchEvent(new Event('cc:social')); return; }
-  window.CC_SOCIAL = null;
-  document.dispatchEvent(new Event('cc:social'));
+  if (window.CC_SOCIAL) { window.CC_SOCIAL = null; document.dispatchEvent(new Event('cc:social')); }
+  else if (hadErr) document.dispatchEvent(new Event('cc:social'));
+  // AND THE OTHER MOMENT THE ACCOUNT'S NAME BECOMES KNOWABLE: a sign-in on a
+  // socket that is already open, where no ws.onopen is coming. Asked only with
+  // a live socket, so a boot that resolves the account before the first connect
+  // does not spend a refusal -- ws.onopen asks for it a moment later.
+  if (S.ws && S.ws.readyState === 1) socialBoot();
 });
 // SET (design 5.6). The client validates nothing about the NAME:
 // server/callsign.js is the single source (design 4.5), so the typed string goes
@@ -1782,7 +1860,13 @@ function sendCallsign(name, cb) {
     // taken the name and be holding it. Re-read, so a SUCCESSFUL save reported
     // as a failure repairs itself on the next snapshot instead of leaving the
     // row wrong -- and the roll guard disarmed -- for the rest of the session.
-    if (err === 'offline') socialResync();
+    //
+    // MATCHED ON THE TIMEOUT, NOT ON THE CODE, since that timeout now answers
+    // 'unavailable' whenever the socket is still up. A reply that never came is
+    // the case this re-read exists for; a server that SAID 'unavailable' said so
+    // about a write of its own and is not re-read, or every refusal in the
+    // window before the migration would spend a friends frame for nothing.
+    if (err === 'offline' || (m && m.timedOut === true)) socialResync();
     cb({ ok: false, error: err });
   };
   callsignPending++;
@@ -1805,7 +1889,18 @@ function socialRolled() {
   callsignPending++;
   socialSend({ type: 'callsign', rolled: true }, (m) => {
     callsignPending--;
-    if (m && m.ok) socialCallsign(null);
+    if (!m || !m.ok) return;
+    socialCallsign(null);
+    // AND PUSH THE ROLLED NAME ONCE THE KEY IS ACTUALLY GONE. The server's roll
+    // branch clears `callsign_key` and deliberately LEAVES `callsign` holding
+    // the surrendered chosen name -- its comment says the rolled display form is
+    // written by this client's own cloud queue. That queue's write is now
+    // guarded on `callsign_key=is.null` (cloud.js), so the save setCallsign()
+    // already scheduled can fire before the server has cleared the key and
+    // simply not match; without this the row would keep showing a name the
+    // account has given up until the next save happened to land. Debounced and
+    // coalescing, like every other cloudQueue() call.
+    cloudQueue();
   });
 }
 

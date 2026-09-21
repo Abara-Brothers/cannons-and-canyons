@@ -219,13 +219,53 @@ window.Cloud = (() => {
         ...(opts.headers || {}),
       },
     });
-    if (!res.ok) throw new Error('rest ' + res.status);
+    // THE STATUS RIDES ON THE THROW. saveDisplayName() below has to tell a
+    // PostgREST 400 for a column that does not exist yet (the phase 6
+    // migration, unapplied) from every other failure, and it cannot do that
+    // from a message string. Nothing else reads it; every existing caller
+    // catches and carries on exactly as before.
+    if (!res.ok) { const err = new Error('rest ' + res.status); err.status = res.status; throw err; }
     // return=minimal answers 2xx with an EMPTY body (200/201/204 alike), and
     // res.json() on empty throws — which once made every successful write
     // report as a failure after the row had already landed. Parse by content,
     // not by status.
     const text = await res.text();
     return text ? JSON.parse(text) : null;
+  }
+
+  // The rolled display name, written ONLY where there is no CHOSEN callsign for
+  // it to destroy.
+  //
+  // IT IS NOT OPTIONAL. server/social.js's roll branch clears `callsign_key` and
+  // deliberately leaves `callsign` holding the surrendered name, with the comment
+  // "the rolled display form is written to the profile by the client's own cloud
+  // queue, as it always has been" -- so this write is half of that contract. It
+  // is also the only way a rolled name ever reaches another player's screen:
+  // server/display-name.js's second proof reads this column.
+  //
+  // THE GUARD IS A POSTGREST FILTER, NOT A TEST IN THIS FILE, and that is the
+  // whole fix. Only the database knows, at the instant of the write, whether the
+  // account holds a chosen name; every client-side answer -- a socket snapshot, a
+  // cached is_anonymous, a remembered callsign -- can be hours stale, and a stale
+  // yes is exactly how an ordinary save from a second device used to void an
+  // account's chosen callsign for 24 hours. server/store.js guards
+  // ensureFriendCode the same way (`friend_code=is.null`).
+  async function saveDisplayName(name) {
+    if (typeof name !== 'string' || !name) return;
+    const opts = { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ callsign: name }) };
+    const row = '/profiles?id=eq.' + session.user_id;
+    try {
+      await rest(row + '&callsign_key=is.null', opts);
+    } catch (e) {
+      // A 400 on a filter over `callsign_key` means the phase 6 migration has
+      // not been applied (PostgREST 42703; server.js's own /health probe reads a
+      // 400 on those columns exactly this way). No column means no account can
+      // hold a chosen callsign either, so the unguarded write is precisely what
+      // shipped before this change and can void nothing. Every other failure is
+      // left alone: the next save tries again.
+      if (!e || e.status !== 400) return;
+      try { await rest(row, opts); } catch {}
+    }
   }
 
   return {
@@ -246,6 +286,22 @@ window.Cloud = (() => {
 
     // Upsert the profile row, creating the anonymous account on first use.
     // Returns true on success so the caller can keep a dirty flag.
+    //
+    // `callsign` IS NO LONGER PART OF THIS BODY, and that is deliberate. It rode
+    // here for as long as a name was only ever a rolled pair, so every cloud save
+    // PATCHed this device's local name over whatever the column held -- harmless
+    // then, and the reason a chosen callsign could be destroyed by a save that
+    // knew nothing about it. The server proves a chosen name by
+    // normaliseCallsign(callsign) === callsign_key; the phase 6 grants let this
+    // client write `callsign` but never `callsign_key`; so a second device
+    // booting with its own rolled pair left the row unprovable, the name gone
+    // from every lobby, the change refused for 24 hours and the key reserved to
+    // an account that no longer showed it. The name now goes up on its own,
+    // guarded in the database -- see saveDisplayName above.
+    //
+    // A key present in a merge-duplicates body IS written, null included, so
+    // simply passing null here would have nulled the column rather than leaving
+    // it alone. Omission is the only way to not touch it.
     async save(callsign, progression) {
       try {
         await ensureSession(true);
@@ -255,11 +311,14 @@ window.Cloud = (() => {
           headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
           body: JSON.stringify({
             id: session.user_id,
-            callsign: callsign || null,
             progression,
             progression_version: 1,
           }),
         });
+        // Secondary, and deliberately not fatal to the return value: progression
+        // is what the dirty flag exists for, and a name that did not land is
+        // retried by the next save like any other.
+        await saveDisplayName(callsign);
         return true;
       } catch { return false; }
     },

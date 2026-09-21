@@ -33,7 +33,7 @@ const BODY = SRC.slice(at + HEAD.length, end);
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const run = new AsyncFunction('Cloud', 'savedName', 'progressionSnapshot', 'Blob', 'document', 'URL', 'setTimeout', 'showToast', 'window', BODY);
 
-async function exportWith({ social, name = 'Iron Hare', who = { anonymous: false, google: true, apple: false, email: 'a@b.c' } }) {
+async function exportWith({ social, blocked, name = 'Iron Hare', who = { anonymous: false, google: true, apple: false, email: 'a@b.c' } }) {
   let text = null;
   class StubBlob { constructor(parts) { text = parts.join(''); } }
   const doc = { createElement: () => ({ click() {}, remove() {} }), body: { appendChild() {} } };
@@ -41,6 +41,7 @@ async function exportWith({ social, name = 'Iron Hare', who = { anonymous: false
   const Cloud = { restore: async () => ({ callsign: name, wins: 7 }), whoami: async () => who, userId: () => 'u-1111' };
   const win = {};
   if (social !== undefined) win.CC_SOCIAL = social;   // absent = a player who never opened Friends
+  if (blocked !== undefined) win.CC_SOCIAL_BLOCKED = blocked;  // bay.js's guest-only blocked-list size
   await run(Cloud, () => name, () => ({ career: { wins: 7 } }), StubBlob, doc, url, () => {}, () => {}, win);
   if (text === null) throw new Error('nothing reached the Blob — the download path changed');
   return JSON.parse(text);
@@ -80,6 +81,27 @@ const KEYS = ['exported_at', 'account_id', 'account_type', 'sign_in', 'callsign'
   const d = await exportWith({ social: { friendCode: null } });
   if (d.friends_count === null && d.blocked_count === null && d.friend_code === null) ok('half-built snapshot: nulls, no throw');
   else fail('half-built snapshot produced ' + JSON.stringify({ c: d.friend_code, f: d.friends_count, b: d.blocked_count }));
+}
+// 4b. A GUEST'S BLOCKED LIST IS REAL, LOADED, AND ON SCREEN. `friends` is
+//    refused to a guest (requireLinked), so CC_SOCIAL is null for them for ever
+//    and blocked_count could never be anything but null -- while the Friends
+//    screen was drawing the list, and while the file's own null_counts sentence
+//    told them the device had not loaded it. bay.js owns that read (block
+//    op:'list') and publishes its size; friends_count and friend_code stay null,
+//    which for a guest is the truth.
+{
+  const guest = { anonymous: true, google: false, apple: false, email: null };
+  const d = await exportWith({ social: undefined, blocked: 2, who: guest });
+  if (d.account_type === 'guest' && d.blocked_count === 2 && d.friends_count === null && d.friend_code === null)
+    ok('a guest exports the blocked list they can see, and nulls for what they genuinely do not have');
+  else fail('guest export: ' + JSON.stringify({ t: d.account_type, b: d.blocked_count, f: d.friends_count, c: d.friend_code }));
+}
+// 4c. and a snapshot still wins: a linked account counts its own list, never a
+//    stale number left behind by a guest session on the same device.
+{
+  const d = await exportWith({ social: SNAP, blocked: 99 });
+  if (d.blocked_count === 1) ok('with a snapshot in hand blocked_count comes from it, not from the guest slot');
+  else fail('snapshot precedence: ' + JSON.stringify(d.blocked_count));
 }
 // 5. the new fields cost NO read — they come off a snapshot already in memory
 {

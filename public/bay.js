@@ -561,7 +561,16 @@ SCREENS.settings = function () {
     // a frame that never came back.
     const known = !!st.social;
     const held = st.linked && known && typeof st.social.callsign === 'string' ? st.social.callsign : '';
-    const max = has('CALLSIGN_MAX') ? CALLSIGN_MAX : 16;
+    // TWICE THE RULE, BECAUSE THE TWO COUNT DIFFERENT THINGS. server/callsign.js
+    // measures a name in CODE POINTS ([...name].length, 3 to 16); HTML maxlength
+    // counts UTF-16 code UNITS. They agree for every BMP script, including the
+    // combining marks BINDING resolution 21 admits, and disagree by half for a
+    // non-BMP letter -- a CJK Extension B ideograph, Gothic, Deseret -- where the
+    // field stopped at 8 characters under a rules line promising 16, with no
+    // error and nothing to act on. Doubling is exact: 16 code points can never
+    // exceed 32 units. It stays a cap against a paste bomb; the server is still
+    // the only validator, and it answers 'length' for anything longer.
+    const max = (has('CALLSIGN_MAX') ? CALLSIGN_MAX : 16) * 2;
     const desc = !st.linked ? CS_OUT : !known ? CS_WAIT : held ? esc(held) : CS_HINT;
     if (!st.linked) return '<div class="cs">' + row('Callsign', desc, 'Roll', 'data-roll') + '</div>';
     const body = callsign.open
@@ -764,6 +773,13 @@ let fr = { q: '', code: '', res: null, ferr: '', cerr: '', perr: '', berr: '' };
 // A GUEST'S OWN BLOCKED LIST. They are refused the friends frame, so this is
 // the one read they get. null = not known yet, exactly like CC_SOCIAL.
 let gb = { list: null, err: '', asking: false };
+// AND THE ONE NUMBER OUT OF IT THAT LEAVES THIS FILE. app.js's exportMyData()
+// builds blocked_count from CC_SOCIAL, which a guest never receives, so a guest
+// looking straight at their own blocked list exported a null and a sentence
+// telling them the device had not loaded it. Parked on window in the same style
+// as CC_SOCIAL_ASKING, declared by app.js, written only here, read only there.
+// Called wherever gb.list moves, so null always means NOT LOADED.
+const gbPublish = () => { window.CC_SOCIAL_BLOCKED = gb.list ? gb.list.length : null; };
 // WHOSE list, sheet and error sentences the state above belongs to. The ACCOUNT
 // ID, because the account this screen's guest half serves is anonymous and
 // app.js's accountKey() — built from an email and a provider list — is '' for
@@ -851,6 +867,17 @@ const SOC_ERR = {
   'block.sign_in':               'Sign in to report or block a player.',
   'block.offline':               'Not connected. Try again in a moment.',
   'block._':                     'Blocking is not available right now. Try again later.',
+  // UNBLOCK IS ITS OWN ACT, AND IT HAD NO GROUP. `block` was passed as the kind
+  // for op:'remove', so every failure fell through to 'block._' and a player who
+  // had just tapped Unblock was told "Blocking is not available right now" --
+  // the game appearing to refuse to UNDO a block, in the exact window (no phase
+  // 6 migration, the table 404s) where it is what every player sees. And
+  // 'block.no_such_user' told them the player was "no longer here" about a row
+  // sitting on their own blocked list.
+  'block.remove.no_such_user':   'They are not on your blocked list.',
+  'block.remove.sign_in':        'Sign in to see who you have blocked.',
+  'block.remove.offline':        'Not connected. Try again in a moment.',
+  'block.remove._':              'Unblocking is not available right now. Try again later.',
   'block.list.slow_down':        'Too many tries. Wait a moment.',
   'block.list.sign_in':          'Sign in to see who you have blocked.',
   'block.list.offline':          'Not connected. Try again in a moment.',
@@ -1063,8 +1090,16 @@ function pmClick(e) {
     const rep = pa.act === 'report', kind = rep ? 'report' : 'block';
     const frame = rep ? { type: 'report', ...pmAim(pa) } : { type: 'block', op: 'add', ...pmAim(pa) };
     pa.busy = kind;
+    // THE SHEET THIS WAS SENT FROM, BY IDENTITY. `if (!pa)` only asked whether
+    // SOME sheet is open: cancel a slow Report, open a Block on another card,
+    // and the report's answer closed that sheet and raised "Reported. Thank
+    // you." over an action the player had abandoned -- or wrote the report's red
+    // sentence into it. pa is replaced wholesale by the branch above and by
+    // pmOpen, so the object is the only thing that identifies the request.
+    // submitCallsign already keeps this discipline with csSeq.
+    const mine = pa;
     socialTx(frame, rep ? 'report' : 'block', rep ? '' : 'add', kind, (m, err) => {
-      if (!pa) return;
+      if (pa !== mine) return;
       pa.busy = '';
       if (err) { pa.err = err; pmPaint(); return; }
       // pmClose(), not a hand-cleared pm/pa: a sent report is a CLOSE like any
@@ -1080,8 +1115,11 @@ function pmClick(e) {
     if (!pm || pm.kind !== 'id' || pm.busy) return;
     const who = pm.key;
     pm.busy = 'unfriend'; pm.err = '';
+    // The same identity check: a backdrop tap and a second menu leave `pm`
+    // truthy and pointing at a different player.
+    const mine = pm;
     socialTx({ type: 'friend', op: 'remove', id: who }, 'friend', 'remove', 'friend.remove', (m, err) => {
-      if (!pm) return;
+      if (pm !== mine) return;
       pm.busy = '';
       if (err) { pm.err = err; pmPaint(); return; }
       pmClose();
@@ -1216,10 +1254,19 @@ function frShareCode(useShare) {
 function gbNeed() {
   if (acctState() !== 'guest' || gb.list || gb.asking || !wsReady()) return;
   gb.asking = true; gb.err = '';
+  // PAINTED BEFORE THE SEND, which is what makes the tap visible: the button
+  // reads Loading and goes disabled while the read is out. Without it the screen
+  // kept rendering an ENABLED Retry over a request already in flight, and
+  // gbNeed's own `gb.asking` guard returned immediately on every further tap --
+  // so a guest, for whom this list is the whole screen, could tap it four times
+  // on a slow connection and see nothing change by a pixel. socialResync does
+  // exactly this on the linked path, for exactly this reason.
+  frPaint();
   socialTx({ type: 'block', op: 'list' }, 'block', 'list', 'block.list', (m, err) => {
     gb.asking = false;
     if (err) gb.err = err;
     else { gb.list = Array.isArray(m.blocked) ? m.blocked : []; gb.err = ''; }
+    gbPublish();
     frPaint();
   });
 }
@@ -1228,6 +1275,7 @@ function gbNeed() {
 function gbRefresh() {
   if (acctState() !== 'guest') return;
   gb.list = null; gb.err = '';
+  gbPublish();
   gbNeed();
 }
 function frNeed() {
@@ -1302,7 +1350,7 @@ function frAct(v) {
   });
   if (op === 'acc') return frOne({ type: 'friend', op: 'accept', from: arg }, 'friend', 'accept', 'friend.accept', 'perr', () => {});
   if (op === 'dec') return frOne({ type: 'friend', op: 'decline', from: arg }, 'friend', 'decline', 'friend.decline', 'perr', () => {});
-  if (op === 'unblock') return frOne({ type: 'block', op: 'remove', id: arg }, 'block', 'remove', 'block', 'berr', () => {
+  if (op === 'unblock') return frOne({ type: 'block', op: 'remove', id: arg }, 'block', 'remove', 'block.remove', 'berr', () => {
     if (fn('showToast')) showToast('Unblocked.');
     gbRefresh();
   });
@@ -1915,6 +1963,7 @@ document.addEventListener('cc:account', () => {
     // and without it a signed-out session would keep drawing the last account's
     // list.
     gb = { list: null, err: '', asking: false };
+    gbPublish();
     fr.perr = ''; fr.berr = ''; fr.ferr = ''; fr.cerr = '';
     // AND THE SHEET GOES WITH IT. pmPaint() renders pmAsk() whenever `pa` is
     // set and never consults pmItems(), so a sign-out with "Report this name"

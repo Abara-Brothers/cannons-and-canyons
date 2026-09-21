@@ -197,6 +197,12 @@ run seat_handle node test/seat_handle.mjs
   # whoami()'s per-provider account list, the source of the account chip and
   # the Bay controls row. Headless — the same stub harness.
   run account         node test/account.mjs
+  # THE CLOUD SAVE, and the one thing it must never be able to do: write this
+  # device's name over an account's CHOSEN callsign. public/cloud.js is not in
+  # the phase 6 diff at all, which is exactly why nothing caught it -- 27 commits
+  # made profiles.callsign load-bearing around a file nobody touched. Headless,
+  # the same stub harness.
+  run cloud_save      node test/cloud_save.mjs
 run validate    bash tools/backup/test-validate.sh
 run hitbox node test/hitbox.mjs
 run golf_hazards node test/golf_hazards.mjs
