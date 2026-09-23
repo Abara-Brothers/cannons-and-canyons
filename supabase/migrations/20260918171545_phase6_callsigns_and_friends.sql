@@ -9,9 +9,34 @@
 --   * by pasting it into the dashboard SQL editor, which runs the same SQL and
 --     records NOTHING — after that route the ledger still believes this
 --     migration is pending, so a later tooling run will try it again and fail.
--- Fill this line in when it is actually applied, and say which route:
+-- APPLIED: 2026-09-21 via apply_migration (the Supabase connector), by Claude
+-- at the owner's instruction, against project onacdpaxcqdfxikxiecy.
 --
---   APPLIED: <DATE> via <apply_migration | dashboard SQL editor>
+-- THE LEDGER VERSION IS NOT THIS FILE'S NAME. apply_migration stamps its own
+-- timestamp, so the project's ledger records this as version 20260921134316
+-- under the name `phase6_callsigns_and_friends`, while this file is stamped
+-- 20260918171545. Migration tooling that compares the local directory with the
+-- remote ledger by VERSION will therefore see this file as still pending and
+-- may try to run it again — which fails safely (see RUNNING THIS TWICE below)
+-- but is confusing. If that happens, it is this mismatch and not a missing
+-- migration.
+--
+-- WHAT WAS SENT, stated because it is not byte-identical to this file: the
+-- executable SQL, verbatim, including every `comment on` statement. The `--`
+-- source comments were not included, so the database carries all of this file's
+-- COLUMN and TABLE comments but the ledger's copy of the query does not carry
+-- the commentary above and between the statements. No statement, constraint,
+-- index or grant differs.
+--
+-- VERIFIED IMMEDIATELY AFTER, not assumed: the column_privileges query returned
+-- exactly 8 rows (INSERT and UPDATE on id, callsign, progression,
+-- progression_version) and named none of the three new columns, which is the
+-- security property this file exists for; all four tables exist with RLS on and
+-- ZERO policies; profiles_callsign_len reads `char_length(callsign) <= 16`; all
+-- eleven indexes are present; the four tables are empty and all 34 profiles have
+-- a null callsign_key; and from outside, with the publishable key, every new
+-- column and table answers 200 with an empty array, including a filter on
+-- callsign_key, which is what public/cloud.js's guarded write depends on.
 --
 -- WHY: a callsign today is ROLLED from two word lists and is not unique, so
 -- there is nothing one player can type to find another. Friends therefore need
