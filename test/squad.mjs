@@ -28,7 +28,8 @@ import { createSquads, fitsFor, SQUAD_SEATS } from '../server/squads.js';
 // THE REAL ENGINE. This is the one suite in the tree that needs both halves in
 // one process: makeCode's loop is what task 1 changes, and `rooms` is the
 // container the code frame's room arm reads through.
-import { rooms, handleClientMessage, setCodeTaken, MODE_SEATS } from '../public/room-engine.js';
+import { rooms, handleClientMessage, setCodeTaken, MODE_SEATS, TEE_IDS, validRackFor } from '../public/room-engine.js';
+import { LOADOUT_POOL, loadoutSizeFor } from '../public/game-core.js';
 import { createSocial, SOCIAL_TYPES } from '../server/social.js';
 // Task 2: the one-byte hook the code minters are proved on. The same module
 // is loaded into a spawned server.js by test/code_frame.mjs with --import;
@@ -1654,6 +1655,99 @@ const ENGINE_STARTS = {};
   else fail('(s3b) the minimum refusal went to ' + JSON.stringify(told));
   if (rooms.size === before) ok('(s3b) every room this block made is gone again');
   else fail(`(s3b) rooms leaked: ${before} -> ${rooms.size}`);
+}
+
+// ---- (s3c) the rack a seat keeps, and the tee sets a golf room takes -------
+// "ready:true requires a full rack for the armed mode's draft size (the
+// client checks first; the server re-checks)" (design 4.3). The number is the
+// ENGINE's: its create and join paths throw away a rack of the wrong length,
+// and a squad that readied against a different number would start into a room
+// that sent every seat to the pick screen. So what the engine KEEPS is the
+// oracle here, read off the create and join paths themselves.
+const RACK5 = LOADOUT_POOL.slice(0, 5);
+const RACK7 = LOADOUT_POOL.slice(0, 7);
+// [keeps five, keeps seven] per mode: duel, ffa and golf draft five (golf's
+// loadoutSizeFor is 0, read by the engine as five), the co-op raids seven.
+const KEEPS = { duel: [true, false], ffa: [true, false], boss: [false, true], aliens: [false, true], golf: [true, false] };
+const keptOnCreate = (mode, rack) => {
+  const w = mkws();
+  handleClientMessage(w, { type: 'create', name: 'T', skin: 'olive', mode, loadout: rack });
+  const cr = frames(w, 'created')[0];
+  const r = cr ? rooms.get(cr.code) : null;
+  const kept = !!(r && same(r.players[0].loadout, rack));
+  handleClientMessage(w, { type: 'leave' });
+  return kept;
+};
+{
+  const before = rooms.size;
+  const got = {};
+  for (const mode of Object.keys(KEEPS)) got[mode] = [keptOnCreate(mode, RACK5), keptOnCreate(mode, RACK7)];
+  if (same(got, KEEPS)) ok('(s3c) the create path keeps five picks for duel, ffa and golf and seven for the co-op raids, and drops the other');
+  else fail('(s3c) the create path kept ' + JSON.stringify(got));
+  // THE JOIN PATH, the one a squad start seats every member but the leader
+  // through. An ffa lobby of four stays open, so both sizes can be offered.
+  const host = mkws();
+  handleClientMessage(host, { type: 'create', name: 'T', skin: 'olive', mode: 'ffa', max: 4, loadout: RACK5 });
+  const code = frames(host, 'created')[0].code;
+  const j5 = mkws(), j7 = mkws();
+  handleClientMessage(j5, { type: 'join', code, name: 'T', skin: 'olive', loadout: RACK5 });
+  handleClientMessage(j7, { type: 'join', code, name: 'T', skin: 'olive', loadout: RACK7 });
+  const r = rooms.get(code);
+  if (r && same(r.players[j5.seat].loadout, RACK5) && r.players[j7.seat].loadout === null)
+    ok('(s3c) the join path keeps a five-pick rack in a free-for-all and drops a seven');
+  else fail('(s3c) join path kept ' + JSON.stringify(r && r.players.map((p) => p && p.loadout)));
+  for (const w of [j5, j7, host]) handleClientMessage(w, { type: 'leave' });
+
+  // THE TEE SETS a golf room takes, and the one it falls back to.
+  const tees = {};
+  for (const t of ['champ', 'mens', 'womens', 'junior', 'blue', 'constructor', '', null]) {
+    const w = mkws();
+    handleClientMessage(w, { type: 'create', name: 'T', skin: 'olive', mode: 'golf', tees: t });
+    const cr = frames(w, 'created')[0];
+    const g = cr ? rooms.get(cr.code) : null;
+    tees[String(t)] = g ? g.tees : undefined;
+    handleClientMessage(w, { type: 'leave' });
+  }
+  if (same(tees, { champ: 'champ', mens: 'mens', womens: 'womens', junior: 'junior', blue: 'mens', constructor: 'mens', '': 'mens', null: 'mens' }))
+    ok('(s3c) a golf room takes exactly champ, mens, womens and junior, and anything else is mens');
+  else fail('(s3c) golf tees: ' + JSON.stringify(tees));
+  if (rooms.size === before) ok('(s3c) every room this block made is gone again');
+  else fail(`(s3c) rooms leaked: ${before} -> ${rooms.size}`);
+
+  // validRackFor IS THE ENGINE'S OWN PREDICATE, and it answers exactly what
+  // the create path just did — so a rack the squad layer accepts at Ready is
+  // a rack the seat keeps at Start.
+  const pred = {};
+  for (const mode of Object.keys(KEEPS)) pred[mode] = [validRackFor(mode, RACK5), validRackFor(mode, RACK7)];
+  if (same(pred, KEEPS) && same(pred, got)) ok('(s3c) validRackFor answers what the create path kept, mode by mode');
+  else fail('(s3c) validRackFor answered ' + JSON.stringify(pred) + ', the engine kept ' + JSON.stringify(got));
+  const junk = [
+    ['duel', ['mortar', 'mortar', 'mortar', 'mortar', 'mortar']],
+    ['duel', ['mortar', 'volley', 'cluster', 'napalm', 'nosuchweapon']],
+    ['duel', null], ['duel', []], ['duel', 'mortar,volley,cluster,napalm,gas'], ['golf', []],
+    ['battleroyale', RACK5], ['constructor', RACK5], [undefined, RACK5],
+  ].filter(([mode, picks]) => validRackFor(mode, picks) !== false);
+  if (!junk.length) ok('(s3c) validRackFor refuses duplicates, an unknown weapon, a non-array, an empty rack, and any rack for a mode that is not one');
+  else fail('(s3c) validRackFor accepted ' + JSON.stringify(junk));
+
+  // THREE CLAIMS ABOUT ONE NUMBER: the table, game-core, and public/bay.js's
+  // MODES `draft` column, which is how many weapons the box has the player
+  // pick before Ready is offered. If the box drafted a different number from
+  // the one the server re-checks, that mode could never ready up. The
+  // literal is the floor, so all three drifting together still fails.
+  const RACK_WANT = { duel: 5, ffa: 5, boss: 7, aliens: 7, golf: 5 };
+  const bay = read('public/bay.js');
+  const bayDraft = (id) => { const m = bay.match(new RegExp("\\{\\s*id:\\s*'" + id + "'[^}]*?draft:\\s*(\\d+)")); return m ? Number(m[1]) : null; };
+  const drift = Object.entries(RACK_WANT).filter(([id, want]) =>
+    !(MODE_SEATS[id].rack === want && (loadoutSizeFor(id) || 5) === want && bayDraft(id) === want));
+  if (!drift.length) ok('(s3c) the rack is one number in MODE_SEATS, in game-core and in the box, for every mode');
+  else fail('(s3c) rack sizes disagree: ' + JSON.stringify(drift.map(([id]) => [id, MODE_SEATS[id].rack, loadoutSizeFor(id), bayDraft(id)])));
+
+  // TEE_IDS IS THE SET THE ENGINE TOOK, not a list beside it.
+  const took = Object.keys(tees).filter((t) => tees[t] === t);
+  if (Array.isArray(TEE_IDS) && Object.isFrozen(TEE_IDS) && same(TEE_IDS, ['champ', 'mens', 'womens', 'junior']) && same(TEE_IDS, took))
+    ok('(s3c) TEE_IDS is frozen and is exactly the tee sets a golf room took');
+  else fail('(s3c) TEE_IDS is ' + JSON.stringify(TEE_IDS) + ', the engine took ' + JSON.stringify(took));
 }
 
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall squad checks passed');

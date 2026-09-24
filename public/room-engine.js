@@ -476,6 +476,19 @@ const MODE_SEATS = Object.freeze({
 // 'constructor' must not find Object.prototype's. sanitizeTees's form.
 const knownMode = (mode) => Object.prototype.hasOwnProperty.call(MODE_SEATS, mode);
 
+// THE RACK A SEAT OF THIS MODE KEEPS. ONE predicate: the create and join paths
+// below apply it through sanitizeLoadoutFor, and server.js hands the same
+// function to the squad layer, so a rack a squad member readies with is a
+// rack the seat keeps when the squad starts. A second implementation of this
+// would be a squad that starts into a pick screen at every seat.
+//
+// A mode that is not in the table has no rack at all. The engine only ever
+// asks with a room's own mode, which createRoom has already taken from the
+// table, so this refusal is only ever seen by a caller that was not.
+export function validRackFor(mode, picks) {
+  return knownMode(mode) && validLoadout(picks, MODE_SEATS[mode].rack);
+}
+
 // The seat numbers are the table above; this is how each mode PLAYS.
 // mode: 'duel'    -> exactly 2, auto-starts the moment the 2nd player joins
 //       'ffa'     -> 2..4, the HOST starts it (or it auto-starts when it fills)
@@ -489,7 +502,9 @@ const knownMode = (mode) => Object.prototype.hasOwnProperty.call(MODE_SEATS, mod
 // a 7-pick payload against 5 silently discards it and strands the player in the
 // draft window for the full PICK_MS.
 const sanitizeLoadout = (picks, n = 5) => (validLoadout(picks, n) ? picks.slice() : null);
-const sanitizeLoadoutFor = (mode, picks) => sanitizeLoadout(picks, loadoutSizeFor(mode) || 5);
+// The create and join paths' rack check IS validRackFor (above), so the check a
+// squad readies against and the check the seat keeps are one function.
+const sanitizeLoadoutFor = (mode, picks) => (validRackFor(mode, picks) ? picks.slice() : null);
 const DEFAULT_LOADOUT = ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'];
 const DEFAULT_LOADOUT7 = ['mortar', 'cluster', 'napalm', 'airstrike', 'volley', 'buster', 'gas'];
 const defaultLoadoutFor = (n) => (n >= 7 ? DEFAULT_LOADOUT7.slice() : DEFAULT_LOADOUT.slice());
@@ -800,6 +815,10 @@ const GOLF_HOLES = [
 ];
 const TEE_SETS = { champ: 1.0, mens: 0.92, womens: 0.84, junior: 0.72 };
 const sanitizeTees = (t) => (Object.prototype.hasOwnProperty.call(TEE_SETS, t) ? t : 'mens');
+// The tee sets as ids, exported beside MODE_SEATS so the squad layer can vet a
+// leader's choice against the set a golf room really takes before it echoes
+// that choice to every other member.
+const TEE_IDS = Object.freeze(Object.keys(TEE_SETS));
 
 function startGolf(room) {
   const n = room.players.length;
@@ -2177,9 +2196,11 @@ export function handleClientMessage(ws, msg) {
 // more — every extra export is another way for the host to reach past the seam.
 export { rooms, send, handleClose };
 // FROZEN DATA, NOT ANOTHER DOOR. The note above is about reaching past the
-// seam; this is the seam's own vocabulary, read-only, so server.js can hand
-// the squad layer the numbers this file enforces instead of a copy.
-export { MODE_SEATS };
+// seam; these are the seam's own vocabulary, read-only, so server.js can hand
+// the squad layer the numbers this file enforces instead of a copy. The rack
+// predicate that goes with them, validRackFor, is exported where it is
+// declared, beside MODE_SEATS.
+export { MODE_SEATS, TEE_IDS };
 // The ONE way back from a seat handle to an account, and the host's only route
 // in. server.js injects it into the social layer as `resolveHandle`; report and
 // block call it and nothing else does.
