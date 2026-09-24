@@ -229,7 +229,7 @@ const BLOCK_KEY_RE = /^[0-9a-f]{32}$/;
 // under server/ has the engine's safeTimeout — so every callback handed to it
 // here is wrapped by hand (see the drop window below).
 //
-// pushInvite(toUserId, { code, from, size, max }, { dryRun }) ->
+// pushInvite(toUserId, { code, from, size, max }, { dryRun, signal }) ->
 // Promise<boolean> — the squad invite's PUSH transport (design 4.4), for an
 // invited friend who holds no live socket. Injected for the reason seatSquad
 // is: the web push, FCM and APNs senders live in server.js, and this module
@@ -242,6 +242,9 @@ const BLOCK_KEY_RE = /^[0-9a-f]{32}$/;
 // `dryRun: true` (D-BLOCK-2 E, as the owner revised it) makes THE SAME READ,
 // SENDS NOTHING, and answers what a real call would have: a DROPPED invite
 // asks it, so the inviter's answer, and what it cost, are a real invite's.
+// `signal` is an AbortSignal aborted when the seam's time is up and the
+// inviter has been answered none (see askPushSeam): a transport must start
+// no send once it is aborted.
 // THE DEFAULT DELIVERS NOTHING AND SAYS SO, in both forms: every host that
 // wires no transport, and every suite, gets an honest 'none', never a 'push'
 // that went nowhere. Task 7 replaces this default from server.js.
@@ -394,9 +397,20 @@ export function createSocial({
   //
   // EVERY KIND OF ACCOUNT, GUESTS INCLUDED, GOES THROUGH THE SIGN-IN DOOR of
   // D-BLOCK-2 B (blocksOnSignIn): a block can name an anonymous account too.
+  //
+  // THE DOOR OPENS WHEN THE SOCKET BECOMES AN ACCOUNT, not on every hello.
+  // `squadAs` is the account this socket was last let in as, and onClose
+  // clears it on a sign-out and on a hello for another account, so it
+  // answers "the same account again" and nothing else. A re-hello with a
+  // rotated token for that account (the client's retry, a repeated sign-in)
+  // stands on rows already checked for it — by the join that made them, or
+  // by this door — so it reads nothing, and a store fault at that moment
+  // removes nobody, a leader included.
   function onAuth(ws) {
     if (!ws || !ws.userId) return;
-    if (ws.isGuest) { blocksOnSignIn(ws); return; }
+    const fresh = ws.squadAs !== wireId(ws.userId);
+    ws.squadAs = wireId(ws.userId);
+    if (ws.isGuest) { if (fresh) blocksOnSignIn(ws); return; }
     if (ws.socialUser && ws.socialUser !== ws.userId) dropPresence(ws.socialUser, ws);
     ws.socialUser = ws.userId;
     let set = online.get(ws.userId);
@@ -421,7 +435,7 @@ export function createSocial({
     // one account, one row, one seat. See claimOnSignIn.
     claimOnSignIn(ws);
     // AFTER the claim, so the row it checks is the one the claim left.
-    blocksOnSignIn(ws);
+    if (fresh) blocksOnSignIn(ws);
   }
 
   // Call on close, and on a sign-out hello. Unlike the first version of this
@@ -436,6 +450,8 @@ export function createSocial({
     dropPresence(ws.socialUser || ws.userId, ws);
     dropSquadMember(ws);
     ws.socialUser = null;
+    // Whoever this socket is next comes through the sign-in door (onAuth).
+    ws.squadAs = null;
   }
 
   function dropPresence(id, ws) {
@@ -1621,14 +1637,35 @@ export function createSocial({
   // anonymous account, and then sign in: the row would stand for them, by
   // name, beside the player who blocked them, and Start would seat the two.
   //
+  // ONE WAY IN DOES NOT PASS HERE, and it is not this file's: server.js's
+  // push-subscription sink sets ws.userId from a token on a socket that
+  // never said hello, with no onAuth (pre-existing, routed to Task 12, whose
+  // fix must go through onAuth). Until then such a row goes through this
+  // door at the socket's next hello, which `squadAs` counts as a new account.
+  //
   // THE ROW IS REMOVED AS A KICK: its socket gets exactly squadKick's victim
   // frame and the rest of the squad the roster a kick gives them. Nothing
-  // names the block. A socket that has since become somebody else (a
-  // sign-out, another hello: ws.authGen) is left to that hello's own check.
-  // A socket that CLOSED meanwhile is not a cancel: its row still stands for
-  // the account (by key, once adopted), so it goes, dropped, told nothing —
-  // D-BLOCK 5's rule. A socket with no account stands for nobody and is not
-  // read at all.
+  // names the block.
+  //
+  // THE CANCEL IS THE IDENTITY, NOT ws.authGen. server.js bumps the
+  // generation as every hello STARTS, before its token is verified, so a
+  // hello with a junk, missing or expired token moves it and changes nothing
+  // else: the socket is still this account, no onAuth follows, and a cancel
+  // on the generation would leave the row standing unchecked for good. Only
+  // a socket that is no longer this account — signed out, or signed in as
+  // another, whose onAuth runs the door for that account — is left alone.
+  // A socket that CLOSED meanwhile is not a cancel either: its row still
+  // stands for the account (by key, once adopted), so it goes, dropped, told
+  // nothing — D-BLOCK 5's rule. A socket with no account stands for nobody
+  // and is not read at all.
+  //
+  // THE CHECK FOLLOWS THE ROW, NOT THE KEY IT HAD. A row is one object for
+  // its life, and adoption rekeys it IN PLACE: a row adopted while the read
+  // is out (an anonymous account upgraded, or the account's other row gone
+  // and a re-hello, which opens no door of its own) is still this row. The
+  // squad is looked up AFTER the read, from the row's key as it is then, and
+  // a row that has left, or moved, is left alone: the socket has moved on,
+  // and wherever it went it went through a door of its own.
   //
   // FAILS CLOSED. A read that fails, or will not settle (the block epoch),
   // cannot say the row is safe, so the row goes: the join door refuses in
@@ -1640,13 +1677,15 @@ export function createSocial({
       if (key == null) return;
       const id = wireId(ws.userId);
       if (!isUuid(id)) return;
-      const gen = ws.authGen;
+      const held = squads.memberOf(key);
+      if (!held) return;
+      const row = held.member;
       let b = null;
       try { b = await settledBlocks(id); } catch { /* unread: not safe */ }
-      if (ws.authGen !== gen) return;
-      const found = squads.memberOf(key);
-      if (!found) return;
-      const { squad: sq, member: row } = found;
+      if (wireId(ws.userId) !== id) return;
+      const found = squads.memberOf(row.key);
+      if (!found || found.member !== row) return;
+      const sq = found.squad;
       if (b) {
         const hidden = new Set([...b.blocked, ...b.blockedBy]);
         // Every row, the account's own included: no account can block itself.
@@ -1841,7 +1880,15 @@ export function createSocial({
     // The invitee's blocks are read in the same leg: one read covers both
     // directions for every member (D-BLOCK 4). Every read is made for every
     // invite, so a refused or dropped one costs what a delivered one does.
-    const [friendIds, blocks, self, theirs] = await Promise.all([store.friendIdsOf(me), store.blockIdsOf(me), store.profileById(me), store.blockIdsOf(to)]);
+    //
+    // A BLOCK THAT LANDS WHILE THE LEG IS OUT is read again (the block epoch,
+    // as join and the sign-in door read it): the frame would otherwise carry
+    // this squad's code to a player a member has just blocked, whose join the
+    // same code then refuses. One that will not settle drops the invite. Only
+    // when the epoch moved, so an ordinary invite costs the one leg.
+    const at = blockEpoch;
+    const [friendIds, blocks, self, first] = await Promise.all([store.friendIdsOf(me), store.blockIdsOf(me), store.profileById(me), store.blockIdsOf(to)]);
+    const theirs = blockEpoch === at ? first : await settledBlocks(to);
     if (ws.authGen !== gen) return;
     if (!friendIds.includes(to)) return no('not_friend');
     if (blocks.blocked.includes(to) || blocks.blockedBy.includes(to)) return no('not_friend');
@@ -1861,7 +1908,7 @@ export function createSocial({
     // So the inviter is told "sent" for an invite that went nowhere: the
     // accepted price of never telling anyone about a block between two OTHER
     // players.
-    const dropped = anyRowOf(sq, new Set([...theirs.blocked, ...theirs.blockedBy]));
+    const dropped = !theirs || anyRowOf(sq, new Set([...theirs.blocked, ...theirs.blockedBy]));
     if (live.length) {
       if (!dropped) for (const w of live) safeSend(w, frame);
       return squadReply(ws, msg, 'invite', { ok: true, delivered: 'online' });
@@ -1885,12 +1932,21 @@ export function createSocial({
   // twelve. Both forms get the same bound, so a timed-out dry run and a
   // timed-out real one answer alike. Read per instance, the house pattern
   // for a time knob (PRESENCE_MS), and unref'd like every timer here.
+  //
+  // THE SEAM IS TOLD WHEN ITS TIME IS UP: `signal` is aborted at the bound,
+  // the moment the inviter is answered none. A transport whose read ran long
+  // must not send after that — the inviter has been told it did not go out,
+  // and the owner asked for that answer to be true.
   const envInvitePush = Number(process.env.SQUAD_INVITE_PUSH_MS);
   const INVITE_PUSH_MS = Number.isFinite(envInvitePush) && envInvitePush >= 0 ? envInvitePush : 4000;
   async function askPushSeam(to, payload, dryRun) {
+    const stop = new AbortController();
     let timer = null;
-    const expiry = new Promise((r) => { timer = setTimeout(r, INVITE_PUSH_MS, false); if (typeof timer.unref === 'function') timer.unref(); });
-    try { return (await Promise.race([pushInvite(to, payload, { dryRun }), expiry])) === true; }
+    const expiry = new Promise((r) => {
+      timer = setTimeout(() => { stop.abort(); r(false); }, INVITE_PUSH_MS);
+      if (typeof timer.unref === 'function') timer.unref();
+    });
+    try { return (await Promise.race([pushInvite(to, payload, { dryRun, signal: stop.signal }), expiry])) === true; }
     catch { return false; }
     finally { clearTimeout(timer); }
   }
@@ -2253,9 +2309,15 @@ export function createSocial({
   // anyone else. A guest may block (requireAccount, deliberately) and may be
   // blocked by the seat handle a lobby shows, and the squad a guest joined by
   // code is the one a Start seats them in again: a block that left a guest in
-  // the blocker's squad would seat the two together on every Start. The
-  // squads searched are every one either account has a row in — by account
-  // key, or through a live socket — from both sides.
+  // the blocker's squad would seat the two together on every Start.
+  //
+  // EVERY SQUAD IS SEARCHED, not only the ones a key reaches. An anonymous
+  // account has no presence and its rows are keyed by socket, so when both
+  // parties are anonymous and the block comes from a socket that holds no
+  // row — a second tab, or the blocking tab after it signed in as somebody
+  // else — no key leads to the squad they share. rowsOf judges every row by
+  // the account it stands for now, and the captured blocker is its only
+  // input; the acting socket is not asked at all.
   //
   // TO EVERYBODY BUT THE BLOCKER IT IS A KICK OR A LEAVE (D-BLOCK). When the
   // blocker leads, each removed row's socket gets exactly squadKick's victim
@@ -2270,25 +2332,15 @@ export function createSocial({
   // throw costs that squad only, and a squad that lost a row is always told.
   //
   // THE BLOCKER IS WHO ASKED, NOT WHO THE SOCKET IS NOW (D-BLOCK-2 D).
-  // handleBlock captures the account and ws.authGen before its first await,
-  // and hands both here after five. A socket that signed out, or said hello
-  // as somebody else, in between is no longer the blocker's: read then, the
-  // block would tear down nothing, or tear down squads of an account that
-  // blocked nobody. The acting socket is searched only while it is still
-  // the blocker's; the blocker's other rows are found by account as ever.
-  function squadBlockTeardown(ws, gen, blocker, blocked) {
+  // handleBlock captures the account before its first await and hands it
+  // here after five. A socket that signed out, or said hello as somebody
+  // else, in between is no longer the blocker's: read then, the block would
+  // tear down nothing, or tear down squads of an account that blocked
+  // nobody. Nothing here reads the socket, so its generation is not needed.
+  function squadBlockTeardown(blocker, blocked) {
     const me = wireId(blocker), them = wireId(blocked);
-    const own = ws && ws.authGen === gen ? ws : null;
     const tell = [];
-    let found = [];
-    try {
-      // Every squad an account has a row in: by its own key, and through
-      // every live socket of it — this one, and for a linked account every
-      // socket presence holds.
-      const squadsOf = (id, w) => [squads.ofUser(id), ...[w, ...socketsOf(id)].map((s) => (s ? squads.ofUser(squads.keyOfSocket(s)) : null))];
-      found = [...new Set([...squadsOf(me, own), ...squadsOf(them, null)].filter(Boolean))];
-    } catch { /* nothing removed yet */ }
-    for (const sq of found) {
+    for (const sq of squads.all()) {
       const t = { sq, out: [], frame: null };
       try {
         const mine = rowsOf(sq, me), theirs = rowsOf(sq, them);
@@ -2340,13 +2392,15 @@ export function createSocial({
   // (D-BLOCK): no frame names the block, though probing can still infer it
   // (D-BLOCK-2 A). Three other doors keep the pair apart afterwards — join,
   // invite and signing in (blocksOnSignIn) — and the block epoch, bumped the
-  // moment the row lands, closes the race between a block and a join or a
-  // sign-in whose block read was already out.
+  // moment the row lands, closes the race between a block and a join, an
+  // invite or a sign-in whose block read was already out. One way in is not
+  // this file's and does not pass them: server.js's push-subscription sink
+  // (see blocksOnSignIn).
   //
-  // WHO IS BLOCKING IS CAPTURED ON ENTRY (D-BLOCK-2 D): the account and the
-  // socket's authGen, before the first await. Every write, the teardown and
-  // the friends pushes act for the account that asked, even if this socket
-  // has signed out or become somebody else by the time they run.
+  // WHO IS BLOCKING IS CAPTURED ON ENTRY (D-BLOCK-2 D): the account, before
+  // the first await. Every write, the teardown and the friends pushes act
+  // for the account that asked, even if this socket has signed out or
+  // become somebody else by the time they run.
   //
   // NO PER-TYPE RATE LIMIT, and that is the spec rather than an oversight:
   // design 4.2 limits friend, callsign and report and says nothing about block,
@@ -2383,7 +2437,7 @@ export function createSocial({
     if (op !== 'add' && op !== 'remove' && op !== 'list') return reply(ws, msg, { type: 'block', op: op || 'unknown', error: 'unavailable' });
     // WHO IS BLOCKING, captured before the first await (D-BLOCK-2 D; see the
     // header above). Everything below acts for this account.
-    const blocker = ws.userId, gen = ws.authGen;
+    const blocker = ws.userId;
     // A BLOCK MUST NOT BE A ONE-WAY DOOR. requireAccount lets a GUEST write a
     // block row, and the blocked list lived ONLY inside friendsSnapshot, behind
     // requireLinked — so a guest could block somebody and then never see or lift
@@ -2491,7 +2545,7 @@ export function createSocial({
     // just blocked them, to be seated beside them by the next Start. Both the
     // removal and the telling run BEFORE the reply — members first, actor
     // last (pushSquad's rule) — so a reply that throws cannot skip either.
-    const tellSquads = alsoPush ? squadBlockTeardown(ws, gen, blocker, alsoPush) : null;
+    const tellSquads = alsoPush ? squadBlockTeardown(blocker, alsoPush) : null;
     if (tellSquads) await tellSquads();
     reply(ws, msg, outcome);
     if (!outcome.ok) return;

@@ -526,9 +526,18 @@ export function createSquads({ now, capacity = 4, codeTaken = () => false } = {}
     return [...touched.values()].filter((sq) => sq.members.length > 0);
   }
 
+  // EVERY LIVE SQUAD, as a copy the caller may remove members under (task 6's
+  // block teardown). The lookups above find a row by a KEY, and one row has
+  // no key an account can be found by: a guest row whose socket is signed in
+  // as an ANONYMOUS account, which has no presence either. A block names
+  // such an account, and its row is found only by looking at every row. A
+  // scan, bounded like keyOfSocket's, and asked once per block, never per
+  // frame.
+  const all = () => [...squads.values()];
+
   return {
     has, get, ofUser, keyOfSocket, create, join, leave, kick, removeMember, setReady, setMode, clearReady,
     markDropped, markResumed, sweepDropped,
-    memberOf, adoptGuest,
+    memberOf, adoptGuest, all,
   };
 }
