@@ -2598,5 +2598,125 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   else fail('(st11) bucket: ' + JSON.stringify(answers));
 }
 
+// ==========================================================================
+// TASK 5 — DROPPING, RESUMING, AND THE SQUAD THAT DID NOT SURVIVE A RESTART
+// ==========================================================================
+// A member whose socket goes keeps their row for the drop window, shown as
+// dropped and NOT ready, and is then removed; `squad resume` re-attaches a
+// returning account; after a restart every resume answers `gone`.
+//
+// ONE OUTER BLOCK, so nothing here collides with a name another section
+// declares at the top level, and its OWN clock, ids and sockets, so a change
+// to another section's fixture cannot break it. What is under test is the
+// REAL createSquads and the REAL createSocial, imported at the top of this
+// file. What is injected is only what the factories take as arguments in
+// production: the store, the clock, the socket, and — for the drop window —
+// the scheduler.
+//
+// NO WALL-CLOCK SLEEPS. The window's timer is INJECTED (createSocial's
+// `schedule`), so a test fires it by hand after moving the injected clock,
+// and nothing here can flake because the machine running the suite is busy.
+// The one test of the real default scheduler waits on a CONDITION with a
+// generous ceiling rather than on a fixed sleep. A push is asynchronous only
+// by the store double's microtasks, so `flush5` — one macrotask turn — is
+// enough to let every one of them land.
+{
+  const D5 = (n) => '00000000-0000-4000-8000-5d' + String(n).padStart(10, '0');
+  const LEAD = D5(1), MEM = D5(2), THIRD = D5(3), FOURTH = D5(4), ANON = D5(9);
+  let CLOCK5 = Date.parse('2026-09-24T09:00:00Z');
+  const now5 = () => CLOCK5;
+  // A LINKED account is userId set and isGuest false. A GUEST is a socket
+  // with a real anonymous account id and isGuest TRUE — the case that
+  // actually happens — or a socket that never said hello.
+  const mkws5 = (userId = null, isGuest = false) => ({ readyState: 1, userId, isGuest, rx: [] });
+  const mem5 = (userId, ws) => ({ userId, guest: !userId, name: 'Rolling Thunder', skin: 'olive', ws });
+  const RACK5 = ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'];
+  const rows5 = (sq) => sq.members.map((m) => m.userId || 'guest');
+
+  // ---- (d1) a closed member is stamped dropped and KEEPS their row ---------
+  {
+    const S = createSquads({ now: now5 });
+    const wl = mkws5(LEAD), wm = mkws5(MEM);
+    const sq = S.create(mem5(LEAD, wl));
+    CLOCK5 += 1;
+    S.join(sq.code, mem5(MEM, wm));
+    S.setReady(MEM, true, RACK5);
+    wm.readyState = 3;                         // the socket closed
+    CLOCK5 += 5000;
+    const got = S.markDropped(MEM, CLOCK5);
+    const m = sq.members.find((x) => x.userId === MEM);
+    if (got === sq && sq.members.length === 2 && m && m.dropAt === CLOCK5 && m.ws === null && S.ofUser(MEM) === sq)
+      ok('(d1) a closed member is stamped dropped, loses their socket, and KEEPS their row and their index entry');
+    else fail('(d1) markDropped: ' + JSON.stringify({ got: got && got.code, n: sq.members.length, m }, noWs));
+    // "A dropped member is not ready" is literal (design 4.3). Left set, the
+    // flag and the rack would outlive the socket they were readied on.
+    if (m && m.ready === false && m.loadout === null)
+      ok('(d1) and a dropped member is NOT ready — the flag and the rack go with the socket');
+    else fail('(d1) ready survived the drop: ' + JSON.stringify(m, noWs));
+  }
+
+  // ---- (d2) a GUEST is found by their socket, and by nothing else ----------
+  {
+    const S = createSquads({ now: now5 });
+    const wl = mkws5(LEAD);
+    const sq = S.create(mem5(LEAD, wl));
+    const wg = mkws5(ANON, true);              // a guest HAS an anonymous id...
+    S.join(sq.code, mem5(null, wg));           // ...and joins as null
+    // THE FLOOR FIRST: the anonymous id on the socket is not a squad key. If
+    // it were, a second socket presenting that id could claim the row.
+    if (S.markDropped(ANON, CLOCK5) === null && sq.members[1].dropAt === null)
+      ok('(d2) the anonymous account id a guest socket carries is not a squad key');
+    else fail('(d2) the anonymous id resolved a guest member');
+    wg.readyState = 3;
+    const got = S.markDropped(wg, CLOCK5);
+    const g = sq.members[1];
+    if (got === sq && g.userId === null && g.dropAt === CLOCK5 && g.ws === null && sq.members.length === 2 && S.ofUser(wg) === sq)
+      ok('(d2) a guest is dropped by the SOCKET that is their key, and their row is kept like anyone else\'s');
+    else fail('(d2) guest drop: ' + JSON.stringify({ got: got && got.code, g }, noWs));
+  }
+
+  // ---- (d3) a member whose row holds a LIVE socket is not dropped ----------
+  // The engine's `player.ws === ws` rule, in the machine's terms: nothing
+  // there is to drop. server/social.js only ever hands markDropped the key of
+  // the row the closing socket holds, so from there this guard cannot be
+  // reached; it is the machine holding its own rule for a direct caller.
+  {
+    const S = createSquads({ now: now5 });
+    const wl = mkws5(LEAD), wm = mkws5(MEM);
+    const sq = S.create(mem5(LEAD, wl));
+    S.join(sq.code, mem5(MEM, wm));
+    const m = sq.members[1];
+    if (S.markDropped(MEM, CLOCK5 + 10) === null && m.dropAt === null && m.ws === wm)
+      ok('(d3) a member whose row holds a live socket is not dropped');
+    else fail('(d3) the live socket was dropped: ' + JSON.stringify({ dropAt: m.dropAt, isWm: m.ws === wm }));
+    // THE CONTROL: the guard is the socket's state, not a refusal to drop.
+    wm.readyState = 3;
+    if (S.markDropped(MEM, CLOCK5 + 20) === sq && m.dropAt === CLOCK5 + 20)
+      ok('(d3) and once that socket has closed, the same call drops them');
+    else fail('(d3) the guard refused a real drop: ' + JSON.stringify({ dropAt: m.dropAt }));
+    // ---- (d4) a second close does not slide the window forward -----------
+    // onClose is reached from three places in server.js; re-stamping dropAt
+    // would hold a member for ever under a socket that closes repeatedly.
+    if (S.markDropped(MEM, CLOCK5 + 9999) === null && m.dropAt === CLOCK5 + 20)
+      ok('(d4) a second close does not re-stamp dropAt, so the window cannot be slid forward');
+    else fail('(d4) the window moved: ' + JSON.stringify({ dropAt: m.dropAt }));
+    // A TIME THAT IS NOT ONE IS NOT A DROP. A row with its socket gone and
+    // dropAt still null would never be swept: a ghost for the squad's life.
+    const wt = mkws5(THIRD);
+    S.join(sq.code, mem5(THIRD, wt));
+    wt.readyState = 3;
+    const t = sq.members[2];
+    const bad = [undefined, null, NaN, '1700000000000'].map((at) => S.markDropped(THIRD, at));
+    if (bad.every((r) => r === null) && t.ws === wt && t.dropAt === null)
+      ok('(d4) a drop stamped with anything but a finite time is refused and the row is untouched');
+    else fail('(d4) a bad time was stamped: ' + JSON.stringify({ bad: bad.map((r) => r && r.code), dropAt: t.dropAt, ws: t.ws === wt }));
+    if (S.markDropped(null, CLOCK5) === null && S.markDropped(D5(77), CLOCK5) === null && S.markDropped({}, CLOCK5) === null)
+      ok('(d4) a key that holds no row drops nothing');
+    else fail('(d4) a stranger key dropped something');
+  }
+
+  // ---- (end of task 5) ----
+}
+
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall squad checks passed');
 process.exit(out.errors.length ? 1 : 0);

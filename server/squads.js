@@ -389,5 +389,57 @@ export function createSquads({ now, capacity = 4, codeTaken = () => false } = {}
     return squad;
   }
 
-  return { has, get, ofUser, keyOfSocket, create, join, leave, kick, removeMember, setReady, setMode, clearReady };
+  // ---- the drop window (task 5, design 4.3) ---------------------------------
+  // A member whose socket goes is not removed: the row is kept, shown as
+  // dropped and NOT READY, for as long as the caller's window lasts, and then
+  // removed. This file owns the STATE of that window and nothing else. There
+  // is no timer here and no clock beyond the injected now(): the window's
+  // length and its timer belong to server/social.js, beside the fan-out they
+  // drive, and sweepDropped takes the cutoff as a TIMESTAMP so a suite can
+  // sweep any moment it likes.
+  //
+  // By MEMBER KEY, like every method above: the account id for a signed-in
+  // member, the socket they joined on for a guest (their row carries
+  // `userId: null`). The key is stored on the row, so nulling member.ws on a
+  // drop strands nothing in byKey.
+
+  // The row a key holds and its squad, or null. The index, never a scan.
+  function memberOf(key) {
+    const squad = ofUser(key);
+    const member = squad ? squad.members.find((m) => m.key === key) : null;
+    return member ? { squad, member } : null;
+  }
+
+  // -> the squad when a row was dropped, null when nothing changed.
+  function markDropped(key, at) {
+    // A TIME THAT IS NOT ONE IS NOT A DROP: a row with its socket gone and
+    // dropAt still null would be swept by nothing, a ghost for the squad's
+    // life. now() always answers a number; this is the machine not trusting it.
+    if (!Number.isFinite(at)) return null;
+    const found = memberOf(key);
+    if (!found) return null;
+    const m = found.member;
+    // ALREADY DROPPED IS NOT A SECOND DROP. server.js reaches its close hook
+    // from three places (the socket's own close, the sign-out branch, a hello
+    // for another account), and re-stamping would slide the window forward on
+    // every one: a member held for ever by a socket that closes repeatedly.
+    // Answering null is also what stops a second snapshot going out for
+    // nothing — dropPresence's `set.delete(ws)` answering false, in this
+    // file's terms.
+    if (m.dropAt !== null) return null;
+    // A ROW HOLDING A LIVE SOCKET HAS NOTHING TO DROP — the engine's
+    // `player.ws === ws` rule. server/social.js only ever passes the key of
+    // the row the closing socket itself holds, so from there this cannot be
+    // reached; it is the machine holding its own rule for a direct caller.
+    if (m.ws && m.ws.readyState === 1) return null;
+    m.dropAt = at;
+    m.ws = null;
+    // "A dropped member is not ready" (design 4.3), literally. The rack goes
+    // with the flag, as it does everywhere else in this file.
+    m.ready = false;
+    m.loadout = null;
+    return found.squad;
+  }
+
+  return { has, get, ofUser, keyOfSocket, create, join, leave, kick, removeMember, setReady, setMode, clearReady, markDropped };
 }
