@@ -842,32 +842,27 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
   if (many.length === 1 && JSON.stringify(many[0][1]) === JSON.stringify([SQA, SQD]))
     ok('(h1) one round trip for the whole squad, and a guest costs no lookup');
   else fail('(h1) profilesByIds calls: ' + JSON.stringify(many));
-  // `online` IS PRESENCE FOR AN ACCOUNT AND THE SOCKET FOR A GUEST — and for
-  // an account the two can disagree IN BOTH DIRECTIONS, so both are asked.
-  // (This test first asked the first one by closing D's presence with the
-  // sign-out hook while D's socket stayed open; since task 5 that hook is a
-  // leave, so each direction is now reached the way production reaches it.)
-  //   * THE ROW'S SOCKET OPEN, THE ACCOUNT NOT PRESENT. B joins on a socket
-  //     whose account id server.js's push-subscription sink set without a
-  //     hello (setPushSubSink: `if (id) ws.userId = id;`), so presence never
-  //     counted it: online is false although the socket is open.
-  //   * THE ROW'S SOCKET GONE, THE ACCOUNT PRESENT. D's row socket closes —
-  //     a real close, so the row is DROPPED — while D is signed in on a
-  //     second device: online is TRUE and dropped is true. That is the
-  //     truthful pair: `online` is the account's presence (the friends
-  //     panel's dot, the same everywhere), `dropped` is this seat's socket,
-  //     and the box renders dropped over online.
-  // And the guest's socket goes: a guest's `online` is its own socket.
+  // `online` IS PRESENCE FOR AN ACCOUNT AND THE SOCKET FOR A GUEST, and the
+  // test must be able to tell presence from the row's socket. (It first did
+  // so by closing D's presence with the sign-out hook while D's socket
+  // stayed open; since task 5 that hook is a leave.) It asks the case where
+  // they really diverge in production: D's row socket closes — a real close,
+  // so the row is DROPPED — while D is signed in on a SECOND DEVICE. D is
+  // online (presence: the friends panel's dot, the same everywhere) and the
+  // row is dropped (this seat's socket); the box renders dropped over online.
+  // Taken from the row's socket, D would read offline. The guest's socket
+  // goes too: a guest's `online` is its own socket. B then joins, which is
+  // the push the assertions read.
   sqUp(S, sqws(SQD));                          // D's second device
   wd.readyState = 3; S.onClose(wd); g.readyState = 3;
-  const wb = sqws(SQB);                        // an id from a push subscription: no onAuth
+  const wb = sqUp(S, sqws(SQB));
   await S.handle(wb, { type: 'squad', op: 'join', code });
   const now4 = (sqlast(wa, 'state') || {}).members || [];
   if (now4.length === 4 && now4[0].online === true
     && now4[1].id === SQD && now4[1].online === true && now4[1].dropped === true
     && now4[2].guest === true && now4[2].online === false
-    && now4[3].id === SQB && now4[3].online === false && now4[3].dropped === false)
-    ok('(h1) online is the account\'s presence both ways — open socket but not present reads offline, dropped but present elsewhere reads online — and a guest\'s is its socket');
+    && now4[3].id === SQB && now4[3].online === true)
+    ok('(h1) online is the account\'s presence — a dropped row whose account is on another device reads online — and a guest\'s is its own socket');
   else fail('(h1) online after D and the guest went: ' + JSON.stringify(now4));
   if (sqf(g).length === 1) ok('(h1) nothing is sent down a socket that is no longer open');
   else fail('(h1) the closed guest socket was sent ' + sqf(g).length + ' frames');
@@ -2017,19 +2012,31 @@ const FITS_BY_SIZE = [
   else fail('(s3f) loners: ' + JSON.stringify([loner.rx, stray.rx]));
 
   // THE ROW IS THE ONE THIS SOCKET HOLDS (squadKey, socket first). A guest who
-  // signs in on the same socket readies the row it holds — found only by an
-  // account that row did not carry, it would be "no squad" and stuck unready.
-  // Since task 5's fix pass that row BECOMES the account's at the sign-in
-  // (claimOnSignIn: one account, one row), so it is shown as SQD's row.
+  // signs in on the same socket readies the row it holds — found by the
+  // account instead, it would ready SOMEBODY ELSE'S ROW.
+  //
+  // BUILT WHERE THE TWO DIFFER (task 5's fix pass). Since then a signed-in
+  // guest's row becomes the account's at the sign-in (claimOnSignIn), so the
+  // row and the account agree and a test built there cannot tell them apart
+  // — (d18) covers that case. They still differ in exactly one state, and the
+  // guard is asked there: the account is ALREADY IN ANOTHER SQUAD (Y, led
+  // from its other device), so the guest row in X stays a guest row. Ready
+  // pressed on X's screen must ready the guest row in X, and leave the
+  // account's row in Y alone.
+  const wd = sqUp(S, sqws(SQD));
+  await S.handle(wd, { type: 'squad', op: 'create' });                  // SQD leads Y elsewhere
+  const Y = sqat(wd, 'state').code;
   const h = sqws(null);
   await S.handle(h, { type: 'squad', op: 'join', code, name: 'H', skin: 'gold' });
   h.userId = SQD; h.isGuest = false; S.onAuth(h);
-  h.rx.length = 0;
+  h.rx.length = 0; wd.rx.length = 0;
   await S.handle(h, { type: 'squad', op: 'ready', ready: true, loadout: RACK5, id: 'h' });
   const hrow = (sqat(wa, 'state').members || [])[3] || {};
-  if (sqat(h, 'ready').ok === true && hrow.id === SQD && hrow.guest === false && hrow.ready === true)
-    ok('(s3f) a guest who signed in on the same socket readies the row it holds — now its account\'s');
-  else fail('(s3f) signed-in guest ready: ' + JSON.stringify(h.rx) + ' row ' + JSON.stringify(hrow));
+  await S.handle(wd, { type: 'squad', op: 'resume', code: Y, id: 'y' });
+  const yrow = ((wd.rx.find((f) => f.id === 'y') || {}).members || [])[0] || {};
+  if (sqat(h, 'ready').ok === true && hrow.guest === true && hrow.ready === true && yrow.id === SQD && yrow.ready === false)
+    ok('(s3f) a guest who signed in on the same socket readies the guest row it holds — not its account\'s row in another squad');
+  else fail('(s3f) signed-in guest ready: ' + JSON.stringify(h.rx) + ' row ' + JSON.stringify(hrow) + ' account row in Y ' + JSON.stringify(yrow));
 
   // A SECOND DEVICE of a member readies that member's row and is answered —
   // roster and ok both — although the squad keeps the socket it had.
