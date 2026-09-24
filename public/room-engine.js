@@ -251,6 +251,23 @@ const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 // used to make the Map do work.
 const roomCode = (v) => (typeof v === 'string' ? v : '').toUpperCase().trim().slice(0, 8);
 
+// ONE CODE NAMESPACE FOR ROOMS AND SQUADS (plan R4). A squad code and a room
+// code are typed into the SAME "Enter a code" field, so a string that could
+// be both is a field with two honest answers and no way to choose. The squad
+// container lives in the host (server/squads.js) and this file must never
+// import it — the OFFLINE page loads this module and must gain no server
+// state (ADR-001) — so the host injects the predicate instead, in the same
+// shape as the six sinks above.
+//
+// THE DEFAULT IS `() => false`, NOT the sinks' `() => {}`, and the difference
+// is load-bearing. This one is CONSULTED rather than announced to, and it
+// sits inside a do/while: a default returning undefined would be falsy and
+// work by accident, and one returning anything truthy would spin makeCode
+// for ever. The offline page never calls setCodeTaken, so its loop stays
+// byte-for-byte the loop it has always run.
+let codeTaken = () => false;
+export function setCodeTaken(fn) { codeTaken = typeof fn === 'function' ? fn : () => false; }
+
 // getRandomValues, not Math.random — the same CSPRNG `makeToken` uses a few
 // lines below, which makes the old call an inconsistency rather than a decision.
 // A room code is a capability: anyone holding it can take a seat in that lobby,
@@ -268,7 +285,7 @@ function makeCode() {
   };
   do {
     code = Array.from({ length: 4 }, pick).join('');
-  } while (rooms.has(code));
+  } while (rooms.has(code) || codeTaken(code));
   return code;
 }
 // 12 random bytes as hex. getRandomValues rather than node:crypto randomBytes:

@@ -20,11 +20,24 @@
 // Headless: no server, no Chrome, no Supabase, no network, no real clock.
 import { readFileSync } from 'node:fs';
 import { createSquads } from '../server/squads.js';
+// THE REAL ENGINE. This is the one suite in the tree that needs both halves in
+// one process: makeCode's loop is what task 1 changes, and `rooms` is the
+// container the code frame's room arm reads through.
+import { rooms, handleClientMessage, setCodeTaken } from '../public/room-engine.js';
 
 const out = { errors: [] };
 const ok = (m) => console.log('  ok — ' + m);
 const fail = (m) => { out.errors.push(m); console.error('FAIL ' + m); };
 const read = (rel) => readFileSync(new URL('../' + rel, import.meta.url), 'utf8');
+// One fake socket for BOTH consumers. The engine needs `readyState === 1` and
+// `send(<string>)` and nothing else; the social layer additionally reads
+// userId / isGuest / chosenName. This is test/social.mjs's mkws with the
+// engine's requirements already satisfied.
+const mkws = (userId = null, isGuest = false) => ({ readyState: 1, userId, isGuest, chosenName: null, _rx: [], send(s) { this._rx.push(JSON.parse(s)); } });
+const frames = (ws, t) => ws._rx.filter((m) => m.type === t);
+const last = (ws) => ws._rx[ws._rx.length - 1];
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const FIVE = ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'];   // a duel's draft size
 
 const NOW = Date.parse('2026-09-22T09:00:00Z');
 const now = () => NOW;
@@ -61,6 +74,66 @@ const now = () => NOW;
   const hits = proto.filter((k) => squads.has(k) !== false || !Object.is(squads.get(k), null));
   if (hits.length === 0) ok('(1c) no prototype key is a squad code — the container is a Map');
   else fail('(1c) the container answered for prototype keys: ' + JSON.stringify(hits));
+}
+
+// ---- (2) public/room-engine.js: makeCode consults the injected predicate ----
+// THE ALPHABET, read out of the engine rather than copied, so this suite
+// cannot vouch for a constant that has drifted underneath it.
+{
+  const CODE_CHARS = (read('public/room-engine.js').match(/const CODE_CHARS = '([A-Z0-9]+)';/) || [])[1] || '';
+  if (CODE_CHARS.length === 31 && !/[ILO01]/.test(CODE_CHARS))
+    ok('(2a) the shared alphabet is 31 characters with no I, L, O, 0 or 1');
+  else fail('(2a) CODE_CHARS read from the engine was ' + JSON.stringify(CODE_CHARS));
+
+  // THE OFFLINE PAGE'S LOOP FIRST, before anything is injected. The default
+  // has to be `() => false` rather than the sinks' `() => {}`, because this
+  // predicate is CONSULTED inside a do/while rather than announced to, and
+  // anything truthy spins it for ever. The offline page never calls
+  // setCodeTaken, so this is the loop it runs.
+  const ws = mkws();
+  handleClientMessage(ws, { type: 'create', name: 'T', skin: 'olive', mode: 'duel', loadout: FIVE });
+  const cr = frames(ws, 'created')[0];
+  if (cr && typeof cr.code === 'string' && cr.code.length === 4
+    && [...cr.code].every((c) => CODE_CHARS.includes(c)) && rooms.has(cr.code))
+    ok('(2a) with nothing injected the engine still mints a live 4-character code — the offline loop is unchanged');
+  else fail('(2a) created was ' + JSON.stringify(cr) + ' rooms.has=' + !!(cr && rooms.has(cr.code)));
+  handleClientMessage(ws, { type: 'leave' });
+}
+
+// THE PREDICATE IS CONSULTED FOR EVERY CANDIDATE AND A REFUSAL IS OBEYED, and
+// it is proved DETERMINISTICALLY rather than probabilistically: a predicate
+// that refuses a fixed number of codes forces a fixed number of loops. An
+// assertion that merely showed the minted code was not in some refused set
+// would pass ~999,997 times in a million with the guard removed.
+{
+  if (rooms.size !== 0) fail('(2b) the rooms Map was not empty at the start of this section: ' + rooms.size);
+  const seen = [];
+  let refuse = 3;
+  setCodeTaken((code) => { seen.push(code); return refuse-- > 0; });
+  const ws = mkws();
+  handleClientMessage(ws, { type: 'create', name: 'T', skin: 'olive', mode: 'duel', loadout: FIVE });
+  const cr = frames(ws, 'created')[0];
+  if (seen.length === 4 && cr && cr.code === seen[3])
+    ok('(2b) makeCode offered every candidate to codeTaken and kept the first it did not refuse (3 refused, the 4th used)');
+  else fail('(2b) offers=' + JSON.stringify(seen) + ' code=' + JSON.stringify(cr && cr.code));
+  handleClientMessage(ws, { type: 'leave' });
+  setCodeTaken(null);
+}
+
+// A HOST THAT WIRES NOTHING, AND A HOST THAT UNWIRES. setCodeTaken(null) must
+// restore the refuse-nothing default rather than storing null and throwing on
+// the next create — which is every room on a deploy where the social layer
+// failed to build.
+{
+  let threw = null;
+  const ws = mkws();
+  try { handleClientMessage(ws, { type: 'create', name: 'T', skin: 'olive', mode: 'duel', loadout: FIVE }); }
+  catch (e) { threw = e; }
+  const cr = frames(ws, 'created')[0];
+  if (!threw && cr && typeof cr.code === 'string' && cr.code.length === 4)
+    ok('(2c) setCodeTaken(null) restored the refuse-nothing default');
+  else fail('(2c) after setCodeTaken(null): threw=' + (threw && threw.message) + ' created=' + JSON.stringify(cr));
+  handleClientMessage(ws, { type: 'leave' });
 }
 
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall squad checks passed');
