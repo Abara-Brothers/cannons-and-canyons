@@ -28,7 +28,7 @@ import { createSquads, fitsFor, SQUAD_SEATS } from '../server/squads.js';
 // THE REAL ENGINE. This is the one suite in the tree that needs both halves in
 // one process: makeCode's loop is what task 1 changes, and `rooms` is the
 // container the code frame's room arm reads through.
-import { rooms, handleClientMessage, setCodeTaken } from '../public/room-engine.js';
+import { rooms, handleClientMessage, setCodeTaken, MODE_SEATS } from '../public/room-engine.js';
 import { createSocial, SOCIAL_TYPES } from '../server/social.js';
 // Task 2: the one-byte hook the code minters are proved on. The same module
 // is loaded into a spawned server.js by test/code_frame.mjs with --import;
@@ -768,18 +768,13 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
     && f(4) === '{"duel":false,"ffa":true,"boss":false,"aliens":false,"golf":true}')
     ok('(s10) fitsFor answers every squad size against every mode, minimum AND maximum');
   else fail('(s10) fitsFor: 1=' + f(1) + ' 2=' + f(2) + ' 3=' + f(3) + ' 4=' + f(4));
-  // THE COPY IS PINNED TO ITS ORIGINAL. server/ may not import
-  // public/room-engine.js (ADR-001), so this table is COPIED the way
-  // SKIN_IDS is in server/social.js — and a copy with nothing holding it to
-  // the original is a copy that drifts. Read as TEXT, by content rather than
-  // line number.
-  const eng = read('public/room-engine.js');
-  const clamp = "  const max = mode === 'ffa' ? Math.max(2, Math.min(4, (opts.max | 0) || 4))\n"
-    + "    : mode === 'golf' ? Math.max(1, Math.min(4, (opts.max | 0) || 2))\n    : 2;";
-  const floor = "      const minSeats = (r.mode === 'boss' || r.mode === 'golf' || r.mode === 'aliens') ? 1 : 2;";
-  if (eng.includes(clamp) && eng.includes(floor))
-    ok('(s10) the engine still clamps seats and floors startMatch exactly as SQUAD_SEATS copies');
-  else fail('(s10) room-engine.js seat rules have MOVED — SQUAD_SEATS is now a second opinion: clamp ' + eng.includes(clamp) + ', floor ' + eng.includes(floor));
+  // THE COPY IS HELD TO THE ENGINE'S OWN TABLE, by value. Both engine paths
+  // now read MODE_SEATS, so the text this once pinned is gone; the copy
+  // itself goes when the social layer is handed MODE_SEATS (task 3).
+  const drift = Object.keys(MODE_SEATS).filter((m) => JSON.stringify(SQUAD_SEATS[m]) !== JSON.stringify([MODE_SEATS[m].min, MODE_SEATS[m].max]));
+  if (!drift.length && Object.keys(SQUAD_SEATS).length === Object.keys(MODE_SEATS).length)
+    ok('(s10) SQUAD_SEATS still names the min and max of the engine\'s MODE_SEATS for every mode');
+  else fail('(s10) SQUAD_SEATS has drifted from MODE_SEATS: ' + JSON.stringify(drift));
 }
 
 // ---- (s11) the caller's row is found by SOCKET, and a move leaves it -------
@@ -1521,6 +1516,144 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
       handleClientMessage(room.ws, { type: 'leave' });
     } finally { setCodeTaken(null); }
   }
+}
+
+// ==========================================================================
+// TASK 3 — Ready, the armed mode, and the seat table that feeds fits
+// ==========================================================================
+// The seat rules were in the engine twice — createRoom's ternary and
+// `case 'startMatch'`'s minSeats — and copied a third time into
+// server/squads.js for `fits`. They are now ONE frozen table in the engine,
+// MODE_SEATS, which both engine paths read and which server.js hands to the
+// social layer. Every number below is a LITERAL, read by hand off the engine
+// as it stood at da6b016 and run against that engine before the table
+// replaced it: an expectation computed from MODE_SEATS would be the table
+// vouching for itself.
+
+// ---- (s3a) createRoom seats exactly what the ternary seated ----------------
+// opts.max as a client can send it: absent, zero, in range, past the top,
+// negative, and a numeric string (createRoom has always coerced with `| 0`).
+const SEAT_ASKED = [undefined, 0, 1, 2, 3, 4, 5, 6, -1, '3'];
+const SEAT_MATRIX = [
+  ['duel',   [2, 2, 2, 2, 2, 2, 2, 2, 2, 2]],
+  ['ffa',    [4, 4, 2, 2, 3, 4, 4, 4, 2, 3]],
+  ['boss',   [2, 2, 2, 2, 2, 2, 2, 2, 2, 2]],
+  ['aliens', [2, 2, 2, 2, 2, 2, 2, 2, 2, 2]],
+  ['golf',   [2, 2, 1, 2, 3, 4, 4, 4, 1, 3]],
+];
+{
+  const before = rooms.size;
+  let bad = 0;
+  for (const [mode, wants] of SEAT_MATRIX) {
+    SEAT_ASKED.forEach((mx, i) => {
+      const w = mkws();
+      handleClientMessage(w, { type: 'create', name: 'T', skin: 'olive', mode, max: mx });
+      const cr = frames(w, 'created')[0];
+      const r = cr ? rooms.get(cr.code) : null;
+      if (!r || r.mode !== mode || r.max !== wants[i] || cr.max !== wants[i]) {
+        bad++; fail(`(s3a) ${mode} max=${JSON.stringify(mx)} seated ${r && r.mode}/${r && r.max}, the ternary seated ${mode}/${wants[i]}`);
+      }
+      handleClientMessage(w, { type: 'leave' });
+    });
+  }
+  if (!bad) ok('(s3a) createRoom seats exactly what the ternary seated — 5 modes x 10 requested counts');
+  // A MODE OFF THE WIRE THAT NAMES A PROTOTYPE KEY IS NOT A MODE. The lookup
+  // is an object now where it was an array, and `in` or a bare index would
+  // find Object.prototype's `constructor` and seat a room in mode
+  // 'constructor' with max undefined.
+  const odd = [];
+  for (const mode of ['constructor', '__proto__', 'toString', 'hasOwnProperty', 'battleroyale', '', null, 5]) {
+    const w = mkws();
+    handleClientMessage(w, { type: 'create', name: 'T', skin: 'olive', mode, max: 4 });
+    const cr = frames(w, 'created')[0];
+    const r = cr ? rooms.get(cr.code) : null;
+    if (!(r && r.mode === 'duel' && r.max === 2 && cr.mode === 'duel')) odd.push([mode, cr]);
+    handleClientMessage(w, { type: 'leave' });
+  }
+  if (!odd.length) ok('(s3a) an unknown mode, prototype names included, is a duel of two, as it always was');
+  else fail('(s3a) unknown modes seated ' + JSON.stringify(odd));
+  if (rooms.size === before) ok('(s3a) every room this block made is gone again');
+  else fail(`(s3a) rooms leaked: ${before} -> ${rooms.size}`);
+
+  // THE TABLE THOSE ROOMS NOW COME FROM, whole: every key, in the order the
+  // snapshot's `fits` and the spec's seat line use, and no field beyond these.
+  // `rack` is game-core's loadoutSizeFor with golf's 0 read as five, which is
+  // what the create and join paths have always validated a golf rack against.
+  const WANT = {
+    duel:   { min: 2, max: 2, def: 2, pick: false, rack: 5 },
+    ffa:    { min: 2, max: 4, def: 4, pick: true,  rack: 5 },
+    boss:   { min: 1, max: 2, def: 2, pick: false, rack: 7 },
+    aliens: { min: 1, max: 2, def: 2, pick: false, rack: 7 },
+    golf:   { min: 1, max: 4, def: 2, pick: true,  rack: 5 },
+  };
+  if (JSON.stringify(MODE_SEATS) === JSON.stringify(WANT)) ok('(s3a) MODE_SEATS is exactly those numbers, those keys and that order');
+  else fail('(s3a) MODE_SEATS is ' + JSON.stringify(MODE_SEATS));
+  // FROZEN, because it is handed to another module and read on every
+  // snapshot: a caller that could write to it could move the seat count the
+  // join path enforces.
+  if (MODE_SEATS && Object.isFrozen(MODE_SEATS) && Object.values(MODE_SEATS).every((r) => Object.isFrozen(r)))
+    ok('(s3a) MODE_SEATS and every row of it are frozen');
+  else fail('(s3a) MODE_SEATS is not frozen all the way down');
+}
+
+// ---- (s3b) which squad sizes the engine will really start -------------------
+// THE ENGINE IS THE ORACLE, driven the way a squad start will drive it: the
+// host creates with max = n, the rest join through the ordinary join path,
+// and the host presses Start if the room has not already begun. The answer is
+// what the engine DID — a room in play holding exactly n humans — so a table
+// that disagreed with the engine could not make it agree. The literal is the
+// spec's seat line (design 4.3): duel 2, ffa 2-4, boss 1-2, aliens 1-2,
+// golf 1-4. Its duel and ffa rows are the startMatch minimum ("Need at least
+// 2 commanders.") and every row's top is createRoom's ceiling, which a third
+// Boss Fight or Alien Invasion member meets as "That battle has already
+// started." because the second one filled the room.
+const engineStarts = (mode, n) => {
+  const crew = Array.from({ length: n }, () => mkws());
+  const [host, ...rest] = crew;
+  handleClientMessage(host, { type: 'create', name: 'T', skin: 'olive', mode, max: n });
+  const code = (frames(host, 'created')[0] || {}).code;
+  let refused = !code;
+  for (const w of rest) {
+    if (refused) break;
+    handleClientMessage(w, { type: 'join', code, name: 'T', skin: 'olive' });
+    if (frames(w, 'joinError').length) refused = true;
+  }
+  const r = code ? rooms.get(code) : null;
+  if (!refused && r && r.state === 'waiting') handleClientMessage(host, { type: 'startMatch' });
+  const humans = r ? r.players.filter((p) => p && !p.bot).length : 0;
+  const began = !refused && !!r && r.state === 'playing' && humans === n;
+  for (const w of crew) handleClientMessage(w, { type: 'leave' });
+  return began;
+};
+const SEAT_LINE = {
+  duel:   [false, true, false, false],
+  ffa:    [false, true, true,  true],
+  boss:   [true,  true, false, false],
+  aliens: [true,  true, false, false],
+  golf:   [true,  true, true,  true],
+};
+const ENGINE_STARTS = {};
+{
+  const before = rooms.size;
+  for (const mode of Object.keys(SEAT_LINE)) ENGINE_STARTS[mode] = [1, 2, 3, 4].map((n) => engineStarts(mode, n));
+  if (JSON.stringify(ENGINE_STARTS) === JSON.stringify(SEAT_LINE))
+    ok('(s3b) the engine starts exactly the squad sizes the seat line names — duel 2, ffa 2-4, boss 1-2, aliens 1-2, golf 1-4');
+  else fail('(s3b) the engine started ' + JSON.stringify(ENGINE_STARTS));
+  // THE REFUSAL COPY IS REACHED BY THE MODES WHOSE MINIMUM IS TWO, and by
+  // nothing else: a lone host of each is told, and a lone Boss Fight host is
+  // not.
+  const told = {};
+  for (const mode of ['duel', 'ffa', 'boss']) {
+    const w = mkws();
+    handleClientMessage(w, { type: 'create', name: 'T', skin: 'olive', mode, max: 4 });
+    handleClientMessage(w, { type: 'startMatch' });
+    told[mode] = w._rx.some((m) => m.type === 'joinError' && m.reason === 'Need at least 2 commanders.');
+    handleClientMessage(w, { type: 'leave' });
+  }
+  if (told.duel && told.ffa && !told.boss) ok('(s3b) a lone duel or free-for-all host is told they need two; a lone Boss Fight host is not');
+  else fail('(s3b) the minimum refusal went to ' + JSON.stringify(told));
+  if (rooms.size === before) ok('(s3b) every room this block made is gone again');
+  else fail(`(s3b) rooms leaked: ${before} -> ${rooms.size}`);
 }
 
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall squad checks passed');

@@ -438,6 +438,45 @@ function killDead(room) {
   }
 }
 
+// ---- THE MODE TABLE: the seats a mode takes, and the rack a seat drafts -----
+// ONE TABLE, READ BY BOTH ENGINE PATHS. The seat rules used to live in
+// createRoom's ternary and, separately, in `case 'startMatch'`'s minimum, and
+// a third copy was made in server/squads.js for a squad's `fits`. Both engine
+// paths now read this object.
+//
+// THE SQUAD LAYER IS HANDED THIS TABLE RATHER THAN COPYING IT. Nothing under
+// server/ may import this file (ADR-001: the offline page loads it and must
+// gain no database), so server.js injects it into createSocial the way it
+// injects resolveSeatHandle. A squad's `fits` is a promise about how many
+// players the room will really seat, and a copy is how that promise starts
+// naming a different number from the one the join path enforces.
+//
+//   min   the fewest humans `case 'startMatch'` will start with
+//   max   the most humans the join path will seat (room.max; the WARLORD and
+//         the horde are appended past it by startGame and are not counted)
+//   def   the seat count when the host chose none
+//   pick  whether the host may choose the seat count (ffa and golf); a mode
+//         that may not is always seated at its max
+//   rack  how many weapons a seat drafts, from game-core's loadoutSizeFor so
+//         the two cannot drift. Golf drafts nothing (loadoutSizeFor answers 0)
+//         and the create and join paths have always validated a golf rack
+//         against five through `|| 5`, which is also what public/bay.js's
+//         MODES table drafts for it, so five is what golf carries here.
+//
+// THE KEY ORDER IS THE SPEC'S SEAT LINE (duel, ffa, boss, aliens, golf): the
+// squad snapshot's `fits` is built by walking these keys.
+const MODE_SEATS = Object.freeze({
+  duel:   Object.freeze({ min: 2, max: 2, def: 2, pick: false, rack: loadoutSizeFor('duel') || 5 }),
+  ffa:    Object.freeze({ min: 2, max: 4, def: 4, pick: true,  rack: loadoutSizeFor('ffa') || 5 }),
+  boss:   Object.freeze({ min: 1, max: 2, def: 2, pick: false, rack: loadoutSizeFor('boss') || 5 }),
+  aliens: Object.freeze({ min: 1, max: 2, def: 2, pick: false, rack: loadoutSizeFor('aliens') || 5 }),
+  golf:   Object.freeze({ min: 1, max: 4, def: 2, pick: true,  rack: loadoutSizeFor('golf') || 5 }),
+});
+// hasOwnProperty, never `in` or a bare index: a mode off the wire named
+// 'constructor' must not find Object.prototype's. sanitizeTees's form.
+const knownMode = (mode) => Object.prototype.hasOwnProperty.call(MODE_SEATS, mode);
+
+// The seat numbers are the table above; this is how each mode PLAYS.
 // mode: 'duel'    -> exactly 2, auto-starts the moment the 2nd player joins
 //       'ffa'     -> 2..4, the HOST starts it (or it auto-starts when it fills)
 //       'boss'    -> 1..2 humans vs the WARLORD (host may start solo)
@@ -572,13 +611,13 @@ function createRoom(hostWs, name, skin, opts = {}) {
     return null;
   }
   const code = makeCode();
-  const MODES = ['duel', 'ffa', 'boss', 'golf', 'aliens'];
-  const mode = MODES.includes(opts.mode) ? opts.mode : 'duel';
-  // Seats: duel 2; ffa 2..4 (default 4); golf 1..4 (owner, 2026-09-18 — a
-  // pair by default, as the course always was); the co-op raids 2.
-  const max = mode === 'ffa' ? Math.max(2, Math.min(4, (opts.max | 0) || 4))
-    : mode === 'golf' ? Math.max(1, Math.min(4, (opts.max | 0) || 2))
-    : 2;
+  const mode = knownMode(opts.mode) ? opts.mode : 'duel';
+  // Seats from MODE_SEATS: duel 2; ffa 2..4 (default 4); golf 1..4 (owner,
+  // 2026-09-18 — a pair by default, as the course always was); the co-op
+  // raids 2. A mode with no choice is seated at its max, so the table's max
+  // is the number the join path below refuses past.
+  const lim = MODE_SEATS[mode];
+  const max = lim.pick ? Math.max(lim.min, Math.min(lim.max, (opts.max | 0) || lim.def)) : lim.max;
   const room = {
     code, mode, max, hostSeat: 0,
     players: [
@@ -2062,7 +2101,10 @@ export function handleClientMessage(ws, msg) {
       const r = rooms.get(ws.roomCode);
       if (!r || r.state !== 'waiting') break;
       if (ws.seat !== r.hostSeat) break;                  // only the host starts early
-      const minSeats = (r.mode === 'boss' || r.mode === 'golf' || r.mode === 'aliens') ? 1 : 2;
+      // From MODE_SEATS, not a second copy of it. r.mode came out of
+      // createRoom, so it is always one of the table's keys. The copy below
+      // says "2" and is right: only duel and ffa have a minimum above one.
+      const minSeats = MODE_SEATS[r.mode].min;
       if (seatCount(r) < minSeats) { send(ws, { type: 'joinError', reason: 'Need at least 2 commanders.' }); break; }
       compactRoster(r);
       startGame(r);
@@ -2134,6 +2176,10 @@ export function handleClientMessage(ws, msg) {
 // count live matches and tell everyone the lights are going out. Resist adding
 // more — every extra export is another way for the host to reach past the seam.
 export { rooms, send, handleClose };
+// FROZEN DATA, NOT ANOTHER DOOR. The note above is about reaching past the
+// seam; this is the seam's own vocabulary, read-only, so server.js can hand
+// the squad layer the numbers this file enforces instead of a copy.
+export { MODE_SEATS };
 // The ONE way back from a seat handle to an account, and the host's only route
 // in. server.js injects it into the social layer as `resolveHandle`; report and
 // block call it and nothing else does.
