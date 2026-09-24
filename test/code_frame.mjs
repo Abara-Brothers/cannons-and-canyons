@@ -386,6 +386,22 @@ async function layerOn() {
     if (r && r.op === 'state' && same(r.fits, { duel: false, ffa: false, boss: true, aliens: true, golf: true }))
       ok('(8b) a squad of one on the real server.js reports fits from the engine\'s own seat table — boss, aliens and golf, not duel or ffa');
     else fail('(8b) a squad of one on the real server.js reported ' + JSON.stringify(r));
+    // TEE_IDS: with none injected every tee set is bad_tees.
+    let from = w._rx.length;
+    tx(w, { type: 'squad', op: 'mode', mode: 'golf', tees: 'womens', id: 'sq2' });
+    const m = await waitFor(w, (f) => f.id === 'sq2', from);
+    const armed = w._rx.slice(from).filter((f) => f.op === 'state').pop();
+    if (same(m, { type: 'squad', op: 'mode', ok: true, id: 'sq2' }) && armed && armed.mode === 'golf' && armed.tees === 'womens')
+      ok('(8b) the real server.js arms golf from the womens tees — the engine\'s TEE_IDS is wired');
+    else fail('(8b) golf with the womens tees on the real server.js answered ' + JSON.stringify(m) + ', roster ' + JSON.stringify(armed));
+    // validRackFor: with none injected no rack is ever accepted.
+    from = w._rx.length;
+    tx(w, { type: 'squad', op: 'ready', ready: true, loadout: ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'], id: 'sq3' });
+    const rd = await waitFor(w, (f) => f.id === 'sq3', from);
+    const readied = w._rx.slice(from).filter((f) => f.op === 'state').pop();
+    if (same(rd, { type: 'squad', op: 'ready', ok: true, id: 'sq3' }) && readied && readied.members[0].ready === true)
+      ok('(8b) the real server.js readies a five-pick golf rack — the engine\'s validRackFor is wired');
+    else fail('(8b) a five-pick ready on the real server.js answered ' + JSON.stringify(rd) + ', roster ' + JSON.stringify(readied));
     w.close();
   }
 

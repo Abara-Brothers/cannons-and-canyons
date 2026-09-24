@@ -1046,10 +1046,96 @@ export function createSocial({
     await pushSquad(sq, ws, msg);
   }
 
+  // THE CALLER'S OWN ROW and the squad it is in, or null. Found by squadKey,
+  // so it is the row this socket holds — a guest who has since signed in
+  // still holds, and acts on, its guest row — and only for a socket holding
+  // none, its account's row (a second device of a member).
+  const squadOf = (ws) => {
+    const key = squadKey(ws);
+    const squad = squads.ofUser(key);
+    const member = squad ? squad.members.find((m) => m.key === key) : null;
+    return member ? { squad, member } : null;
+  };
+
+  // design 4.3, row 'ready'. NO SIGN-IN GATE (R3): membership is the gate. D5
+  // lets a guest join by code and design 7 lets a guest be seated, so a guest
+  // who could not ready would be a squad that can never start.
+  //
+  // THE SERVER RE-CHECKS THE RACK against the ARMED mode, with the engine's
+  // own validRackFor (injected as validRack): the client checks first so the
+  // toggle is honest, and this makes it true. A rack accepted here is a rack
+  // the seat keeps when the squad starts. Only `true` is ready.
+  //
+  // THE RATE BUCKET IS NOT SPENT HERE. handleSquad has already charged this
+  // frame; spending again would halve the allowance for this op alone.
+  async function squadReady(ws, msg) {
+    const found = squadOf(ws);
+    if (!found) return squadReply(ws, msg, 'ready', { error: 'no_squad' });
+    const want = msg.ready === true;
+    if (want && !validRack(found.squad.mode, msg.loadout)) return squadReply(ws, msg, 'ready', { error: 'no_rack' });
+    const res = squads.setReady(found.member.key, want, want ? msg.loadout : null);
+    if (!res.ok) return squadReply(ws, msg, 'ready', { error: res.error });
+    // pushSquad's rule: EVERYONE ELSE FIRST, then the sender its roster, and
+    // the sender's answer LAST — the one send that can throw must not cost
+    // the others the roster that has already changed. The sender is pushed
+    // the roster even from a second device, which holds no row.
+    await pushSquad(res.squad, ws, null);
+    squadReply(ws, msg, 'ready', { ok: true });
+  }
+
+  // design 4.3, row 'mode'. LEADER ONLY, through ledSquad, and no sign-in gate
+  // of its own (a guest can never lead, so a guest member is not_leader).
+  // Leadership is asked before the frame is read: somebody who does not lead
+  // learns nothing about which modes or tee sets exist.
+  async function squadMode(ws, msg) {
+    const no = (error) => squadReply(ws, msg, 'mode', { error });
+    if (!squadOf(ws)) return no('no_squad');
+    const sq = ledSquad(ws);
+    if (!sq) return no('not_leader');
+    // THE INJECTED TABLE IS THE WHITELIST, read with hasOwnProperty so a
+    // mode of 'constructor' cannot find Object.prototype's.
+    const mode = msg.mode;
+    if (typeof mode !== 'string' || !Object.prototype.hasOwnProperty.call(seats, mode)) return no('bad_mode');
+    const lim = seats[mode];
+    // TEE SETS ARE ECHOED TO EVERY MEMBER in the next roster, so they are
+    // vetted here rather than left to the room: an unchecked string in a
+    // broadcast frame is a free-text channel between two modified clients —
+    // what the aim relay's `weapon` field once was (see `case 'aim'` in
+    // public/room-engine.js) — against privacy.html's "No chat, no messages,
+    // and no message field of any kind". They belong to golf and nothing
+    // else, so a frame carrying one while arming another mode has it dropped,
+    // unechoed, rather than refused: a box that has just shown the golf
+    // controls may still have the last choice in hand. Absent, it is null,
+    // the room's own default.
+    let tees = null;
+    if (mode === 'golf' && msg.tees != null) {
+      if (!teeIds.includes(msg.tees)) return no('bad_tees');
+      tees = msg.tees;
+    }
+    // THE SEAT CHOICE: an integer within the mode's own seats, for a mode the
+    // host may choose for (ffa, golf). Anything else is null, "the mode's own
+    // seats". A number smuggles nothing, so out of range is dropped, not
+    // refused.
+    const max = lim.pick && Number.isInteger(msg.max) && msg.max >= lim.min && msg.max <= lim.max ? msg.max : null;
+    // sq.leader: ledSquad has established that this caller IS the leader —
+    // see squadKick for why nothing else is passed.
+    const res = squads.setMode(sq.code, sq.leader, mode, tees, max);
+    if (!res.ok) return no(res.error);
+    // READY MEANS "MY RACK IS FULL FOR THE ARMED MODE". A rack readied for
+    // the old mode that the new one would not keep is a member the start
+    // would send to the pick screen, so exactly those members stand down —
+    // five picks survive duel to ffa; they do not survive duel to boss.
+    for (const m of res.squad.members) if (m.ready && !validRack(mode, m.loadout)) squads.setReady(m.key, false, null);
+    await pushSquad(res.squad, ws, null);
+    squadReply(ws, msg, 'mode', { ok: true });
+  }
+
   SQUAD_OPS.create = squadCreate;
   SQUAD_OPS.join = squadJoin;
   SQUAD_OPS.leave = squadLeave;
   SQUAD_OPS.kick = squadKick;
+  SQUAD_OPS.ready = squadReady;
+  SQUAD_OPS.mode = squadMode;
 
   const skinOf = (row) => (row && typeof row.skin === 'string' && SKIN_IDS.has(row.skin) ? row.skin : null);
 

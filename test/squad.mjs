@@ -1881,5 +1881,271 @@ const FITS_BY_SIZE = [
   else fail('(s3d) with no seat table: ' + JSON.stringify(lone));
 }
 
+// ---- (s3f) ready through the handler: the server re-checks the rack --------
+// "the client checks first; the server re-checks" (design 4.3), against the
+// ARMED mode, through the engine's own validRackFor. NO SIGN-IN GATE (R3):
+// membership is the gate, so a guest member can ready — or a squad with a
+// guest in it could never start. A success answers the sender with
+// { op:'ready', ok:true } and its id, LAST, after every member (the sender
+// included) has been pushed the roster that says so.
+{
+  const S = sqSocial(sqstore());
+  const wa = sqUp(S, sqws(SQA)), wb = sqUp(S, sqws(SQB)), g = sqws(null);
+  await S.handle(wa, { type: 'squad', op: 'create' });
+  const code = sqat(wa, 'state').code;
+  await S.handle(wb, { type: 'squad', op: 'join', code });
+  await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+  const clear = () => { for (const w of [wa, wb, g]) w.rx.length = 0; };
+  const readies = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
+
+  // DUEL IS ARMED, so seven is not a rack and five is.
+  clear();
+  await S.handle(wa, { type: 'squad', op: 'ready', ready: true, loadout: RACK7, id: 'r1' });
+  await S.handle(wa, { type: 'squad', op: 'ready', ready: true, id: 'r0' });
+  if (same(wa.rx, [{ type: 'squad', op: 'ready', error: 'no_rack', id: 'r1' }, { type: 'squad', op: 'ready', error: 'no_rack', id: 'r0' }])
+    && wb.rx.length === 0 && g.rx.length === 0)
+    ok('(s3f) with duel armed, seven picks and no rack at all are each refused no_rack, with the id, and nobody is pushed anything');
+  else fail('(s3f) duel refusals: ' + JSON.stringify(wa.rx) + ' others ' + (wb.rx.length + g.rx.length));
+  clear();
+  await S.handle(wa, { type: 'squad', op: 'ready', ready: true, loadout: RACK5, id: 'r2' });
+  if (wa.rx.length === 2 && wa.rx[0].op === 'state' && wa.rx[0].id === undefined
+    && same(wa.rx[1], { type: 'squad', op: 'ready', ok: true, id: 'r2' })
+    && same(readies(wa), [true, false, false]) && same(readies(wb), [true, false, false]) && same(readies(g), [true, false, false]))
+    ok('(s3f) five picks ready a duel: every member is pushed the roster, and the sender\'s ok comes last with its id');
+  else fail('(s3f) five for a duel: ' + JSON.stringify(wa.rx) + ' b ' + JSON.stringify(readies(wb)));
+
+  // A GUEST MEMBER READIES, and its row stays id null on every screen.
+  clear();
+  await S.handle(g, { type: 'squad', op: 'ready', ready: true, loadout: RACK5, id: 'g1' });
+  const grow = (sqat(wb, 'state').members || [])[2] || {};
+  if (sqat(g, 'ready').ok === true && sqat(g, 'ready').id === 'g1' && grow.guest === true && grow.ready === true && grow.id === null)
+    ok('(s3f) a guest member readies with no sign-in gate, and stays id:null on the others\' screens');
+  else fail('(s3f) guest ready: ' + JSON.stringify(g.rx) + ' row ' + JSON.stringify(grow));
+
+  // ONLY `true` IS READY. B readies, then sends the string "true": that is a
+  // stand-down, the harmless reading of a frame that is not what it should be.
+  await S.handle(wb, { type: 'squad', op: 'ready', ready: true, loadout: RACK5 });
+  const bFirst = readies(wb)[1];
+  await S.handle(wb, { type: 'squad', op: 'ready', ready: 'true', loadout: RACK5 });
+  if (bFirst === true && readies(wb)[1] === false && sqat(wb, 'ready').ok === true) ok('(s3f) ready:"true" is not a yes — it stands the member down');
+  else fail('(s3f) string ready: first ' + bFirst + ', then ' + JSON.stringify(readies(wb)));
+
+  // SOMEONE IN NO SQUAD — an account and a guest — is no_squad, never sign_in.
+  const loner = sqUp(S, sqws(SQE)), stray = sqws(null);
+  await S.handle(loner, { type: 'squad', op: 'ready', ready: true, loadout: RACK5, id: 'l' });
+  await S.handle(stray, { type: 'squad', op: 'ready', ready: true, loadout: RACK5, id: 's' });
+  if (same(loner.rx, [{ type: 'squad', op: 'ready', error: 'no_squad', id: 'l' }]) && same(stray.rx, [{ type: 'squad', op: 'ready', error: 'no_squad', id: 's' }]))
+    ok('(s3f) ready from an account or a guest in no squad is no_squad, not sign_in');
+  else fail('(s3f) loners: ' + JSON.stringify([loner.rx, stray.rx]));
+
+  // THE ROW IS THE ONE THIS SOCKET HOLDS (squadKey, socket first). A guest who
+  // signs in on the same socket still holds its GUEST row, and readies that
+  // row — found by its account it would be "no squad" and stuck unready.
+  const h = sqws(null);
+  await S.handle(h, { type: 'squad', op: 'join', code, name: 'H', skin: 'gold' });
+  h.userId = SQD; h.isGuest = false; S.onAuth(h);
+  h.rx.length = 0;
+  await S.handle(h, { type: 'squad', op: 'ready', ready: true, loadout: RACK5, id: 'h' });
+  const hrow = (sqat(wa, 'state').members || [])[3] || {};
+  if (sqat(h, 'ready').ok === true && hrow.guest === true && hrow.ready === true)
+    ok('(s3f) a guest who signed in on the same socket readies the guest row it holds');
+  else fail('(s3f) signed-in guest ready: ' + JSON.stringify(h.rx) + ' row ' + JSON.stringify(hrow));
+
+  // A SECOND DEVICE of a member readies that member's row and is answered —
+  // roster and ok both — although the squad keeps the socket it had.
+  const wb2 = sqUp(S, sqws(SQB));
+  await S.handle(wb2, { type: 'squad', op: 'ready', ready: true, loadout: RACK5, id: 'd2' });
+  if (wb2.rx.length === 2 && wb2.rx[0].op === 'state' && wb2.rx[0].you === 1 && same(wb2.rx[1], { type: 'squad', op: 'ready', ok: true, id: 'd2' }) && readies(wa)[1] === true)
+    ok('(s3f) a second device of a member readies that member\'s row and is answered with the roster and its ok');
+  else fail('(s3f) second device: ' + JSON.stringify(wb2.rx));
+
+  // ONE TOKEN PER READY. handleSquad spends the squad bucket for every op;
+  // a handler that spent it again would halve the allowance. A fresh
+  // member's join spends one of twenty, so nineteen readies are answered and
+  // the twentieth is slow_down — at a frozen clock nothing refills.
+  const S2 = sqSocial(sqstore());
+  const lead = sqUp(S2, sqws(SQA)), mem = sqUp(S2, sqws(SQB));
+  await S2.handle(lead, { type: 'squad', op: 'create' });
+  await S2.handle(mem, { type: 'squad', op: 'join', code: sqat(lead, 'state').code });
+  const answers = [];
+  for (let i = 0; i < 20; i++) { await S2.handle(mem, { type: 'squad', op: 'ready', ready: false, id: i }); answers.push(sqat(mem, 'ready').ok === true ? 'ok' : sqat(mem, 'ready').error); }
+  if (answers.slice(0, 19).every((a) => a === 'ok') && answers[19] === 'slow_down')
+    ok('(s3f) ready spends one token from the squad bucket, not two: nineteen answered after a join, the twentieth slow_down');
+  else fail('(s3f) bucket: ' + JSON.stringify(answers));
+}
+
+// ---- (s3g) mode through the handler: vetted against the engine's table -----
+// The machine checks WHO (ledSquad, then setMode); this checks WHAT. The
+// injected MODE_SEATS is the whitelist of modes and of seat counts, TEE_IDS of
+// tee sets. Tees are ECHOED to every member in the next roster, so an
+// unchecked string there would be a free-text channel between two modified
+// clients — which the aim relay's `weapon` field once was — against
+// privacy.html's "No chat, no messages, and no message field of any kind".
+{
+  const S = sqSocial(sqstore());
+  const wa = sqUp(S, sqws(SQA)), wb = sqUp(S, sqws(SQB)), g = sqws(null);
+  await S.handle(wa, { type: 'squad', op: 'create' });
+  const code = sqat(wa, 'state').code;
+  await S.handle(wb, { type: 'squad', op: 'join', code });
+  await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+  const clear = () => { for (const w of [wa, wb, g]) w.rx.length = 0; };
+  const armed = (w) => { const st = sqat(w, 'state'); return [st.mode, st.tees, st.max]; };
+
+  clear();
+  await S.handle(wa, { type: 'squad', op: 'mode', mode: 'golf', tees: 'womens', max: 3, id: 'm1' });
+  if (wa.rx.length === 2 && same(wa.rx[1], { type: 'squad', op: 'mode', ok: true, id: 'm1' })
+    && same(armed(wa), ['golf', 'womens', 3]) && same(armed(wb), ['golf', 'womens', 3]) && same(armed(g), ['golf', 'womens', 3]))
+    ok('(s3g) the leader arms golf with a real tee set and a seat choice; every member is pushed it, and the ok comes last');
+  else fail('(s3g) golf: ' + JSON.stringify(wa.rx));
+
+  // AN UNKNOWN MODE NEVER REACHES THE SQUAD — prototype names included.
+  const badModes = [];
+  for (const mode of ['battleroyale', 'constructor', '__proto__', 'toString', 'hasOwnProperty', '', 5, null, undefined]) {
+    clear();
+    await S.handle(wa, { type: 'squad', op: 'mode', mode, id: 'b' });
+    if (!(same(wa.rx, [{ type: 'squad', op: 'mode', error: 'bad_mode', id: 'b' }]) && wb.rx.length === 0 && g.rx.length === 0)) badModes.push([mode, [...wa.rx]]);
+  }
+  await S.handle(wa, { type: 'squad', op: 'mode', mode: 'golf', tees: 'womens', max: 3 });
+  if (!badModes.length && same(armed(wa), ['golf', 'womens', 3])) ok('(s3g) a mode the table does not have, prototype names included, is bad_mode, and nothing moves or is pushed');
+  else fail('(s3g) bad modes: ' + JSON.stringify(badModes));
+
+  // AN UNKNOWN TEE SET REACHES NO OTHER MEMBER.
+  const badTees = [];
+  for (const tees of ['MEET ME AT THE OTHER GAME', 'constructor', 'Mens', 7, {}, ['mens']]) {
+    clear();
+    await S.handle(wa, { type: 'squad', op: 'mode', mode: 'golf', tees, id: 't' });
+    const seen = JSON.stringify(wb.rx) + JSON.stringify(g.rx);
+    if (!(same(wa.rx, [{ type: 'squad', op: 'mode', error: 'bad_tees', id: 't' }]) && seen === '[][]')) badTees.push([tees, [...wa.rx], seen]);
+  }
+  if (!badTees.length) ok('(s3g) a tee set that is not one of the engine\'s is bad_tees, and no frame of it reaches another member');
+  else fail('(s3g) bad tees: ' + JSON.stringify(badTees));
+  // Tee sets are golf's. Carried while arming anything else they are dropped,
+  // not echoed; absent for golf they are null — the room's own default.
+  clear();
+  await S.handle(wa, { type: 'squad', op: 'mode', mode: 'ffa', tees: 'MEET ME AT THE OTHER GAME' });
+  const ffaTees = armed(wb);
+  const leaked = JSON.stringify(wb.rx).includes('MEET ME') || JSON.stringify(g.rx).includes('MEET ME');
+  await S.handle(wa, { type: 'squad', op: 'mode', mode: 'golf' });
+  if (same(ffaTees, ['ffa', null, null]) && !leaked && same(armed(wb), ['golf', null, null]))
+    ok('(s3g) tees ride with golf only: any other mode drops them unechoed, and golf with none arms null');
+  else fail('(s3g) tees off golf: ' + JSON.stringify([ffaTees, leaked, armed(wb)]));
+
+  // THE SEAT CHOICE is vetted against the same table: an integer within the
+  // mode's seats for a mode that takes one, and otherwise null, "the mode's
+  // own seats". A number smuggles nothing, so out of range drops, not refuses.
+  const maxCases = [['ffa', 2, 2], ['ffa', 3, 3], ['ffa', 4, 4], ['ffa', 9, null], ['ffa', 1, null], ['ffa', '3', null], ['ffa', 3.5, null],
+    ['golf', 1, 1], ['golf', 4, 4], ['golf', 0, null], ['golf', -1, null], ['duel', 2, null], ['boss', 2, null], ['aliens', 1, null]];
+  // The leader's socket has spent its twenty frames a minute on the checks
+  // above; a minute passes so these are answered rather than slowed.
+  SQCLOCK += 60000;
+  const badMax = [];
+  for (const [mode, max, want] of maxCases) {
+    await S.handle(wa, { type: 'squad', op: 'mode', mode, max });
+    if (!same(armed(wb), [mode, null, want])) badMax.push([mode, max, armed(wb)]);
+  }
+  if (!badMax.length) ok('(s3g) the seat choice is kept only inside the mode\'s own seats and only for ffa and golf; anything else arms null');
+  else fail('(s3g) seat choices: ' + JSON.stringify(badMax));
+
+  // NOT THE LEADER: a member and a guest member are not_leader (never
+  // sign_in — this op has no sign-in gate); someone in no squad is no_squad.
+  const loner = sqUp(S, sqws(SQE)), stray = sqws(null);
+  const asked = [];
+  for (const w of [wb, g, loner, stray]) {
+    w.rx.length = 0;
+    await S.handle(w, { type: 'squad', op: 'mode', mode: 'boss', id: 'x' });
+    asked.push(w.rx.map((f) => f.error || f.op));
+  }
+  if (same(asked, [['not_leader'], ['not_leader'], ['no_squad'], ['no_squad']]) && armed(wa)[0] === 'aliens')
+    ok('(s3g) a member and a guest member are refused not_leader and a player in no squad no_squad, and the armed mode stays put');
+  else fail('(s3g) non-leaders: ' + JSON.stringify(asked) + ' armed ' + JSON.stringify(armed(wa)));
+
+  // THE LEADER'S SECOND DEVICE holds no row and is the leader's account on
+  // both halves, so it arms the mode, like kick (h7).
+  const wa2 = sqUp(S, sqws(SQA));
+  await S.handle(wa2, { type: 'squad', op: 'mode', mode: 'boss', id: 'd' });
+  if (wa2.rx.length === 2 && wa2.rx[0].you === 0 && same(wa2.rx[1], { type: 'squad', op: 'mode', ok: true, id: 'd' }) && armed(wb)[0] === 'boss')
+    ok('(s3g) the leader\'s second device arms the mode and is answered');
+  else fail('(s3g) second device: ' + JSON.stringify(wa2.rx));
+
+  // ONE TOKEN PER MODE FRAME, as for ready.
+  const S2 = sqSocial(sqstore());
+  const lead = sqUp(S2, sqws(SQA));
+  await S2.handle(lead, { type: 'squad', op: 'create' });
+  const answers = [];
+  for (let i = 0; i < 20; i++) { await S2.handle(lead, { type: 'squad', op: 'mode', mode: 'duel', id: i }); answers.push(sqat(lead, 'mode').ok === true ? 'ok' : sqat(lead, 'mode').error); }
+  if (answers.slice(0, 19).every((a) => a === 'ok') && answers[19] === 'slow_down')
+    ok('(s3g) mode spends one token from the squad bucket, not two');
+  else fail('(s3g) bucket: ' + JSON.stringify(answers));
+}
+
+// ---- (s3i) a rack readied for one mode does not survive into another --------
+// Ready means "my rack is full for the ARMED mode". When the leader arms a
+// mode whose rack is a different size, a rack readied for the old one is not
+// a rack the new room would keep, and a start would send that member to the
+// pick screen. So the switch stands exactly those members down, and nobody
+// whose rack still fits.
+{
+  const S = sqSocial(sqstore());
+  const wa = sqUp(S, sqws(SQA)), wb = sqUp(S, sqws(SQB)), g = sqws(null);
+  await S.handle(wa, { type: 'squad', op: 'create' });
+  const code = sqat(wa, 'state').code;
+  await S.handle(wb, { type: 'squad', op: 'join', code });
+  await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+  const readies = () => (sqat(wb, 'state').members || []).map((m) => m.ready);
+  for (const w of [wa, wb, g]) await S.handle(w, { type: 'squad', op: 'ready', ready: true, loadout: RACK5 });
+  const r0 = readies();
+  await S.handle(wa, { type: 'squad', op: 'mode', mode: 'ffa' });
+  const r1 = readies();
+  await S.handle(wa, { type: 'squad', op: 'mode', mode: 'boss' });
+  const r2 = readies();
+  await S.handle(g, { type: 'squad', op: 'ready', ready: true, loadout: RACK7 });
+  await S.handle(wa, { type: 'squad', op: 'mode', mode: 'aliens' });
+  const r3 = readies();
+  await S.handle(wa, { type: 'squad', op: 'mode', mode: 'golf' });
+  const r4 = readies();
+  if (same([r0, r1, r2, r3, r4], [[true, true, true], [true, true, true], [false, false, false], [false, false, true], [false, false, false]]))
+    ok('(s3i) arming a mode stands down exactly the members whose rack it would not keep — five to five stays, five to seven and seven to five do not');
+  else fail('(s3i) readies across mode changes: ' + JSON.stringify([r0, r1, r2, r3, r4]));
+  // The ready op agrees: a rack for the old mode is refused under the new.
+  await S.handle(wb, { type: 'squad', op: 'ready', ready: true, loadout: RACK7, id: 'q' });
+  if (sqat(wb, 'ready').error === 'no_rack' && readies()[1] === false) ok('(s3i) and a seven-pick rack is refused once golf is armed');
+  else fail('(s3i) seven under golf: ' + JSON.stringify(sqlast(wb, 'ready')));
+}
+
+// ---- (s3l) ledSquad guards mode on both halves, as it guards kick -----------
+// Leadership is the row this socket holds AND the account signed in on it.
+// (h9) proves both halves for kick; these are the same two cases for mode.
+{
+  // THE ACCOUNT ALONE: a socket holding a GUEST row in squad one, signed in
+  // as B, who leads squad two from another device. It must not arm squad two.
+  const S = sqSocial(sqstore());
+  const wa = sqUp(S, sqws(SQA)), wb = sqUp(S, sqws(SQB)), g = sqws(null), h = sqws(null);
+  await S.handle(wa, { type: 'squad', op: 'create' });
+  const one = sqat(wa, 'state').code;
+  await S.handle(g, { type: 'squad', op: 'join', code: one, name: 'G', skin: 'gold' });
+  await S.handle(wb, { type: 'squad', op: 'create' });
+  await S.handle(h, { type: 'squad', op: 'join', code: sqat(wb, 'state').code, name: 'H', skin: 'gold' });
+  g.userId = SQB; g.isGuest = false; S.onAuth(g);
+  g.rx.length = 0; h.rx.length = 0; wb.rx.length = 0; wa.rx.length = 0;
+  await S.handle(g, { type: 'squad', op: 'mode', mode: 'boss', id: 'x' });
+  if (same(g.rx, [{ type: 'squad', op: 'mode', error: 'not_leader', id: 'x' }]) && h.rx.length === 0 && wb.rx.length === 0 && wa.rx.length === 0)
+    ok('(s3l) a socket holding a guest row cannot arm the squad its account leads from another device');
+  else fail('(s3l) cross-squad mode: ' + JSON.stringify(g.rx) + ' squad two got ' + JSON.stringify(h.rx.concat(wb.rx)));
+}
+{
+  // THE ROW ALONE: the leader's socket signs out and in as E, still holding
+  // the leader's row. It must not arm that squad.
+  const S = sqSocial(sqstore());
+  const wa = sqUp(S, sqws(SQA)), wb = sqUp(S, sqws(SQB));
+  await S.handle(wa, { type: 'squad', op: 'create' });
+  await S.handle(wb, { type: 'squad', op: 'join', code: sqat(wa, 'state').code });
+  S.onClose(wa); wa.userId = SQE; wa.isGuest = false; S.onAuth(wa);
+  wa.rx.length = 0; wb.rx.length = 0;
+  await S.handle(wa, { type: 'squad', op: 'mode', mode: 'boss', id: 'y' });
+  if (same(wa.rx, [{ type: 'squad', op: 'mode', error: 'not_leader', id: 'y' }]) && wb.rx.length === 0)
+    ok('(s3l) a socket now signed in as someone else cannot arm the squad from the leader\'s row it still holds');
+  else fail('(s3l) account-switched mode: ' + JSON.stringify(wa.rx) + ' member got ' + JSON.stringify(wb.rx));
+}
+
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall squad checks passed');
 process.exit(out.errors.length ? 1 : 0);
