@@ -842,17 +842,32 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
   if (many.length === 1 && JSON.stringify(many[0][1]) === JSON.stringify([SQA, SQD]))
     ok('(h1) one round trip for the whole squad, and a guest costs no lookup');
   else fail('(h1) profilesByIds calls: ' + JSON.stringify(many));
-  // `online` IS PRESENCE FOR AN ACCOUNT AND THE SOCKET FOR A GUEST. D's last
-  // socket closes and the guest's goes; the next roster says so, and both
-  // rows are still there. A REAL close — the socket is closed when server.js
-  // calls the hook (task 5: the hook on an OPEN socket is a sign-out, which
-  // is a leave).
+  // `online` IS PRESENCE FOR AN ACCOUNT AND THE SOCKET FOR A GUEST — and for
+  // an account the two can disagree IN BOTH DIRECTIONS, so both are asked.
+  // (This test first asked the first one by closing D's presence with the
+  // sign-out hook while D's socket stayed open; since task 5 that hook is a
+  // leave, so each direction is now reached the way production reaches it.)
+  //   * THE ROW'S SOCKET OPEN, THE ACCOUNT NOT PRESENT. B joins on a socket
+  //     whose account id server.js's push-subscription sink set without a
+  //     hello (setPushSubSink: `if (id) ws.userId = id;`), so presence never
+  //     counted it: online is false although the socket is open.
+  //   * THE ROW'S SOCKET GONE, THE ACCOUNT PRESENT. D's row socket closes —
+  //     a real close, so the row is DROPPED — while D is signed in on a
+  //     second device: online is TRUE and dropped is true. That is the
+  //     truthful pair: `online` is the account's presence (the friends
+  //     panel's dot, the same everywhere), `dropped` is this seat's socket,
+  //     and the box renders dropped over online.
+  // And the guest's socket goes: a guest's `online` is its own socket.
+  sqUp(S, sqws(SQD));                          // D's second device
   wd.readyState = 3; S.onClose(wd); g.readyState = 3;
-  const wb = sqUp(S, sqws(SQB));
+  const wb = sqws(SQB);                        // an id from a push subscription: no onAuth
   await S.handle(wb, { type: 'squad', op: 'join', code });
   const now4 = (sqlast(wa, 'state') || {}).members || [];
-  if (now4.length === 4 && now4[1].id === SQD && now4[1].online === false && now4[2].guest === true && now4[2].online === false && now4[0].online === true)
-    ok('(h1) online follows the account\'s presence and a guest\'s own socket, and an offline row keeps its place');
+  if (now4.length === 4 && now4[0].online === true
+    && now4[1].id === SQD && now4[1].online === true && now4[1].dropped === true
+    && now4[2].guest === true && now4[2].online === false
+    && now4[3].id === SQB && now4[3].online === false && now4[3].dropped === false)
+    ok('(h1) online is the account\'s presence both ways — open socket but not present reads offline, dropped but present elsewhere reads online — and a guest\'s is its socket');
   else fail('(h1) online after D and the guest went: ' + JSON.stringify(now4));
   if (sqf(g).length === 1) ok('(h1) nothing is sent down a socket that is no longer open');
   else fail('(h1) the closed guest socket was sent ' + sqf(g).length + ' frames');
