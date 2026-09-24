@@ -2888,6 +2888,356 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     else fail('(d8c) leaderless sweep: ' + JSON.stringify({ has: S.has(sq.code), n: changed.length, left: sq.members.length }));
   }
 
+  // ==== THE SOCIAL LAYER: the close hook, the timer, the fan-out ============
+  // THE CLOCKWORK: an injected scheduler that records every timer it is asked
+  // for, stamps it due at CLOCK5 + ms, and runs it only when the test says so.
+  // createSocial takes it as `schedule(fn, ms) -> cancel`, and production's
+  // default is a real setTimeout (tested once, below, on its own).
+  //   fire()  — run every timer whose time has come by CLOCK5: what a real
+  //             timer does once the clock has moved.
+  //   force() — run every timer still pending, due or not: a timer firing
+  //             EARLY by the wall clock, which Node can do by a millisecond.
+  const mkClockwork = () => {
+    const all = [];
+    const schedule = (fn, ms) => { const t = { fn, ms, due: CLOCK5 + ms, off: false, ran: false }; all.push(t); return () => { t.off = true; }; };
+    const pending = () => all.filter((t) => !t.off && !t.ran);
+    const run = (list) => { for (const t of list) { if (t.off || t.ran) continue; t.ran = true; t.fn(); } return list.length; };
+    const fire = () => run(pending().filter((t) => t.due <= CLOCK5));
+    const force = () => run(pending());
+    return { all, schedule, pending, fire, force };
+  };
+  const flush5 = () => new Promise((r) => setImmediate(r));
+  const NAMES5 = { [LEAD]: 'Anvil Six', [MEM]: 'Bunker Nine', [THIRD]: 'Crater Two', [FOURTH]: 'Delta Four' };
+  // profilesByIds answers the three columns server/store.js really selects,
+  // and nothing else. `gate`, when set, holds the read until it resolves, and
+  // `entered` resolves the moment a read is waiting on it — so a test can act
+  // INSIDE a name read without guessing how long one takes.
+  const store5 = () => {
+    const st = { gate: null, entered: null, onEnter: null, calls: 0 };
+    st.profilesByIds = async (ids) => {
+      st.calls += 1;
+      if (st.gate) { const g = st.gate; st.gate = null; if (st.onEnter) st.onEnter(); await g; }
+      const m = new Map();
+      for (const id of ids) if (NAMES5[id]) m.set(id, { id, callsign: NAMES5[id], callsign_key: NAMES5[id].toLowerCase() });
+      return m;
+    };
+    st.hold = () => {
+      let release;
+      st.gate = new Promise((r) => { release = r; });
+      st.entered = new Promise((r) => { st.onEnter = r; });
+      return () => release();
+    };
+    return st;
+  };
+  // The send server.js really uses, down to the wire: nothing reaches a
+  // socket that is not open, and what does has been through JSON.
+  const social5 = (store = store5(), { clock = now5, cw = null, seatSquad } = {}) => createSocial({
+    store, terms: [], now: clock, seats: MODE_SEATS, teeIds: TEE_IDS, validRack: validRackFor,
+    ...(seatSquad ? { seatSquad } : {}),
+    ...(cw ? { schedule: cw.schedule } : {}),
+    send: (ws, f) => { if (ws && ws.readyState === 1) ws.rx.push(JSON.parse(JSON.stringify(f))); },
+  });
+  const sq5 = (w, op) => w.rx.filter((f) => f.type === 'squad' && (!op || f.op === op));
+  const last5 = (w, op) => { const f = sq5(w, op); return f[f.length - 1] || null; };
+  const up5 = (S, ws) => { S.onAuth(ws); return ws; };
+  // server.js's close, exactly: the socket is CLOSED by the time the event
+  // fires, and the hook runs before the engine's handleClose.
+  const close5 = (S, ws) => { ws.readyState = 3; S.onClose(ws); };
+  // server.js's sign-out branch, exactly: the hook with the socket still
+  // OPEN, then the generation bump, then the identity cleared.
+  const signOut5 = (S, ws) => { S.onClose(ws); ws.authGen = (ws.authGen || 0) + 1; ws.userId = null; ws.isGuest = false; ws.chosenName = null; };
+  // A hello for a DIFFERENT account: the generation is bumped when the hello
+  // arrives, and the hook runs when its verification lands, only when the
+  // socket already had an id — then the new id, then onAuth.
+  const switch5 = (S, ws, id, guest = false) => { ws.authGen = (ws.authGen || 0) + 1; if (ws.userId && ws.userId !== id) S.onClose(ws); ws.userId = id; ws.isGuest = guest; S.onAuth(ws); };
+  const pair5 = async (S) => {
+    const wl = up5(S, mkws5(LEAD)), wm = up5(S, mkws5(MEM));
+    await S.handle(wl, { type: 'squad', op: 'create' });
+    const code = (last5(wl, 'state') || {}).code;
+    CLOCK5 += 1;
+    await S.handle(wm, { type: 'squad', op: 'join', code, name: 'Bee', skin: 'olive' });
+    wl.rx.length = 0; wm.rx.length = 0;
+    return { wl, wm, code };
+  };
+  const ids5 = (f) => (f && f.members ? f.members.map((r) => r.id || 'guest') : null);
+
+  // ---- (d9) THE WINDOW, WIRED: a close keeps the row, sixty seconds later it
+  // goes, and the squad is told both times ---------------------------------
+  {
+    const prevEnv = process.env.SQUAD_DROP_MS;
+    delete process.env.SQUAD_DROP_MS;          // production's window, not a suite's
+    const cw = mkClockwork();
+    const S = social5(store5(), { cw });
+    if (prevEnv === undefined) delete process.env.SQUAD_DROP_MS; else process.env.SQUAD_DROP_MS = prevEnv;
+    const { wl, wm } = await pair5(S);
+    close5(S, wm);
+    await flush5();
+    const a = last5(wl, 'state');
+    const row = a && a.members.find((r) => r.id === MEM);
+    if (a && a.id === undefined && same(ids5(a), [LEAD, MEM]) && row.dropped === true && row.ready === false && row.online === false)
+      ok('(d9) a close pushes the squad a roster that still carries the member, marked dropped, not ready and offline, with no id');
+    else fail('(d9) close snapshot: ' + JSON.stringify(a));
+    const armed = cw.pending();
+    if (armed.length === 1 && armed[0].ms === 60000)
+      ok('(d9) the close arms ONE timer, and the window is sixty seconds');
+    else fail('(d9) timers armed: ' + JSON.stringify(cw.all.map((t) => [t.ms, t.off, t.ran])));
+    wl.rx.length = 0;
+    CLOCK5 += 60000;
+    cw.fire();
+    await flush5();
+    const b = last5(wl, 'state');
+    if (b && b.id === undefined && same(ids5(b), [LEAD]) && sq5(wl).length === 1 && cw.pending().length === 0)
+      ok('(d9) when it fires the member is removed and the squad is pushed one fresh roster, and nothing is left armed');
+    else fail('(d9) after the window: ' + JSON.stringify(wl.rx) + ' pending ' + cw.pending().length);
+  }
+
+  // ---- (d9b) deferred item 1: A DISCONNECTED GUEST IS DROPPED, THEN REMOVED -
+  // Before the drop window a guest whose socket closed stayed a member for
+  // the life of the squad, holding a dead socket in the index.
+  {
+    const cw = mkClockwork();
+    const S = social5(store5(), { cw });
+    const { wl, code } = await pair5(S);
+    const g = mkws5(ANON, true);
+    await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+    wl.rx.length = 0;
+    close5(S, g);
+    await flush5();
+    const a = last5(wl, 'state');
+    if (a && same(ids5(a), [LEAD, MEM, 'guest']) && a.members[2].dropped === true && a.members[2].online === false)
+      ok('(d9b) a guest whose socket closes is marked dropped, and the squad is told');
+    else fail('(d9b) guest close: ' + JSON.stringify(a));
+    CLOCK5 += 60000;
+    cw.fire();
+    await flush5();
+    const b = last5(wl, 'state');
+    if (b && same(ids5(b), [LEAD, MEM])) ok('(d9b) and at the end of the window the guest\'s row is removed');
+    else fail('(d9b) guest after the window: ' + JSON.stringify(b));
+  }
+
+  // ---- (d9c) deferred item 7: A GUEST WHO SIGNED IN, THEN DISCONNECTED -----
+  // The row is found by the SOCKET, not by who is signed in on it. By
+  // identity this socket is MEM's account now, which holds no row, and the
+  // guest row it really holds would be left behind for good.
+  {
+    const cw = mkClockwork();
+    const S = social5(store5(), { cw });
+    const wl = up5(S, mkws5(LEAD));
+    await S.handle(wl, { type: 'squad', op: 'create' });
+    const code = last5(wl, 'state').code;
+    const g = mkws5(null);                     // never said hello
+    await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+    switch5(S, g, MEM);                        // signs in mid-squad (no hook: it had no id)
+    wl.rx.length = 0;
+    close5(S, g);
+    await flush5();
+    const a = last5(wl, 'state');
+    if (a && same(ids5(a), [LEAD, 'guest']) && a.members[1].dropped === true)
+      ok('(d9c) a guest who signed in and then disconnected: the guest row they hold is dropped');
+    else fail('(d9c) signed-in guest close: ' + JSON.stringify(a));
+    CLOCK5 += 60000;
+    cw.fire();
+    await flush5();
+    const b = last5(wl, 'state');
+    if (b && same(ids5(b), [LEAD])) ok('(d9c) and swept at the end of the window — no guest row is left behind');
+    else fail('(d9c) signed-in guest after the window: ' + JSON.stringify(b));
+  }
+
+  // ---- (d9d) a socket holding NO row closes: nobody is dropped -------------
+  // A second device of a member closing is not the member leaving. Their row
+  // is on the first device, which is still here.
+  {
+    const cw = mkClockwork();
+    const S = social5(store5(), { cw });
+    const { wl, wm } = await pair5(S);
+    const wm2 = up5(S, mkws5(MEM));
+    close5(S, wm2);
+    await flush5();
+    if (sq5(wl).length === 0 && sq5(wm).length === 0 && cw.all.length === 0)
+      ok('(d9d) a second device closing drops nobody, pushes nothing and arms nothing');
+    else fail('(d9d) second-device close: ' + JSON.stringify({ wl: wl.rx, timers: cw.all.length }));
+  }
+
+  // ---- (d9e) THE WINDOW RESTARTS FOR A MEMBER WHO DROPS AGAIN --------------
+  // A member who drops, is removed some other way, comes back and drops
+  // again must be swept a full window after the SECOND drop — not left
+  // unswept because a timer from the first was still standing.
+  {
+    const cw = mkClockwork();
+    const S = social5(store5(), { cw });
+    const { wl, wm, code } = await pair5(S);
+    const t0 = CLOCK5;
+    close5(S, wm);
+    await flush5();
+    await S.handle(wl, { type: 'squad', op: 'kick', id: MEM });      // removed while dropped
+    CLOCK5 = t0 + 30000;
+    const wm2 = up5(S, mkws5(MEM));
+    await S.handle(wm2, { type: 'squad', op: 'join', code });
+    close5(S, wm2);                            // the second drop, thirty seconds on
+    await flush5();
+    // SIXTY SECONDS AFTER THE FIRST DROP: only thirty into the second, so
+    // they stay. Whatever timer is standing fires here.
+    CLOCK5 = t0 + 60000;
+    cw.fire();
+    await flush5();
+    const mid = last5(wl, 'state');
+    const kept = !!(mid && mid.members.some((r) => r.id === MEM && r.dropped === true));
+    // SIXTY SECONDS AFTER THE SECOND DROP: they go. A window that kept the
+    // FIRST drop's timer instead of replacing it has nothing left armed here,
+    // and the member would be dropped for ever.
+    CLOCK5 = t0 + 90000;
+    cw.fire();
+    await flush5();
+    const b = last5(wl, 'state');
+    if (kept && b && same(ids5(b), [LEAD]))
+      ok('(d9e) a second drop re-arms the window from THAT drop: kept at sixty seconds from the first, swept at sixty from the second');
+    else fail('(d9e) re-drop: ' + JSON.stringify({ keptAtSixty: kept, last: ids5(b), pending: cw.pending().length }));
+    // A FIRED TIMER IS FORGOTTEN. The member comes back and drops a third
+    // time; arming for them must find no stale entry to cancel — an entry
+    // left behind by a fired timer is one per drop, for ever.
+    const wm3 = up5(S, mkws5(MEM));
+    await S.handle(wm3, { type: 'squad', op: 'join', code });
+    close5(S, wm3);
+    if (!cw.all.some((t) => t.ran && t.off) && cw.pending().length === 1)
+      ok('(d9e) a timer that has fired leaves no entry behind to be cancelled later');
+    else fail('(d9e) a fired timer was still on the books: ' + JSON.stringify(cw.all.map((t) => [t.ran, t.off])));
+  }
+
+  // ---- (d9f) A TIMER THAT FIRES A MILLISECOND EARLY STILL SWEEPS ITS MEMBER -
+  // Node can fire a timer a millisecond before Date.now() says the delay has
+  // passed, and a clock can be stepped backwards. The member the timer was
+  // armed for must be swept anyway: there is no second timer for them.
+  {
+    const cw = mkClockwork();
+    const S = social5(store5(), { cw });
+    const { wl, wm } = await pair5(S);
+    const t0 = CLOCK5;
+    close5(S, wm);
+    await flush5();
+    CLOCK5 = t0 + 60000 - 1;                   // the wall clock says: not quite
+    cw.force();                                // ...and the timer fires anyway
+    await flush5();
+    const b = last5(wl, 'state');
+    if (b && same(ids5(b), [LEAD])) ok('(d9f) a timer firing a millisecond early by the wall clock still removes the member it was armed for');
+    else fail('(d9f) early fire left them: ' + JSON.stringify(ids5(b)));
+    CLOCK5 = t0 + 60000;
+  }
+
+  // ---- (d10) A THROW IN THE WINDOW MUST NOT REACH THE PROCESS ---------------
+  // server.js answers uncaughtException by shutting down: one throw out of
+  // an unattended callback kills every live match on the box. The engine's
+  // timers get this from safeTimeout; nothing under server/ has one, so the
+  // containment here is written by hand and has to be tested. now() is a
+  // REAL injected dependency the sweep and the close both call — the clock
+  // the factory takes as an argument, made to fail.
+  {
+    let boom = false, throws = 0;
+    const clock = () => { if (boom) { throws += 1; throw new Error('drop-window probe'); } return CLOCK5; };
+    const cw = mkClockwork();
+    const S = social5(store5(), { clock, cw });
+    const { wl, wm, code } = await pair5(S);
+    close5(S, wm);                             // armed with a working clock
+    await flush5();
+    CLOCK5 += 60000;
+    boom = true;
+    let escaped = null;
+    try { cw.fire(); } catch (e) { escaped = e; }
+    if (!escaped && throws > 0) ok('(d10) a throw inside the sweep timer is contained — the callback returns');
+    else fail('(d10) the sweep callback threw: ' + (escaped ? escaped.message : 'the clock was never called'));
+    // THE CLOSE HOOK TOO. onClose runs in server.js's 'close' handler and
+    // its sign-out branch; a throw there skips handleClose (the seat is never
+    // released) or leaves the identity uncleared, and reaches the process.
+    const wt = up5(S, mkws5(THIRD));
+    boom = false;
+    await S.handle(wt, { type: 'squad', op: 'join', code });
+    boom = true; throws = 0;
+    let fromClose = null;
+    try { close5(S, wt); } catch (e) { fromClose = e; }
+    if (!fromClose && throws > 0 && wt.socialUser === null && !S.online.has(THIRD))
+      ok('(d10) a throw inside the close hook is contained, and the rest of onClose still ran');
+    else fail('(d10) the close hook: ' + JSON.stringify({ threw: fromClose && fromClose.message, throws, socialUser: wt.socialUser, online: S.online.has(THIRD) }));
+    // AND THE LAYER IS STILL ALIVE: one fault is one lost sweep, not a
+    // wedged window. The next drop arms and fires normally, and its sweep
+    // catches up with the member the faulted one missed.
+    boom = false;
+    const wf = up5(S, mkws5(FOURTH));
+    await S.handle(wf, { type: 'squad', op: 'join', code });
+    close5(S, wf);
+    await flush5();
+    wl.rx.length = 0;
+    CLOCK5 += 60000;
+    cw.fire();
+    await flush5();
+    const f = last5(wl, 'state');
+    if (f && !f.members.some((r) => r.id === FOURTH || r.id === MEM))
+      ok('(d10) and the next window still runs, catching up with the member the faulted sweep missed');
+    else fail('(d10) the layer did not recover: ' + JSON.stringify(ids5(f)));
+  }
+
+  // ---- (d10b) THE DEFAULT SCHEDULER: a real timer, and still contained -----
+  // Everything above injects the clockwork. This is the one test of what
+  // production runs when nothing is injected: a real setTimeout, the window
+  // read from SQUAD_DROP_MS per instance. It waits on a CONDITION with a
+  // generous ceiling, never on a fixed sleep, so a busy machine can make it
+  // slow but not wrong.
+  {
+    const waitFor = async (cond, ms = 10000) => { const end = Date.now() + ms; while (!cond() && Date.now() < end) await new Promise((r) => setTimeout(r, 5)); return cond(); };
+    const prevEnv = process.env.SQUAD_DROP_MS;
+    process.env.SQUAD_DROP_MS = '0';
+    let boom = false, throws = 0;
+    const clock = () => { if (boom) { throws += 1; throw new Error('default-timer probe'); } return CLOCK5; };
+    const S = social5(store5(), { clock });
+    if (prevEnv === undefined) delete process.env.SQUAD_DROP_MS; else process.env.SQUAD_DROP_MS = prevEnv;
+    const { wl, wm } = await pair5(S);
+    close5(S, wm);
+    const gone = await waitFor(() => { const f = last5(wl, 'state'); return !!(f && same(ids5(f), [LEAD])); });
+    if (gone) ok('(d10b) with nothing injected, a real timer runs the window and the squad is told');
+    else fail('(d10b) the default timer never swept: ' + JSON.stringify(wl.rx));
+    let escaped = null;
+    const onEsc = (e) => { escaped = e; };
+    process.on('uncaughtException', onEsc);
+    try {
+      const S2 = (() => { process.env.SQUAD_DROP_MS = '0'; const s = social5(store5(), { clock }); if (prevEnv === undefined) delete process.env.SQUAD_DROP_MS; else process.env.SQUAD_DROP_MS = prevEnv; return s; })();
+      const p = await pair5(S2);
+      close5(S2, p.wm);                        // arms a real timer with a working clock...
+      boom = true;                             // ...that fires into a failing one
+      const fired = await waitFor(() => throws > 0);
+      await flush5(); await flush5();
+      if (fired && !escaped) ok('(d10b) and a throw inside the real timer never reaches uncaughtException');
+      else fail('(d10b) default timer: ' + (escaped ? 'ESCAPED to uncaughtException: ' + escaped.message : 'never fired'));
+    } finally { boom = false; process.removeListener('uncaughtException', onEsc); }
+  }
+
+  // ---- (d10c) A PENDING WINDOW NEVER HOLDS THE PROCESS OPEN ----------------
+  // The house rule for every timer this layer arms (presence's too): unref'd.
+  // Asked of a child process left to exit NATURALLY with a full sixty-second
+  // window pending — this suite ends in process.exit, so it cannot see it.
+  // A ceiling of twenty seconds, far above the fraction of a second the child
+  // needs and far below the sixty it would hang for.
+  {
+    const { spawnSync } = await import('node:child_process');
+    // The child creates a squad, then its only member's socket closes: a
+    // sixty-second window is pending when the script's last line has run.
+    const src = `
+      const { createSocial } = await import(${JSON.stringify(new URL('../server/social.js', import.meta.url).href)});
+      const S = createSocial({ store: { async profilesByIds() { return new Map(); } }, terms: [], now: Date.now, send() {} });
+      const a = { readyState: 1, userId: ${JSON.stringify(LEAD)}, isGuest: false };
+      S.onAuth(a);
+      await S.handle(a, { type: 'squad', op: 'create' });
+      a.readyState = 3;
+      S.onClose(a);
+      console.log('armed');
+    `;
+    const env = { ...process.env };
+    delete env.SQUAD_DROP_MS;
+    const t0 = Date.now();
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', src], { encoding: 'utf8', timeout: 20000, env });
+    const took = Date.now() - t0;
+    if (r.status === 0 && !r.signal && r.stdout.trim() === 'armed' && !r.stderr && took < 20000)
+      ok(`(d10c) with a sixty-second window pending, a process that is done exits on its own (${took < 5000 ? 'promptly' : took + ' ms'})`);
+    else fail('(d10c) the window held the process open: ' + JSON.stringify({ status: r.status, signal: r.signal, took, out: r.stdout, err: (r.stderr || '').slice(0, 300) }));
+  }
+
   // ---- (end of task 5) ----
 }
 

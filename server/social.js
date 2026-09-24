@@ -221,6 +221,14 @@ const BLOCK_KEY_RE = /^[0-9a-f]{32}$/;
 // suite that builds this layer without it) gets an honest refusal, never a
 // start that quietly seated nobody.
 //
+// schedule(fn, ms) -> cancel() — the squad drop window's timer (task 5),
+// injected for the reason `now` is: so a suite can run the window without
+// waiting on wall time, and without a sleep that a busy machine could make
+// flake. The default is what production runs: a real setTimeout, unref'd so a
+// pending window never holds the process open. It is a BARE timer — nothing
+// under server/ has the engine's safeTimeout — so every callback handed to it
+// here is wrapped by hand (see the drop window below).
+//
 // THIS LIST ACCUMULATES (plan X2). A later task adds its option after these;
 // it never restates the line.
 export function createSocial({
@@ -229,6 +237,7 @@ export function createSocial({
   roomExists = () => false,
   seats = {}, teeIds = [], validRack = () => false,
   seatSquad = () => ({ ok: false, error: 'unavailable' }),
+  schedule = (fn, ms) => { const t = setTimeout(fn, ms); if (typeof t.unref === 'function') t.unref(); return () => clearTimeout(t); },
 }) {
 
   // userId -> that account's live sockets. "Online" is "the set is non-empty".
@@ -390,9 +399,15 @@ export function createSocial({
 
   // Call on close, and on a sign-out hello. Unlike the first version of this
   // function it does NOT depend on ws.userId still being set.
+  //
+  // The squad hook runs AFTER presence, so the roster it pushes already says
+  // the account is offline, and BEFORE socialUser is cleared. It finds the
+  // row by the socket, not by ws.userId, so it does not depend on the id
+  // either.
   function onClose(ws) {
     if (!ws) return;
     dropPresence(ws.socialUser || ws.userId, ws);
+    dropSquadMember(ws);
     ws.socialUser = null;
   }
 
@@ -1260,6 +1275,99 @@ export function createSocial({
     for (const m of sq.members) if (m.ws && m.ws !== ws) safeSend(m.ws, done);
     await pushSquad(sq, ws, null);
     squadReply(ws, msg, 'start', { ok: true, code: seated.code });
+  }
+
+  // ---- the drop window (task 5, design 4.3) --------------------------------
+  // A member whose socket goes keeps their row for DROP_MS, shown as dropped
+  // and not ready, and is then removed and the squad pushed a fresh roster.
+  // server/squads.js holds the state of the window; this holds its length,
+  // its timers and the fan-out, which need this closure.
+  //
+  // THE THIRD GRACE WINDOW IN THIS BUILD, AND IT IS NEITHER OF THE OTHER TWO.
+  // public/room-engine.js holds a per-SEAT forfeit timer (RESUME_GRACE_MS,
+  // 120 s, or ASYNC_GRACE_MS, 24 h, for an async duel) and a whole-ROOM hold
+  // (EMPTY_ROOM_GRACE_MS, 30 min). This one is about a MEMBERSHIP: a player
+  // who drops mid-match keeps their seat under the engine's window and their
+  // squad row under this one, and the two expire independently, on purpose.
+  // Nothing here touches a room.
+  //
+  // Read PER INSTANCE, the house pattern for a time knob (PRESENCE_MS above),
+  // so a suite can set it just before it builds its layer.
+  const envDrop = Number(process.env.SQUAD_DROP_MS);
+  const DROP_MS = Number.isFinite(envDrop) && envDrop >= 0 ? envDrop : 60000;
+  // member key -> cancel(), at most one per member dropped in the last
+  // DROP_MS: an entry is deleted when its timer fires or the member resumes,
+  // and a member who drops again replaces theirs. A key is an account id or,
+  // for a guest, the dead socket, held here for at most one window.
+  const dropTimers = new Map();
+
+  // THE SWEEP, WRAPPED BY HAND. `schedule` is a bare timer: safeTimeout and
+  // safeInterval live in public/room-engine.js and nothing under server/ has
+  // either, so a throw out of this callback would reach 'uncaughtException',
+  // whose handler shuts the server down and takes every live match with it.
+  // One fault costs one sweep, never the process; the next drop's sweep
+  // catches up with whoever this one missed.
+  //
+  // THE CUTOFF IS AT LEAST `at`, the drop this timer was armed for. The timer
+  // firing IS that member's window having passed; now() is only asked about
+  // everyone else. A timer can fire a millisecond early by the wall clock,
+  // and a clock can be stepped backwards, and either would leave the member
+  // one millisecond inside the window, with no timer left to try again.
+  function sweepSquads(at) {
+    try {
+      const cutoff = Math.max(now() - DROP_MS, at);
+      // Every squad that still has someone to tell: a survivor's roster, or
+      // the guests a leaderless squad ended under. pushSquadAfterExit is
+      // task 2's answer to both, and swallows nothing it should not.
+      for (const sq of squads.sweepDropped(cutoff)) pushSquadAfterExit(sq).catch(() => {});
+    } catch { /* one lost sweep, never the process */ }
+  }
+
+  // Replaces any timer this member already has, so the window always runs
+  // from their LATEST drop.
+  function armDropSweep(key, at) {
+    clearDropSweep(key);
+    const cancel = schedule(() => {
+      if (dropTimers.get(key) === cancel) dropTimers.delete(key);
+      sweepSquads(at);
+    }, DROP_MS);
+    dropTimers.set(key, cancel);
+  }
+
+  function clearDropSweep(key) {
+    const cancel = dropTimers.get(key);
+    if (!cancel) return;
+    dropTimers.delete(key);
+    cancel();
+  }
+
+  // Called from onClose, which server.js calls from THREE places: the
+  // socket's own 'close', the sign-out branch of the auth sink, and a hello
+  // for a different account. It cannot be bolted onto the engine's
+  // handleClose instead: that returns early unless `player.ws === ws` and
+  // does nothing for a socket that held no room, and a member in the bay
+  // holds no room.
+  //
+  // THE ROW THIS SOCKET HOLDS, AND ONLY THAT ONE (squads.keyOfSocket — the
+  // first half of squadKey). A socket closing takes nothing but its own row
+  // with it. squadKey's other half, the identity, is how a REQUEST from a
+  // second device finds the account's row; a second device CLOSING is not
+  // the account leaving, and its row is on a device that is still here.
+  //
+  // WRAPPED, for the timer's reason and one more: onClose runs inside
+  // server.js's 'close' handler ahead of the engine's handleClose, and a
+  // throw here would also skip the seat's release.
+  function dropSquadMember(ws) {
+    try {
+      const key = squads.keyOfSocket(ws);
+      if (key == null) return;
+      if (ws.readyState === 1) return;
+      const at = now();
+      const sq = squads.markDropped(key, at);
+      if (!sq) return;
+      armDropSweep(key, at);
+      pushSquad(sq, null, null).catch(() => {});
+    } catch { /* the squad row waits for the next sweep; the close goes on */ }
   }
 
   SQUAD_OPS.create = squadCreate;
