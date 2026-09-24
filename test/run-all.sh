@@ -246,6 +246,13 @@ else
   # so it never reaches production or APNs. Exercises HTTP/2, ES256 signing and
   # the dead-token contract — including the one that must NOT delete a row.
   run push_apns node test/push_apns.mjs
+  # A squad's Start, seated into one room by the REAL seatSquad in server.js --
+  # the only place it can be reached, because server.js exports nothing and
+  # binds a port on import, so a headless suite could only stub the thing under
+  # test. Spawns its own servers on free ports (one with MAX_ROOMS=1 for the
+  # capacity refusal) against a local Supabase mock, and drives abandonRoom in
+  # process; it never reaches production.
+  run squad_seat node test/squad_seat.mjs
   # Also self-hosted, and it asks the OS for a free port rather than taking one
   # — kill_server() above only clears $PORT, so a hardcoded port left busy by a
   # crashed run would surface here as a misleading "server never came up".

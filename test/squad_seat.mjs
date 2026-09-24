@@ -302,6 +302,22 @@ async function squadUp(port, pilots, mode = 'duel', { ready = pilots.map(() => t
   return { ws, code: made.code, racks: ws.map((_, i) => RACK(i, n)) };
 }
 const closeAll = async (socks) => { for (const w of socks) try { w.close(); } catch {} await sleep(50); };
+// EVERY ROOM CODE THESE SOCKETS WERE EVER SHOWN MUST BE DEAD, asked of the
+// engine by a stranger's `join`. After a refused start there should be none at
+// all; if a gate upstream ever lets a room be built, this is what says whether
+// the refusal left it standing.
+const liveCodes = async (port, socks) => {
+  const codes = [...new Set(socks.flatMap((w) => seen(w, 'created').map((m) => m.code)))];
+  const live = [];
+  for (const code of codes) {
+    const x = await open(port);
+    put(x, { type: 'join', code, name: 'Nomad', skin: 'gold', loadout: RACK(0) });
+    const r = await wait(x, (m) => m.type === 'joinError' || m.type === 'lobby' || m.type === 'start');
+    if (!(r && r.type === 'joinError' && r.reason === 'No game with that code.')) live.push([code, r && (r.reason || r.type)]);
+    x.close();
+  }
+  return live;
+};
 // Nothing on a server's output beyond its banner, the [boot] line, and the one
 // expected warning (a local mock is never the browser's config.js Supabase).
 const strayLines = (s, extra) => s.log.split('\n').filter((l) => l.trim()
@@ -426,10 +442,14 @@ async function sectionB() {
   {
     const s = await squadUp(S.port, [1, 2, 3], 'ffa', { ready: [true, true, false] });
     if (s) {
+      const before = s.ws.map((w) => w._rx.length);
       const a = await ask(s.ws[0], { op: 'start' });
       await settle(s.ws);
-      if (a && a.error === 'not_ready' && !s.ws.some((w) => seen(w, 'created').length || seen(w, 'lobby').length))
-        ok('(B3) one member not ready refuses the start, and nothing is built');
+      // NOTHING AT ALL reaches the members: a refusal before the seating
+      // changes nothing, so there is nothing to push.
+      if (a && a.error === 'not_ready' && s.ws[1]._rx.length === before[1] && s.ws[2]._rx.length === before[2]
+        && !seen(s.ws[0], 'created').length && !seen(s.ws[0], 'lobby').length)
+        ok('(B3) one member not ready refuses the start; nothing is built and the members are sent nothing');
       else fail('(B3) one not ready: ' + JSON.stringify(a) + ' ' + JSON.stringify(s.ws.map(types)));
       const r = await ask(s.ws[2], { op: 'ready', ready: true, loadout: RACK(2) });
       const b = await ask(s.ws[0], { op: 'start' });
@@ -467,6 +487,9 @@ async function sectionB() {
       if (s.ws.every((w, i) => !w._rx.slice(from[i]).some((m) => m.type === 'restore' || m.type === 'opponentLeft')))
         ok('(B4) after the refusal no member holds a seat in any match');
       else fail('(B4) after the refusal: ' + JSON.stringify(s.ws.map((w, i) => w._rx.slice(from[i]).map((m) => m.type))));
+      const left = await liveCodes(S.port, s.ws);
+      if (left.length === 0) ok('(B4) and no room it was ever shown is left standing');
+      else fail('(B4) rooms left standing after the refusal: ' + JSON.stringify(left));
       // A CLOSED SOCKET. Arm a mode the three fit, then one member's socket
       // goes. The engine's join would SEAT a closed socket — it never looks —
       // so this gate is the only thing between the squad and a ghost seat.
@@ -489,6 +512,9 @@ async function sectionB() {
       await settle(one.ws);
       if (c && c.error === 'wont_fit' && seen(one.ws[0], 'created').length === 0) ok('(B4) a squad of one on a duel is refused wont_fit — fits has a minimum');
       else fail('(B4) one on a duel: ' + JSON.stringify(c) + ' ' + JSON.stringify(types(one.ws[0])));
+      const left = await liveCodes(S.port, one.ws);
+      if (left.length === 0) ok('(B4) and the squad of one is left in no room');
+      else fail('(B4) rooms left standing after the one-on-a-duel refusal: ' + JSON.stringify(left));
       await closeAll(one.ws);
     }
   }
@@ -754,6 +780,52 @@ async function sectionB() {
       const strayC = strayLines(C, /^\[capacity\] room creation REFUSED — 1\/1 rooms in memory$/);
       if (strayC.length === 0) ok('(B6) the capped server printed nothing unexpected');
       else fail('(B6) the capped server printed:\n      ' + strayC.join('\n      '));
+    }
+  }
+
+  // ---- B14. the next match: a member still on the last one's result screen --
+  // The squad outlives every match (design 4.3), so the ordinary second Start
+  // finds members still seated in the room of the match that has just ENDED.
+  // That room holds nothing to protect, so it is not member_busy: the member
+  // is moved, and quietly — an ended room is torn down without 'Opponent
+  // left'. A third server with a short resume grace, so a dropped seat is
+  // forfeited and a free-for-all for two reaches its gameover in a moment.
+  {
+    const R = await boot({ RESUME_GRACE_MS: '300' });
+    if (R) {
+      const s = await squadUp(R.port, [1, 2], 'ffa');
+      if (s) {
+        const [a, b] = s.ws;
+        const first = await ask(a, { op: 'start' });
+        const bIn = await wait(b, (m) => m.type === 'start');
+        b.close();
+        const over = await wait(a, (m) => m.type === 'gameover');
+        // The member who left is kicked (their row still holds the closed
+        // socket until the drop window exists), a new one joins, and both
+        // ready again: the Readies were spent by the first start.
+        const c = await pilot(R.port, 3);
+        const j = await ask(c, { op: 'join', code: s.code, name: 'Pilot3', skin: 'olive' });
+        // A kick names its target by `id` (Task 2's frame), which is also the
+        // field a reply echoes — so it is sent as is, and its answer is the
+        // roster that comes back carrying that id.
+        put(a, { type: 'squad', op: 'kick', id: ID(2) });
+        const k = await wait(a, (m) => m.type === 'squad' && m.id === ID(2));
+        const ra = await ask(a, { op: 'ready', ready: true, loadout: RACK(0) });
+        const rc = await ask(c, { op: 'ready', ready: true, loadout: RACK(2) });
+        const from = a._rx.length;
+        const again = await ask(a, { op: 'start' });
+        const cs = await wait(c, (m) => m.type === 'start');
+        await settle([a, c]);
+        const aAfter = a._rx.slice(from).map((m) => m.type);
+        if (first && first.ok && bIn && over && j && j.op === 'state' && k && k.op === 'state' && ra && ra.ok && rc && rc.ok
+          && again && again.ok === true && again.code !== first.code && cs && cs.code === again.code && !aAfter.includes('opponentLeft'))
+          ok('(B14) a leader still seated in the room of the match that just ended starts the next one — moved, quietly, not member_busy');
+        else fail('(B14) next match: ' + JSON.stringify({ first, over: !!over, j: j && j.op, k: k && (k.op + (k.error || '')), ra, rc, again, c: cs && cs.code, aAfter }));
+        await closeAll([a, c]);
+      }
+      const strayR = strayLines(R);
+      if (strayR.length === 0) ok('(B14) the short-grace server printed nothing unexpected');
+      else fail('(B14) the short-grace server printed:\n      ' + strayR.join('\n      '));
     }
   }
 }

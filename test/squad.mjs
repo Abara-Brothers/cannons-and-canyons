@@ -2223,5 +2223,300 @@ const FITS_BY_SIZE = [
   else fail('(s3l) account-switched mode: ' + JSON.stringify(wa.rx) + ' member got ' + JSON.stringify(wb.rx));
 }
 
+// ==========================================================================
+// TASK 4 — Start: the handler's half
+// ==========================================================================
+// seatSquad is INJECTED here. server.js owns the real one, and
+// test/squad_seat.mjs drives it end to end over real sockets into the real
+// engine; what this section tests is the HANDLER — what it hands the seating,
+// in what order, what it refuses before ever calling it, and what it tells
+// every member afterwards. So the stub is a collaborator, not the subject: it
+// records what it is handed and answers whatever the test tells it to, and
+// every assertion below is about frames the handler produced or about what
+// it chose to hand over. If the handler were reverted, each would fail.
+const stR = (i, n = 5) => LOADOUT_POOL.slice(i, i + n);
+const mkSeat = (verdict = { ok: true, code: 'RM01' }) => {
+  const st = { calls: [], verdict };
+  st.fn = (seats, opts) => { st.calls.push({ seats, opts }); return typeof st.verdict === 'function' ? st.verdict(seats, opts) : st.verdict; };
+  return st;
+};
+// A squad of `n` (leader SQA, then SQB, then a GUEST), the mode armed, and
+// every member ready with a rack of its own unless `ready` says otherwise.
+const stSquad = async (S, { n = 2, mode = 'duel', ready } = {}) => {
+  const wa = sqUp(S, sqws(SQA)), wb = sqUp(S, sqws(SQB)), g = sqws(null);
+  const ws = [wa, wb, g].slice(0, n);
+  await S.handle(wa, { type: 'squad', op: 'create' });
+  const code = sqat(wa, 'state').code;
+  if (n > 1) await S.handle(wb, { type: 'squad', op: 'join', code, name: 'Bee', skin: 'desert' });
+  if (n > 2) await S.handle(g, { type: 'squad', op: 'join', code, name: 'Gee', skin: 'gold' });
+  if (mode !== 'duel') await S.handle(wa, { type: 'squad', op: 'mode', mode });
+  const k = mode === 'boss' || mode === 'aliens' ? 7 : 5;
+  for (let i = 0; i < ws.length; i++) {
+    if (ready && !ready[i]) continue;
+    await S.handle(ws[i], { type: 'squad', op: 'ready', ready: true, loadout: stR(i, k) });
+  }
+  for (const w of ws) w.rx.length = 0;
+  return { ws, code, racks: ws.map((_, i) => stR(i, k)) };
+};
+const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
+
+// ---- (st1) what seatSquad is handed ----------------------------------------
+{
+  const seat = mkSeat();
+  const S = sqSocial(sqstore(), { seatSquad: seat.fn });
+  const { ws: [wa, wb, g], code, racks } = await stSquad(S, { n: 3, mode: 'ffa' });
+  await S.handle(wa, { type: 'squad', op: 'start', id: 's' });
+  const c = seat.calls[0] || { seats: [], opts: {} };
+  // R5: THE LEADER FIRST, then the roster in order. The engine makes the first
+  // socket the host seat and starts the match as the last one lands, so this
+  // order IS the match's order.
+  if (seat.calls.length === 1 && c.seats.length === 3 && c.seats[0].ws === wa && c.seats[1].ws === wb && c.seats[2].ws === g)
+    ok('(st1) seatSquad is handed the leader first, then every member in roster order — the guest included');
+  else fail('(st1) seats were ' + JSON.stringify(seat.calls.map((x) => x.seats.map((s) => (s.ws === wa ? 'a' : s.ws === wb ? 'b' : s.ws === g ? 'g' : '?')))));
+  if (same(c.seats.map((s) => s.loadout), racks) && same(c.seats.map((s) => [s.name, s.skin]), [['', null], ['Bee', 'desert'], ['Gee', 'gold']]))
+    ok('(st1) each seat carries its own member\'s rack, and the name and paint that member joined with');
+  else fail('(st1) seat payload ' + JSON.stringify(c.seats.map((s) => [s.name, s.skin, s.loadout])));
+  if (same(c.opts, { mode: 'ffa', tees: null, squad: code })) ok('(st1) and the armed mode, its tee set, and the squad code the room is marked with');
+  else fail('(st1) opts ' + JSON.stringify(c.opts));
+}
+
+// ---- (st2) seated: who is told what, and the Readies are spent -------------
+{
+  const seat = mkSeat({ ok: true, code: 'RM02' });
+  const S = sqSocial(sqstore(), { seatSquad: seat.fn });
+  const { ws: [wa, wb, g] } = await stSquad(S, { n: 3, mode: 'ffa' });
+  await S.handle(wa, { type: 'squad', op: 'start', id: 's' });
+  const done = { type: 'squad', op: 'start', ok: true, code: 'RM02' };
+  // A member is told unsolicited — no id — and THEN shown the roster.
+  const member = (w) => w.rx.length === 2 && same(w.rx[0], done) && w.rx[1].op === 'state' && w.rx[1].id === undefined
+    && w.rx[1].members.every((m) => m.ready === false);
+  if (member(wb) && member(g)) ok('(st2) every member is told the room code unsolicited, then pushed a roster with every Ready spent');
+  else fail('(st2) members got ' + JSON.stringify([wb.rx, g.rx]));
+  // The caller: its roster, then its answer LAST with the id — pushSquad's
+  // order, because the answer is the one send that can throw.
+  if (wa.rx.length === 2 && wa.rx[0].op === 'state' && wa.rx[0].id === undefined && wa.rx[0].members.every((m) => m.ready === false)
+    && same(wa.rx[1], { ...done, id: 's' }))
+    ok('(st2) the leader is pushed the roster and then answered with the room code, id echoed, last');
+  else fail('(st2) leader got ' + JSON.stringify(wa.rx));
+  // THE READIES REALLY ARE SPENT: the next start, with nobody re-readying,
+  // never reaches the seating.
+  await S.handle(wa, { type: 'squad', op: 'start', id: 's2' });
+  if (sqat(wa, 'start').error === 'not_ready' && seat.calls.length === 1) ok('(st2) a second start with the Readies spent is not_ready and never reaches the seating');
+  else fail('(st2) second start ' + JSON.stringify(sqlast(wa, 'start')) + ' calls ' + seat.calls.length);
+}
+
+// ---- (st3) refused by the seating: R6, everybody is told -------------------
+{
+  const seat = mkSeat({ ok: false, error: 'capacity', at: 0 });
+  const S = sqSocial(sqstore(), { seatSquad: seat.fn });
+  const { ws: [wa, wb, g] } = await stSquad(S, { n: 3, mode: 'ffa' });
+  await S.handle(wa, { type: 'squad', op: 'start', id: 's' });
+  const bad = { type: 'squad', op: 'start', error: 'capacity' };
+  // A member who sent nothing may already be standing in a lobby that no
+  // longer exists; this is what tells them. Nothing started, so every Ready
+  // stands and the squad can simply try again.
+  const member = (w) => w.rx.length === 2 && same(w.rx[0], bad) && w.rx[1].op === 'state' && w.rx[1].members.every((m) => m.ready === true);
+  if (seat.calls.length === 1 && member(wb) && member(g)) ok('(st3) a refusal from the seating reaches every member unsolicited, and the roster after it still has every Ready');
+  else fail('(st3) members got ' + JSON.stringify([wb.rx, g.rx]) + ' calls ' + seat.calls.length);
+  if (wa.rx.length === 2 && wa.rx[0].op === 'state' && same(wa.rx[1], { ...bad, id: 's' })) ok('(st3) the leader is answered the same refusal, id echoed, last');
+  else fail('(st3) leader got ' + JSON.stringify(wa.rx));
+  seat.verdict = { ok: true, code: 'RM03' };
+  await S.handle(wa, { type: 'squad', op: 'start', id: 's2' });
+  if (sqat(wa, 'start').ok === true && seat.calls.length === 2) ok('(st3) and the same squad starts on the next press without anybody readying again');
+  else fail('(st3) retry ' + JSON.stringify(sqlast(wa, 'start')));
+}
+
+// ---- (st4) a seating that answers nonsense is a refusal, never a success ---
+// server.js's seatSquad never does this; a host that injects something else
+// (Task 6's brief once gave it `() => null`) must still get an honest answer
+// to every member and a squad that can try again.
+{
+  const said = [];
+  for (const verdict of [null, () => undefined, { ok: 'yes', code: 'RM04' }, { ok: true }, { ok: true, code: 7 }, 'ok']) {
+    const seat = mkSeat(verdict);
+    const S = sqSocial(sqstore(), { seatSquad: seat.fn });
+    const { ws: [wa, wb] } = await stSquad(S, { n: 2 });
+    await S.handle(wa, { type: 'squad', op: 'start', id: 's' });
+    said.push([sqat(wa, 'start').error, sqat(wb, 'start').error, readyRow(wb).join()]);
+  }
+  if (said.every(([a, b, r]) => a === 'unavailable' && b === 'unavailable' && r === 'true,true'))
+    ok('(st4) a seating answer that is not { ok: true, code } is refused unavailable to every member, and every Ready stands');
+  else fail('(st4) ' + JSON.stringify(said));
+  // AND WITH NO SEATING WIRED AT ALL, the default refuses honestly.
+  const S = sqSocial(sqstore());
+  const { ws: [wa, wb] } = await stSquad(S, { n: 2 });
+  await S.handle(wa, { type: 'squad', op: 'start', id: 'd' });
+  if (same(sqlast(wa, 'start'), { type: 'squad', op: 'start', error: 'unavailable', id: 'd' }) && sqat(wb, 'start').error === 'unavailable')
+    ok('(st4) a layer built without seatSquad answers every start unavailable — never a start that seated nobody');
+  else fail('(st4) default: ' + JSON.stringify([sqlast(wa, 'start'), sqlast(wb, 'start')]));
+}
+
+// ---- (st5) every gate refuses BEFORE the seating, and changes nothing -------
+// Each is asked on a squad that would otherwise start, so the refusal is the
+// gate's and not something else's. The caller gets exactly one frame, nobody
+// else gets any, and the seating is never called.
+{
+  const cases = [];
+  const run = async (label, want, setup) => {
+    const seat = mkSeat();
+    const S = sqSocial(sqstore(), { seatSquad: seat.fn });
+    const { caller, others, frame } = await setup(S);
+    for (const w of [caller, ...others]) w.rx.length = 0;
+    await S.handle(caller, { type: 'squad', op: 'start', id: 'x', ...frame });
+    const good = seat.calls.length === 0 && same(caller.rx, [{ type: 'squad', op: 'start', error: want, id: 'x' }]) && others.every((w) => w.rx.length === 0);
+    cases.push([label, good ? 'ok' : JSON.stringify({ calls: seat.calls.length, caller: caller.rx, others: others.map((w) => w.rx) })]);
+  };
+  await run('an account in no squad', 'no_squad', async (S) => ({ caller: sqUp(S, sqws(SQE)), others: [] }));
+  await run('a guest in no squad', 'no_squad', async (S) => ({ caller: sqws(null), others: [] }));
+  await run('a member', 'not_leader', async (S) => { const { ws: [wa, wb] } = await stSquad(S); return { caller: wb, others: [wa] }; });
+  await run('a guest member', 'not_leader', async (S) => { const { ws: [wa, wb, g] } = await stSquad(S, { n: 3, mode: 'ffa' }); return { caller: g, others: [wa, wb] }; });
+  // LEADERSHIP IS ASKED BEFORE THE FRAME IS READ: a member sending a rack that
+  // is not one learns nothing about racks.
+  await run('a member with a bad rack', 'not_leader', async (S) => { const { ws: [wa, wb] } = await stSquad(S); return { caller: wb, others: [wa], frame: { loadout: ['junk'] } }; });
+  for (const [what, rack] of [['seven picks on a duel', stR(0, 7)], ['an unknown weapon', ['junk', ...stR(0, 4)]], ['a string', 'mortar'], ['an object', { 0: 'mortar' }], ['a repeated pick', ['mortar', 'mortar', 'volley', 'cluster', 'napalm']]])
+    await run('a leader\'s rack of ' + what, 'no_rack', async (S) => { const { ws: [wa, wb] } = await stSquad(S); return { caller: wa, others: [wb], frame: { loadout: rack } }; });
+  await run('three on a duel', 'wont_fit', async (S) => { const { ws: [wa, wb, g] } = await stSquad(S, { n: 3 }); return { caller: wa, others: [wb, g] }; });
+  await run('one on a free-for-all', 'wont_fit', async (S) => { const { ws: [wa] } = await stSquad(S, { n: 1, mode: 'ffa' }); return { caller: wa, others: [] }; });
+  await run('one on a duel', 'wont_fit', async (S) => { const { ws: [wa] } = await stSquad(S, { n: 1 }); return { caller: wa, others: [] }; });
+  await run('three on a raid', 'wont_fit', async (S) => { const { ws: [wa, wb, g] } = await stSquad(S, { n: 3, mode: 'boss' }); return { caller: wa, others: [wb, g] }; });
+  await run('a member not ready', 'not_ready', async (S) => { const { ws: [wa, wb, g] } = await stSquad(S, { n: 3, mode: 'ffa', ready: [true, true, false] }); return { caller: wa, others: [wb, g] }; });
+  await run('the leader not ready and no rack sent', 'not_ready', async (S) => { const { ws: [wa, wb] } = await stSquad(S, { ready: [false, true] }); return { caller: wa, others: [wb] }; });
+  await run('a member whose socket has closed', 'member_offline', async (S) => { const { ws: [wa, wb] } = await stSquad(S); wb.readyState = 3; return { caller: wa, others: [] }; });
+  await run('a guest whose socket is closing', 'member_offline', async (S) => { const { ws: [wa, wb, g] } = await stSquad(S, { n: 3, mode: 'ffa' }); g.readyState = 2; return { caller: wa, others: [wb] }; });
+  const bad = cases.filter(([, r]) => r !== 'ok');
+  if (!bad.length) ok(`(st5) ${cases.length} refusals, each answered with its own reason and id, before the seating and with nobody else told anything`);
+  else fail('(st5) ' + JSON.stringify(bad));
+}
+
+// ---- (st6) ledSquad guards start on both halves ---------------------------
+{
+  // THE ACCOUNT ALONE: a socket holding a GUEST row in squad one, signed in as
+  // B, who leads squad two from another device — and squad two is ready.
+  const seat = mkSeat();
+  const S = sqSocial(sqstore(), { seatSquad: seat.fn });
+  const wa = sqUp(S, sqws(SQA)), wb = sqUp(S, sqws(SQB)), g = sqws(null), wc = sqUp(S, sqws(SQC));
+  await S.handle(wa, { type: 'squad', op: 'create' });
+  await S.handle(g, { type: 'squad', op: 'join', code: sqat(wa, 'state').code, name: 'G', skin: 'gold' });
+  await S.handle(wb, { type: 'squad', op: 'create' });
+  await S.handle(wc, { type: 'squad', op: 'join', code: sqat(wb, 'state').code });
+  for (const w of [wb, wc]) await S.handle(w, { type: 'squad', op: 'ready', ready: true, loadout: stR(0) });
+  g.userId = SQB; g.isGuest = false; S.onAuth(g);
+  for (const w of [wa, wb, wc, g]) w.rx.length = 0;
+  await S.handle(g, { type: 'squad', op: 'start', id: 'x' });
+  if (same(g.rx, [{ type: 'squad', op: 'start', error: 'not_leader', id: 'x' }]) && seat.calls.length === 0 && [wa, wb, wc].every((w) => w.rx.length === 0))
+    ok('(st6) a socket holding a guest row cannot start the squad its account leads from another device');
+  else fail('(st6) cross-squad start: ' + JSON.stringify(g.rx) + ' calls ' + seat.calls.length);
+  // THE CONTROL: that squad two WAS startable, by its leader.
+  await S.handle(wb, { type: 'squad', op: 'start', id: 'y' });
+  if (sqat(wb, 'start').ok === true && seat.calls.length === 1) ok('(st6) while its leader, on the socket holding the leader\'s row, starts it');
+  else fail('(st6) control: ' + JSON.stringify(sqlast(wb, 'start')));
+}
+{
+  // THE ROW ALONE: the leader's socket signs out and in as E, still holding
+  // the leader's row.
+  const seat = mkSeat();
+  const S = sqSocial(sqstore(), { seatSquad: seat.fn });
+  const { ws: [wa, wb] } = await stSquad(S);
+  S.onClose(wa); wa.userId = SQE; wa.isGuest = false; S.onAuth(wa);
+  await S.handle(wa, { type: 'squad', op: 'start', id: 'y' });
+  if (same(wa.rx, [{ type: 'squad', op: 'start', error: 'not_leader', id: 'y' }]) && seat.calls.length === 0 && wb.rx.length === 0)
+    ok('(st6) a socket now signed in as someone else cannot start from the leader\'s row it still holds');
+  else fail('(st6) account-switched start: ' + JSON.stringify(wa.rx) + ' calls ' + seat.calls.length);
+}
+
+// ---- (st7) the last gate on the racks ---------------------------------------
+// Arming a mode stands down every rack it would not keep, but Start does not
+// trust that it happened. The rack predicate is injected, so this makes it
+// STRICTER between the Readies and the Start — the case a broken stand-down
+// would leave — and the member whose rack the room would no longer keep must
+// be stood down, the squad shown it, and the start refused before the seating.
+{
+  let strict = false;
+  const validRack = (mode, picks) => validRackFor(mode, picks) && !(strict && picks[0] === 'volley');
+  const seat = mkSeat();
+  const S = sqSocial(sqstore(), { seatSquad: seat.fn, validRack });
+  const { ws: [wa, wb, g] } = await stSquad(S, { n: 3, mode: 'ffa' });   // wb's rack starts with 'volley'
+  strict = true;
+  await S.handle(wa, { type: 'squad', op: 'start', id: 's' });
+  const shown = (w) => same(readyRow(w), [true, false, true]);
+  if (seat.calls.length === 0 && sqat(wa, 'start').error === 'not_ready' && sqat(wa, 'start').id === 's' && shown(wa) && shown(wb) && shown(g))
+    ok('(st7) a Ready whose rack the room would not keep is stood down at Start, the squad is shown it, and nothing is seated');
+  else fail('(st7) ' + JSON.stringify({ calls: seat.calls.length, a: wa.rx, b: readyRow(wb), g: readyRow(g) }));
+}
+
+// ---- (st8) the leader's rack on the Start frame ------------------------------
+// It stands in for the leader's Ready for this start, it is the rack the
+// leader's seat is handed — a copy — and it is not kept.
+{
+  const seat = mkSeat({ ok: false, error: 'capacity', at: 0 });
+  const S = sqSocial(sqstore(), { seatSquad: seat.fn });
+  const { ws: [wa, wb] } = await stSquad(S, { ready: [false, true] });
+  const frameRack = stR(3);
+  await S.handle(wa, { type: 'squad', op: 'start', loadout: frameRack, id: 's' });
+  const c = seat.calls[0] || { seats: [{}] };
+  if (seat.calls.length === 1 && same(c.seats[0].loadout, frameRack) && c.seats[0].loadout !== frameRack)
+    ok('(st8) the leader\'s rack on the frame stands in for their Ready, and their seat is handed a copy of it');
+  else fail('(st8) seat 0 was handed ' + JSON.stringify(c.seats[0].loadout));
+  // NOT KEPT: the roster pushed after the refusal still shows the leader not
+  // ready, and a start without a rack is not_ready.
+  const rowAfter = readyRow(wb);
+  await S.handle(wa, { type: 'squad', op: 'start', id: 's2' });
+  if (same(rowAfter, [false, true]) && sqat(wa, 'start').error === 'not_ready' && seat.calls.length === 1)
+    ok('(st8) and it is not kept: after a refused start the leader is still not ready');
+  else fail('(st8) kept? roster ' + JSON.stringify(rowAfter) + ' then ' + JSON.stringify(sqlast(wa, 'start')));
+}
+
+// ---- (st9) the host seat is the leader's, wherever the roster puts them -----
+// Leadership passes to the earliest-joined SIGNED-IN member, so a guest who
+// joined before them sits above the leader in the roster.
+{
+  const seat = mkSeat();
+  const S = sqSocial(sqstore(), { seatSquad: seat.fn });
+  const wa = sqUp(S, sqws(SQA)), g = sqws(null), wc = sqUp(S, sqws(SQC));
+  await S.handle(wa, { type: 'squad', op: 'create' });
+  const code = sqat(wa, 'state').code;
+  await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+  await S.handle(wc, { type: 'squad', op: 'join', code });
+  await S.handle(wa, { type: 'squad', op: 'leave' });
+  for (const w of [g, wc]) await S.handle(w, { type: 'squad', op: 'ready', ready: true, loadout: stR(0) });
+  const roster = sqat(wc, 'state');
+  await S.handle(wc, { type: 'squad', op: 'start', id: 's' });
+  const c = seat.calls[0] || { seats: [] };
+  if (roster.leader === SQC && roster.you === 1 && c.seats.length === 2 && c.seats[0].ws === wc && c.seats[1].ws === g)
+    ok('(st9) a leader who sits below a guest in the roster is still handed to the seating first');
+  else fail('(st9) roster ' + JSON.stringify([roster.leader, roster.you]) + ' seats ' + JSON.stringify(c.seats.map((s) => (s.ws === wc ? 'c' : s.ws === g ? 'g' : '?'))));
+}
+
+// ---- (st10) a second device of the leader starts the squad the rows hold ----
+{
+  const seat = mkSeat({ ok: true, code: 'RM10' });
+  const S = sqSocial(sqstore(), { seatSquad: seat.fn });
+  const { ws: [wa, wb] } = await stSquad(S);
+  const wa2 = sqUp(S, sqws(SQA));
+  await S.handle(wa2, { type: 'squad', op: 'start', id: 'd' });
+  const c = seat.calls[0] || { seats: [] };
+  if (c.seats.length === 2 && c.seats[0].ws === wa && c.seats[1].ws === wb
+    && same(sqlast(wa2, 'start'), { type: 'squad', op: 'start', ok: true, code: 'RM10', id: 'd' })
+    && same(sqlast(wa, 'start'), { type: 'squad', op: 'start', ok: true, code: 'RM10' }))
+    ok('(st10) the leader\'s second device starts the squad: the leader\'s ROW socket is seated, the asking device is answered');
+  else fail('(st10) seats ' + JSON.stringify(c.seats.map((s) => (s.ws === wa ? 'a' : s.ws === wb ? 'b' : s.ws === wa2 ? 'a2' : '?'))) + ' a2 ' + JSON.stringify(wa2.rx) + ' a ' + JSON.stringify(sqlast(wa, 'start')));
+}
+
+// ---- (st11) one token per start ---------------------------------------------
+// handleSquad spends the squad bucket for every op; a handler that spent it
+// again would halve the allowance. The create spends one of twenty, so
+// nineteen starts are answered and the twentieth is slow_down — at a frozen
+// clock nothing refills.
+{
+  const S = sqSocial(sqstore(), { seatSquad: mkSeat().fn });
+  const wa = sqUp(S, sqws(SQA));
+  await S.handle(wa, { type: 'squad', op: 'create' });
+  const answers = [];
+  for (let i = 0; i < 20; i++) { await S.handle(wa, { type: 'squad', op: 'start', id: i }); answers.push(sqat(wa, 'start').error); }
+  if (answers.slice(0, 19).every((a) => a === 'wont_fit') && answers[19] === 'slow_down')
+    ok('(st11) start spends one token from the squad bucket, not two: nineteen answered after a create, the twentieth slow_down');
+  else fail('(st11) bucket: ' + JSON.stringify(answers));
+}
+
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall squad checks passed');
 process.exit(out.errors.length ? 1 : 0);
