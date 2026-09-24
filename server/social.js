@@ -1214,8 +1214,10 @@ export function createSocial({
     // A LIVE SOCKET FOR EVERY MEMBER. The engine's join does not look at a
     // socket's state, so a closed one would be SEATED: a ghost seat, marked
     // connected, that the match would one day hand the turn to. Nothing is
-    // seated unless every seat has somebody on it.
-    if (!sq.members.every((m) => m.ws && m.ws.readyState === 1 && m.dropAt == null)) return no('member_offline');
+    // seated unless every seat has somebody on it. `at` is the roster row of
+    // the first member who is not there, so the box can mark them.
+    const off = sq.members.findIndex((m) => !(m.ws && m.ws.readyState === 1 && m.dropAt == null));
+    if (off >= 0) return squadReply(ws, msg, 'start', { error: 'member_offline', at: off });
     // R5: THE ORDER IS THE ORDER THE ROOM FILLS IN. The leader first, because
     // the create makes them the host seat; everyone else in roster order, and
     // the match begins as the last one lands. Each seat is handed a COPY of
@@ -1233,13 +1235,17 @@ export function createSocial({
       // then the caller its roster, and the caller's own answer LAST, because
       // it is the one send here that can throw.
       //
-      // `at` NAMES THE ROW THAT FAILED (a member_busy, say), so the box can
-      // mark it. seatSquad counts in the list it was handed — leader first —
-      // and the box counts in the roster, and the two differ whenever the
-      // leader is not the first row, so it is translated; an index that names
-      // no seat is dropped rather than passed on.
+      // `at` NAMES THE MEMBER AT FAULT, and rides ONLY on the two refusals
+      // that have one: member_busy and member_offline. A capacity refusal, or
+      // a room the engine would not build or start, is nobody's doing, and an
+      // `at` there would have the box mark a member who did nothing wrong.
+      // seatSquad counts in the list it was handed — leader first — and the
+      // box counts in the roster, and the two differ whenever the leader is
+      // not the first row, so it is translated; an index naming no seat is
+      // dropped rather than passed on.
       const error = (seated && typeof seated.error === 'string' && seated.error) || 'unavailable';
-      const row = seated && Number.isInteger(seated.at) && seated.at >= 0 ? sq.members.indexOf(ordered[seated.at]) : -1;
+      const blames = error === 'member_busy' || error === 'member_offline';
+      const row = blames && Number.isInteger(seated.at) && seated.at >= 0 ? sq.members.indexOf(ordered[seated.at]) : -1;
       const why = row >= 0 ? { error, at: row } : { error };
       for (const m of sq.members) if (m.ws && m.ws !== ws) safeSend(m.ws, { type: 'squad', op: 'start', ...why });
       await pushSquad(sq, ws, null);

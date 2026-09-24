@@ -66,7 +66,11 @@ export function createSeatSquad({ rooms, handleClientMessage, abandonRoom, repor
     // THE ROOM THIS CALL BUILT, and only that one: the leader holding seat 0
     // of a room that is not the one they held before. A refused create leaves
     // no such room, and a room the leader already hosted is not ours to take.
-    let prior = null, room = null;
+    // `sent` is the net's arming: until the create frame has gone, this call
+    // has built nothing, so there is nothing for a failure to undo — and the
+    // room the leader is sitting in (their own lobby, a match in progress) is
+    // somebody's game, never ours to mark or take down.
+    let prior = null, room = null, sent = false;
     const built = () => {
       const r = leader && leader.ws && leader.ws.roomCode ? rooms.get(leader.ws.roomCode) : null;
       return r && r !== prior && r.players[0] && r.players[0].ws === leader.ws ? r : null;
@@ -91,6 +95,7 @@ export function createSeatSquad({ rooms, handleClientMessage, abandonRoom, repor
       // and the end of the loop below are the same instant, and no seat is
       // left open for a stranger holding the code.
       const max = opts.mode === 'ffa' || opts.mode === 'golf' ? list.length : undefined;
+      sent = true;
       handleClientMessage(leader.ws, {
         type: 'create', name: leader.name, skin: leader.skin,
         mode: opts.mode, max, tees: opts.tees, loadout: leader.loadout,
@@ -150,10 +155,12 @@ export function createSeatSquad({ rooms, handleClientMessage, abandonRoom, repor
       // ordinary client, and server.js's socket handler catches those. This is
       // the same net for the one caller that is not a socket: report it, take
       // down whatever this call built — including a room whose create threw
-      // after the room was made, before it could be marked — and refuse.
+      // after the room was made, before it could be marked — and refuse. ONLY
+      // ONCE THE CREATE HAS BEEN SENT: a fault before it undoes nothing,
+      // because nothing was done.
       try { report('seatSquad', err); } catch { /* never the second fault */ }
       try {
-        const r = room || built();
+        const r = sent ? room || built() : null;
         if (r && rooms.get(r.code) === r) { if (!r.squad) r.squad = opts.squad || true; abandonRoom(r.code, sockets); }
       } catch { /* the room is the engine's problem now; the answer still goes out */ }
       return { ok: false, error: 'refused', at: -1 };

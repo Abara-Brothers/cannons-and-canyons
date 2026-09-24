@@ -2311,9 +2311,9 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   const S = sqSocial(sqstore(), { seatSquad: seat.fn });
   const { ws: [wa, wb, g] } = await stSquad(S, { n: 3, mode: 'ffa' });
   await S.handle(wa, { type: 'squad', op: 'start', id: 's' });
-  // `at` 0: the seating's refusal names the seat that failed — the create, the
-  // leader's — as the roster row it is (st12 proves the translation).
-  const bad = { type: 'squad', op: 'start', error: 'capacity', at: 0 };
+  // NO `at`, though the seating named seat 0: a full server is nobody's
+  // fault, and the box must not mark the leader for it (st12).
+  const bad = { type: 'squad', op: 'start', error: 'capacity' };
   // A member who sent nothing may already be standing in a lobby that no
   // longer exists; this is what tells them. Nothing started, so every Ready
   // stands and the squad can simply try again.
@@ -2365,7 +2365,8 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     const { caller, others, frame } = await setup(S);
     for (const w of [caller, ...others]) w.rx.length = 0;
     await S.handle(caller, { type: 'squad', op: 'start', id: 'x', ...frame });
-    const good = seat.calls.length === 0 && same(caller.rx, [{ type: 'squad', op: 'start', error: want, id: 'x' }]) && others.every((w) => w.rx.length === 0);
+    const body = typeof want === 'string' ? { error: want } : want;
+    const good = seat.calls.length === 0 && same(caller.rx, [{ type: 'squad', op: 'start', ...body, id: 'x' }]) && others.every((w) => w.rx.length === 0);
     cases.push([label, good ? 'ok' : JSON.stringify({ calls: seat.calls.length, caller: caller.rx, others: others.map((w) => w.rx) })]);
   };
   await run('an account in no squad', 'no_squad', async (S) => ({ caller: sqUp(S, sqws(SQE)), others: [] }));
@@ -2383,8 +2384,22 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   await run('three on a raid', 'wont_fit', async (S) => { const { ws: [wa, wb, g] } = await stSquad(S, { n: 3, mode: 'boss' }); return { caller: wa, others: [wb, g] }; });
   await run('a member not ready', 'not_ready', async (S) => { const { ws: [wa, wb, g] } = await stSquad(S, { n: 3, mode: 'ffa', ready: [true, true, false] }); return { caller: wa, others: [wb, g] }; });
   await run('the leader not ready and no rack sent', 'not_ready', async (S) => { const { ws: [wa, wb] } = await stSquad(S, { ready: [false, true] }); return { caller: wa, others: [wb] }; });
-  await run('a member whose socket has closed', 'member_offline', async (S) => { const { ws: [wa, wb] } = await stSquad(S); wb.readyState = 3; return { caller: wa, others: [] }; });
-  await run('a guest whose socket is closing', 'member_offline', async (S) => { const { ws: [wa, wb, g] } = await stSquad(S, { n: 3, mode: 'ffa' }); g.readyState = 2; return { caller: wa, others: [wb] }; });
+  // member_offline NAMES THE ROW that is not there, so the box can mark it.
+  await run('a member whose socket has closed', { error: 'member_offline', at: 1 }, async (S) => { const { ws: [wa, wb] } = await stSquad(S); wb.readyState = 3; return { caller: wa, others: [] }; });
+  await run('a guest whose socket is closing', { error: 'member_offline', at: 2 }, async (S) => { const { ws: [wa, wb, g] } = await stSquad(S, { n: 3, mode: 'ffa' }); g.readyState = 2; return { caller: wa, others: [wb] }; });
+  await run('the first of two members gone', { error: 'member_offline', at: 1 }, async (S) => { const { ws: [wa, wb, g] } = await stSquad(S, { n: 3, mode: 'ffa' }); wb.readyState = 3; g.readyState = 3; return { caller: wa, others: [] }; });
+  // Row 0 is not always the leader: a guest who joined before them sits above.
+  await run('a guest above the leader, gone', { error: 'member_offline', at: 0 }, async (S) => {
+    const wa = sqUp(S, sqws(SQA)), g = sqws(null), wc = sqUp(S, sqws(SQC));
+    await S.handle(wa, { type: 'squad', op: 'create' });
+    const code = sqat(wa, 'state').code;
+    await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+    await S.handle(wc, { type: 'squad', op: 'join', code });
+    await S.handle(wa, { type: 'squad', op: 'leave' });
+    for (const w of [g, wc]) await S.handle(w, { type: 'squad', op: 'ready', ready: true, loadout: stR(0) });
+    g.readyState = 3;
+    return { caller: wc, others: [] };
+  });
   const bad = cases.filter(([, r]) => r !== 'ok');
   if (!bad.length) ok(`(st5) ${cases.length} refusals, each answered with its own reason and id, before the seating and with nobody else told anything`);
   else fail('(st5) ' + JSON.stringify(bad));
@@ -2548,6 +2563,23 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   ]);
   if (same(said, expect)) ok('(st12) a seating refusal carries `at` as the ROSTER row that failed, to the leader and every member; an index naming no seat is dropped');
   else fail('(st12) ' + JSON.stringify(said));
+  // `at` RIDES ONLY WHERE A MEMBER IS AT FAULT: member_busy (above) and
+  // member_offline carry it; a full server, a room the engine would not build
+  // or start, and an engine fault are nobody's doing and carry none, whatever
+  // index the seating reported.
+  const said2 = [];
+  for (const [error, at] of [['member_offline', 1], ['member_offline', 0], ['capacity', 0], ['refused', 1], ['refused', 0], ['refused', -1], ['unavailable', 1]]) {
+    seat.verdict = { ok: false, error, at };
+    g.rx.length = 0; wc.rx.length = 0;
+    await S.handle(wc, { type: 'squad', op: 'start', id: 'c' });
+    said2.push([sqlast(wc, 'start'), sqlast(g, 'start')]);
+  }
+  const expect2 = [['member_offline', 0], ['member_offline', 1], ['capacity'], ['refused'], ['refused'], ['refused'], ['unavailable']].map(([error, at]) => [
+    { type: 'squad', op: 'start', error, ...(at === undefined ? {} : { at }), id: 'c' },
+    { type: 'squad', op: 'start', error, ...(at === undefined ? {} : { at }) },
+  ]);
+  if (same(said2, expect2)) ok('(st12) `at` rides only on member_busy and member_offline — never on capacity, refused or unavailable, whatever index the seating gave');
+  else fail('(st12) at on other refusals: ' + JSON.stringify(said2));
 }
 
 // ---- (st11) one token per start ---------------------------------------------

@@ -153,10 +153,10 @@ else fail(`(A9) rooms went from ${roomsAtStart} to ${rooms.size}`);
 // seat lists the handler would never send — rather than trusted.
 const P = LOADOUT_POOL;
 const seatsOf = (n) => Array.from({ length: n }, (_, i) => ({ ws: mkws(), name: '', skin: 'olive', loadout: P.slice(i, i + 5) }));
-const seatRig = (wrap) => {
+const seatRig = (wrap, roomsView = rooms) => {
   const rig = { reports: [], logs: [] };
   rig.seat = createSeatSquad({
-    rooms, abandonRoom,
+    rooms: roomsView, abandonRoom,
     handleClientMessage: wrap ? (ws, msg) => wrap(ws, msg, handleClientMessage) : handleClientMessage,
     report: (kind, err) => rig.reports.push([kind, err && err.message]),
     log: (line) => rig.logs.push(line),
@@ -234,6 +234,42 @@ const roomsBeforeC = rooms.size;
     ok('(C3) an engine fault before the create leaves the leader\'s own lobby exactly as it was');
   else fail('(C3) own lobby after a fault: ' + JSON.stringify({ r, own, kept: !!lobby, marked: lobby && lobby.squad, code: seats[0].ws.roomCode }));
   handleClientMessage(seats[0].ws, { type: 'leave' });
+}
+{
+  // (C3c) A FAULT BEFORE THE CREATE UNDOES NOTHING, because nothing has been
+  // done: the net may only take down a room THIS call built, and before the
+  // create frame is sent there is none. Faults at the two earlier points —
+  // inside the live-socket check, and inside the busy check — with the leader
+  // (a) alone in a lobby of their own, and (b) in a live match against the
+  // CPU. Whatever the leader is in must come out exactly as it went in: the
+  // same room object, still theirs, not marked, not ended, and nobody told.
+  const said = [];
+  for (const where of ['live-socket check', 'busy check']) {
+    for (const holding of ['own lobby', 'CPU match']) {
+      const seats = seatsOf(2);
+      const lead = seats[0].ws;
+      if (holding === 'own lobby') handleClientMessage(lead, { type: 'create', name: 'Ava', skin: 'olive', mode: 'ffa', max: 4, loadout: FIVE });
+      else handleClientMessage(lead, { type: 'ai', name: 'Ava', skin: 'olive', difficulty: 'easy', loadout: FIVE });
+      const code = lead.roomCode, room = rooms.get(code);
+      const state = room && room.state, frames = lead._rx.length;
+      // One fault, once: a getter that throws on the member's socket state,
+      // or a rooms view whose FIRST lookup throws (the busy check's) and
+      // which answers truthfully after that, as the real Map would.
+      let view = rooms;
+      if (where === 'live-socket check') Object.defineProperty(seats[1].ws, 'readyState', { get() { throw new Error('injected engine fault'); } });
+      else { let armed = true; view = { get: (c) => { if (armed) { armed = false; throw new Error('injected engine fault'); } return rooms.get(c); } }; }
+      const rig = seatRig(null, view);
+      let r; try { r = rig.seat(seats, { mode: 'duel', squad: 'SQC6' }); } catch (e) { r = 'threw ' + e.message; }
+      const after = rooms.get(code);
+      said.push([`${where} / ${holding}`, JSON.stringify(r) === JSON.stringify({ ok: false, error: 'refused', at: -1 }) && rig.reports.length === 1
+        && !!room && after === room && !room.squad && room.state === state && lead.roomCode === code && room.players[lead.seat] && room.players[lead.seat].ws === lead
+        && lead._rx.length === frames ? 'ok' : JSON.stringify({ r, kept: after === room, marked: room && room.squad, state: room && room.state, code: lead.roomCode, told: lead._rx.slice(frames).map((m) => m.type) })]);
+      handleClientMessage(lead, { type: 'leave' });
+    }
+  }
+  const bad = said.filter(([, v]) => v !== 'ok');
+  if (!bad.length) ok('(C3) a fault inside the live-socket or the busy check leaves the leader\'s own lobby, and their live CPU match, exactly as they were');
+  else fail('(C3) a fault before the create touched the leader\'s room: ' + JSON.stringify(bad));
 }
 {
   // (C4) SEATING TRUSTS NO CALLER FOR A LIVE SOCKET. The engine's join seats
@@ -646,9 +682,9 @@ async function sectionB() {
       const quietFrom = s.ws[1]._rx.length;
       const b = await ask(s.ws[0], { op: 'start' });
       await settle(s.ws.slice(0, 2));
-      if (m && m.ok && s.ws[2]._closed !== null && b && b.error === 'member_offline' && s.ws[1]._rx.length === quietFrom
+      if (m && m.ok && s.ws[2]._closed !== null && b && b.error === 'member_offline' && b.at === 2 && s.ws[1]._rx.length === quietFrom
         && !s.ws.slice(0, 2).some((w) => seen(w, 'created').length || seen(w, 'lobby').length))
-        ok('(B4) a member whose socket has closed stops the start (member_offline) at the handler, and nothing is built');
+        ok('(B4) a member whose socket has closed stops the start (member_offline, naming their row, at 2) at the handler, and nothing is built');
       else fail('(B4) closed member: ' + JSON.stringify([m, b]) + ' ' + JSON.stringify(s.ws.map(types)));
       await closeAll(s.ws);
     }
@@ -910,10 +946,11 @@ async function sectionB() {
         const x = await ask(a, { op: 'start' });
         const told = await wait(b, (m) => m.type === 'squad' && m.op === 'start');
         await settle(s.ws);
-        if (x && x.error === 'capacity') ok('(B6) the leader is told capacity, with the id echoed');
+        // No `at`: a full server is nobody's fault, so no member is marked.
+        if (x && x.error === 'capacity' && x.id && !('at' in x)) ok('(B6) the leader is told capacity, with the id echoed and no member blamed');
         else fail('(B6) the leader got ' + JSON.stringify(x));
         // R6: EVERY member, not only the one who asked.
-        if (told && told.error === 'capacity' && told.id === undefined) ok('(B6) the member who sent nothing is told the same, unsolicited');
+        if (told && told.error === 'capacity' && told.id === undefined && !('at' in told)) ok('(B6) the member who sent nothing is told the same, unsolicited');
         else fail('(B6) the member got ' + JSON.stringify(told));
         if (!s.ws.some((w) => seen(w, 'created').length || seen(w, 'lobby').length || seen(w, 'start').length))
           ok('(B6) no member is left standing in a room that half existed');
