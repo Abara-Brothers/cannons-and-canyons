@@ -2715,6 +2715,68 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     else fail('(d4) a stranger key dropped something');
   }
 
+  // ---- (d5) resume re-attaches an ACCOUNT's row, and hands back no Ready ---
+  {
+    const S = createSquads({ now: now5 });
+    const wl = mkws5(LEAD), wm = mkws5(MEM);
+    const sq = S.create(mem5(LEAD, wl));
+    S.join(sq.code, mem5(MEM, wm));
+    S.setReady(MEM, true, RACK5);
+    wm.readyState = 3;
+    S.markDropped(MEM, CLOCK5);
+    const w3 = mkws5(MEM);                     // the reconnect
+    const m = sq.members[1];
+    if (S.markResumed(MEM, w3) === sq && m.ws === w3 && m.dropAt === null && S.keyOfSocket(w3) === MEM)
+      ok('(d5) resume re-attaches the new socket to the account\'s row and clears dropAt');
+    else fail('(d5) markResumed: ' + JSON.stringify({ isW3: m.ws === w3, dropAt: m.dropAt }));
+    // READY IS NOT HANDED BACK. The player has been away and the leader may
+    // have changed the mode; they say so again.
+    if (m.ready === false && m.loadout === null)
+      ok('(d5) and it does NOT restore Ready — a player who was away says so again');
+    else fail('(d5) Ready came back by itself: ' + JSON.stringify(m, noWs));
+    // THE SOCKET ALREADY ON THE ROW is a no-op re-attach, not a refusal.
+    if (S.markResumed(MEM, w3) === sq && m.ws === w3) ok('(d5) resuming onto the socket already on the row changes nothing and says so');
+    else fail('(d5) a same-socket resume was refused');
+    // A GUEST CAN NEVER RESUME: their key was the socket that went, a new
+    // socket is a new key, and the anonymous id is not a key. The OLD socket
+    // object is the one spelling a client could never produce — it is the
+    // machine's own guard against a direct caller handing it over.
+    const wg = mkws5(ANON, true);
+    S.join(sq.code, mem5(null, wg));
+    wg.readyState = 3;
+    S.markDropped(wg, CLOCK5);
+    const g = sq.members[2];
+    const wg2 = mkws5(ANON, true);
+    const tries = [S.markResumed(wg2, wg2), S.markResumed(ANON, wg2), S.markResumed(null, wg2), S.markResumed(wg, wg2)];
+    if (tries.every((r) => r === null) && g.ws === null && g.dropAt === CLOCK5)
+      ok('(d5) a guest row is never resumed — not by a new socket, not by the anonymous id, not even by the old socket object');
+    else fail('(d5) a guest row was resumed: ' + JSON.stringify({ tries: tries.map((r) => r && r.code), dropAt: g.dropAt, ws: !!g.ws }));
+  }
+
+  // ---- (d5b) ONE SOCKET, ONE ROW: resume never gives a socket a second row -
+  // The invariant task 2 handed on (item 3): a socket on two rows is a
+  // player counted twice — in `fits`, in the start gate, in the seats.
+  {
+    const S = createSquads({ now: now5 });
+    const wl = mkws5(LEAD), wt = mkws5(THIRD), wm = mkws5(MEM);
+    const x = S.create(mem5(LEAD, wl));
+    S.join(x.code, mem5(MEM, wm));
+    const y = S.create(mem5(THIRD, wt));
+    wm.readyState = 3;
+    S.markDropped(MEM, CLOCK5);
+    // A socket that already holds a GUEST row in Y presents MEM's account.
+    const w = mkws5(null);
+    S.join(y.code, mem5(null, w));
+    const m = x.members[1];
+    if (S.markResumed(MEM, w) === null && m.ws === null && m.dropAt === CLOCK5 && S.keyOfSocket(w) === w)
+      ok('(d5b) a socket that already holds a row is not given a second one by resume');
+    else fail('(d5b) one socket, two rows: ' + JSON.stringify({ ws: m.ws === w, dropAt: m.dropAt }));
+    // THE CONTROL: the same account, on a socket holding nothing, resumes.
+    const w2 = mkws5(MEM);
+    if (S.markResumed(MEM, w2) === x && m.ws === w2) ok('(d5b) and the same account on a socket holding no row resumes normally');
+    else fail('(d5b) the guard refused a real resume');
+  }
+
   // ---- (end of task 5) ----
 }
 

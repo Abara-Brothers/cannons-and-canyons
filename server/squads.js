@@ -441,5 +441,27 @@ export function createSquads({ now, capacity = 4, codeTaken = () => false } = {}
     return found.squad;
   }
 
-  return { has, get, ofUser, keyOfSocket, create, join, leave, kick, removeMember, setReady, setMode, clearReady, markDropped };
+  // -> the squad when `ws` now holds the account's row, null otherwise. The
+  // socket is re-attached and dropAt cleared. READY IS NOT RESTORED: the
+  // player has been away, the leader may have changed the mode, and design
+  // 4.3 resets every Ready on room creation anyway. They say so again.
+  function markResumed(key, ws) {
+    // BY ACCOUNT ONLY (design 4.3: "by userId"). A guest's key is the socket
+    // that went, and a new socket is a new key, so a guest row can never be
+    // resumed — the one spelling that could reach it is the OLD socket object,
+    // which no client can present, and this refuses it anyway.
+    if (typeof key !== 'string' || !ws) return null;
+    const found = memberOf(key);
+    if (!found) return null;
+    // ONE SOCKET, ONE ROW. A socket already holding another row — a guest row
+    // in some squad, say — is not handed a second: two rows on one socket is
+    // one player counted twice in `fits`, the start gate and the seats.
+    const held = keyOfSocket(ws);
+    if (held !== null && held !== key) return null;
+    found.member.ws = ws;
+    found.member.dropAt = null;
+    return found.squad;
+  }
+
+  return { has, get, ofUser, keyOfSocket, create, join, leave, kick, removeMember, setReady, setMode, clearReady, markDropped, markResumed };
 }
