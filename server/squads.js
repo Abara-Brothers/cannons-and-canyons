@@ -75,6 +75,29 @@ function drawCodeChar() {
   return CODE_CHARS[b[0] % CODE_CHARS.length];
 }
 
+// THE SEAT TABLE, COPIED FROM public/room-engine.js RATHER THAN IMPORTED, for
+// the reason CODE_CHARS above is. [min, max] per mode: max is createRoom's
+// clamp (`const max = mode === 'ffa' ? ...`) and min is startMatch's floor
+// (`const minSeats = ...`). Pinned against both of those lines by
+// test/squad.mjs (s10), because a copy with nothing holding it to the
+// original is a copy that drifts. TASK 3 OWNS THE SEAT TABLE (plan X6) and
+// replaces this copy with one source of truth; this is only as much as the
+// snapshot's `fits` needs.
+export const SQUAD_SEATS = { duel: [2, 2], ffa: [2, 4], boss: [1, 2], aliens: [1, 2], golf: [1, 4] };
+
+// WHICH MODES A SQUAD OF THIS SIZE CAN BE SEATED IN — minimum AND maximum, so
+// a squad of one fits no duel. Computed on the SERVER so the Squad box and the
+// mode boards read one truth, and so Start and the dimming can never disagree
+// about the same squad.
+export function fitsFor(size) {
+  const out = {};
+  for (const m of ['duel', 'ffa', 'boss', 'aliens', 'golf']) {
+    const [lo, hi] = SQUAD_SEATS[m];
+    out[m] = size >= lo && size <= hi;
+  }
+  return out;
+}
+
 // codeTaken(code) -> bool: THE OTHER DIRECTION OF ONE CODE NAMESPACE (plan
 // R4). The engine refuses a candidate a live squad holds (server.js wires
 // setCodeTaken to this container); this refuses a candidate a live ROOM holds.

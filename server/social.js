@@ -34,7 +34,7 @@ import { createNameProofs } from './display-name.js';
 // presence and the block reads, and all five are trapped inside
 // createSocial's closure. Importing the factory rather than widening that
 // closure is the same move createNameProofs above is.
-import { createSquads } from './squads.js';
+import { createSquads, fitsFor } from './squads.js';
 // THE ONLY NODE API IN THIS FILE, and it is a pure computation rather than I/O:
 // the blocked list has to carry something a client can hand back to Unblock and
 // nothing a client can keep. See blockKey below. randomBytes/createHmac are
@@ -88,7 +88,14 @@ export const SOCIAL_TYPES = new Set(['friends', 'friend', 'block', 'callsign', '
 // round trips and spends nobody's allowance (see pushFriends, which collapses
 // those instead). A per-connection cap belongs with the connection accounting
 // in server.js and is the next task's, not this one's.
-const LIMITS = { callsign: 3, friend: 10, friends: 20, report: 5 };
+//
+// `squad` is sized like `friends` and for the same reason: a squad op is a
+// memory change plus at most ONE profilesByIds behind each snapshot it fans
+// out, and a squad box is acted on, not polled. EVERY squad op spends from
+// this one bucket — an unknown op included, for handleFriend's reason — and
+// every later op (invite, ready, mode, start, resume) joins it by being
+// registered in SQUAD_OPS.
+const LIMITS = { callsign: 3, friend: 10, friends: 20, report: 5, squad: 20 };
 
 // The chosen-callsign cooling-off period: a rolling 24 hours since the last
 // set, not a calendar day, so there is no timezone to be wrong about.
@@ -187,13 +194,14 @@ const BLOCK_KEY_RE = /^[0-9a-f]{32}$/;
 // file, and this module must gain no rooms. server.js holds both and passes
 // `(code) => rooms.has(code)` straight in.
 //
-// ITS READER IS THE SQUAD MINTER, WHICH TASK 2 WRITES: the other direction of
-// one code namespace (plan R4) is a squad code refusing any candidate that
-// names a live room, and this is the only route from server/ to `rooms`.
-// NOTHING IN THIS FILE READS IT YET — the code frame, which did, is answered
-// in server.js now — so it is plumbing for that minter and has no behaviour a
-// test can observe until the minter exists. The default refuses nothing, which
-// is the right direction for a host that wires no rooms at all.
+// ITS READER IS THE SQUAD MINTER: the other direction of one code namespace
+// (plan R4) is a squad code refusing any candidate that names a live room,
+// and this is the only route from server/ to `rooms`. It is handed to
+// createSquads as codeTaken below, and nothing else in this file reads it.
+// test/code_frame.mjs proves the wiring against the real server.js, with the
+// code bytes scripted so a squad is made to try a live room's code first.
+// The default refuses nothing, which is the right direction for a host that
+// wires no rooms at all.
 export function createSocial({ store, terms, send, now, resolveHandle = () => null, roomExists = () => false }) {
 
   // userId -> that account's live sockets. "Online" is "the set is non-empty".
@@ -675,9 +683,20 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
   const { provenName, rolledName, displayName, seenName } = createNameProofs({ terms });
 
   // ---- squads (design 4.3) -------------------------------------------------
+  // THE STATE MACHINE IS server/squads.js AND IT KNOWS NOTHING ABOUT SOCKETS.
+  // What lives here is everything that needs this closure: the per-socket
+  // queue that serialises a read-then-write, the rate bucket, the sign-in
+  // gate, and displayName — because a member row is A NAME ON ANOTHER
+  // PLAYER'S SCREEN, and profiles.callsign is PATCHed by the account itself
+  // on every cloud save (BINDING resolution 27).
+  //
   // One factory, held, never re-created per frame — createNameProofs above is
-  // built the same way and for the same reason.
-  const squads = createSquads({ now });
+  // built the same way and for the same reason. codeTaken is the squad half of
+  // ONE CODE NAMESPACE (plan R4): the engine refuses a code a squad holds
+  // (server.js hands it hasSquad), and the squad minter refuses a code a live
+  // room holds, through the roomExists server.js injects. Both directions are
+  // proved against the real server.js by test/code_frame.mjs.
+  const squads = createSquads({ now, codeTaken: roomExists });
 
   // op -> handler. A NULL PROTOTYPE, and that is not decoration: `op` comes
   // off the wire, and with a plain object literal SQUAD_OPS['constructor'] is
@@ -688,33 +707,249 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
   // closing it belongs with the friend ops and is not this task's, but the
   // new table must not repeat it.)
   //
-  // EMPTY IN TASK 1 ON PURPOSE. Every op is therefore unknown, which is the
-  // whole behaviour this task owes a client: a squad frame reaches the server
-  // and is ANSWERED. create, invite, join, leave, ready, mode, start, resume
-  // and kick fill this table in tasks 2 to 5.
+  // FILLED BY ASSIGNMENT, ONE LINE PER OP, and never redeclared as a literal:
+  // a literal would bring the prototype back. Task 2 registers create, join,
+  // leave and kick at the end of this section; invite, ready, mode, start and
+  // resume are registered the same way by the tasks that write them.
   const SQUAD_OPS = Object.create(null);
+
+  // THE PER-OP SIGN-IN GATE (R3). Squads are the first type whose ops do not
+  // share one: `join` and `leave` are open to a guest — a code is how a friend
+  // brings somebody in (D5), and a guest who can join must be able to get out
+  // — and `create` and `kick` need an account that survives a reinstall,
+  // because a squad is led by one (a guest can never lead; see
+  // server/squads.js). requireLinked is REUSED rather than restated, so there
+  // is one sign-in rule in this file and one piece of copy for it. A later op
+  // that needs an account is added here.
+  const SQUAD_LINKED = new Set(['create', 'kick']);
+
+  const squadReply = (ws, msg, op, rest) => reply(ws, msg, { type: 'squad', op, ...rest });
 
   async function handleSquad(ws, msg) {
     const op = typeof msg.op === 'string' ? msg.op : '';
     const fn = SQUAD_OPS[op];
+    // THE RATE CHECK BEFORE ANY ANSWER, INCLUDING FOR AN OP THAT DOES NOT
+    // EXIST, for handleFriend's reason: an unknown op costs no store read but
+    // it does cost a reply, and a path that answers without spending is free.
+    if (!rateOk(ws, 'squad', LIMITS.squad)) return squadReply(ws, msg, op || 'unknown', { error: 'slow_down' });
     // Answered rather than dropped, and answered the way an unknown block op
     // is: the reply carries the OP, because a client with two squad answers
     // outstanding cannot tell which one failed from { type:'squad',
     // error:'unavailable' } alone.
     //
-    // NO GATE ON THIS PATH. R3: squads are the first type whose ops differ —
-    // `join` by code is open to a guest and the rest need a linked account —
-    // so the gate is applied per op, by the op, inside this table's handlers.
-    // An op that does not exist has no gate to apply, and answering
-    // 'sign_in' to a guest for an op that is not there would advertise ops
-    // this build does not have.
-    if (!fn) return reply(ws, msg, { type: 'squad', op: op || 'unknown', error: 'unavailable' });
-    // TASK 2 ADDS THE CATCH HERE, beside handle()'s net and for handleFriend's
-    // reason: this reply has to carry the op. It is not written now because
-    // with an empty table it cannot be reached and therefore cannot be
-    // tested, and a branch no test can break is a branch nobody is keeping.
-    await fn(ws, msg);
+    // NO GATE ON THIS PATH. An op that does not exist has no gate to apply,
+    // and answering 'sign_in' to a guest for an op that is not there would
+    // advertise ops this build does not have.
+    if (!fn) return squadReply(ws, msg, op || 'unknown', { error: 'unavailable' });
+    if (SQUAD_LINKED.has(op) && !requireLinked(ws, msg)) return;
+    // A catch of its own BESIDE handle()'s net, for handleFriend's reason:
+    // this reply carries the OP, and handle()'s net would answer
+    // { type:'squad', error } with none.
+    try { await fn(ws, msg); }
+    catch { squadReply(ws, msg, op, { error: 'unavailable' }); }
   }
+
+  // WHO A SQUAD FRAME IS FROM. A signed-in member is their account id; a
+  // GUEST is their socket. A guest cannot be the former and must not be: an
+  // ANONYMOUS account id is an identity this feature must never spend, the
+  // snapshot says `id: null` for a guest, and this keeps that true all the
+  // way down. A socket is also the one key no client can forge. The rule is
+  // requireLinked's, so what the gate calls a guest is what the machine does.
+  const squadGuest = (ws) => !(ws && ws.userId && !ws.isGuest);
+  const squadKey = (ws) => (squadGuest(ws) ? ws : wireId(ws.userId));
+  const squadMemberOf = (ws, msg) => ({
+    userId: squadGuest(ws) ? null : wireId(ws.userId),
+    guest: squadGuest(ws),
+    // Kept for the seating path, NEVER SHOWN: see squadSnapshot.
+    name: typeof msg.name === 'string' ? msg.name : '',
+    skin: skinOf(msg),
+    ws,
+  });
+
+  // `you`: which row of this squad THIS SOCKET is, or -1 when it is none. The
+  // socket first — the ordinary case, and the only one for a guest, whose key
+  // IS a socket — then the account, so a second device of a signed-in member
+  // (whose row still holds the first device) is shown its own row.
+  function youIn(sq, ws) {
+    const i = sq.members.findIndex((m) => m.ws === ws);
+    if (i >= 0) return i;
+    const key = squadKey(ws);
+    return sq.members.findIndex((m) => m.key === key);
+  }
+
+  // THE FRAME, WITHOUT `you` — the one field that differs per destination.
+  //
+  // A GUEST ROW CARRIES callsign null AND guest true, AND NEVER THE NAME THE
+  // GUEST SENT. That string arrived off the wire on a socket with no account
+  // behind it and nothing to prove it against; it is exactly what
+  // displayName exists to keep off another player's screen. null is also
+  // what displayName answers for a name it cannot vouch for, so the box has
+  // ONE rule and `guest` chooses the word. It is never the empty string,
+  // which would paint a blank row, and a null name never drops the row.
+  //
+  // `online` and `dropped` are not complements. `online` is PRESENCE — the
+  // account has a live socket somewhere — and for a guest, who has none
+  // (onAuth returns early for a guest), it is their own socket. `dropped` is
+  // this member's squad socket inside the drop window (task 5).
+  //
+  // ONE profilesByIds FOR THE WHOLE SQUAD, and none at all when every member
+  // is a guest. A squad change fans out to four sockets; a per-member lookup
+  // would make one leave four round trips. The rows are built AFTER the read,
+  // from the roster as it stands then, so a push's frames and their `you`
+  // indexes always describe the same roster.
+  async function squadSnapshot(sq) {
+    const ids = sq.members.filter((m) => m.userId).map((m) => m.userId);
+    const names = ids.length ? await store.profilesByIds(ids) : new Map();
+    return {
+      type: 'squad', op: 'state', code: sq.code, leader: sq.leader,
+      mode: sq.mode, tees: sq.tees, max: sq.max,
+      members: sq.members.map((m) => ({
+        id: m.userId,
+        callsign: m.userId ? displayName(names.get(m.userId)) : null,
+        guest: m.guest,
+        online: m.userId ? isOnline(m.userId) : !!(m.ws && m.ws.readyState === 1),
+        ready: m.ready,
+        dropped: m.dropAt !== null,
+      })),
+      fits: fitsFor(sq.members.length),
+    };
+  }
+
+  // THE FRAME AS ONE SOCKET MUST SEE IT (plan X4): the snapshot plus `you`,
+  // the mirror of forSocket above. For a caller that answers ONE socket —
+  // task 5's resume. A fan-out uses pushSquad, which builds the snapshot once
+  // and applies the same youIn to every destination.
+  async function squadFrame(sq, ws) {
+    const base = await squadSnapshot(sq);
+    return { ...base, you: youIn(sq, ws) };
+  }
+
+  // THE FAN-OUT GOES DOWN THE SQUAD'S OWN SOCKETS, NOT socketsOf(). A guest
+  // has no presence at all — onAuth returns early for one, so `online` never
+  // holds them and socketsOf(guest) is always empty — and a roster fanned out
+  // through presence would reach every signed-in member and nobody else,
+  // silently, on every squad with a guest in it.
+  //
+  // `actor` is the socket whose request this answers: it gets the frame as a
+  // REPLY (with the request's id); everyone else gets it with none.
+  //
+  // THE ACTOR IS ALWAYS ANSWERED, even when it is not the socket on its row —
+  // a second device of a member, or of the leader kicking. The squad keeps
+  // the socket it already has (resume is task 5's), but a request is a
+  // request, and one that was never answered holds the client's waiter for
+  // its full twelve seconds.
+  //
+  // It REJECTS when the snapshot cannot be built: create, join and kick
+  // answer their actor from inside it, and handleSquad's catch is then the
+  // one honest answer. Callers pushing to people who did not ask swallow it.
+  async function pushSquad(sq, actor, msg) {
+    const base = await squadSnapshot(sq);
+    let answered = false;
+    for (const m of sq.members) {
+      if (!m.ws) continue;
+      const frame = { ...base, you: youIn(sq, m.ws) };
+      if (m.ws === actor) { reply(actor, msg, frame); answered = true; }
+      else safeSend(m.ws, frame);
+    }
+    if (actor && !answered) reply(actor, msg, { ...base, you: youIn(sq, actor) });
+  }
+
+  // A SQUAD SOMEBODY HAS JUST LEFT. `has` is the test, because the machine
+  // deletes the squad but hands the object back with its members still on it
+  // so exactly this can be done.
+  async function pushSquadAfterExit(sq) {
+    if (squads.has(sq.code)) return pushSquad(sq, null, null);
+    // It is gone. Anyone still on the list is there because the last account
+    // left and only guests remained: nobody can lead, the squad ended under
+    // them, and a box still rendering it is a Start button that answers
+    // nothing. An empty list means the leaver was the last member, and their
+    // own answer is the whole story.
+    for (const m of sq.members) if (m.ws) safeSend(m.ws, { type: 'squad', op: 'ended', reason: 'no_leader' });
+  }
+
+  // WHO A KICK IS AIMED AT. Two forms, and — the rule targetId below applies
+  // to `handle` — ONE FORM, NEVER EITHER:
+  //   `i`  — the row's index in the last snapshot, and the ONLY way to name a
+  //          GUEST, whose row carries `id: null` by the frame's own rule.
+  //          When `i` is present IT is the target, and `id` goes back to being
+  //          the pure correlation echo it is on every other frame — which
+  //          matters, because public/app.js's socialSend mints a numeric `id`
+  //          onto every frame that carries none. Read `id` first and every
+  //          index kick from the real client would miss.
+  //   `id` — an account id the SERVER put in this squad's own roster. The
+  //          ordinary case, and it names one person however the roster moves.
+  // The index is accepted for a guest row and for nothing else, so a stale
+  // index can MISS and be refused but can never land on a signed-in member
+  // the leader did not aim at.
+  const squadTarget = (sq, msg) => {
+    if (msg.i !== undefined) {
+      if (!Number.isInteger(msg.i)) return null;
+      const m = sq.members[msg.i];
+      return m && m.guest ? m : null;
+    }
+    const id = wireId(msg.id);
+    return (id && sq.members.find((m) => m.userId === id)) || null;
+  };
+
+  async function squadCreate(ws, msg) {
+    const prev = squads.ofUser(squadKey(ws));
+    const sq = squads.create(squadMemberOf(ws, msg));
+    // THE SQUAD THEY JUST LEFT STILL HAS PEOPLE IN IT. create() leaves it as
+    // its first act, so those left behind have a new leader — or none of them
+    // can lead and it is gone. Either way they are owed the truth and nobody
+    // is going to ask for it on their behalf. Told AFTER the creator is
+    // answered, and in a finally so a creator whose own answer failed does
+    // not also cost them it; a failure telling them is swallowed, because the
+    // creator has been answered and a second answer would be false.
+    try { await pushSquad(sq, ws, msg); }
+    finally { if (prev) await pushSquadAfterExit(prev).catch(() => {}); }
+  }
+
+  async function squadJoin(ws, msg) {
+    // codeOf is the ONE normalisation of a code off the wire (see its note at
+    // the top of this file): upper case, trimmed, bounded, and '' for a value
+    // that is not a string. No shape test beside it — a string that is not a
+    // live squad's code misses the machine's Map and is answered no_such_squad
+    // either way, so a regex here could never be seen to do anything.
+    const prev = squads.ofUser(squadKey(ws));
+    const res = squads.join(codeOf(msg.code), squadMemberOf(ws, msg));
+    if (!res.ok) return squadReply(ws, msg, 'join', { error: res.error });
+    try { await pushSquad(res.squad, ws, msg); }
+    finally { if (prev && prev !== res.squad) await pushSquadAfterExit(prev).catch(() => {}); }
+  }
+
+  async function squadLeave(ws, msg) {
+    const res = squads.leave(squadKey(ws));
+    // ANSWERED FIRST AND ALWAYS, INCLUDING WHEN THERE WAS NOTHING TO LEAVE.
+    // The state the player asked for is the state they are in, and a second
+    // word for it would be one more string to render. The leaver gets a
+    // REPLY; `ended` is reserved for members who did not ask. The push to
+    // those left behind is a courtesy after the answer, and a failure in it
+    // must not reach handleSquad's catch and send the leaver a second answer
+    // saying the leave failed.
+    squadReply(ws, msg, 'left', { ok: true });
+    if (res.squad) await pushSquadAfterExit(res.squad).catch(() => {});
+  }
+
+  async function squadKick(ws, msg) {
+    const me = squadKey(ws);
+    const sq = squads.ofUser(me);
+    if (!sq || sq.leader !== me) return squadReply(ws, msg, 'kick', { error: 'not_leader' });
+    const target = squadTarget(sq, msg);
+    if (!target) return squadReply(ws, msg, 'kick', { error: 'no_such_member' });
+    // Held BEFORE the removal: kick() takes the row off the squad, and a
+    // player who is no longer in it is exactly the one who has to be told.
+    const victim = target.ws;
+    const res = squads.kick(sq.code, me, target.key);
+    if (!res.ok) return squadReply(ws, msg, 'kick', { error: res.error });
+    if (victim) safeSend(victim, { type: 'squad', op: 'ended', reason: 'kicked' });
+    await pushSquad(sq, ws, msg);
+  }
+
+  SQUAD_OPS.create = squadCreate;
+  SQUAD_OPS.join = squadJoin;
+  SQUAD_OPS.leave = squadLeave;
+  SQUAD_OPS.kick = squadKick;
 
   const skinOf = (row) => (row && typeof row.skin === 'string' && SKIN_IDS.has(row.skin) ? row.skin : null);
 
