@@ -2002,16 +2002,18 @@ const FITS_BY_SIZE = [
   else fail('(s3f) loners: ' + JSON.stringify([loner.rx, stray.rx]));
 
   // THE ROW IS THE ONE THIS SOCKET HOLDS (squadKey, socket first). A guest who
-  // signs in on the same socket still holds its GUEST row, and readies that
-  // row — found by its account it would be "no squad" and stuck unready.
+  // signs in on the same socket readies the row it holds — found only by an
+  // account that row did not carry, it would be "no squad" and stuck unready.
+  // Since task 5's fix pass that row BECOMES the account's at the sign-in
+  // (claimOnSignIn: one account, one row), so it is shown as SQD's row.
   const h = sqws(null);
   await S.handle(h, { type: 'squad', op: 'join', code, name: 'H', skin: 'gold' });
   h.userId = SQD; h.isGuest = false; S.onAuth(h);
   h.rx.length = 0;
   await S.handle(h, { type: 'squad', op: 'ready', ready: true, loadout: RACK5, id: 'h' });
   const hrow = (sqat(wa, 'state').members || [])[3] || {};
-  if (sqat(h, 'ready').ok === true && hrow.guest === true && hrow.ready === true)
-    ok('(s3f) a guest who signed in on the same socket readies the guest row it holds');
+  if (sqat(h, 'ready').ok === true && hrow.id === SQD && hrow.guest === false && hrow.ready === true)
+    ok('(s3f) a guest who signed in on the same socket readies the row it holds — now its account\'s');
   else fail('(s3f) signed-in guest ready: ' + JSON.stringify(h.rx) + ' row ' + JSON.stringify(hrow));
 
   // A SECOND DEVICE of a member readies that member's row and is answered —
@@ -3040,31 +3042,39 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   }
 
   // ---- (d9c) deferred item 7: A GUEST WHO SIGNED IN, THEN DISCONNECTED -----
-  // The row is found by the SOCKET, not by who is signed in on it. By
-  // identity this socket is MEM's account now, which holds no row, and the
-  // guest row it really holds would be left behind for good.
-  {
+  // The row is found by the SOCKET, not by who is signed in on it. Two
+  // shapes since the fix pass. Ordinarily the guest row BECOMES the account's
+  // at the sign-in (claimOnSignIn), and its close is an ordinary drop. But
+  // when the account is already in ANOTHER squad the guest row stays a guest
+  // row under a socket signed in as that account: by identity this socket is
+  // MEM, whose row is in the other squad on a live device, and the guest row
+  // it really holds would be left behind for good.
+  for (const shape of ['adopted', 'another squad']) {
     const cw = mkClockwork();
     const S = social5(store5(), { cw });
     const wl = up5(S, mkws5(LEAD));
     await S.handle(wl, { type: 'squad', op: 'create' });
     const code = last5(wl, 'state').code;
+    const wm = up5(S, mkws5(MEM));
+    if (shape === 'another squad') await S.handle(wm, { type: 'squad', op: 'create' });
     const g = mkws5(null);                     // never said hello
     await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
     switch5(S, g, MEM);                        // signs in mid-squad (no hook: it had no id)
-    wl.rx.length = 0;
+    await flush5();
+    const held = shape === 'adopted' ? MEM : 'guest';
+    wl.rx.length = 0; wm.rx.length = 0;
     close5(S, g);
     await flush5();
     const a = last5(wl, 'state');
-    if (a && same(ids5(a), [LEAD, 'guest']) && a.members[1].dropped === true)
-      ok('(d9c) a guest who signed in and then disconnected: the guest row they hold is dropped');
-    else fail('(d9c) signed-in guest close: ' + JSON.stringify(a));
+    if (a && same(ids5(a), [LEAD, held]) && a.members[1].dropped === true && sq5(wm).length === 0)
+      ok(`(d9c) ${shape}: a guest who signed in and then disconnected — the row their socket holds is dropped, and nothing else is`);
+    else fail(`(d9c) ${shape}: signed-in guest close: ` + JSON.stringify({ roster: a, other: wm.rx }));
     CLOCK5 += 60000;
     cw.fire();
     await flush5();
     const b = last5(wl, 'state');
-    if (b && same(ids5(b), [LEAD])) ok('(d9c) and swept at the end of the window — no guest row is left behind');
-    else fail('(d9c) signed-in guest after the window: ' + JSON.stringify(b));
+    if (b && same(ids5(b), [LEAD])) ok(`(d9c) ${shape}: and swept at the end of the window — no row is left behind`);
+    else fail(`(d9c) ${shape}: after the window: ` + JSON.stringify(b));
   }
 
   // ---- (d9d) a socket holding NO row closes: nobody is dropped -------------
@@ -3311,26 +3321,34 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     else fail('(d11) account switch: ' + JSON.stringify(ids5(f)));
   }
   {
-    // A GUEST ROW STAYS. A guest's squad identity IS the socket, and signing
-    // in or out does not change the socket. An anonymous guest signing in is
-    // a hello for a different account (server.js runs the hook, since the
-    // anonymous id differs), and task 2 keeps that guest acting on its guest
-    // row after it: this must not take the row away first.
+    // A GUEST ROW STAYS through its own socket's hook. A guest's squad
+    // identity IS the socket, and it is not the socket that is leaving.
+    //   * An ANONYMOUS guest who signs OUT is still that socket: the row stays.
+    //   * An anonymous guest who signs IN is a hello for a different account,
+    //     so server.js runs the hook (open socket) BEFORE onAuth — and onAuth
+    //     then makes the row the account's (claimOnSignIn). Taken away at the
+    //     hook, the player would lose their place a moment before it was
+    //     theirs by name.
+    //   * Once it IS the account's row, signing out is an account's sign-out:
+    //     a leave, like anyone's.
     const S = social5(store5(), { cw: mkClockwork() });
     const { wl, code } = await pair5(S);
     const g = mkws5(ANON, true);
     await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
     wl.rx.length = 0;
-    switch5(S, g, THIRD);                      // signs in
-    signOut5(S, g);                            // and out again
+    signOut5(S, g);                            // an anonymous guest signs out
+    g.userId = ANON; g.isGuest = true;         // ...and hellos as a guest again
     await flush5();
     const quiet = sq5(wl).length === 0;
-    g.rx.length = 0;
-    await S.handle(up5(S, mkws5(FOURTH)), { type: 'squad', op: 'join', code });
+    switch5(S, g, THIRD);                      // signs in to a real account
+    await flush5();
     const mine = last5(g, 'state');
-    if (quiet && mine && same(ids5(mine), [LEAD, MEM, 'guest', FOURTH]) && mine.you === 2)
-      ok('(d11) a guest row survives its socket signing in and out — the socket, which is its identity, never changed');
-    else fail('(d11) guest row on sign-in/out: ' + JSON.stringify({ told: wl.rx, mine }));
+    signOut5(S, g);                            // and out of it
+    await flush5();
+    const after = last5(wl, 'state');
+    if (quiet && mine && same(ids5(mine), [LEAD, MEM, THIRD]) && mine.you === 2 && after && same(ids5(after), [LEAD, MEM]))
+      ok('(d11) a guest keeps its row through its own sign-out and its sign-in — where the row becomes the account\'s — and that account\'s sign-out then leaves');
+    else fail('(d11) guest row on sign-in/out: ' + JSON.stringify({ quiet, mine: ids5(mine), you: mine && mine.you, after: ids5(after) }));
   }
   {
     // A SECOND DEVICE SIGNING OUT is not the account leaving: the row is on
@@ -3381,7 +3399,8 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   // runs no hook — it had no id), and an ANONYMOUS guest (server.js runs the
   // hook with the socket open, because the anonymous id differs — the sign-
   // out branch above must keep the guest row, not take it). Either way the
-  // re-join is task 2's already-here: the socket keeps the row it holds.
+  // row the socket holds becomes the account's at the sign-in, and the
+  // re-join is task 2's already-here: still exactly one row.
   for (const [label, before] of [['a socket that never said hello', [null, false]], ['an anonymous guest', [ANON, true]]]) {
     const S = social5(store5(), { cw: mkClockwork() });
     const { wl, code } = await pair5(S);
@@ -3392,8 +3411,8 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     await S.handle(g, { type: 'squad', op: 'join', code, id: 'j' });
     const got = g.rx.find((f) => f.id === 'j') || {};
     const roster = last5(wl, 'state') || {};
-    if (got.op === 'state' && same(ids5(got), [LEAD, MEM, 'guest']) && got.you === 2 && same(ids5(roster), [LEAD, MEM, 'guest']))
-      ok(`(d11c) ${label} who signs in and re-joins their own squad ends with exactly one row — the one their socket held`);
+    if (got.op === 'state' && same(ids5(got), [LEAD, MEM, THIRD]) && got.you === 2 && same(ids5(roster), [LEAD, MEM, THIRD]))
+      ok(`(d11c) ${label} who signs in and re-joins their own squad ends with exactly one row — the one their socket held, now the account's`);
     else fail(`(d11c) ${label}: answered ${JSON.stringify(ids5(got))} you ${got.you}; squad ${JSON.stringify(ids5(roster))}`);
   }
 
@@ -3435,15 +3454,21 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
       ok('(d12) a guest resuming on the socket they joined on is answered their squad — no sign-in, no `gone`');
     else fail('(d12) guest resume: ' + JSON.stringify(g.rx));
     // deferred item 5: THE SOCKET'S OWN ROW FIRST. That guest signs in on the
-    // same socket (task 2's (h9): they keep acting on their guest row). By
-    // identity the socket is now THIRD, who is in no squad — a resume built
-    // on identity would answer `gone` to a member standing in the squad.
+    // same socket as THIRD, who is already in ANOTHER squad on another device
+    // — the one case where the guest row stays a guest row (claimOnSignIn),
+    // so the row this socket holds and the account signed in on it disagree.
+    // A resume built on identity would answer THIRD's other squad to a
+    // socket standing in this one.
+    const wt = up5(S, mkws5(THIRD));
+    await S.handle(wt, { type: 'squad', op: 'create' });
+    const other = last5(wt, 'state').code;
     switch5(S, g, THIRD);
+    await flush5();
     g.rx.length = 0;
     await S.handle(g, { type: 'squad', op: 'resume', code, id: 'rh' });
     const r2 = g.rx[0] || {};
-    if (g.rx.length === 1 && r2.op === 'state' && r2.code === code && r2.you === 2 && r2.members[2].guest === true)
-      ok('(d12) a guest who signed in mid-squad resumes the guest row their socket holds, not their new account\'s nothing');
+    if (g.rx.length === 1 && r2.op === 'state' && r2.code === code && r2.code !== other && r2.you === 2 && r2.members[2].guest === true)
+      ok('(d12) a signed-in socket still holding a guest row resumes the squad that row is in, not its account\'s other squad');
     else fail('(d12) signed-in guest resume: ' + JSON.stringify(g.rx));
   }
   {
@@ -3791,6 +3816,148 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     const c = wl.rx.find((f) => f.id === 'u');
     if (c && c.ok === true && same(seated, [2])) ok('(d17) and once they resume, the same start seats the whole squad');
     else fail('(d17) control: ' + JSON.stringify({ c, seated }));
+  }
+
+  // ---- (d18) ONE ACCOUNT, ONE ROW, ONE SEAT (review, Important 4) ----------
+  // "Each member is seated exactly once when the squad starts." A GUEST row
+  // is keyed by its socket, and that socket can sign in afterwards, so the
+  // same account could stand in one squad twice: once as the guest row its
+  // signed-in socket holds, once as an account row on another device. The
+  // engine's join checks the socket, never the account, so Start seated it
+  // twice — and a duel led by that account would be the account against
+  // itself. Two ways in, both closed at the sign-in; one guard on the harm.
+  const seatRec5 = () => { const r = { calls: [] }; r.fn = (seats) => { r.calls.push(seats.map((s) => s.ws.userId || 'guest')); return { ok: true, code: 'RM18' }; }; return r; };
+  const readyAll5 = async (S, socks) => { for (const w of socks) await S.handle(w, { type: 'squad', op: 'ready', ready: true, loadout: RACK5 }); };
+  {
+    // THE REVIEWER'S EXACT SEQUENCE: g joins as a guest and then signs in as
+    // MEM; MEM's other device joins the same squad by code. On a free-for-all,
+    // so a squad of three would FIT and only the rule can stop a double seat.
+    const seat = seatRec5();
+    const S = social5(store5(), { cw: mkClockwork(), seatSquad: seat.fn });
+    const wl = up5(S, mkws5(LEAD));
+    await S.handle(wl, { type: 'squad', op: 'create' });
+    const code = last5(wl, 'state').code;
+    await S.handle(wl, { type: 'squad', op: 'mode', mode: 'ffa' });
+    const g = mkws5(null);
+    await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+    switch5(S, g, MEM);                        // signs in (it had no id: no hook, then onAuth)
+    const wm2 = up5(S, mkws5(MEM));
+    await S.handle(wm2, { type: 'squad', op: 'join', code, id: 'j' });
+    const seen = wm2.rx.find((f) => f.id === 'j') || {};
+    await readyAll5(S, [wl, g, wm2]);
+    await S.handle(wl, { type: 'squad', op: 'start', id: 's' });
+    if (same(ids5(seen), [LEAD, MEM]) && seen.you === 1 && same(seat.calls, [[LEAD, MEM]]))
+      ok('(d18) signed in on the guest\'s socket, then joining from another device: one row for the account, and Start seats it once');
+    else fail('(d18) reviewer sequence: ' + JSON.stringify({ roster: ids5(seen), you: seen.you, seated: seat.calls, start: wl.rx.find((f) => f.id === 's') }));
+  }
+  {
+    // THE MIRROR, which no join-time check can see: the account's row comes
+    // FIRST (live, on another device), then a guest socket joins and signs in
+    // as it. The account is already here; the guest row goes, and the socket
+    // that signed in is told its squad is on the other device.
+    const seat = seatRec5();
+    const S = social5(store5(), { cw: mkClockwork(), seatSquad: seat.fn });
+    const { wl, wm, code } = await pair5(S);
+    await S.handle(wl, { type: 'squad', op: 'mode', mode: 'ffa' });
+    const g = mkws5(ANON, true);               // an ANONYMOUS guest: the hook runs, then onAuth
+    await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+    g.rx.length = 0;
+    switch5(S, g, MEM);
+    await flush5();
+    await readyAll5(S, [wl, wm]);
+    await S.handle(wl, { type: 'squad', op: 'start', id: 's' });
+    if (same(sq5(g, 'ended'), [ELSEWHERE]) && same(seat.calls, [[LEAD, MEM]]) && same(ids5(last5(wl, 'state')), [LEAD, MEM]))
+      ok('(d18) a guest socket signing in as an account already in the squad: its guest row goes, it is told ended: elsewhere, and Start seats the account once');
+    else fail('(d18) mirror, live: ' + JSON.stringify({ g: g.rx, seated: seat.calls, roster: ids5(last5(wl, 'state')) }));
+  }
+  {
+    // THE MIRROR WHEN THE ACCOUNT'S ROW IS DROPPED: nobody live holds it, so
+    // the socket that has just signed in takes it — resume's own rule — and
+    // the player is back in the squad on the device in their hand.
+    const S = social5(store5(), { cw: mkClockwork() });
+    const { wl, wm, code } = await pair5(S);
+    close5(S, wm);
+    await flush5();
+    const g = mkws5(null);
+    await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+    g.rx.length = 0;
+    switch5(S, g, MEM);
+    await flush5();
+    const mine = last5(g, 'state');
+    if (mine && same(ids5(mine), [LEAD, MEM]) && mine.you === 1 && mine.members[1].dropped === false && sq5(g, 'ended').length === 0)
+      ok('(d18) signing in as an account whose row is dropped takes that row onto this socket: one row, back, and pushed to it');
+    else fail('(d18) mirror, dropped: ' + JSON.stringify(g.rx));
+  }
+  {
+    // WHAT A SIGNED-IN GUEST ROW BECOMES. With no other row for the account
+    // anywhere, the row the socket holds becomes the ACCOUNT's: shown by its
+    // proved callsign, and addressable by the account id like anyone else's.
+    const S = social5(store5(), { cw: mkClockwork() });
+    const { wl, code } = await pair5(S);
+    const g = mkws5(null);
+    await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+    switch5(S, g, THIRD);
+    await flush5();
+    const shown = last5(wl, 'state') || {};
+    g.rx.length = 0;
+    await S.handle(wl, { type: 'squad', op: 'kick', id: THIRD });
+    if (shown.members && shown.members[2] && shown.members[2].id === THIRD && shown.members[2].callsign === 'Crater Two'
+      && shown.members[2].guest === false && same(sq5(g, 'ended'), [{ type: 'squad', op: 'ended', reason: 'kicked' }]))
+      ok('(d18) a guest who signs in with no row elsewhere becomes that account\'s row: its callsign is shown and it answers to the account id');
+    else fail('(d18) adopted row: ' + JSON.stringify({ shown: shown.members, g: g.rx }));
+  }
+  {
+    // THE VARIANT TASK 2 ACCEPTED is left as it is: g holds a guest row in X
+    // and signs in as MEM, who LEADS squad Y from another device. (That state
+    // is what (h9), (s3l), (st6) and squad_seat's (B11) are built on.) From
+    // it, MEM's other device joining X would put the account in X twice, so
+    // that join is refused — and refused before anything moves, so Y keeps
+    // its leader.
+    const S = social5(store5(), { cw: mkClockwork() });
+    const wl = up5(S, mkws5(LEAD)), wm = up5(S, mkws5(MEM));
+    await S.handle(wl, { type: 'squad', op: 'create' });
+    const X = last5(wl, 'state').code;
+    await S.handle(wm, { type: 'squad', op: 'create' });
+    const Y = last5(wm, 'state').code;
+    const g = mkws5(null);
+    await S.handle(g, { type: 'squad', op: 'join', code: X, name: 'G', skin: 'gold' });
+    switch5(S, g, MEM);
+    await flush5();
+    const x0 = ids5(last5(wl, 'state'));
+    wl.rx.length = 0;
+    await S.handle(wm, { type: 'squad', op: 'join', code: X, id: 'j' });
+    const a = wm.rx.find((f) => f.id === 'j');
+    await S.handle(wm, { type: 'squad', op: 'resume', code: Y, id: 'r' });
+    const y = wm.rx.find((f) => f.id === 'r') || {};
+    if (same(x0, [LEAD, 'guest']) && same(a, { type: 'squad', op: 'join', error: 'already_in', id: 'j' }) && sq5(wl).length === 0 && y.code === Y && y.leader === MEM)
+      ok('(d18) the account joining a squad its signed-in guest row already stands in is refused already_in, and nothing moves');
+    else fail('(d18) variant join: ' + JSON.stringify({ x0, answer: a, told: wl.rx, y }));
+  }
+  {
+    // THE GUARD ON THE HARM ITSELF. The state is built DIRECTLY — a socket's
+    // identity changed without the sign-in hook — because the rules above
+    // make it unreachable through server.js; Start must refuse it anyway,
+    // naming the second row, and seat nobody. Twice: on a free-for-all, and
+    // on a duel, where it would be the account against itself.
+    for (const mode of ['ffa', 'duel']) {
+      const seat = seatRec5();
+      const S = social5(store5(), { cw: mkClockwork(), seatSquad: seat.fn });
+      const wm = up5(S, mkws5(MEM));
+      await S.handle(wm, { type: 'squad', op: 'create' });
+      const code = last5(wm, 'state').code;
+      await S.handle(wm, { type: 'squad', op: 'mode', mode });
+      const g = mkws5(null);
+      await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+      g.userId = MEM; g.isGuest = false;       // no hook: built directly
+      await readyAll5(S, [wm, g]);
+      if (mode === 'ffa') { const wt = up5(S, mkws5(THIRD)); await S.handle(wt, { type: 'squad', op: 'join', code }); await readyAll5(S, [wt]); }
+      wm.rx.length = 0;
+      await S.handle(wm, { type: 'squad', op: 'start', id: 's' });
+      const a = wm.rx.find((f) => f.id === 's');
+      if (same(a, { type: 'squad', op: 'start', error: 'duplicate_member', at: 1, id: 's' }) && seat.calls.length === 0)
+        ok(`(d18) Start refuses one account on two rows (${mode}): duplicate_member, naming the second row, and nobody is seated`);
+      else fail(`(d18) defence on ${mode}: ` + JSON.stringify({ a, seated: seat.calls }));
+    }
   }
 
   // ---- (end of task 5) ----

@@ -395,6 +395,9 @@ export function createSocial({
     // with no observable behaviour to fail on, and it would also make a flush
     // that lost its store read sticky, because nothing would ask again.
     presenceChanged(ws.userId);
+    // A GUEST ROW THIS SOCKET HOLDS IS NOW AN ACCOUNT'S (task 5's fix pass):
+    // one account, one row, one seat. See claimOnSignIn.
+    claimOnSignIn(ws);
   }
 
   // Call on close, and on a sign-out hello. Unlike the first version of this
@@ -1064,9 +1067,18 @@ export function createSocial({
     // either way, so a regex here could never be seen to do anything.
     const from = squadKey(ws);
     const olds = squadsOfCaller(ws, from);
+    // THE ACCOUNT IS ALREADY STANDING IN THIS SQUAD AS A GUEST ROW whose
+    // socket has since signed in as it — the one state claimOnSignIn leaves
+    // alone, because the account was in another squad at the time. Joining
+    // would put it here twice. Refused BEFORE anything moves, so the squad
+    // the account is in now keeps it (task 5's fix pass).
+    const me = identityKey(ws);
+    const target = squads.get(codeOf(msg.code));
+    if (typeof me === 'string' && target && target.members.some((m) => m.guest && m.ws && m.ws !== ws && identityKey(m.ws) === me))
+      return squadReply(ws, msg, 'join', { error: 'already_in' });
     // create's rule: the account's row on another device is told if this
     // join takes it — and only then, so an already-here join tells nobody.
-    const held = heldElsewhere(ws, [from, identityKey(ws)]);
+    const held = heldElsewhere(ws, [from, me]);
     const res = squads.join(codeOf(msg.code), squadMemberOf(ws, msg), from);
     if (!res.ok) return squadReply(ws, msg, 'join', { error: res.error });
     try { await pushSquad(res.squad, ws, msg); }
@@ -1253,6 +1265,21 @@ export function createSocial({
     const sent = msg.loadout != null;
     if (sent && !validRack(sq.mode, msg.loadout)) return no('no_rack');
     const rackOf = (m) => (m === lead && sent ? msg.loadout : m.loadout);
+    // EACH ACCOUNT IS SEATED EXACTLY ONCE (task 5's fix pass). The engine's
+    // join checks the socket, never the account, so one account on two rows
+    // would be two seats — and in a duel, the account against itself. The
+    // rows' own rules keep that state out (claimOnSignIn, squadJoin's
+    // already_in); this guards the HARM, whatever the cause, and asks before
+    // `fits` so the answer names the real fault rather than a squad that
+    // looks one too big. An account is a row's userId or the account its
+    // socket is signed in as; `at` is the SECOND row of that account.
+    const whose = new Map();
+    let twice = -1;
+    sq.members.forEach((m, i) => {
+      const ids = new Set([m.userId, m.ws ? identityKey(m.ws) : null].filter((v) => typeof v === 'string' && v));
+      for (const a of ids) { if (twice < 0 && whose.has(a) && whose.get(a) !== i) twice = i; whose.set(a, whose.has(a) ? whose.get(a) : i); }
+    });
+    if (twice >= 0) return squadReply(ws, msg, 'start', { error: 'duplicate_member', at: twice });
     // THE SAME `fits` THE BOX AND THE BOARDS ARE SHOWING: fitsFor over the
     // engine's own seat table, minimum AND maximum (plan X6). A squad of one
     // does not start a duel; three do not start one either.
@@ -1421,10 +1448,12 @@ export function createSocial({
       // row was answered AS that account when it joined again as a guest.
       if (ws.readyState === 1) {
         // A GUEST ROW STAYS. Its key is this socket — a guest's squad
-        // identity is the connection, which signing in or out does not
-        // change — and task 2 keeps a guest who signs in mid-squad acting on
-        // that row. server.js runs this hook when an ANONYMOUS guest signs in,
-        // because the anonymous id differs from the new one.
+        // identity is the connection, and it is not the connection that is
+        // leaving. This matters most when an ANONYMOUS guest signs in:
+        // server.js runs this hook first (the anonymous id differs from the
+        // new one), then onAuth, whose claimOnSignIn makes the row the
+        // account's. Taking it out here would lose the player their place a
+        // moment before it was theirs by name.
         if (typeof key !== 'string') return;
         const res = squads.leave(key);
         // pushSquadAfterExit: a roster for the survivors, or `ended` for the
@@ -1437,7 +1466,65 @@ export function createSocial({
       if (!sq) return;
       armDropSweep(key, at);
       pushSquad(sq, null, null).catch(() => {});
-    } catch { /* the squad row waits for the next sweep; the close goes on */ }
+    } catch {
+      // The close goes on, and that is all this buys. WHAT IT COSTS, said
+      // plainly: a throw BEFORE markDropped (the clock, say) leaves the row
+      // holding a CLOSED socket with no dropAt, which no sweep will ever
+      // remove — the window is keyed by dropAt. The row is not dangerous:
+      // Start's member_offline gate reads the socket's state and refuses it,
+      // and the leader can kick it, or it goes when the squad does. It is a
+      // stranded row, not a live seat, and test (d10) pins exactly that.
+    }
+  }
+
+  // ---- one account, one row (task 5's fix pass) -----------------------------
+  // Called from onAuth, on every verified hello of a SIGNED-IN account. A
+  // guest row is keyed by the socket that joined, and that socket may since
+  // have signed in: it is then an ACCOUNT standing in the squad under a key
+  // no account-keyed rule can see — and the account's other device could
+  // join beside it and be seated beside it, the same player twice (a duel
+  // led by that account would be the account against itself). There are two
+  // ways into that state, and this is where both are closed: a join can only
+  // see the first, and the second (the account's row came FIRST, the guest
+  // then signed in) is only visible here.
+  //
+  //   * The account has NO row anywhere: the guest row BECOMES the account's
+  //     (squads.adoptGuest). It then carries the account id, is shown by its
+  //     proved callsign, and every account-keyed rule reaches it; the byKey
+  //     index — a Map — holds one row per account from then on.
+  //   * The account has a row IN THIS SQUAD: it is already here. The guest
+  //     row goes. If no live socket holds the account's row (it is dropped),
+  //     this socket takes it — resume's own rule, and the device in the
+  //     player's hand. Otherwise the row stays where it is and this socket
+  //     is told `ended: elsewhere`, as any device whose row went elsewhere is.
+  //   * The account has a row in ANOTHER squad: left exactly as it was. That
+  //     is the state task 2 accepted and (h9), (s3l), (st6) and squad_seat's
+  //     (B11) are built on — a socket showing one squad must not command the
+  //     other with an index read off the wrong screen. It cannot seat the
+  //     account twice in ONE room; squadJoin refuses the account's own join
+  //     into the squad where its guest row stands, and Start refuses a
+  //     duplicate outright (duplicate_member) whatever the cause.
+  //
+  // Wrapped: onAuth runs inside server.js's hello callback, and a throw here
+  // must not cost the socket its callsign lookup behind it.
+  function claimOnSignIn(ws) {
+    try {
+      const key = squads.keyOfSocket(ws);
+      if (key == null || typeof key === 'string') return;     // no guest row here
+      const id = identityKey(ws);
+      if (typeof id !== 'string') return;                     // still a guest
+      const adopted = squads.adoptGuest(key, id);
+      if (adopted) { pushSquad(adopted, null, null).catch(() => {}); return; }
+      const here = squads.memberOf(key);
+      const theirs = squads.memberOf(id);
+      if (!here || !theirs || theirs.squad !== here.squad) return;   // another squad: as it was
+      const was = theirs.member.ws;
+      const held = !!(was && was.readyState === 1);
+      squads.leave(key);                                      // a guest row: no hand-off, no end
+      if (!held && squads.markResumed(id, ws)) clearDropSweep(id);
+      else endedElsewhere(ws);
+      pushSquad(here.squad, null, null).catch(() => {});
+    } catch { /* the hello goes on */ }
   }
 
   // ---- squad resume (task 5; design 4.3 and 5.4) ----------------------------

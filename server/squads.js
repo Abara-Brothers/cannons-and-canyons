@@ -404,10 +404,40 @@ export function createSquads({ now, capacity = 4, codeTaken = () => false } = {}
   // drop strands nothing in byKey.
 
   // The row a key holds and its squad, or null. The index, never a scan.
+  // ON THE SURFACE (task 5's fix pass): "find the row a key holds" was
+  // written out three times, here and twice in server/social.js; this is the
+  // one copy, and social.js asks it.
   function memberOf(key) {
     const squad = ofUser(key);
     const member = squad ? squad.members.find((m) => m.key === key) : null;
     return member ? { squad, member } : null;
+  }
+
+  // A GUEST ROW BECOMES ITS ACCOUNT'S ROW (task 5's fix pass). A guest row is
+  // keyed by its socket, and that socket can sign in afterwards; left a
+  // guest row, it is an account standing in the squad under a key no
+  // account-keyed rule can see, and the account's other device could then
+  // join beside it and be SEATED BESIDE IT. Rekeyed, the row carries the
+  // account id like any other, byKey — a Map — holds at most one row for the
+  // account, and every account-keyed rule (already-here, one squad per
+  // player, a kick by id, a block's teardown) reaches it.
+  //
+  // -> the squad, or null when there is nothing to adopt: the key holds no
+  // guest row, or the account ALREADY has a row, anywhere. That is the
+  // caller's decision to make (server/social.js's claimOnSignIn); this never
+  // gives an account a second row.
+  function adoptGuest(guestKey, userId) {
+    if (typeof userId !== 'string' || !userId || typeof guestKey === 'string') return null;
+    if (byKey.has(userId)) return null;
+    const found = memberOf(guestKey);
+    if (!found || !found.member.guest) return null;
+    const m = found.member;
+    byKey.delete(guestKey);
+    m.key = userId;
+    m.userId = userId;
+    m.guest = false;
+    byKey.set(userId, found.squad);
+    return found.squad;
   }
 
   // -> the squad when a row was dropped, null when nothing changed.
@@ -492,5 +522,6 @@ export function createSquads({ now, capacity = 4, codeTaken = () => false } = {}
   return {
     has, get, ofUser, keyOfSocket, create, join, leave, kick, removeMember, setReady, setMode, clearReady,
     markDropped, markResumed, sweepDropped,
+    memberOf, adoptGuest,
   };
 }
