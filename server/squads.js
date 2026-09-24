@@ -463,5 +463,34 @@ export function createSquads({ now, capacity = 4, codeTaken = () => false } = {}
     return found.squad;
   }
 
-  return { has, get, ofUser, keyOfSocket, create, join, leave, kick, removeMember, setReady, setMode, clearReady, markDropped, markResumed };
+  // Removes every member whose dropAt <= cutoff. `cutoff` is a TIMESTAMP, not
+  // a duration: the caller owns the window and this function has no clock.
+  //
+  // -> every squad a removal changed THAT STILL HAS SOMEBODY IN IT TO TELL:
+  // a survivor's roster, or — when the removal ended a squad nobody signed in
+  // was left to lead — the guests it ended under, still on the list leave()
+  // hands back. A squad emptied outright has nobody to tell and is not
+  // returned. Each squad once, however many it lost.
+  function sweepDropped(cutoff) {
+    const touched = new Map();
+    for (const squad of [...squads.values()]) {
+      for (const m of squad.members.filter((x) => x.dropAt !== null && x.dropAt <= cutoff)) {
+        // THE SAME DOOR A MEMBER LEAVING USES, for a guest as for an account
+        // (plan X5): leave() owns the byKey entry, the earliest-joinedAt
+        // hand-off, the end of a squad nobody can lead and the delete of an
+        // emptied one. A second copy of any of those here would be a rule
+        // that could disagree with the first — (d7) compares the answers.
+        // If an earlier removal in this loop ended the squad, leave() finds
+        // no entry for the rest and changes nothing.
+        const res = leave(m.key);
+        if (res.squad) touched.set(res.squad.code, res.squad);
+      }
+    }
+    return [...touched.values()].filter((sq) => sq.members.length > 0);
+  }
+
+  return {
+    has, get, ofUser, keyOfSocket, create, join, leave, kick, removeMember, setReady, setMode, clearReady,
+    markDropped, markResumed, sweepDropped,
+  };
 }

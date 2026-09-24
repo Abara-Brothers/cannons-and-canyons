@@ -2777,6 +2777,117 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     else fail('(d5b) the guard refused a real resume');
   }
 
+  // ---- (d6) the sweep: the boundary, and a sweep that removes nobody -------
+  {
+    const S = createSquads({ now: now5 });
+    const T = CLOCK5;
+    const wl = mkws5(LEAD), wm = mkws5(MEM), wt = mkws5(THIRD);
+    const sq = S.create(mem5(LEAD, wl));
+    S.join(sq.code, mem5(MEM, wm));
+    S.join(sq.code, mem5(THIRD, wt));
+    wm.readyState = 3; wt.readyState = 3;
+    S.markDropped(MEM, T);                     // exactly ON the cutoff
+    S.markDropped(THIRD, T + 1);               // one millisecond inside it
+    const changed = S.sweepDropped(T);
+    if (changed.length === 1 && changed[0] === sq && same(rows5(sq), [LEAD, THIRD]) && S.ofUser(MEM) === null && S.ofUser(THIRD) === sq)
+      ok('(d6) dropAt === cutoff is swept, one millisecond later is kept, the index entry goes with the row, and the squad is returned once');
+    else fail('(d6) sweep boundary: ' + JSON.stringify({ n: changed.length, rows: rows5(sq), mem: !!S.ofUser(MEM) }));
+    // A squad that lost nobody is not returned: a sweep is not a broadcast.
+    if (S.sweepDropped(T).length === 0 && same(rows5(sq), [LEAD, THIRD]))
+      ok('(d6) a sweep that removes nobody returns nothing to push');
+    else fail('(d6) an idle sweep returned squads to push');
+    // TWO REMOVALS FROM ONE SQUAD ARE ONE PUSH.
+    const wf = mkws5(FOURTH);
+    S.join(sq.code, mem5(FOURTH, wf));
+    wf.readyState = 3;
+    S.markDropped(FOURTH, T + 1);
+    const both = S.sweepDropped(T + 1);
+    if (both.length === 1 && both[0] === sq && same(rows5(sq), [LEAD]))
+      ok('(d6) a squad that loses two members in one sweep is returned once');
+    else fail('(d6) two removals: ' + JSON.stringify({ n: both.length, rows: rows5(sq) }));
+  }
+
+  // ---- (d7) the leader swept hands off exactly as leave() does -------------
+  // Two identical squads, one swept and one left, the answers compared: the
+  // sweep does not re-derive the earliest-survivor rule, it goes through
+  // leave(). joinedAt is stamped by the MACHINE from now() (task 2's
+  // mkMember), so the join order is made with the clock: MEM joins before
+  // THIRD but sits below them in the roster, so a tie-break by roster order
+  // and the real rule give different heirs.
+  {
+    const build = () => {
+      const S = createSquads({ now: now5 });
+      const T0 = CLOCK5;
+      const sq = S.create(mem5(LEAD, mkws5(LEAD)));
+      CLOCK5 = T0 + 50; S.join(sq.code, mem5(THIRD, mkws5(THIRD)));
+      CLOCK5 = T0 + 10;
+      // MEM is stamped earlier than THIRD although they join later.
+      S.join(sq.code, mem5(MEM, mkws5(MEM)));
+      CLOCK5 = T0;
+      return { S, sq };
+    };
+    const a = build(), b = build();
+    a.sq.members[0].ws.readyState = 3;
+    a.S.markDropped(LEAD, CLOCK5);
+    a.S.sweepDropped(CLOCK5);
+    b.S.leave(LEAD);
+    if (a.sq.leader === MEM && b.sq.leader === MEM && same(rows5(a.sq), rows5(b.sq)))
+      ok('(d7) the earliest-joined survivor inherits, and the swept answer is the one leave() gives');
+    else fail(`(d7) sweep leader ${a.sq.leader} vs leave leader ${b.sq.leader}`);
+  }
+
+  // ---- (d8) the last member swept deletes the squad ------------------------
+  // An emptied squad left behind is one permanent entry per squad ever
+  // formed, and holds its code against every future mint.
+  {
+    const S = createSquads({ now: now5 });
+    const wl = mkws5(LEAD);
+    const sq = S.create(mem5(LEAD, wl));
+    wl.readyState = 3;
+    S.markDropped(LEAD, CLOCK5);
+    const changed = S.sweepDropped(CLOCK5);
+    if (!S.has(sq.code) && S.get(sq.code) === null && S.ofUser(LEAD) === null && changed.length === 0)
+      ok('(d8) the last member swept deletes the squad and its index entry, and there is nobody to push to');
+    else fail('(d8) an emptied squad survived: ' + JSON.stringify({ has: S.has(sq.code), ofUser: !!S.ofUser(LEAD), n: changed.length }));
+  }
+
+  // ---- (d8b) A SWEPT GUEST GOES THROUGH THE SAME DOOR, AND THE INDEX WITH IT
+  // A guest's byKey entry is keyed by their socket. A removal that skipped
+  // the index would leave a dead socket pointing at a squad for ever.
+  {
+    const S = createSquads({ now: now5 });
+    const wl = mkws5(LEAD), wg = mkws5(null);
+    const sq = S.create(mem5(LEAD, wl));
+    S.join(sq.code, mem5(null, wg));
+    wg.readyState = 3;
+    S.markDropped(wg, CLOCK5);
+    const changed = S.sweepDropped(CLOCK5);
+    if (changed.length === 1 && changed[0] === sq && same(rows5(sq), [LEAD]) && S.ofUser(wg) === null && S.keyOfSocket(wg) === null)
+      ok('(d8b) a swept guest leaves the roster AND the index — no dead socket keeps pointing at the squad');
+    else fail('(d8b) guest sweep: ' + JSON.stringify({ n: changed.length, rows: rows5(sq), ofUser: !!S.ofUser(wg) }));
+  }
+
+  // ---- (d8c) THE LEADER SWEPT WITH ONLY GUESTS LEFT ENDS THE SQUAD — AND THE
+  // GUESTS STILL STANDING IN IT ARE RETURNED, SO THEY CAN BE TOLD ---------
+  // leave() ends a squad nobody signed in is left to lead (task 2). It keeps
+  // the member list on the squad object it hands back precisely so the people
+  // it ended under can be told; a sweep that dropped that squad on the floor
+  // would leave their boxes showing a squad that no longer exists.
+  {
+    const S = createSquads({ now: now5 });
+    const wl = mkws5(LEAD), wg = mkws5(null), wh = mkws5(null);
+    const sq = S.create(mem5(LEAD, wl));
+    S.join(sq.code, mem5(null, wg));
+    S.join(sq.code, mem5(null, wh));
+    wl.readyState = 3;
+    S.markDropped(LEAD, CLOCK5);
+    const changed = S.sweepDropped(CLOCK5);
+    if (!S.has(sq.code) && changed.length === 1 && changed[0] === sq && sq.members.length === 2
+      && S.ofUser(wg) === null && S.ofUser(wh) === null && S.ofUser(LEAD) === null)
+      ok('(d8c) a squad left with only guests ends, its index is emptied, and it is returned with the guests on it to be told');
+    else fail('(d8c) leaderless sweep: ' + JSON.stringify({ has: S.has(sq.code), n: changed.length, left: sq.members.length }));
+  }
+
   // ---- (end of task 5) ----
 }
 
