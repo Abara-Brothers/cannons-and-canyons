@@ -6704,6 +6704,217 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     else fail('(sg-h) signed out during the door: ' + JSON.stringify({ inside, n: wn.rx, x: ans6(g.wc, 'r') }));
   }
 
+  // ---- (sg-i) a door-failed row stays out of Start (D-BLOCK-3 H amended) ----
+  // A leads X on ffa with C; wn joined with no account, and C and wn are
+  // ready, so only the door stands between Start and a seat. Then (`sign`)
+  // wn signs in as B while the store fails: the door fails to guest, and
+  // the store is left failing. `row` is a block row written first.
+  // seatSquad records the sockets it is handed.
+  const failWorld6 = async (row, sign = true) => {
+    const seated = [];
+    const st = t6store(ROWS6);
+    if (row) await st.addBlock(row[0], row[1]);
+    const S = mkSocial6(st, { seatSquad: (seats) => { seated.push(seats.map((s) => s.ws)); return { ok: true, code: 'RM6I' }; } });
+    const wa = up6(S, A), wc = up6(S, C);
+    const code = await create6(S, wa);
+    await join6(S, wc, code, 'Crater Two');
+    await S.handle(wa, { type: 'squad', op: 'mode', mode: 'ffa' });
+    const wn = t6ws(null);
+    await join6(S, wn, code, 'Bunker');
+    await S.handle(wc, { type: 'squad', op: 'ready', ready: true, loadout: RACK5 });
+    await S.handle(wn, { type: 'squad', op: 'ready', ready: true, loadout: RACK5 });
+    if (sign) { st.boom.add('blockIdsOf'); hello6(S, wn, B); await settle6(); }
+    clear6(wa, wc, wn);
+    st.calls.length = 0;
+    return { st, S, wa, wc, wn, code, seated };
+  };
+  const start6 = async (g, id) => { await g.S.handle(g.wa, { type: 'squad', op: 'start', loadout: RACK5, id }); return ans6(g.wa, id); };
+  const OFF6 = (id) => ({ type: 'squad', op: 'start', error: 'member_offline', at: 2, id });
+  const OK6 = (id) => ({ type: 'squad', op: 'start', ok: true, code: 'RM6I', id });
+  const reads6 = (st) => st.calls.filter((c) => c === 'blockIdsOf').length;
+  const roster6 = async (g, id) => { await g.S.handle(g.wc, { type: 'squad', op: 'resume', id }); return ans6(g.wc, id); };
+  {
+    // (i) A HAS BLOCKED B and the store still fails. Start is refused
+    // member_offline at the row, twice: each refusal re-runs the door once,
+    // and that read fails too. Nothing is seated, and B is named to nobody.
+    const g = await failWorld6([A, B]);
+    const s1 = await start6(g, 's1');
+    await settle6();
+    const s2 = await start6(g, 's2');
+    await settle6();
+    const failing = { s1, s2, reads: reads6(g.st), seated: g.seated.length, n: got6(g.wn, 'squad') };
+    g.st.boom.delete('blockIdsOf');
+    failing.x = ids6(await roster6(g, 'r1'));
+    failing.named = shows6(g.wa, B) || shows6(g.wc, B);
+    if (same6(failing.s1, OFF6('s1')) && same6(failing.s2, OFF6('s2')) && failing.reads === 2 && failing.seated === 0
+      && !failing.n.length && same6(failing.x, [A, C, null]) && !failing.named)
+      ok('(sg-i) a row whose door read failed is refused by Start member_offline at its index, every time, and nothing is seated');
+    else fail('(sg-i) door-failed row at Start: ' + JSON.stringify(failing));
+    // (ii) The store answers again. The next refused Start's re-run finds
+    // the block: the row goes exactly as A kicking it by index would (the
+    // twin), and the Start after that seats A and C, never wn.
+    clear6(g.wa, g.wc, g.wn);
+    const m = TRACE6.length;
+    const s3 = await start6(g, 's3');
+    await settle6();
+    const mine = seq6(m, [g.wn, g.wc]);
+    const s4 = await start6(g, 's4');
+    const t = await failWorld6(null, false);
+    const tm = TRACE6.length;
+    await t.S.handle(t.wa, { type: 'squad', op: 'kick', i: 2 });
+    const twin = seq6(tm, [t.wn, t.wc]);
+    if (same6(s3, OFF6('s3')) && mine.length === 2 && same6(mine, twin)
+      && same6(s4, OK6('s4')) && g.seated.length === 1 && same6(g.seated[0].map((w) => [g.wa, g.wc].indexOf(w)), [0, 1]))
+      ok('(sg-i) once the store answers, the refused Start\'s re-run finds the block and removes the row exactly as a kick; the pair is never seated');
+    else fail('(sg-i) re-run finds a block: ' + JSON.stringify({ s3, mine, twin, s4, seated: g.seated.map((l) => l.length) }));
+  }
+  {
+    // (iii) NO BLOCK: the refused Start's re-run reads once and lets B in —
+    // the row is B's, by name, on every roster — and the next Start seats
+    // all three.
+    const g = await failWorld6(null);
+    g.st.boom.delete('blockIdsOf');
+    const s1 = await start6(g, 's1');
+    await settle6();
+    const reads = reads6(g.st);
+    const after = last6(g.wc, 'squad', 'state');
+    const s2 = await start6(g, 's2');
+    if (same6(s1, OFF6('s1')) && reads === 1 && after && same6(ids6(after), [A, C, B]) && after.members[2].callsign === 'Bunker Nine'
+      && same6(s2, OK6('s2')) && g.seated.length === 1 && g.seated[0].length === 3)
+      ok('(sg-i) with no block the refused Start\'s re-run lets the account in: adopted, named, and the next Start seats everyone');
+    else fail('(sg-i) re-run admits: ' + JSON.stringify({ s1, reads, after: after && after.members, s2, seated: g.seated.map((l) => l.length) }));
+  }
+  {
+    // (iii, b) The socket is then B as a hello's door leaves it: B's next
+    // hello, while the store fails, reads nothing and bars nothing.
+    const g = await failWorld6(null);
+    g.st.boom.delete('blockIdsOf');
+    await start6(g, 's1');
+    await settle6();
+    g.st.calls.length = 0;
+    g.st.boom.add('blockIdsOf');
+    hello6(g.S, g.wn, B);
+    await settle6();
+    g.st.boom.delete('blockIdsOf');
+    const reads = reads6(g.st);
+    const s2 = await start6(g, 's2');
+    if (reads === 0 && same6(s2, OK6('s2')) && g.seated.length === 1 && g.seated[0].length === 3)
+      ok('(sg-i) a row the re-run let in is not read again on the account\'s next hello, and a store fault then bars nothing');
+    else fail('(sg-i) re-hello after the re-run: ' + JSON.stringify({ reads, s2, n: got6(g.wn, 'squad') }));
+  }
+  {
+    // (iii, c) B's next hello runs the door again too: the store answering,
+    // it lets B in, and Start seats all three.
+    const g = await failWorld6(null);
+    g.st.boom.delete('blockIdsOf');
+    hello6(g.S, g.wn, B);
+    await settle6();
+    const reads = reads6(g.st);
+    const s1 = await start6(g, 's1');
+    if (reads === 1 && same6(s1, OK6('s1')) && g.seated.length === 1 && g.seated[0].length === 3)
+      ok('(sg-i) the account\'s next hello re-runs a failed door too, and once it lets the account in Start seats the row');
+    else fail('(sg-i) hello re-runs the failed door: ' + JSON.stringify({ reads, s1, seated: g.seated.map((l) => l.length) }));
+  }
+  {
+    // (iv) ONE READ PER ROW. While a refused Start's re-run is out, a second
+    // refused Start starts no second read; the one read lets B in.
+    const g = await failWorld6(null);
+    g.st.boom.delete('blockIdsOf');
+    const h = g.st.hold('blockIdsOf');
+    const s1 = await start6(g, 's1');
+    const inside = await within6(h.inside);
+    const s2 = await start6(g, 's2');
+    const during = reads6(g.st);
+    h.release();
+    await settle6();
+    const s3 = await start6(g, 's3');
+    if (inside && same6(s1, OFF6('s1')) && same6(s2, OFF6('s2')) && during === 1 && reads6(g.st) === 1 && same6(s3, OK6('s3')))
+      ok('(sg-i) two Starts refused while a re-run is out start one read between them');
+    else fail('(sg-i) two refused Starts: ' + JSON.stringify({ inside, s1, s2, during, reads: reads6(g.st), s3 }));
+  }
+  {
+    // (v) A RE-RUN THAT FAILS IS CONTAINED. (a) B's door fails WITHOUT a
+    // throw — its read and re-read each lose their log entries, as in
+    // (sg-e ii) — and then the store fails: each refused Start's re-run
+    // throws in its read, the row stays out of Start, and no rejection is
+    // left unhandled. (b) The re-run finds A's block while the roster's name
+    // read fails: the row still goes, as a kick.
+    const a = await failWorld6(null, false);
+    const o = outs6(a.S);
+    const h = stale6(a.st, 'blockIdsOf');
+    hello6(a.S, a.wn, B);
+    let inside = await within6(h.inside), again = null;
+    if (inside) { await blk6(a.S, o.e, B); await age6(a.S, o.n, B); again = staleFor6(a.st, 'blockIdsOf', B); } else h.restore();
+    h.release();
+    if (again) {
+      inside = await within6(again.inside);
+      if (inside) { await blk6(a.S, o.e, B); await age6(a.S, o.n, B); } else again.restore();
+      again.release();
+    }
+    await settle6();
+    a.st.boom.add('blockIdsOf');
+    a.st.calls.length = 0;
+    const stray = [];
+    const onStray = (e) => stray.push(String((e && e.message) || e));
+    process.on('unhandledRejection', onStray);
+    const a1 = await start6(a, 's1');
+    await settle6();
+    const a2 = await start6(a, 's2');
+    await settle6();
+    process.off('unhandledRejection', onStray);
+    a.st.boom.delete('blockIdsOf');
+    if (inside && !stray.length && same6(a1, OFF6('s1')) && same6(a2, OFF6('s2')) && reads6(a.st) === 2 && !a.seated.length && !got6(a.wn, 'squad', 'ended').length)
+      ok('(sg-i) a re-run whose read throws is contained: the row stays out of Start and nothing is left unhandled');
+    else fail('(sg-i) re-run read throws: ' + JSON.stringify({ inside, stray, a1, a2, reads: reads6(a.st), seated: a.seated.length }));
+    const b = await failWorld6([A, B]);
+    b.st.boom.delete('blockIdsOf');
+    b.st.boom.add('profilesByIds');
+    const b1 = await start6(b, 's1');
+    await settle6();
+    b.st.boom.delete('profilesByIds');
+    const xb = ids6(await roster6(b, 'r'));
+    if (same6(b1, OFF6('s1')) && same6(got6(b.wn, 'squad'), [KICKED6]) && same6(xb, [A, C]))
+      ok('(sg-i) a re-run that finds a block while the roster\'s name read fails still removes the row as a kick');
+    else fail('(sg-i) re-run, names unread: ' + JSON.stringify({ b1, n: got6(b.wn, 'squad'), xb }));
+  }
+  {
+    // (vi) THE RE-RUN CANCELS ON IDENTITY, as the door does. A has blocked B;
+    // the socket signs out while the re-run's read is out. Nothing is removed
+    // or claimed. The socket is nobody now, so no account's failed door holds
+    // its row out of Start (a guest row, as any socket with no account).
+    const g = await failWorld6([A, B]);
+    g.st.boom.delete('blockIdsOf');
+    const h = stale6(g.st, 'blockIdsOf');
+    const s1 = await start6(g, 's1');
+    const inside = await within6(h.inside);
+    if (inside) { g.wn.authGen += 1; g.S.onClose(g.wn); g.wn.userId = null; g.wn.isGuest = false; } else h.restore();   // server.js's sign-out
+    h.release();
+    await settle6();
+    const x = await roster6(g, 'r');
+    if (inside && same6(s1, OFF6('s1')) && !got6(g.wn, 'squad', 'ended').length && same6(ids6(x), [A, C, null]) && !shows6(g.wa, B) && !shows6(g.wc, B))
+      ok('(sg-i) a re-run whose socket signs out during its read removes and claims nothing');
+    else fail('(sg-i) signed out during the re-run: ' + JSON.stringify({ inside, s1, n: got6(g.wn, 'squad'), x }));
+    const s2 = await start6(g, 's2');
+    if (same6(s2, OK6('s2')) && g.seated.length === 1 && g.seated[0].includes(g.wn))
+      ok('(sg-i) and a socket signed out of the account is not held out of Start by that account\'s failed door');
+    else fail('(sg-i) signed-out row at Start: ' + JSON.stringify({ s2, seated: g.seated.map((l) => l.length) }));
+  }
+  {
+    // (vii) ONLY A DOOR-FAILED ROW IS RE-RUN. B's door failed and then the
+    // socket closed: the row is dropped, Start refuses it as offline, and
+    // runs no door for it.
+    const g = await failWorld6(null);
+    g.st.boom.delete('blockIdsOf');
+    g.wn.readyState = 3; g.S.onClose(g.wn);
+    await settle6();
+    g.st.calls.length = 0;
+    const s1 = await start6(g, 's1');
+    await settle6();
+    if (same6(s1, OFF6('s1')) && reads6(g.st) === 0)
+      ok('(sg-i) a Start refused at a door-failed row that has dropped runs no door for it');
+    else fail('(sg-i) dropped door-failed row: ' + JSON.stringify({ s1, reads: reads6(g.st) }));
+  }
+
   // ---- (end of task 6 checks) ----
   if (prevPushMs === undefined) delete process.env.SOCIAL_PUSH_MS; else process.env.SOCIAL_PUSH_MS = prevPushMs;
   if (prevPresenceMs === undefined) delete process.env.SOCIAL_PRESENCE_MS; else process.env.SOCIAL_PRESENCE_MS = prevPresenceMs;

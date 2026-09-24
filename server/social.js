@@ -1419,9 +1419,13 @@ export function createSocial({
     //
     // A ROW THE SIGN-IN DOOR IS STILL READING FOR is not there yet either
     // (D-BLOCK-3 F): its account's blocks are unread, and seating it could
-    // seat a blocked pair together.
-    const off = sq.members.findIndex((m) => !(m.ws && m.ws.readyState === 1 && m.dropAt == null) || doorOut.has(m));
-    if (off >= 0) return squadReply(ws, msg, 'start', { error: 'member_offline', at: off });
+    // seat a blocked pair together. Nor is one whose read FAILED (H
+    // amended), and refusing it runs its door again (reopenDoor).
+    const off = sq.members.findIndex((m) => !(m.ws && m.ws.readyState === 1 && m.dropAt == null) || doorOut.has(m) || doorShut(m));
+    if (off >= 0) {
+      reopenDoor(sq.members[off]);
+      return squadReply(ws, msg, 'start', { error: 'member_offline', at: off });
+    }
     if (!sq.members.every((m) => (m === lead && sent) || m.ready === true)) return no('not_ready');
     // THE LAST GATE ON THE RACKS. Arming a mode stands down every member
     // whose rack it would not keep (squadMode, above), but this is the last
@@ -1714,21 +1718,37 @@ export function createSocial({
   // The teardown and join still count the socket as the account (rowsOf),
   // so a block landing later still separates them.
   //
+  // AND THE ROW STAYS OUT OF START (H amended): the engine seats the
+  // socket, which is the account. doorFailed holds it until a door lets the
+  // account in or removes the row; a socket that is no longer that account
+  // is not held for it. Each Start refused at it runs its door again
+  // (reopenDoor), and so does the account's next hello. No timer, no loop.
+  //
   // Called from onAuth, which learns synchronously whether the door took the
-  // row (and must not claim it). The read is never awaited there, so
-  // everything is caught here: nothing is left to reject unhandled.
+  // row (and must not claim it), and from squadStart. The read is never
+  // awaited there, so everything is caught here: nothing is left to reject
+  // unhandled.
   const doorOut = new Map();            // row -> the door reading for it now
+  const doorFailed = new WeakMap();     // row -> the account its door failed for
+  const doorShut = (m) => !!m.ws && doorFailed.get(m) === wireId(m.ws.userId);
+  function openDoor(ws, id, row) {
+    const mark = {};
+    doorOut.set(row, mark);
+    doorCheck(ws, id, row, mark);
+  }
   function signInDoor(ws) {
     try {
       const key = squads.keyOfSocket(ws);
       const id = wireId(ws.userId);
       const held = key == null || !isUuid(id) ? null : squads.memberOf(key);
       if (!held) return false;
-      const mark = {};
-      doorOut.set(held.member, mark);
-      doorCheck(ws, id, held.member, mark);
+      openDoor(ws, id, held.member);
       return true;
     } catch { return false; }
+  }
+  // One read per row: never while a door holds it.
+  function reopenDoor(row) {
+    if (doorShut(row) && !doorOut.has(row)) openDoor(row.ws, doorFailed.get(row), row);
   }
   async function doorCheck(ws, id, row, mark) {
     try {
@@ -1738,9 +1758,15 @@ export function createSocial({
       const found = squads.memberOf(row.key);
       if (!found || found.member !== row) return;
       doorOut.delete(row);
-      if (!b) { if (ws.squadAs === id) ws.squadAs = null; return; }
+      if (!b) { if (ws.squadAs === id) ws.squadAs = null; doorFailed.set(row, id); return; }
       // Every row, the account's own included: no account can block itself.
-      if (!anyRowOf(found.squad, new Set([...b.blocked, ...b.blockedBy]))) { claimOnSignIn(ws, row.key); return; }
+      // Let in: the socket is the account as far as the next hello goes.
+      if (!anyRowOf(found.squad, new Set([...b.blocked, ...b.blockedBy]))) {
+        doorFailed.delete(row);
+        ws.squadAs = id;
+        claimOnSignIn(ws, row.key);
+        return;
+      }
       const was = row.ws;
       squads.removeMember(found.squad.code, row.key);
       safeSend(was, { type: 'squad', op: 'ended', reason: 'kicked' });
