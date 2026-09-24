@@ -19,7 +19,7 @@ import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import {
   rooms, send, handleClientMessage, handleClose, resolveSeatHandle, setCodeTaken,
-  MODE_SEATS, TEE_IDS, validRackFor,
+  MODE_SEATS, TEE_IDS, validRackFor, abandonRoom,
 
   setPushNudge, setAuthSink, setPushSubSink, setFaultSink, setCapacitySink, setMatchSink,
 } from './public/room-engine.js';
@@ -89,6 +89,127 @@ const SB_URL = process.env.SUPABASE_URL || '';
 const SB_PUB = process.env.SUPABASE_PUBLISHABLE_KEY || '';
 const SB_SECRET = process.env.SUPABASE_SECRET_KEY || '';
 
+// ---- Seating a squad (plan R2, R5, R6) ----------------------------------------
+// THE OTHER PLACE THE TWO HALVES MEET, beside resolveSeatHandle below. The
+// leader's Start is answered by the social layer, which may not import
+// public/room-engine.js — the offline page imports it and must gain no
+// database (ADR-001) — so it cannot seat anybody. This file holds both halves,
+// does the seating, and is injected into createSocial as `seatSquad`.
+//
+// HOW IT SEATS WITHOUT WIDENING THE ENGINE. It sends the engine the frames an
+// ordinary client sends: `create` for the leader, then `join` for each member,
+// through handleClientMessage, which is already the whole inbound surface. The
+// create path is module-private and the join path is not a function at all,
+// only the body of a switch arm, so this is the one route the engine offers —
+// and taking it means every seat goes through the same sanitizers, rack check,
+// seat limits and auto-start as every ordinary player's, with no second entry
+// point into room state to keep in step. `case 'create'` leaves the new code on
+// the host socket and `case 'join'` on each member's, so the answers come back
+// on the sockets themselves. The one thing no frame can do is abandon a
+// half-built room quietly, and abandonRoom is the only export this adds.
+//
+//   seats: [{ ws, name, skin, loadout }] — INDEX 0 IS THE LEADER; the rest are
+//          seated in the order given. R5 makes the order load-bearing: the
+//          engine auto-starts, so the match begins as the last entry lands.
+//   opts:  { mode, tees, squad } — the armed mode, a golf tee set, and the
+//          squad code the room is marked with.
+//
+// Returns { ok: true, code } or { ok: false, error, at }, `at` the index in
+// `seats` that failed. NEVER THROWS, and on a failure no room it built is left
+// standing, so the caller's only job is to answer the squad.
+function seatSquad(seats, opts = {}) {
+  const list = Array.isArray(seats) ? seats : [];
+  const sockets = list.map((s) => s && s.ws);
+  let code = null;
+  try {
+    if (!list.length) return { ok: false, error: 'refused', at: 0 };
+    for (let i = 0; i < list.length; i++) if (seatBusy(list[i].ws)) return { ok: false, error: 'member_busy', at: i };
+    // OUT OF THE QUICK-MATCH QUEUE, every seat, through the engine's own
+    // `cancelQuick`. `join` does not clear the one-socket queue, so a member
+    // seated while still queued would be paired with the next quick seeker a
+    // moment later — and pairing is a create, which takes them straight back
+    // out of the squad's match.
+    for (const ws of sockets) handleClientMessage(ws, { type: 'cancelQuick' });
+    const leader = list[0];
+    // THE ROOM IS SIZED TO THE SQUAD, never to the seat count the leader
+    // advertised (design 4.3: `max = members.length` for ffa and golf; every
+    // other mode has one seat count). That is what makes R5 trustworthy: the
+    // last member's join is the seat that fills the room, so the auto-start
+    // and the end of this loop are the same instant, and no seat is left open
+    // for a stranger holding the code.
+    const max = opts.mode === 'ffa' || opts.mode === 'golf' ? list.length : undefined;
+    handleClientMessage(leader.ws, {
+      type: 'create', name: leader.name, skin: leader.skin,
+      mode: opts.mode, max, tees: opts.tees, loadout: leader.loadout,
+    });
+    // `case 'create'` answers a refusal (MAX_ROOMS) to the socket itself and
+    // returns nothing, so the only honest test is whether the leader now holds
+    // seat 0 of a room.
+    const room = leader.ws.roomCode ? rooms.get(leader.ws.roomCode) : null;
+    if (!room || !room.players[0] || room.players[0].ws !== leader.ws) return { ok: false, error: 'capacity', at: 0 };
+    code = room.code;
+    // MARKED BEFORE ANY MEMBER IS SEATED (design 4.3: "the room is marked
+    // squad: code"). abandonRoom tears down only a marked room, so an
+    // unmarked one here could not be cleaned up after a refusal below.
+    room.squad = opts.squad;
+    for (let i = 1; i < list.length; i++) {
+      const m = list[i];
+      handleClientMessage(m.ws, { type: 'join', code, name: m.name, skin: m.skin, loadout: m.loadout });
+      // `case 'join'` also answers a refusal to the joiner and returns
+      // nothing, so again: is the seat really theirs? Read through m.ws.seat,
+      // which compactRoster keeps true even when this join started a duel.
+      const p = rooms.get(code) === room ? room.players[m.ws.seat] : null;
+      if (m.ws.roomCode !== code || !p || p.ws !== m.ws) {
+        // R6: a half-seated room is one some of the squad is standing in and
+        // the rest cannot reach. It goes, and the caller answers everybody.
+        abandonRoom(code, sockets);
+        return { ok: false, error: 'refused', at: i };
+      }
+    }
+    // THE MATCH BEGINS AS THE LAST MEMBER LANDS (R5) — in every mode. A duel
+    // starts on its second seat and a room sized to the squad starts when it
+    // fills, but a raid (boss, aliens) is always seated at two, and a squad of
+    // one leaves it a seat short: the engine would hold the leader in a lobby
+    // with an open seat. The host's own `startMatch` is how a lone commander
+    // starts one everywhere else (Play solo sends exactly this), so the
+    // leader's socket sends it, through the engine's own host and minimum
+    // checks. A room still waiting after that is not a started squad, and is
+    // abandoned like any other failure rather than reported as one.
+    if (room.state === 'waiting') handleClientMessage(leader.ws, { type: 'startMatch' });
+    if (rooms.get(code) !== room || room.state === 'waiting') {
+      abandonRoom(code, sockets);
+      return { ok: false, error: 'refused', at: 0 };
+    }
+    return { ok: true, code };
+  } catch (err) {
+    // An engine throw on a synthesised frame would also throw for an ordinary
+    // client, and the socket handler below catches those. This is the same net
+    // for the one caller that is not a socket: report it, take down whatever
+    // was half built, and refuse honestly.
+    reportServerError('seatSquad', err);
+    if (code) abandonRoom(code, sockets);
+    return { ok: false, error: 'refused', at: -1 };
+  }
+}
+
+// IN A GAME ALREADY? The engine treats a socket that creates or joins a room as
+// LEAVING the one it holds (releasePriorRoom), which is right when a player
+// chooses it and wrong when a squad Start chooses it for them: mid-match their
+// tank is scuttled once the grace runs out and the ledger records the loss,
+// and in a lobby somebody else is in, that player's lobby is destroyed (they
+// are sent 'Opponent left') or loses a seat. So a seat whose socket holds a
+// place in a match in progress, or in a lobby with any other player in it, is
+// 'member_busy' and nothing is touched. A lobby they sit in alone is theirs to
+// lose and goes quietly (the lone-host teardown); a room whose match is over
+// holds nothing to protect.
+function seatBusy(ws) {
+  const r = ws.roomCode ? rooms.get(ws.roomCode) : null;
+  const p = r ? r.players[ws.seat] : null;
+  if (!p || p.ws !== ws) return false;
+  if (r.state === 'playing') return true;
+  return r.state === 'waiting' && r.players.some((q) => q && q !== p && q.connected);
+}
+
 // ---- The social layer (design 4.1, 4.2, 4.5) --------------------------------
 // Built ONCE at module load, beside the other sinks. It owns no sockets: this
 // file hands it frames and tells it when a socket authenticates or closes.
@@ -135,6 +256,10 @@ try {
       // engine still knows nothing about squads. Each defaults to failing
       // closed in createSocial, so leaving one out refuses, never over-promises.
       seats: MODE_SEATS, teeIds: TEE_IDS, validRack: validRackFor,
+      // AND THE SEATING ITSELF (plan R2): a squad start is answered by the
+      // social layer, but only this file holds the engine that can seat it.
+      // See seatSquad above.
+      seatSquad,
     });
     // ONE CODE NAMESPACE (plan R4). makeCode has always collided against
     // `rooms` alone, so a squad code drawn from the same 31-character

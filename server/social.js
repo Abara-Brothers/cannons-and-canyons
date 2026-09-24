@@ -213,6 +213,14 @@ const BLOCK_KEY_RE = /^[0-9a-f]{32}$/;
 // no rack is accepted. A host that forgets to wire them gets refusals, never
 // a squad told it fits a room it does not.
 //
+// seatSquad(seats, opts) -> { ok, code } | { ok: false, error } — server.js's
+// seating of a whole squad into one room (plan R2), injected for the same
+// reason as the rest: creating a room and seating players is the engine's, and
+// this module may not import it. The default refuses, 'unavailable', like
+// resolveHandle's resolves nothing: every host that does not wire one (every
+// suite that builds this layer without it) gets an honest refusal, never a
+// start that quietly seated nobody.
+//
 // THIS LIST ACCUMULATES (plan X2). A later task adds its option after these;
 // it never restates the line.
 export function createSocial({
@@ -220,6 +228,7 @@ export function createSocial({
   resolveHandle = () => null,
   roomExists = () => false,
   seats = {}, teeIds = [], validRack = () => false,
+  seatSquad = () => ({ ok: false, error: 'unavailable' }),
 }) {
 
   // userId -> that account's live sockets. "Online" is "the set is non-empty".
@@ -1144,12 +1153,100 @@ export function createSocial({
     squadReply(ws, msg, 'mode', { ok: true });
   }
 
+  // design 4.3, row 'start': THE LEADER SEATS THE WHOLE SQUAD IN ONE ROOM.
+  // Every gate below is checked before anything is seated, and a refusal
+  // changes nothing — no room, no ready flag, no rack — save the one gate that
+  // finds a Ready the room would not honour, which stands that member down so
+  // the box shows the squad the reason.
+  //
+  // LEADER ONLY, THROUGH ledSquad, and no sign-in gate of its own: mode's
+  // rule, and for mode's reason (a guest can never lead, so a guest member is
+  // not_leader). ledSquad is the ONLY leadership check on this path; nothing
+  // here re-derives it. A second device of the leader passes it, as it does
+  // for kick and mode, and starts the squad the rows hold — the leader's seat
+  // goes to the socket on the leader's ROW, because the squad seats the
+  // sockets it knows, and the row is the one every member's box is showing.
+  //
+  // THE RATE BUCKET IS NOT SPENT HERE; handleSquad has already charged it.
+  async function squadStart(ws, msg) {
+    const no = (error) => squadReply(ws, msg, 'start', { error });
+    if (!squadOf(ws)) return no('no_squad');
+    const sq = ledSquad(ws);
+    if (!sq) return no('not_leader');
+    const lead = sq.members.find((m) => m.key === sq.leader);
+    // THE LEADER'S RACK MAY RIDE ON THE START FRAME (the Squad box's Start
+    // carries the leader's picks rather than asking for a Ready). It is judged by
+    // the same predicate the ready op uses — the engine's validRackFor for the
+    // ARMED mode — and a frame that carries one that is not a rack is refused
+    // no_rack, never quietly ignored. It stands in for the leader's Ready for
+    // THIS start only and is not stored: a refused start changes nothing, and a
+    // seated one clears every rack anyway.
+    const sent = msg.loadout != null;
+    if (sent && !validRack(sq.mode, msg.loadout)) return no('no_rack');
+    const rackOf = (m) => (m === lead && sent ? msg.loadout : m.loadout);
+    // THE SAME `fits` THE BOX AND THE BOARDS ARE SHOWING: fitsFor over the
+    // engine's own seat table, minimum AND maximum (plan X6). A squad of one
+    // does not start a duel; three do not start one either.
+    if (!fitsFor(sq.members.length)[sq.mode]) return no('wont_fit');
+    if (!sq.members.every((m) => (m === lead && sent) || m.ready === true)) return no('not_ready');
+    // THE LAST GATE ON THE RACKS. Arming a mode stands down every member
+    // whose rack it would not keep (squadMode, above), but this is the last
+    // line before a room is built and it does not trust that that happened: a
+    // rack the room would not keep sends that seat to the pick screen, and the
+    // squad's match with it. Such a member is not ready by the rule ready
+    // itself states, so they are stood down HERE, the squad is shown it, and
+    // the start is refused for the reason the box can now see.
+    const stale = sq.members.filter((m) => !validRack(sq.mode, rackOf(m)));
+    if (stale.length) {
+      for (const m of stale) squads.setReady(m.key, false, null);
+      await pushSquad(sq, ws, null);
+      return no('not_ready');
+    }
+    // A LIVE SOCKET FOR EVERY MEMBER. The engine's join does not look at a
+    // socket's state, so a closed one would be SEATED: a ghost seat, marked
+    // connected, that the match would one day hand the turn to. Nothing is
+    // seated unless every seat has somebody on it.
+    if (!sq.members.every((m) => m.ws && m.ws.readyState === 1 && m.dropAt == null)) return no('member_offline');
+    // R5: THE ORDER IS THE ORDER THE ROOM FILLS IN. The leader first, because
+    // the create makes them the host seat; everyone else in roster order, and
+    // the match begins as the last one lands. Each seat is handed a COPY of
+    // its rack, like every rack this layer passes on.
+    const ordered = [lead, ...sq.members.filter((m) => m !== lead)];
+    const seated = seatSquad(
+      ordered.map((m) => ({ ws: m.ws, name: m.name, skin: m.skin, loadout: rackOf(m).slice() })),
+      { mode: sq.mode, tees: sq.tees, squad: sq.code },
+    );
+    if (!(seated && seated.ok === true && typeof seated.code === 'string')) {
+      // R6: EVERY MEMBER IS TOLD, not only the one who asked: a member seated
+      // before the failure was shown a lobby that no longer exists, and this is
+      // what tells them why. Nothing was started, so every Ready stands and the
+      // squad can simply try again. pushSquad's order: everyone else first,
+      // then the caller its roster, and the caller's own answer LAST, because
+      // it is the one send here that can throw.
+      const error = (seated && typeof seated.error === 'string' && seated.error) || 'unavailable';
+      const bad = { type: 'squad', op: 'start', error };
+      for (const m of sq.members) if (m.ws && m.ws !== ws) safeSend(m.ws, bad);
+      await pushSquad(sq, ws, null);
+      return no(error);
+    }
+    // SEATED. The Readies are spent (design 4.3: they reset when the room is
+    // created), and the racks with them — clearReady's order, AFTER the seats
+    // took their copies. Every member already has the engine's own frames for
+    // the room; this tells their box which room, and then what it now holds.
+    squads.clearReady(sq.code);
+    const done = { type: 'squad', op: 'start', ok: true, code: seated.code };
+    for (const m of sq.members) if (m.ws && m.ws !== ws) safeSend(m.ws, done);
+    await pushSquad(sq, ws, null);
+    squadReply(ws, msg, 'start', { ok: true, code: seated.code });
+  }
+
   SQUAD_OPS.create = squadCreate;
   SQUAD_OPS.join = squadJoin;
   SQUAD_OPS.leave = squadLeave;
   SQUAD_OPS.kick = squadKick;
   SQUAD_OPS.ready = squadReady;
   SQUAD_OPS.mode = squadMode;
+  SQUAD_OPS.start = squadStart;
 
   const skinOf = (row) => (row && typeof row.skin === 'string' && SKIN_IDS.has(row.skin) ? row.skin : null);
 
