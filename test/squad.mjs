@@ -3207,7 +3207,14 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     else fail('(d10) the close hook: ' + JSON.stringify({ threw: fromClose && fromClose.message, throws, socialUser: wt.socialUser, online: S.online.has(THIRD) }));
     // AND THE LAYER IS STILL ALIVE: one fault is one lost sweep, not a
     // wedged window. The next drop arms and fires normally, and its sweep
-    // catches up with the member the faulted one missed.
+    // catches up with the member the faulted SWEEP missed (MEM).
+    //
+    // WHAT IT DOES NOT RECOVER, asserted rather than left out: the close hook
+    // threw BEFORE markDropped, so THIRD's row holds a closed socket with no
+    // dropAt, and no sweep will ever remove it — the window is keyed by
+    // dropAt. It is a stranded row, not a live seat: it reads offline and not
+    // dropped, Start refuses it member_offline by its socket's state, and the
+    // leader can kick it.
     boom = false;
     const wf = up5(S, mkws5(FOURTH));
     await S.handle(wf, { type: 'squad', op: 'join', code });
@@ -3218,9 +3225,18 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     cw.fire();
     await flush5();
     const f = last5(wl, 'state');
-    if (f && !f.members.some((r) => r.id === FOURTH || r.id === MEM))
+    if (f && same(ids5(f), [LEAD, THIRD]))
       ok('(d10) and the next window still runs, catching up with the member the faulted sweep missed');
     else fail('(d10) the layer did not recover: ' + JSON.stringify(ids5(f)));
+    const stranded = f && f.members[1];
+    await S.handle(wl, { type: 'squad', op: 'start', loadout: RACK5, id: 's' });
+    const refused = wl.rx.find((x) => x.id === 's');
+    await S.handle(wl, { type: 'squad', op: 'kick', id: THIRD });
+    const cleared = last5(wl, 'state');
+    if (stranded && stranded.online === false && stranded.dropped === false
+      && same(refused, { type: 'squad', op: 'start', error: 'member_offline', at: 1, id: 's' }) && cleared && same(ids5(cleared), [LEAD]))
+      ok('(d10) the row whose close hook threw is stranded, not swept — offline, refused member_offline at Start, and the leader can kick it');
+    else fail('(d10) stranded row: ' + JSON.stringify({ stranded, refused, cleared: ids5(cleared) }));
   }
 
   // ---- (d10b) THE DEFAULT SCHEDULER: a real timer, and still contained -----
@@ -3282,7 +3298,11 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     const t0 = Date.now();
     const r = spawnSync(process.execPath, ['--input-type=module', '-e', src], { encoding: 'utf8', timeout: 20000, env });
     const took = Date.now() - t0;
-    if (r.status === 0 && !r.signal && r.stdout.trim() === 'armed' && !r.stderr && took < 20000)
+    // What matters is the EXIT: on its own, whole, promptly. Not a pristine
+    // stderr — NODE_OPTIONS or a Node warning is the environment's to print,
+    // and a check on it would fail the push gate for nothing this tests.
+    const said = (r.stdout || '').trim().split('\n').pop();
+    if (r.status === 0 && !r.signal && said === 'armed' && took < 20000)
       ok(`(d10c) with a sixty-second window pending, a process that is done exits on its own (${took < 5000 ? 'promptly' : took + ' ms'})`);
     else fail('(d10c) the window held the process open: ' + JSON.stringify({ status: r.status, signal: r.signal, took, out: r.stdout, err: (r.stderr || '').slice(0, 300) }));
   }

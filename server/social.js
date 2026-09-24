@@ -1003,11 +1003,7 @@ export function createSocial({
   // squad has; `elsewhere` because the account's has not, necessarily.
   const endedElsewhere = (w) => safeSend(w, { type: 'squad', op: 'ended', reason: 'elsewhere' });
   // The socket on the row `key` holds now, or null.
-  const rowSocketOf = (key) => {
-    const sq = squads.ofUser(key);
-    const m = sq ? sq.members.find((x) => x.key === key) : null;
-    return m ? m.ws : null;
-  };
+  const rowSocketOf = (key) => { const f = squads.memberOf(key); return f ? f.member.ws : null; };
   // Read BEFORE an op that may remove or move rows: every [key, socket] for a
   // row under `keys` held by a socket other than the caller's. AFTER it,
   // tellMoved tells each of those sockets whose row is no longer on it — and
@@ -1134,12 +1130,7 @@ export function createSocial({
   // so it is the row this socket holds — a guest who has since signed in
   // still holds, and acts on, its guest row — and only for a socket holding
   // none, its account's row (a second device of a member).
-  const squadOf = (ws) => {
-    const key = squadKey(ws);
-    const squad = squads.ofUser(key);
-    const member = squad ? squad.members.find((m) => m.key === key) : null;
-    return member ? { squad, member } : null;
-  };
+  const squadOf = (ws) => squads.memberOf(squadKey(ws));
 
   // design 4.3, row 'ready'. NO SIGN-IN GATE (R3): membership is the gate. D5
   // lets a guest join by code and design 7 lets a guest be seated, so a guest
@@ -1572,13 +1563,13 @@ export function createSocial({
   async function squadResume(ws, msg) {
     const own = squads.keyOfSocket(ws);
     const key = own != null ? own : identityKey(ws);
-    const sq = squads.ofUser(key);
-    if (!sq) return squadReply(ws, msg, 'gone', {});
+    const found = squads.memberOf(key);
+    if (!found) return squadReply(ws, msg, 'gone', {});
+    const { squad: sq, member: m } = found;
     let back = false;
     if (own == null) {
-      const m = sq.members.find((x) => x.key === key);
-      const held = m && m.ws && m.ws.readyState === 1;
-      if (m && (!held || codeOf(msg.code) === sq.code)) {
+      const held = m.ws && m.ws.readyState === 1;
+      if (!held || codeOf(msg.code) === sq.code) {
         const was = m.ws, dropped = m.dropAt !== null;
         // markResumed is by account only and never gives a socket a second
         // row; `own == null` has already established this socket holds none.
@@ -1601,7 +1592,7 @@ export function createSocial({
     // answer, because the re-attach has already happened. From the same
     // snapshot: one name read for the whole resume. Everyone else first; the
     // answer, the one send here that can throw, last (pushSquad's order).
-    if (back && live) for (const m of sq.members) if (m.ws && m.ws !== ws) safeSend(m.ws, { ...frame, you: youIn(sq, m.ws) });
+    if (back && live) for (const x of sq.members) if (x.ws && x.ws !== ws) safeSend(x.ws, { ...frame, you: youIn(sq, x.ws) });
     if (ws.authGen !== gen) return;
     // NO ROW OF THIS SQUAD IS THIS SOCKET'S ANY MORE — kicked, or the squad
     // ended, while the names were read. The roster it has just been removed
