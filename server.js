@@ -18,7 +18,7 @@ import http2 from 'node:http2';
 import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import {
-  rooms, send, handleClientMessage, handleClose, resolveSeatHandle,
+  rooms, send, handleClientMessage, handleClose, resolveSeatHandle, setCodeTaken,
 
   setPushNudge, setAuthSink, setPushSubSink, setFaultSink, setCapacitySink, setMatchSink,
 } from './public/room-engine.js';
@@ -117,7 +117,31 @@ try {
     // socket's own room, and only to answer a report or a block. Neither module
     // gains the other's dependencies: the engine stays browser-safe for the
     // offline page, and the social layer still knows nothing about rooms.
-    social = createSocial({ store, terms, send, now: Date.now, resolveHandle: resolveSeatHandle });
+    social = createSocial({
+      store, terms, send, now: Date.now,
+      resolveHandle: resolveSeatHandle,
+      // THE OTHER HALF OF THE SAME SEAM. resolveSeatHandle lets the social
+      // layer ask "who is on this seat"; this lets it ask "is this string a
+      // live room". Both are injected rather than imported for the one rule
+      // that governs this file: nothing under server/ may pull in the engine,
+      // because the OFFLINE page imports it (ADR-001). server.js holds both
+      // and joins them, here and nowhere else.
+      roomExists: (code) => rooms.has(code),
+    });
+    // ONE CODE NAMESPACE (plan R4). makeCode has always collided against
+    // `rooms` alone, so a squad code drawn from the same 31-character
+    // alphabet could equal a live room code and the Bay's single "Enter a
+    // code" field would have two honest answers and no way to choose. The
+    // predicate crosses the same seam in the other direction: the engine asks
+    // the squad container. The squad minter, when there is one, must ask
+    // `rooms` in turn, and roomExists above is the only route from server/ to
+    // it.
+    //
+    // WIRED INSIDE THE BLOCK THAT BUILT THE LAYER, so a deploy with no
+    // Supabase — where `social` is never built and there are no squads at all
+    // — leaves the engine's `() => false` default in place and makeCode
+    // behaves exactly as it does today (plan R14).
+    setCodeTaken(social.hasSquad);
 
   }
 } catch (err) {

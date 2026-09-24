@@ -187,6 +187,13 @@ run social_store node test/social_store.mjs
 # a raw uuid cannot take the handle's door, the resolution order, and that the
 # handle never reaches the [report] log line. Headless — no server, no Supabase.
 run seat_handle node test/seat_handle.mjs
+# ONE CODE NAMESPACE, and the two frame types squads reach the server through.
+# Drives the REAL room engine (real makeCode, real `rooms` Map, real create
+# path) and the REAL social layer in one process, wired exactly as server.js
+# wires them, so a squad code and a room code cannot name the same thing and a
+# squad frame is answered rather than dropped. Headless — no server, no
+# Chrome, no Supabase.
+run squad node test/squad.mjs
 
   # The OAuth redirect contract: provider, return URL, and the anti-login-CSRF
   # guard on BOTH carriers. Headless — cloud.js is evaluated against stubs.

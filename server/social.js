@@ -29,6 +29,12 @@ import { isUuid, reportCallsign } from './store.js';
 // each proof — and the two reviews and three decisions behind them — travelled
 // with them; this layer's behaviour is unchanged.
 import { createNameProofs } from './display-name.js';
+// THE SQUAD STATE MACHINE. Built and held HERE rather than in server.js (plan
+// R1): every squad op needs the per-socket queue, the rate buckets, `reply`,
+// presence and the block reads, and all five are trapped inside
+// createSocial's closure. Importing the factory rather than widening that
+// closure is the same move createNameProofs above is.
+import { createSquads } from './squads.js';
 // THE ONLY NODE API IN THIS FILE, and it is a pure computation rather than I/O:
 // the blocked list has to carry something a client can hand back to Unblock and
 // nothing a client can keep. See blockKey below. randomBytes/createHmac are
@@ -39,8 +45,17 @@ import { createHmac, randomBytes } from 'node:crypto';
 
 // The frame types that belong here and never reach the engine. server.js
 // imports this set to decide what to intercept; keep it in step with the
-// switch in handle() below.
-export const SOCIAL_TYPES = new Set(['friends', 'friend', 'block', 'callsign', 'report']);
+// switch in handleOne() below.
+//
+// THREE CONSUMERS, AND THEY MOVE TOGETHER (plan R15): this file's own switch,
+// server.js's socket 'message' handler, which imports the set to intercept,
+// and public/app.js's routing block, which mirrors it so a reply reaches
+// socialReply. This set is the ONLY server-side gate — server.js's handler is
+// `if (SOCIAL_TYPES.has(msg.type)) { ... return; } handleClientMessage(ws, msg);`
+// — so a type left out of it is handed to the room engine, whose switch has
+// no arm for it and answers nothing at all. That failure is silent on the
+// wire and surfaces twelve seconds later as the client's own timeout.
+export const SOCIAL_TYPES = new Set(['friends', 'friend', 'block', 'callsign', 'report', 'squad', 'code']);
 
 // Per-socket rate limits, messages per minute (design 4.2). These sit ON TOP of
 // the engine's 60 frames/s socket limiter: that one stops a flood of anything,
@@ -136,7 +151,16 @@ const BLOCK_KEY_RE = /^[0-9a-f]{32}$/;
 // (every existing test, and any host that does not wire one) a handle resolves
 // to nothing and is answered no_such_user, which is the safe direction: the
 // friends-panel route is unaffected and no target is ever guessed at.
-export function createSocial({ store, terms, send, now, resolveHandle = () => null }) {
+//
+// roomExists(code) -> bool. INJECTED for exactly the reason resolveHandle
+// above is, and defaulting to a function that finds nothing: the container of
+// rooms is public/room-engine.js's `rooms` Map, the OFFLINE page imports that
+// file, and this module must gain no rooms. server.js holds both and passes
+// `(code) => rooms.has(code)` straight in. With no predicate (every existing
+// test, and any host that does not wire one) a code naming a live room is
+// answered 'none' — the safe direction: the client offers to join nothing
+// rather than offering to join something this process cannot find.
+export function createSocial({ store, terms, send, now, resolveHandle = () => null, roomExists = () => false }) {
 
   // userId -> that account's live sockets. "Online" is "the set is non-empty".
   // Presence is never persisted (design 4.1).
@@ -479,6 +503,20 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
           if (!requireAccount(ws, msg)) return;
           await handleReport(ws, msg);
           return;
+        case 'squad':
+          // NO GATE ON THIS LINE. R3: the gate is per op and lives inside the
+          // handler, because `join` by code is open to a guest and the rest
+          // are not. requireLinked here would refuse the one op a guest is
+          // entitled to.
+          await handleSquad(ws, msg);
+          return;
+        case 'code':
+          // NO GATE AT ALL — see handleCode. SYNCHRONOUS: both lookups are a
+          // Map hit in this process, so there is no promise to await and no
+          // rejection to hand the caller; a throw lands in the net below like
+          // any other.
+          handleCode(ws, msg);
+          return;
         default:
           // Unreachable while server.js gates on SOCIAL_TYPES, and answered
           // anyway: same reasoning as above, answer, never drop.
@@ -608,6 +646,91 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
   // `terms` is this layer's own injected blocklist, and server.js passes the SAME
   // list to the same factory for /history — one file, one rule, one term list.
   const { provenName, rolledName, displayName, seenName } = createNameProofs({ terms });
+
+  // ---- squads (design 4.3) -------------------------------------------------
+  // One factory, held, never re-created per frame — createNameProofs above is
+  // built the same way and for the same reason.
+  const squads = createSquads({ now });
+
+  // op -> handler. A NULL PROTOTYPE, and that is not decoration: `op` comes
+  // off the wire, and with a plain object literal SQUAD_OPS['constructor'] is
+  // `Object` — truthy — so the `!fn` test below would wave it through and
+  // `await fn(ws, msg)` would call Object(ws, msg), return quietly and send
+  // NOTHING. The client's waiter then sits for its full twelve seconds.
+  // (FRIEND_OPS below is a plain literal and has exactly that hole today;
+  // closing it belongs with the friend ops and is not this task's, but the
+  // new table must not repeat it.)
+  //
+  // EMPTY IN TASK 1 ON PURPOSE. Every op is therefore unknown, which is the
+  // whole behaviour this task owes a client: a squad frame reaches the server
+  // and is ANSWERED. create, invite, join, leave, ready, mode, start, resume
+  // and kick fill this table in tasks 2 to 5.
+  const SQUAD_OPS = Object.create(null);
+
+  async function handleSquad(ws, msg) {
+    const op = typeof msg.op === 'string' ? msg.op : '';
+    const fn = SQUAD_OPS[op];
+    // Answered rather than dropped, and answered the way an unknown block op
+    // is: the reply carries the OP, because a client with two squad answers
+    // outstanding cannot tell which one failed from { type:'squad',
+    // error:'unavailable' } alone.
+    //
+    // NO GATE ON THIS PATH. R3: squads are the first type whose ops differ —
+    // `join` by code is open to a guest and the rest need a linked account —
+    // so the gate is applied per op, by the op, inside this table's handlers.
+    // An op that does not exist has no gate to apply, and answering
+    // 'sign_in' to a guest for an op that is not there would advertise ops
+    // this build does not have.
+    if (!fn) return reply(ws, msg, { type: 'squad', op: op || 'unknown', error: 'unavailable' });
+    // TASK 2 ADDS THE CATCH HERE, beside handle()'s net and for handleFriend's
+    // reason: this reply has to carry the op. It is not written now because
+    // with an empty table it cannot be reached and therefore cannot be
+    // tested, and a branch no test can break is a branch nobody is keeping.
+    await fn(ws, msg);
+  }
+
+  // THE SAME NORMALISATION public/room-engine.js's roomCode() applies, COPIED
+  // rather than imported for the reason SKIN_IDS above is copied: nothing
+  // under server/ may pull in the game engine, which the OFFLINE page also
+  // loads. Keep in step with public/room-engine.js's roomCode().
+  //
+  // Copying it is load-bearing, not tidiness. The rooms Map this reaches
+  // through roomExists is keyed by whatever roomCode() produced, so a code
+  // typed in lower case would miss every live room if this did not upper-case
+  // it the same way. The coercion is what keeps `{"code": 123}` from throwing
+  // on .toUpperCase() — the throw that used to reach uncaughtException. An
+  // empty string is safe to look up in either container, because makeCode
+  // only ever mints four characters, so it needs no guard of its own.
+  const codeOf = (v) => (typeof v === 'string' ? v : '').toUpperCase().trim().slice(0, 8);
+
+  // ---- one code field, two containers (design D8) --------------------------
+  // "Enter a code" is one field and a code can name a squad or a room, so the
+  // client cannot know which frame to send next until the server says. It
+  // asks { type:'code', code } and this answers { type:'code', kind }.
+  //
+  // NO SIGN-IN, and it is the only frame in this layer with no gate at all. A
+  // guest handed a code by a friend is precisely the player this field exists
+  // for (design 5.1's guest line), and a gate would make the field refuse the
+  // one person it was written for.
+  //
+  // NO RATE BUCKET, for the reason `block` has none and stated here rather
+  // than left to be inferred: both lookups are a Map hit in this process,
+  // there is no store round trip to protect and no write to amplify, and
+  // design 4.2's table limits callsign, friend and report and nothing else.
+  // server.js's 60 frames/s socket limiter is what bounds it.
+  //
+  // SQUADS FIRST, THEN ROOMS — the spec's order. It cannot matter while BOTH
+  // minters consult the other container — makeCode through codeTaken (wired
+  // in server.js), and the squad minter through roomExists (task 2 writes
+  // that minter and must hand it roomExists) — because no string can then be
+  // in both; if either wiring were ever lost, this is the tie-break, chosen
+  // rather than left to whichever `if` happened to be typed first. Note which
+  // way it fails: a squad minted over a live room's code would answer 'squad'
+  // here and leave that room unreachable from the field.
+  function handleCode(ws, msg) {
+    const code = codeOf(msg.code);
+    reply(ws, msg, { type: 'code', kind: squads.has(code) ? 'squad' : roomExists(code) ? 'room' : 'none' });
+  }
 
   const skinOf = (row) => (row && typeof row.skin === 'string' && SKIN_IDS.has(row.skin) ? row.skin : null);
 
@@ -1172,6 +1295,13 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
   // other: both are process-lifetime Maps keyed by account, so the only way a
   // test can assert they do not grow by an entry per account that has ever
   // connected is to look at them. Nothing outside writes to either. server.js
-  // uses handle, onAuth and onClose alone.
-  return { handle, online, onAuth, onClose, presenceLast };
+  // uses handle, onAuth and onClose, and hands hasSquad to the engine.
+  //
+  // hasSquad is handed out for ONE caller and one only: server.js wires it
+  // into the engine as setCodeTaken, so makeCode collides a candidate against
+  // squads as well as rooms (plan R4). It is the container's `has` and
+  // nothing more — no squad, no member and no name leaves through it, and
+  // there is no setter beside it. The same footing as `online` and
+  // `presenceLast` above: a reader, never a door.
+  return { handle, online, onAuth, onClose, presenceLast, hasSquad: (code) => squads.has(code) };
 }

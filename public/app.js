@@ -2433,6 +2433,7 @@ function handle(m) {
     // the client ever sends — and it is the one answer to a callsign frame that
     // does not carry type 'callsign', so it has to be routed here by name.
     case 'friends': case 'friend': case 'block': case 'callsign': case 'report':
+    case 'squad': case 'code':
     case 'presence': case 'social':
       socialReply(m);
       break;

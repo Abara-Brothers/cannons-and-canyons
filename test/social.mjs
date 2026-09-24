@@ -100,9 +100,9 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
 
 // ---- (a) the frame types this layer owns ------------------------------------
 {
-  const want = ['friends', 'friend', 'block', 'callsign', 'report'];
+  const want = ['friends', 'friend', 'block', 'callsign', 'report', 'squad', 'code'];
   if (SOCIAL_TYPES instanceof Set && want.every((t) => SOCIAL_TYPES.has(t)) && SOCIAL_TYPES.size === want.length)
-    ok('(a) SOCIAL_TYPES is exactly the five social frame types');
+    ok('(a) SOCIAL_TYPES is exactly the seven social frame types');
   else fail('(a) SOCIAL_TYPES is ' + JSON.stringify([...(SOCIAL_TYPES || [])]));
 }
 
