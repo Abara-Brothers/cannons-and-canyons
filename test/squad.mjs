@@ -2311,7 +2311,9 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   const S = sqSocial(sqstore(), { seatSquad: seat.fn });
   const { ws: [wa, wb, g] } = await stSquad(S, { n: 3, mode: 'ffa' });
   await S.handle(wa, { type: 'squad', op: 'start', id: 's' });
-  const bad = { type: 'squad', op: 'start', error: 'capacity' };
+  // `at` 0: the seating's refusal names the seat that failed — the create, the
+  // leader's — as the roster row it is (st12 proves the translation).
+  const bad = { type: 'squad', op: 'start', error: 'capacity', at: 0 };
   // A member who sent nothing may already be standing in a lobby that no
   // longer exists; this is what tells them. Nothing started, so every Ready
   // stands and the squad can simply try again.
@@ -2487,19 +2489,65 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   else fail('(st9) roster ' + JSON.stringify([roster.leader, roster.you]) + ' seats ' + JSON.stringify(c.seats.map((s) => (s.ws === wc ? 'c' : s.ws === g ? 'g' : '?'))));
 }
 
-// ---- (st10) a second device of the leader starts the squad the rows hold ----
+// ---- (st10) a device that is not holding the leader's seat is refused -------
+// ledSquad lets a second device of the leader act as the leader, and for kick
+// and mode that is harmless. Start is different: it SEATS a socket, and the
+// socket the squad would seat as host is the one on the leader's ROW. Seating
+// it for a press on another device leaves the leader looking at a screen in no
+// room while their tank waits on a device they may not be watching — and a
+// squad duel gives a turn a day's grace. So the press is refused wrong_device
+// and nobody is seated.
 {
   const seat = mkSeat({ ok: true, code: 'RM10' });
   const S = sqSocial(sqstore(), { seatSquad: seat.fn });
   const { ws: [wa, wb] } = await stSquad(S);
   const wa2 = sqUp(S, sqws(SQA));
   await S.handle(wa2, { type: 'squad', op: 'start', id: 'd' });
-  const c = seat.calls[0] || { seats: [] };
-  if (c.seats.length === 2 && c.seats[0].ws === wa && c.seats[1].ws === wb
-    && same(sqlast(wa2, 'start'), { type: 'squad', op: 'start', ok: true, code: 'RM10', id: 'd' })
-    && same(sqlast(wa, 'start'), { type: 'squad', op: 'start', ok: true, code: 'RM10' }))
-    ok('(st10) the leader\'s second device starts the squad: the leader\'s ROW socket is seated, the asking device is answered');
-  else fail('(st10) seats ' + JSON.stringify(c.seats.map((s) => (s.ws === wa ? 'a' : s.ws === wb ? 'b' : s.ws === wa2 ? 'a2' : '?'))) + ' a2 ' + JSON.stringify(wa2.rx) + ' a ' + JSON.stringify(sqlast(wa, 'start')));
+  if (same(wa2.rx, [{ type: 'squad', op: 'start', error: 'wrong_device', id: 'd' }]) && seat.calls.length === 0 && wa.rx.length === 0 && wb.rx.length === 0)
+    ok('(st10) the leader\'s second device is refused wrong_device, nobody is seated, and nobody else is told anything');
+  else fail('(st10) second device: ' + JSON.stringify(wa2.rx) + ' calls ' + seat.calls.length + ' row got ' + JSON.stringify(wa.rx));
+  // LEADERSHIP IS STILL ASKED FIRST: a member's second device is not_leader,
+  // not told which device would have been the right one.
+  const wb2 = sqUp(S, sqws(SQB));
+  await S.handle(wb2, { type: 'squad', op: 'start', id: 'e' });
+  if (same(wb2.rx, [{ type: 'squad', op: 'start', error: 'not_leader', id: 'e' }])) ok('(st10) a member\'s second device is not_leader, as the member is');
+  else fail('(st10) member second device: ' + JSON.stringify(wb2.rx));
+  // THE CONTROL: the same squad starts from the device holding the leader's row.
+  await S.handle(wa, { type: 'squad', op: 'start', id: 'f' });
+  if (sqat(wa, 'start').ok === true && seat.calls.length === 1 && seat.calls[0].seats[0].ws === wa) ok('(st10) while the device holding the leader\'s row starts it');
+  else fail('(st10) control: ' + JSON.stringify(sqlast(wa, 'start')));
+}
+
+// ---- (st12) a refusal from the seating names the ROW that failed ------------
+// seatSquad answers `at`, the index in the list it was HANDED — leader first.
+// The box addresses members by ROSTER index, and the two differ whenever the
+// leader is not the first row (a guest who joined earlier sits above them), so
+// the handler translates. An `at` that names no seat is dropped, not passed on.
+{
+  const seat = mkSeat({ ok: false, error: 'member_busy', at: 1 });
+  const S = sqSocial(sqstore(), { seatSquad: seat.fn });
+  const wa = sqUp(S, sqws(SQA)), g = sqws(null), wc = sqUp(S, sqws(SQC));
+  await S.handle(wa, { type: 'squad', op: 'create' });
+  const code = sqat(wa, 'state').code;
+  await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+  await S.handle(wc, { type: 'squad', op: 'join', code });
+  await S.handle(wa, { type: 'squad', op: 'leave' });
+  for (const w of [g, wc]) await S.handle(w, { type: 'squad', op: 'ready', ready: true, loadout: stR(0) });
+  // Roster: the guest at row 0, the leader (C) at row 1. Seats: C, then G.
+  const said = [];
+  for (const at of [1, 0, -1, 2, '1', undefined]) {
+    seat.verdict = { ok: false, error: 'member_busy', at };
+    g.rx.length = 0; wc.rx.length = 0;
+    await S.handle(wc, { type: 'squad', op: 'start', id: 'b' });
+    said.push([sqlast(wc, 'start'), sqlast(g, 'start')]);
+  }
+  const want = (at) => (at === undefined ? {} : { at });
+  const expect = [0, 1, undefined, undefined, undefined, undefined].map((at) => [
+    { type: 'squad', op: 'start', error: 'member_busy', ...want(at), id: 'b' },
+    { type: 'squad', op: 'start', error: 'member_busy', ...want(at) },
+  ]);
+  if (same(said, expect)) ok('(st12) a seating refusal carries `at` as the ROSTER row that failed, to the leader and every member; an index naming no seat is dropped');
+  else fail('(st12) ' + JSON.stringify(said));
 }
 
 // ---- (st11) one token per start ---------------------------------------------

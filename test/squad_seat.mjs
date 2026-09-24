@@ -575,9 +575,9 @@ async function sectionB() {
       const after = b._rx.slice(before).map((m) => (m.type === 'squad' ? 'squad:' + m.op : m.type));
       put(b, { type: 'sync' });
       const still = await wait(b, (m) => m.type === 'restore', 3000, before);
-      if (cpu && x && x.error === 'member_busy' && !after.some((t) => ['created', 'lobby', 'start', 'opponentLeft', 'oppConn'].includes(t))
+      if (cpu && x && x.error === 'member_busy' && x.at === 1 && !after.some((t) => ['created', 'lobby', 'start', 'opponentLeft', 'oppConn'].includes(t))
         && still && still.code === cpu.code && seen(a, 'created').length === 0)
-        ok('(B7) a member mid-match (against the CPU) stops the start: member_busy, and their match is untouched');
+        ok('(B7) a member mid-match (against the CPU) stops the start: member_busy naming their row (at 1), and their match is untouched');
       else fail('(B7) mid-match member: answer ' + JSON.stringify(x) + ' member then got ' + JSON.stringify(after) + ' still in ' + JSON.stringify(still && still.code) + ' was in ' + JSON.stringify(cpu && cpu.code));
       await closeAll(s.ws);
     }
@@ -717,22 +717,28 @@ async function sectionB() {
     }
   }
 
-  // ---- B12. a second device of the leader starts the squad the rows hold -----
-  // ledSquad lets a second device of the leader act as the leader (kick, mode,
-  // and now start). The squad seats the sockets it KNOWS — the rows — so the
-  // leader's seat is the socket on the leader's row, and the device that asked
-  // is answered and seated nowhere.
+  // ---- B12. a device not holding the leader's seat cannot start ------------
+  // ledSquad lets a second device of the leader act as the leader, but Start
+  // SEATS a socket, and the host seat is the one on the leader's row. Seating
+  // it for a press elsewhere would strand the leader on a screen in no room, so
+  // the press is refused wrong_device and nobody anywhere is seated.
   {
     const s = await squadUp(S.port, [1, 2], 'duel');
     if (s) {
       const other = await pilot(S.port, 1);
-      const go = await ask(other, { op: 'start' });
-      const host = await wait(s.ws[0], (m) => m.type === 'start');
+      const before = s.ws.map((w) => w._rx.length);
+      const no = await ask(other, { op: 'start' });
       await settle([other, ...s.ws]);
-      if (go && go.ok === true && host && host.code === go.code && seen(s.ws[0], 'created').length === 1
-        && !types(other).some((t) => ['created', 'lobby', 'start'].includes(t)))
-        ok('(B12) the leader\'s second device starts the squad; the leader\'s row socket takes the host seat, the asking device is only answered');
-      else fail('(B12) second device: ' + JSON.stringify(go) + ' row got ' + JSON.stringify(types(s.ws[0])) + ' asker got ' + JSON.stringify(types(other)));
+      const quiet = s.ws.every((w, i) => w._rx.length === before[i]);
+      if (no && no.error === 'wrong_device' && quiet && !types(other).some((t) => ['created', 'lobby', 'start'].includes(t))
+        && (await liveCodes(S.port, [other, ...s.ws])).length === 0)
+        ok('(B12) the leader\'s second device is refused wrong_device: no room is built, and the squad\'s own sockets are sent nothing');
+      else fail('(B12) second device: ' + JSON.stringify(no) + ' row got ' + JSON.stringify(types(s.ws[0])) + ' asker got ' + JSON.stringify(types(other)));
+      // THE CONTROL: the device holding the leader's row starts the same squad.
+      const go = await ask(s.ws[0], { op: 'start' });
+      const b = await wait(s.ws[1], (m) => m.type === 'start');
+      if (go && go.ok === true && b && b.code === go.code) ok('(B12) while the device holding the leader\'s row starts it');
+      else fail('(B12) control: ' + JSON.stringify(go));
       await closeAll([other, ...s.ws]);
     }
   }

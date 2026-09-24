@@ -1162,10 +1162,18 @@ export function createSocial({
   // LEADER ONLY, THROUGH ledSquad, and no sign-in gate of its own: mode's
   // rule, and for mode's reason (a guest can never lead, so a guest member is
   // not_leader). ledSquad is the ONLY leadership check on this path; nothing
-  // here re-derives it. A second device of the leader passes it, as it does
-  // for kick and mode, and starts the squad the rows hold — the leader's seat
-  // goes to the socket on the leader's ROW, because the squad seats the
-  // sockets it knows, and the row is the one every member's box is showing.
+  // here re-derives it.
+  //
+  // AND ONLY FROM THE DEVICE THAT HOLDS THE LEADER'S SEAT. ledSquad lets a
+  // second device of the leader act as the leader, which is harmless for kick
+  // and mode. Start is different: it SEATS a socket, and the host seat is the
+  // socket on the leader's ROW — the one the squad knows and every member's
+  // box is showing. Seating it for a press on another device would leave the
+  // leader looking at a screen in no room while their tank waits on a device
+  // they may not be watching, and a squad duel gives a turn a day's grace. So
+  // that press is refused wrong_device and nobody is seated. This is not a
+  // second leadership rule: the caller has already passed ledSquad; it is
+  // which socket the seat would go to.
   //
   // THE RATE BUCKET IS NOT SPENT HERE; handleSquad has already charged it.
   async function squadStart(ws, msg) {
@@ -1174,6 +1182,7 @@ export function createSocial({
     const sq = ledSquad(ws);
     if (!sq) return no('not_leader');
     const lead = sq.members.find((m) => m.key === sq.leader);
+    if (lead.ws !== ws) return no('wrong_device');
     // THE LEADER'S RACK MAY RIDE ON THE START FRAME (the Squad box's Start
     // carries the leader's picks rather than asking for a Ready). It is judged by
     // the same predicate the ready op uses — the engine's validRackFor for the
@@ -1223,11 +1232,18 @@ export function createSocial({
       // squad can simply try again. pushSquad's order: everyone else first,
       // then the caller its roster, and the caller's own answer LAST, because
       // it is the one send here that can throw.
+      //
+      // `at` NAMES THE ROW THAT FAILED (a member_busy, say), so the box can
+      // mark it. seatSquad counts in the list it was handed — leader first —
+      // and the box counts in the roster, and the two differ whenever the
+      // leader is not the first row, so it is translated; an index that names
+      // no seat is dropped rather than passed on.
       const error = (seated && typeof seated.error === 'string' && seated.error) || 'unavailable';
-      const bad = { type: 'squad', op: 'start', error };
-      for (const m of sq.members) if (m.ws && m.ws !== ws) safeSend(m.ws, bad);
+      const row = seated && Number.isInteger(seated.at) && seated.at >= 0 ? sq.members.indexOf(ordered[seated.at]) : -1;
+      const why = row >= 0 ? { error, at: row } : { error };
+      for (const m of sq.members) if (m.ws && m.ws !== ws) safeSend(m.ws, { type: 'squad', op: 'start', ...why });
       await pushSquad(sq, ws, null);
-      return no(error);
+      return squadReply(ws, msg, 'start', why);
     }
     // SEATED. The Readies are spent (design 4.3: they reset when the room is
     // created), and the racks with them — clearReady's order, AFTER the seats
