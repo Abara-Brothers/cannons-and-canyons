@@ -2058,6 +2058,13 @@ const FITS_BY_SIZE = [
   if (same(asked, [['not_leader'], ['not_leader'], ['no_squad'], ['no_squad']]) && armed(wa)[0] === 'aliens')
     ok('(s3g) a member and a guest member are refused not_leader and a player in no squad no_squad, and the armed mode stays put');
   else fail('(s3g) non-leaders: ' + JSON.stringify(asked) + ' armed ' + JSON.stringify(armed(wa)));
+  // LEADERSHIP IS ASKED FIRST: a member probing with a mode or tee set that
+  // does not exist learns only that they do not lead.
+  wb.rx.length = 0;
+  await S.handle(wb, { type: 'squad', op: 'mode', mode: 'battleroyale', id: 'p1' });
+  await S.handle(wb, { type: 'squad', op: 'mode', mode: 'golf', tees: 'MEET ME AT THE OTHER GAME', id: 'p2' });
+  if (same(wb.rx.map((f) => f.error), ['not_leader', 'not_leader'])) ok('(s3g) a member sending a mode or tee set that does not exist is told only not_leader');
+  else fail('(s3g) a member\'s junk mode was answered ' + JSON.stringify(wb.rx));
 
   // THE LEADER'S SECOND DEVICE holds no row and is the leader's account on
   // both halves, so it arms the mode, like kick (h7).
