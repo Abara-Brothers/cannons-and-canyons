@@ -29,13 +29,19 @@
 // normalisations live in different files (see server/social.js's codeOf),
 // and agreement is proved here rather than assumed.
 //
+// A THIRD WORLD proves the field can only ever have ONE answer (plan R4): with
+// the code bytes scripted by a test-only --import preload, a room is made to
+// try a live squad's code first and a squad a live room's, against the real
+// server.js and its real wiring. See world 3 for how the hook is proved to
+// take effect in each server before anything relies on it.
+//
 // Self-hosted: spawns and kills its own servers on free ports, and the layer-on
 // world talks to a local mock of GoTrue and PostgREST. No Chrome, no real
 // Supabase, no network beyond loopback.
 import { spawn } from 'node:child_process';
 import http from 'node:http';
 import net from 'node:net';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
 
 const out = { errors: [] };
@@ -68,13 +74,14 @@ setTimeout(() => { fail('timeout — the suite did not finish in 45 s'); finish(
 
 // Spawn this checkout's server.js with the Supabase env REPLACED by `sb` (all
 // three keys deleted first, so a stray key in the caller's shell can never
-// decide which world this is).
-async function boot(sb, extra = {}) {
+// decide which world this is). `node` is extra arguments for node itself,
+// ahead of the script: world 3 preloads its byte script with --import.
+async function boot(sb, extra = {}, node = []) {
   const port = await freePort();
   const env = { ...process.env, PORT: String(port) };
   delete env.SUPABASE_URL; delete env.SUPABASE_PUBLISHABLE_KEY; delete env.SUPABASE_SECRET_KEY;
   Object.assign(env, sb, extra);
-  const s = { port, log: '', proc: spawn(process.execPath, ['server.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] }) };
+  const s = { port, log: '', proc: spawn(process.execPath, [...node, 'server.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] }) };
   s.proc.stdout.on('data', (d) => { s.log += d; });
   s.proc.stderr.on('data', (d) => { s.log += d; });
   servers.push(s);
@@ -296,11 +303,19 @@ const mockHandler = (req, res) => {
   res.writeHead(204); res.end();
 };
 
+// ONE mock for every layer-on world, started by whichever world needs it
+// first, so world 3 does not depend on world 2 having got that far.
+async function startMock() {
+  if (!mock) {
+    mock = http.createServer(mockHandler);
+    await new Promise((r) => mock.listen(0, '127.0.0.1', r));
+  }
+  return `http://127.0.0.1:${mock.address().port}`;
+}
+
 async function layerOn() {
   console.log('== layer ON, Supabase hanging (local mock) ==');
-  mock = http.createServer(mockHandler);
-  await new Promise((r) => mock.listen(0, '127.0.0.1', r));
-  const MOCK = `http://127.0.0.1:${mock.address().port}`;
+  const MOCK = await startMock();
   // SOCIAL_PRESENCE_MS pushed out of the window: a presence flush reads the
   // same friendship query this world hangs, and must not be what it observes.
   const s = await boot({ SUPABASE_URL: MOCK, SUPABASE_PUBLISHABLE_KEY: 'pk_test', SUPABASE_SECRET_KEY: 'sk_test' }, { SOCIAL_PRESENCE_MS: '600000' });
@@ -395,8 +410,153 @@ async function layerOn() {
   else fail('(11) the layer-on server printed:\n      ' + stray.join('\n      '));
 }
 
+// =============================================================================
+// WORLD 3: ONE CODE NAMESPACE (plan R4), both directions, layer ON.
+// =============================================================================
+// server.js holds the two lines that make a room code and a squad code unable
+// to collide: setCodeTaken(social.hasSquad), so the ENGINE refuses a code a
+// live squad holds, and the roomExists it injects into createSocial, which
+// server/social.js hands the SQUAD MINTER as codeTaken, so a squad refuses a
+// code a live room holds. Neither can be seen by looking at random codes —
+// a collision is one mint in 923,521 — so the codes are CHOSEN.
+//
+// HOW. Both minters draw one one-byte getRandomValues per character
+// (public/room-engine.js makeCode, server/squads.js mintCode), and byte b
+// becomes the alphabet's b-th character, so 0,1,2,3 mints "ABCD".
+// test/fixtures/scripted-code-bytes.mjs is preloaded into the spawned server
+// with --import and serves ONE-BYTE requests from CC_TEST_CODE_BYTES, passing
+// every other length to the real CSPRNG, and reports each one-byte request on
+// stderr. The script here is 0,1,2,3 then 0,1,2,3,4,5,6,7: the first minter
+// takes "ABCD", and the second is made to try "ABCD" first and must move on
+// to "EFGH".
+//
+// PROVED BEFORE IT IS RELIED ON, in each server: the first mint, with nothing
+// held, must be exactly "ABCD" out of exactly four scripted draws. If the hook
+// did not take effect, or something else drew a byte first, that is the
+// assertion that says so, and the direction check is not run — so it can
+// never pass or fail for a reason nobody chose.
+const PRELOAD = ['--import', pathToFileURL(ROOT + 'test/fixtures/scripted-code-bytes.mjs').href];
+const SCRIPT = '0,1,2,3,0,1,2,3,4,5,6,7';
+// Every one-byte request the preload served, as "script:N" or "real:N", in
+// order. stderr is a pipe and may land after the socket frame that the draw
+// produced, so wait for at least `n`, then settle, then read.
+const byteLog = (s) => s.log.split('\n').map((l) => l.match(/^\[code-bytes\] (\d+) (script|real) (\d+)$/)).filter(Boolean).map((m) => `${m[2]}:${m[3]}`);
+const draws = async (s, n) => {
+  for (let i = 0; i < 100 && byteLog(s).length < n; i++) await sleep(20);
+  await sleep(120);
+  return byteLog(s);
+};
+const scripted = (bytes) => bytes.map((b) => 'script:' + b);
+
+// A linked account's squad create, answered by the layer.
+async function squadCreate(port, id) {
+  const w = await open(port);
+  tx(w, { type: 'hello', token: 'tok-linked' });
+  tx(w, { type: 'squad', op: 'create', id });
+  const r = await waitFor(w, (m) => m.id === id);
+  return { w, r };
+}
+async function roomCreate(port) {
+  const h = await open(port);
+  tx(h, { type: 'create', name: 'Host', skin: 'olive', mode: 'duel' });
+  const cr = await waitFor(h, (m) => m.type === 'created');
+  return { h, code: cr && cr.code };
+}
+
+// Boot one layer-on server with the script preloaded, and prove the three
+// preconditions every check after it stands on.
+async function scriptedServer(label) {
+  const MOCK = await startMock();
+  const s = await boot({ SUPABASE_URL: MOCK, SUPABASE_PUBLISHABLE_KEY: 'pk_test', SUPABASE_SECRET_KEY: 'sk_test' },
+    { SOCIAL_PRESENCE_MS: '600000', CC_TEST_CODE_BYTES: SCRIPT }, PRELOAD);
+  if (!s) { fail(`(${label}) server never reported listening`); return null; }
+  if (!new RegExp('^\\[code-bytes\\] armed 12$', 'm').test(s.log)) { fail(`(${label}) the byte script was not armed in the server — the preload did not load:\n      ${s.log.split('\n').join('\n      ')}`); return null; }
+  const w = await open(s.port);
+  tx(w, { type: 'friends', id: 'g1' });
+  const r = await waitFor(w, (m) => m.id === 'g1');
+  w.close();
+  if (!same(r, { type: 'social', error: 'sign_in', id: 'g1' })) { fail(`(${label}) the social layer is not on, so this world would test the wrong wiring: friends answered ` + JSON.stringify(r)); return null; }
+  const early = byteLog(s);
+  if (early.length) { fail(`(${label}) something drew one-byte values before any code was minted, and ate the script: ` + JSON.stringify(early)); return null; }
+  return s;
+}
+
+async function namespace() {
+  console.log('== layer ON, code bytes scripted (plan R4, both directions) ==');
+
+  // ---- (12) DIRECTION 1: the engine refuses a code a live SQUAD holds -----
+  {
+    const s = await scriptedServer('12');
+    if (s) {
+      const { w, r } = await squadCreate(s.port, 'q1');
+      const d1 = await draws(s, 4);
+      // THE HOOK, PROVED IN THIS SERVER, on the squad minter.
+      if (!(r && r.op === 'state' && r.code === 'ABCD' && same(d1, scripted([0, 1, 2, 3])))) {
+        fail('(12) the hook did not take effect in the server: the first squad, with nothing held, got ' + JSON.stringify(r) + ' from one-byte draws ' + JSON.stringify(d1) + ' — nothing below was checked');
+      } else {
+        ok('(12) hook proved in the server: the first squad mints "ABCD" from exactly the four scripted bytes, and nothing else drew one');
+        const c1 = await ask(w, { type: 'code', code: 'abcd', id: 'k1' });
+        if (same(c1, { type: 'code', kind: 'squad', id: 'k1' })) ok('(12) a live squad\'s code answers the code field "squad"');
+        else fail('(12) the live squad ABCD answered ' + JSON.stringify(c1));
+        const { h, code } = await roomCreate(s.port);
+        const d2 = await draws(s, 12);
+        if (code === 'EFGH' && same(d2, scripted([0, 1, 2, 3, 0, 1, 2, 3, 4, 5, 6, 7])))
+          ok('(12) a room made to try the squad\'s "ABCD" first is refused it and takes "EFGH" — setCodeTaken(social.hasSquad) is live');
+        else fail('(12) with squad ABCD live, the room took ' + JSON.stringify(code) + ' from ' + JSON.stringify(d2) + '; expected "EFGH" from the twelve scripted draws — the engine must refuse a live squad\'s code');
+        const k2 = await ask(w, { type: 'code', code: 'ABCD', id: 'k2' });
+        const k3 = await ask(w, { type: 'code', code: 'EFGH', id: 'k3' });
+        if (same(k2, { type: 'code', kind: 'squad', id: 'k2' }) && same(k3, { type: 'code', kind: 'room', id: 'k3' }))
+          ok('(12) and the code field has one answer for each: ABCD squad, EFGH room');
+        else fail('(12) code field: ' + JSON.stringify([k2, k3]));
+        if (h) h.close();
+      }
+      w.close();
+    }
+  }
+
+  // ---- (13) DIRECTION 2: the squad minter refuses a code a live ROOM holds -
+  {
+    const s = await scriptedServer('13');
+    if (s) {
+      const { h, code } = await roomCreate(s.port);
+      const d1 = await draws(s, 4);
+      // THE HOOK, PROVED IN THIS SERVER, on the engine's minter.
+      if (!(code === 'ABCD' && same(d1, scripted([0, 1, 2, 3])))) {
+        fail('(13) the hook did not take effect in the server: the first room, with nothing held, got ' + JSON.stringify(code) + ' from one-byte draws ' + JSON.stringify(d1) + ' — nothing below was checked');
+      } else {
+        ok('(13) hook proved in the server: the first room mints "ABCD" from exactly the four scripted bytes, and nothing else drew one');
+        const { w, r } = await squadCreate(s.port, 'q2');
+        const d2 = await draws(s, 12);
+        if (r && r.op === 'state' && r.code === 'EFGH' && same(d2, scripted([0, 1, 2, 3, 0, 1, 2, 3, 4, 5, 6, 7])))
+          ok('(13) a squad made to try the room\'s "ABCD" first is refused it and takes "EFGH" — the squad minter is handed roomExists');
+        else fail('(13) with room ABCD live, the squad took ' + JSON.stringify(r && r.code) + ' from ' + JSON.stringify(d2) + '; expected "EFGH" from the twelve scripted draws — the squad minter must refuse a live room\'s code, drawing one byte per character');
+        // THE SYMPTOM THE WIRING PREVENTS: squads are asked first, so a squad
+        // on a room's code would make that room unreachable from the field.
+        const k1 = await ask(w, { type: 'code', code: 'ABCD', id: 'k1' });
+        const k2 = await ask(w, { type: 'code', code: 'EFGH', id: 'k2' });
+        if (same(k1, { type: 'code', kind: 'room', id: 'k1' }) && same(k2, { type: 'code', kind: 'squad', id: 'k2' }))
+          ok('(13) and the code field still reaches the room: ABCD room, EFGH squad');
+        else fail('(13) code field: ' + JSON.stringify([k1, k2]));
+        w.close();
+      }
+      if (h) h.close();
+    }
+  }
+
+  await sleep(100);
+  // The preload's own lines and the mock's config warning are expected;
+  // anything else a scripted server printed is not.
+  let quiet = true;
+  for (const s of servers.slice(-2)) {
+    const stray = strayLines(s, /^\[csp\] WARNING: public\/config\.js points the browser at |^\[code-bytes\] /);
+    if (stray.length) { quiet = false; fail('(14) a scripted server printed:\n      ' + stray.join('\n      ')); }
+  }
+  if (quiet) ok('(14) the scripted servers printed nothing but the banner, the config warning and their byte log');
+}
+
 (async () => {
   await layerOff();
   await layerOn();
+  await namespace();
   return finish();
 })().catch((e) => { fail('threw: ' + (e && e.stack ? e.stack : e)); finish(); });
