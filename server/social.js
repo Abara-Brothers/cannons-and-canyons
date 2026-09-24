@@ -2083,6 +2083,82 @@ export function createSocial({
     catch { friendReply(ws, msg, op, { error: 'unavailable' }); }
   }
 
+  // ---- a block tears the pair out of a squad they share (R16) ---------------
+  // design 4.2, the block row: "removes them from your squad if you lead it or
+  // you from theirs". Called by handleBlock once the block row has landed.
+  //
+  // IN EVERY SQUAD THE TWO ACCOUNTS SHARE, WHOEVER DOES NOT LEAD IT GOES: the
+  // blocked party when the blocker leads, otherwise the blocker. THE LEADER IS
+  // NEVER THE ONE REMOVED — in the first case the leader is the blocker, in
+  // the second the person removed is not the leader — so a block can never
+  // hand a squad on and never end one (both were in it; one is left). A
+  // hand-off would be an event the rest of the squad could time against the
+  // block.
+  //
+  // WHO LEADS IS READ OFF EACH SQUAD, NOT OFF THE SOCKET, and ledSquad is the
+  // wrong tool here on purpose. ledSquad answers "which squad may THIS SOCKET
+  // command" — the squad its own row is in — and nothing here is a command
+  // issued from a screen: the target is the account the block names, never an
+  // index, and the only person ever removed besides the blocker is the
+  // blocked party, from a squad the blocker's ACCOUNT leads. Asked through
+  // ledSquad, a socket holding a guest row in one squad while its account
+  // leads another reads "not leading" for the squad it does lead — and the
+  // leader would be the one removed.
+  //
+  // THE ROWS ARE THE ACCOUNTS', found by rowsOf, so a GUEST is torn out like
+  // anyone else. A guest may block (requireAccount, deliberately) and may be
+  // blocked by the seat handle a lobby shows, and the squad a guest joined by
+  // code is the one a Start seats them in again: a block that left a guest in
+  // the blocker's squad would seat the two together on every Start. The
+  // squads searched are every one either account has a row in — by account
+  // key, or through a live socket — from both sides.
+  //
+  // SILENT, BOTH WAYS (R16). The squad is pushed the same fresh roster an
+  // ordinary leave produces (pushSquadAfterExit), so nobody left in it can
+  // tell a block from somebody walking out — and the player removed is sent
+  // NO FRAME AT ALL: one sent at that instant either carries a reason, which
+  // announces the block, or carries none and is still told apart from the
+  // kick that shares its shape. Their box is repaired by the resume their
+  // client sends. ONE EXCEPTION, and it tells the blocked party nothing: the
+  // blocker's OWN other device, when it held the row the blocker lost, is
+  // told `ended: elsewhere` — what any device whose row goes because of
+  // another device is told (task 5). The device that blocked has its ok:true.
+  //
+  // TWO HALVES, AND handleBlock RUNS THEM EITHER SIDE OF ITS REPLY. The
+  // removal is memory and happens NOW, before the reply, so nothing about
+  // delivering the answer — a half-closed socket whose send() throws — can
+  // leave the blocked party in the squad. The telling is RETURNED, and runs
+  // after the reply beside the friends pushes, which are courtesies of the
+  // same kind. Neither throws out: the removal is wrapped, and the push
+  // swallows its own faults (a failed name read costs names, never rows).
+  function squadBlockTeardown(ws, blocked) {
+    const torn = [], moved = [];
+    try {
+      const me = wireId(ws.userId), them = wireId(blocked);
+      // Every squad an account has a row in: by its own key, and through
+      // every live socket of it — this one, and for a linked account every
+      // socket presence holds.
+      const squadsOf = (id, w) => [squads.ofUser(id), ...[w, ...socketsOf(id)].map((s) => (s ? squads.ofUser(squads.keyOfSocket(s)) : null))];
+      for (const sq of new Set([...squadsOf(me, ws), ...squadsOf(them, null)].filter(Boolean))) {
+        const mine = rowsOf(sq, me), theirs = rowsOf(sq, them);
+        // NO SHARED SQUAD IS THE ORDINARY CASE, and this is the whole guard:
+        // each of them may lead a squad of their own, and a block is no
+        // reason to touch one the other player is not in.
+        if (!mine.length || !theirs.length) continue;
+        const goes = sq.leader === me ? theirs : mine;
+        for (const m of goes) {
+          const was = m.ws;
+          if (squads.removeMember(sq.code, m.key).squad && goes === mine && was && was !== ws) moved.push(was);
+        }
+        torn.push(sq);
+      }
+    } catch { /* the block stands; one lost teardown, never a second answer */ }
+    return async () => {
+      for (const w of moved) endedElsewhere(w);
+      for (const sq of torn) await pushSquadAfterExit(sq).catch(() => {});
+    };
+  }
+
   // ---- blocks (design 4.2; Apple Guideline 1.2, "the ability to block") ------
   // THE ONE SOCIAL ACT THAT DESTROYS STATE. `add` writes the block row and then
   // clears everything the pair had: the friendship, and the pending request in
@@ -2100,9 +2176,14 @@ export function createSocial({
   // themselves, whereas a deleted friendship with no block row is silent data
   // loss for a player who is not even protected. Tested both ways round.
   //
-  // Removing the blocked party from a SQUAD — the other half of the 4.2 rule —
-  // is PROJECT 3. There are no squads in this build, so it is not implemented
-  // here and has no test here.
+  // REMOVING THE PAIR FROM A SQUAD THEY SHARE — the other half of the 4.2 rule
+  // (R16) — is squadBlockTeardown above, tested in test/squad.mjs (blk-a to
+  // blk-l). It comes AFTER every write here: a squad is memory, so it adds a
+  // step at the end and moves none of the writes above. The blocked party
+  // leaves the blocker's squad when the blocker leads it, otherwise the blocker
+  // leaves theirs; the squad is pushed the roster an ordinary leave produces,
+  // and the player removed is sent nothing (the blocker's own other device, if
+  // it held the row, is told ended:elsewhere, as for any move between devices).
   //
   // NO PER-TYPE RATE LIMIT, and that is the spec rather than an oversight:
   // design 4.2 limits friend, callsign and report and says nothing about block,
@@ -2233,8 +2314,19 @@ export function createSocial({
       if (wrote) { outcome = { type: 'block', op, ok: true }; if (op === 'add') alsoPush = id; }
       else outcome = { type: 'block', op, error: 'unavailable' };
     }
+    // R16, THE SQUAD HALF OF A BLOCK. It hangs off `alsoPush` because that is
+    // the one flag set on BOTH paths that leave a block row behind — the clean
+    // one and the catch's `wrote === true` — and a half-failed block that
+    // skipped it would leave the blocked party in the squad of the player who
+    // just blocked them, to be seated beside them by the next Start. The
+    // removal runs HERE, before the reply, so it cannot depend on the reply
+    // being deliverable. What it returns tells the squad, after the reply and
+    // before the friends pushes, so every snapshot below is built from the
+    // squads as they now stand.
+    const tellSquads = alsoPush ? squadBlockTeardown(ws, alsoPush) : null;
     reply(ws, msg, outcome);
     if (!outcome.ok) return;
+    if (tellSquads) await tellSquads();
     await pushFriends(ws.userId);
     // ONLY ON ADD. The blocked player's own panel really did change — the
     // friendship is gone — so it has to be rebuilt. On REMOVE nothing of theirs
