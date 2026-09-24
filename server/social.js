@@ -55,6 +55,12 @@ import { createHmac, randomBytes } from 'node:crypto';
 // — so a type left out of it is handed to the room engine, whose switch has
 // no arm for it and answers nothing at all. That failure is silent on the
 // wire and surfaces twelve seconds later as the client's own timeout.
+//
+// ONE MEMBER HAS NO ARM IN handleOne(): `code`. It is in the set so that
+// server.js intercepts it and app.js routes its answer, but server.js answers
+// it itself, ahead of the hello wait and this layer's per-socket queue,
+// because the answer is two lookups in memory and a frame queued behind a slow
+// store read outlived the client's waiter. This layer never sees one.
 export const SOCIAL_TYPES = new Set(['friends', 'friend', 'block', 'callsign', 'report', 'squad', 'code']);
 
 // Per-socket rate limits, messages per minute (design 4.2). These sit ON TOP of
@@ -104,13 +110,12 @@ const SKIN_IDS = new Set(['olive', 'desert', 'jungle', 'midnight', 'arctic', 'go
 //
 // TWO COPIES OF THIS RULE, AND THERE MUST NOT BE A THIRD. The engine's
 // roomCode() is the authority: its `join` looks rooms up through it and the
-// rooms Map is keyed by what it produced. This is the other, and it serves
-// BOTH places outside the engine that answer "is this a code": the code frame
-// inside createSocial below, and server.js's layer-off branch, which IMPORTS
-// it from here rather than restating it — that branch runs precisely when
-// createSocial was never built, so the rule cannot live only inside the
-// closure. test/code_frame.mjs proves this copy and the engine's agree, by
-// asking the engine's own `join` the same strings.
+// rooms Map is keyed by what it produced. This is the other, and it lives at
+// module scope and is EXPORTED because its reader is server.js: the code frame
+// is answered there, in the one place its kind is computed, whether or not
+// createSocial was ever built. The squad ops that take a code (task 2's join)
+// read it here too. test/code_frame.mjs proves this copy and the engine's
+// agree, by asking the engine's own `join` the same strings.
 //
 // Copying it is load-bearing, not tidiness. A code typed in lower case would
 // miss every live room if this did not upper-case it the way roomCode() does.
@@ -180,10 +185,15 @@ const BLOCK_KEY_RE = /^[0-9a-f]{32}$/;
 // above is, and defaulting to a function that finds nothing: the container of
 // rooms is public/room-engine.js's `rooms` Map, the OFFLINE page imports that
 // file, and this module must gain no rooms. server.js holds both and passes
-// `(code) => rooms.has(code)` straight in. With no predicate (every existing
-// test, and any host that does not wire one) a code naming a live room is
-// answered 'none' — the safe direction: the client offers to join nothing
-// rather than offering to join something this process cannot find.
+// `(code) => rooms.has(code)` straight in.
+//
+// ITS READER IS THE SQUAD MINTER, WHICH TASK 2 WRITES: the other direction of
+// one code namespace (plan R4) is a squad code refusing any candidate that
+// names a live room, and this is the only route from server/ to `rooms`.
+// NOTHING IN THIS FILE READS IT YET — the code frame, which did, is answered
+// in server.js now — so it is plumbing for that minter and has no behaviour a
+// test can observe until the minter exists. The default refuses nothing, which
+// is the right direction for a host that wires no rooms at all.
 export function createSocial({ store, terms, send, now, resolveHandle = () => null, roomExists = () => false }) {
 
   // userId -> that account's live sockets. "Online" is "the set is non-empty".
@@ -534,13 +544,6 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
           // entitled to.
           await handleSquad(ws, msg);
           return;
-        case 'code':
-          // NO GATE AT ALL — see handleCode. SYNCHRONOUS: both lookups are a
-          // Map hit in this process, so there is no promise to await and no
-          // rejection to hand the caller; a throw lands in the net below like
-          // any other.
-          handleCode(ws, msg);
-          return;
         default:
           // Unreachable while server.js gates on SOCIAL_TYPES, and answered
           // anyway: same reasoning as above, answer, never drop.
@@ -711,35 +714,6 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
     // with an empty table it cannot be reached and therefore cannot be
     // tested, and a branch no test can break is a branch nobody is keeping.
     await fn(ws, msg);
-  }
-
-  // ---- one code field, two containers (design D8) --------------------------
-  // "Enter a code" is one field and a code can name a squad or a room, so the
-  // client cannot know which frame to send next until the server says. It
-  // asks { type:'code', code } and this answers { type:'code', kind }.
-  //
-  // NO SIGN-IN, and it is the only frame in this layer with no gate at all. A
-  // guest handed a code by a friend is precisely the player this field exists
-  // for (design 5.1's guest line), and a gate would make the field refuse the
-  // one person it was written for.
-  //
-  // NO RATE BUCKET, for the reason `block` has none and stated here rather
-  // than left to be inferred: both lookups are a Map hit in this process,
-  // there is no store round trip to protect and no write to amplify, and
-  // design 4.2's table limits callsign, friend and report and nothing else.
-  // server.js's 60 frames/s socket limiter is what bounds it.
-  //
-  // SQUADS FIRST, THEN ROOMS — the spec's order. It cannot matter while BOTH
-  // minters consult the other container — makeCode through codeTaken (wired
-  // in server.js), and the squad minter through roomExists (task 2 writes
-  // that minter and must hand it roomExists) — because no string can then be
-  // in both; if either wiring were ever lost, this is the tie-break, chosen
-  // rather than left to whichever `if` happened to be typed first. Note which
-  // way it fails: a squad minted over a live room's code would answer 'squad'
-  // here and leave that room unreachable from the field.
-  function handleCode(ws, msg) {
-    const code = codeOf(msg.code);
-    reply(ws, msg, { type: 'code', kind: squads.has(code) ? 'squad' : roomExists(code) ? 'room' : 'none' });
   }
 
   const skinOf = (row) => (row && typeof row.skin === 'string' && SKIN_IDS.has(row.skin) ? row.skin : null);
@@ -1307,9 +1281,10 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
   // connected is to look at them. Nothing outside writes to either. server.js
   // uses handle, onAuth and onClose, and hands hasSquad to the engine.
   //
-  // hasSquad is handed out for ONE caller and one only: server.js wires it
-  // into the engine as setCodeTaken, so makeCode collides a candidate against
-  // squads as well as rooms (plan R4). It is the container's `has` and
+  // hasSquad is handed out for ONE caller and one only, server.js, which uses
+  // it twice: wired into the engine as setCodeTaken, so makeCode collides a
+  // candidate against squads as well as rooms (plan R4), and as the squad arm
+  // of the code frame it answers itself. It is the container's `has` and
   // nothing more — no squad, no member and no name leaves through it, and
   // there is no setter beside it. The same footing as `online` and
   // `presenceLast` above: a reader, never a door.

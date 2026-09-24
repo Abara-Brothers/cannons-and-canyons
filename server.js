@@ -1652,38 +1652,72 @@ wss.on('connection', (ws) => {
         // Social frames never enter the engine: the offline page imports the
         // same file and must gain no database (ADR-001). They also WAIT for an
         // in-flight hello, so a frame sent immediately after sign-in is
-        // answered for the account rather than refused for a race.
+        // answered for the account rather than refused for a race — every
+        // type except `code`, which is answered here, first, and waits for
+        // nothing.
+        //
+        // THE CODE FRAME: the "Enter a code" field's one question, "is this a
+        // squad, a room, or nothing?". Its answer is two lookups in this
+        // process's memory, and it is computed HERE AND NOWHERE ELSE — the
+        // social layer has no code handler of its own — AHEAD of three things
+        // that would each make a player wait for an answer that needs none of
+        // them:
+        //
+        //   * THE LAYER-OFF BRANCH below. Joining a room by code has never
+        //     needed the database, and plan R14 accepts losing squads when
+        //     the layer did not build, not rooms. With no layer `social` is
+        //     null, so the squad arm cannot answer — no squad can exist, and
+        //     'squad' would send the client to a join refused 'unavailable'.
+        //   * THE HELLO WAIT (ws.authPending, up to sbAccountFromToken's 8 s).
+        //     Safe to skip because the answer does not depend on who asks:
+        //     there is no gate here to answer for, and a guest handed a code
+        //     is exactly who this field exists for (design 5.1).
+        //   * THE PER-SOCKET QUEUE inside social.handle, which can hold a
+        //     frame behind a friends read of up to five 8 s store calls. That
+        //     queue exists to stop read-then-write races; a code lookup writes
+        //     nothing, so there is no race for it to prevent.
+        //
+        // Waiting on either of the last two on a Supabase that hangs rather
+        // than refuses delivered this answer after the client's 12 s waiter
+        // had given up, and the field refused a room the engine was holding
+        // open. THE ONE CONSEQUENCE of skipping them: a code frame can now
+        // overtake an earlier social frame on the same socket. That is
+        // harmless for what this field is for — joining SOMEONE ELSE'S code —
+        // because nothing the earlier frame can do changes whether a string
+        // names a live room or squad.
+        //
+        // NO RATE BUCKET: two Map lookups, no store round trip to protect and
+        // no write to amplify; the socket limiter above bounds it. SQUADS
+        // FIRST, then rooms — the spec's order, and the tie-break if the one
+        // namespace (plan R4) were ever broken: once makeCode consults
+        // codeTaken (wired at boot, above) and the squad minter consults rooms (task 2
+        // writes that minter and hands it roomExists), no string is both.
+        //
+        // codeOf is server/social.js's, IMPORTED rather than restated — one
+        // of exactly two copies of the rule in the tree; the other is
+        // public/room-engine.js's roomCode(), which the engine's `join` looks
+        // rooms up through. See codeOf's comment for why there are two.
+        if (msg.type === 'code') {
+          const c = codeOf(msg.code);
+          const frame = { type: 'code', kind: social && social.hasSquad(c) ? 'squad' : rooms.has(c) ? 'room' : 'none' };
+          if (msg.id !== undefined) frame.id = msg.id;
+          send(ws, frame);
+          return;
+        }
         // ECHO THE ID HERE TOO. Every reply the social layer sends carries the
         // request's id back; this branch is the one that does not go through it,
         // and without the echo a client correlating by id waits for ever for the
         // one answer it was always going to get — on exactly the deploys where
         // the layer is off (no secret key, or a blocklist that would not load).
         if (!social) {
-          // THE ONE SOCIAL TYPE THAT IS ANSWERED ANYWAY: the "Enter a code"
-          // field's question. Joining a room by code has never needed the
-          // database — `join` goes straight to the engine — and answering
-          // this 'unavailable' would make the one code field refuse a room
-          // the engine is holding open, on exactly the deploys where the
-          // social layer failed to build. Plan R14 accepts losing SQUADS
-          // then, not rooms. So it is answered from `rooms`, in memory.
-          //
-          // NEVER 'squad' HERE. Squads live inside the social layer, and this
-          // branch runs because there is no social layer: no squad can exist,
-          // so that answer would always be a lie that sends the client to a
-          // squad join refused 'unavailable'.
-          //
-          // codeOf is server/social.js's, IMPORTED rather than restated — the
-          // same rule the layer's own code frame uses, and one of exactly two
-          // copies in the tree; the other is public/room-engine.js's
-          // roomCode(), which the engine's `join` looks rooms up through. See
-          // codeOf's comment for why there are two and not one.
-          if (msg.type === 'code') {
-            const frame = { type: 'code', kind: rooms.has(codeOf(msg.code)) ? 'room' : 'none' };
-            if (msg.id !== undefined) frame.id = msg.id;
-            send(ws, frame);
-            return;
-          }
-          const frame = { type: msg.type, error: 'unavailable' };
+          // A SQUAD REFUSAL CARRIES ITS OP, spelled the way handleSquad spells
+          // it (op, or 'unknown'), for handleSquad's own reason: a client with
+          // two squad answers outstanding cannot tell which one failed from
+          // { type:'squad', error } alone. The other types keep the shape
+          // they have always had here.
+          const frame = msg.type === 'squad'
+            ? { type: 'squad', op: (typeof msg.op === 'string' && msg.op) || 'unknown', error: 'unavailable' }
+            : { type: msg.type, error: 'unavailable' };
           if (msg.id !== undefined) frame.id = msg.id;
           send(ws, frame);
           return;

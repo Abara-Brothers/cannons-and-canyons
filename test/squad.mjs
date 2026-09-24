@@ -1,5 +1,5 @@
 // Task 1's half of squads: ONE CODE NAMESPACE, and the two new frame types
-// reaching the layer that will answer them.
+// reaching the server.
 //
 // WHY THIS EXISTS. A squad code and a room code are typed into the SAME
 // "Enter a code" field (design D8). If the two spaces can collide, that field
@@ -15,7 +15,12 @@
 //
 // This suite loads public/room-engine.js, which test/social.mjs deliberately
 // does not. That is the point of this one: the seam between the engine's code
-// minting and the layer that answers a code is what task 1 builds.
+// minting and the squad container is what task 1 builds.
+//
+// THE CODE FRAME IS NOT HERE. Its answer is computed in server.js's socket
+// handler, ahead of the social layer, and nothing in process can reach that
+// handler; test/code_frame.mjs drives it against a real server.js, with the
+// layer off and with it on against a hanging Supabase.
 //
 // Headless: no server, no Chrome, no Supabase, no network, no real clock.
 import { readFileSync } from 'node:fs';
@@ -157,21 +162,38 @@ const now = () => NOW;
 }
 
 // A TRIPWIRE, NOT A PROOF, and said plainly the way test/display_name.mjs
-// says it about its own source checks. These three lines in server.js are
-// only observable against a running server with Supabase configured, which
-// this headless suite has neither of. What EXECUTES the same shapes is (2b)
-// and (3d) below, which wire them by hand with the same expressions.
+// says it about its own source checks. Two of these lines are wiring whose
+// effect NO test can observe in this task, in process or against a running
+// server: setCodeTaken(social.hasSquad) changes nothing while no squad can
+// exist (hasSquad answers false for every string, which is also the engine's
+// default), and roomExists has no reader until task 2's squad minter. So the
+// source is read — and read WITH COMMENTS STRIPPED and SCOPED TO THE BLOCK
+// THAT BUILDS THE LAYER, the way test/house-rules.mjs reads the auth sink.
+// Unstripped, a commented-out copy of the line, or a comment that merely
+// quotes it, satisfied these regexes; unscoped, a copy wired outside that
+// block would run on a deploy with no social layer at all (plan R14).
+//
+// What EXECUTES the same shapes is (2b) and (3g) here, which wire them by
+// hand with the same expressions, and test/code_frame.mjs, which boots the
+// real server.js with the layer on and mints rooms through the wired loop.
 {
-  const src = read('server.js');
+  const code = (src) => src.split('\n')
+    .map((l) => l.replace(/\/\*.*?\*\//g, '').replace(/(^|\s)\/\/.*$/, '$1'))
+    .join('\n');
+  const src = code(read('server.js'));
   if (/if \(SOCIAL_TYPES\.has\(msg\.type\)\) \{/.test(src))
     ok('(3b) server.js still routes on SOCIAL_TYPES alone — membership in that set IS interception');
   else fail('(3b) server.js no longer contains "if (SOCIAL_TYPES.has(msg.type)) {" — (3a) proves nothing without it');
-  if (/roomExists: \(code\) => rooms\.has\(code\)/.test(src))
-    ok('(3b) server.js injects roomExists as rooms.has');
-  else fail('(3b) server.js does not inject "roomExists: (code) => rooms.has(code)" — the code frame\'s room arm has no container behind it');
-  if (/setCodeTaken\(social\.hasSquad\)/.test(src))
-    ok('(3b) server.js wires the engine\'s codeTaken to the squad container');
-  else fail('(3b) server.js does not call setCodeTaken(social.hasSquad) — squad and room codes can collide');
+  const from = src.indexOf('if (SB_URL && SB_SECRET) {');
+  const to = src.indexOf('[boot] social off', from);
+  const block = from >= 0 && to > from ? src.slice(from, to) : '';
+  if (!block) fail('(3b) no "if (SB_URL && SB_SECRET) {" ... "[boot] social off" block in server.js — nothing below was checked');
+  if (block && /roomExists: \(code\) => rooms\.has\(code\)/.test(block))
+    ok('(3b) server.js injects roomExists as rooms.has, in live code inside the block that builds the layer');
+  else fail('(3b) server.js does not inject "roomExists: (code) => rooms.has(code)" in live code inside the block that builds the layer — task 2\'s squad minter has no route to `rooms`');
+  if (block && /^\s*setCodeTaken\(social\.hasSquad\);/m.test(block))
+    ok('(3b) server.js wires the engine\'s codeTaken to the squad container, in live code inside the block that builds the layer');
+  else fail('(3b) server.js does not call setCodeTaken(social.hasSquad) in live code inside the block that builds the layer — squad and room codes can collide');
 }
 
 // WHY INTERCEPTION IS NOT OPTIONAL, shown rather than asserted: hand both new
@@ -184,100 +206,6 @@ const now = () => NOW;
   if (ws._rx.length === 0 && rooms.size === before)
     ok('(3c) the room engine answers neither frame and creates nothing');
   else fail('(3c) the engine answered ' + JSON.stringify(ws._rx) + ' rooms ' + before + '->' + rooms.size);
-}
-
-// ---- (3d) the code frame, against the REAL rooms container ------------------
-{
-  // A CODE WITH A LETTER IN IT, forced rather than hoped for. Eight of the 31
-  // characters are digits, so about one mint in 226 is digits alone — and for
-  // that code the lower-case probe below is the very same string, passes with
-  // the case fold deleted, and proves nothing on that run. Refusing letterless
-  // candidates through the engine's own seam (the one (2b) proves) makes every
-  // run exercise the fold. The predicate is unwired again before anything else
-  // mints.
-  setCodeTaken((c) => !/[A-Z]/.test(c));
-  const host = mkws();
-  handleClientMessage(host, { type: 'create', name: 'T', skin: 'olive', mode: 'duel', loadout: FIVE });
-  setCodeTaken(null);
-  const CODE = frames(host, 'created')[0].code;
-  if (CODE.toLowerCase() === CODE) fail('(3d) the minted code ' + JSON.stringify(CODE) + ' has no letter, so the lower-case probe below cannot fail');
-
-  const store = mkstore();
-  const social = createSocial({ store, terms: TERMS, send, now, roomExists: (code) => rooms.has(code) });
-
-  const w1 = mkws(UID);
-  await social.handle(w1, { type: 'code', code: CODE, id: 'c1' });
-  if (same(last(w1), { type: 'code', kind: 'room', id: 'c1' }))
-    ok('(3d) a live room code answers kind "room", with the request id echoed');
-  else fail('(3d) a live room code answered ' + JSON.stringify(last(w1)));
-
-  const w2 = mkws(UID);
-  await social.handle(w2, { type: 'code', code: CODE.toLowerCase() });
-  if (same(last(w2), { type: 'code', kind: 'room' }))
-    ok('(3d) the same code in lower case answers "room" — the normalisation matches the engine\'s roomCode()');
-  else fail('(3d) lower case answered ' + JSON.stringify(last(w2)));
-
-  // THE TRIM, the other half of roomCode() that a lookup can observe. The
-  // engine's join trims, so a pasted " ABCD " seats a player; a code frame that
-  // did not trim would tell that same player there is no such game.
-  const w2b = mkws(UID);
-  await social.handle(w2b, { type: 'code', code: ' ' + CODE + ' ' });
-  if (same(last(w2b), { type: 'code', kind: 'room' }))
-    ok('(3d) the same code with spaces round it answers "room" — trimmed, as the engine\'s join trims it');
-  else fail('(3d) a space-padded code answered ' + JSON.stringify(last(w2b)));
-
-  const w3 = mkws(UID);
-  await social.handle(w3, { type: 'code', code: 123 });
-  if (same(last(w3), { type: 'code', kind: 'none' }))
-    ok('(3d) a non-string code answers "none" rather than throwing on .toUpperCase()');
-  else fail('(3d) {code:123} answered ' + JSON.stringify(last(w3)));
-
-  const w4 = mkws(UID);
-  await social.handle(w4, { type: 'code' });
-  if (same(last(w4), { type: 'code', kind: 'none' })) ok('(3d) a frame with no code at all answers "none"');
-  else fail('(3d) a frame with no code answered ' + JSON.stringify(last(w4)));
-
-  // NO SIGN-IN. This field is the guest's whole way in (design 5.1), so it is
-  // the one frame in this layer that must never answer the shared
-  // { type:'social', error:'sign_in' }. mkws(null) is a socket that never
-  // said hello.
-  const guest = mkws(null);
-  await social.handle(guest, { type: 'code', code: CODE });
-  if (same(last(guest), { type: 'code', kind: 'room' }))
-    ok('(3d) a socket with no account gets the answer, not a sign-in gate');
-  else fail('(3d) an unauthenticated socket got ' + JSON.stringify(last(guest)));
-
-  // THE SAME STRING, THE OTHER ANSWER. Tear the room down and ask again. A
-  // handler answering from a constant, or from a container it never
-  // consulted, cannot produce two answers for one input.
-  handleClientMessage(host, { type: 'leave' });
-  if (rooms.size !== 0) fail('(3d) leave did not tear the lobby down; rooms.size is ' + rooms.size);
-  const w5 = mkws(UID);
-  await social.handle(w5, { type: 'code', code: CODE });
-  if (same(last(w5), { type: 'code', kind: 'none' }))
-    ok('(3d) the very same code answers "none" once the room is gone — the answer is read, not remembered');
-  else fail('(3d) a dead room code still answered ' + JSON.stringify(last(w5)));
-
-  if (store.calls.length === 0) ok('(3d) a code frame never reaches the store — both lookups are memory');
-  else fail('(3d) a code frame reached the store: ' + JSON.stringify(store.calls));
-}
-
-// ---- (3e) the roomExists default -------------------------------------------
-// Every existing test builds createSocial without it, and so does any host
-// that does not wire one. The default must REFUSE rather than throw or guess:
-// a layer answering "room" here would tell a player a code is joinable on a
-// deploy with no rooms container behind the question at all.
-{
-  const host = mkws();
-  handleClientMessage(host, { type: 'create', name: 'T', skin: 'olive', mode: 'duel', loadout: FIVE });
-  const CODE = frames(host, 'created')[0].code;
-  const social = createSocial({ store: mkstore(), terms: TERMS, send, now });
-  const ws = mkws(UID);
-  await social.handle(ws, { type: 'code', code: CODE });
-  if (same(last(ws), { type: 'code', kind: 'none' }))
-    ok('(3e) with no roomExists injected a live room code answers "none" — the default refuses, it does not throw');
-  else fail('(3e) the default roomExists answered ' + JSON.stringify(last(ws)));
-  handleClientMessage(host, { type: 'leave' });
 }
 
 // ---- (3f) the squad handler ------------------------------------------------
@@ -332,7 +260,7 @@ const now = () => NOW;
     // included — so the rest of (3g) is skipped, out loud.
     fail('(3g) createSocial returned ' + JSON.stringify(Object.keys(social)) + ' — no hasSquad, so the rest of (3g) did not run');
   } else {
-    ok('(3g) createSocial hands out hasSquad — server.js has something to give setCodeTaken');
+    ok('(3g) createSocial hands out hasSquad — server.js has something to give setCodeTaken and the code frame');
     const odd = ['ABCD', 'constructor', '__proto__', ''].filter((c) => social.hasSquad(c) !== false);
     if (odd.length === 0) ok('(3g) hasSquad answers false for every string with no squad behind it, prototype keys included');
     else fail('(3g) hasSquad answered true for ' + JSON.stringify(odd));
@@ -355,7 +283,9 @@ const now = () => NOW;
   // until a squad can exist, and create() is task 2. TASK 2 MUST ADD HERE:
   // (i) createSquads().create(member) followed by has(code) === true and
   // get(code) returning that squad and ofUser(member.userId) finding it;
-  // (ii) a live squad code answering { type:'code', kind:'squad' };
+  // (ii) a live squad code answering { type:'code', kind:'squad' } — asked of
+  // the REAL server.js, which is where that answer is computed (see
+  // test/code_frame.mjs), because nothing in process reaches it;
   // (iii) ofUser(null) answering null with a guest member present, which is
   // the guard server/squads.js deliberately leaves to that task;
   // (iv) THE OTHER DIRECTION OF R4: the squad minter refusing a candidate that
