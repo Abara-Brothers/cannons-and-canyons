@@ -1037,9 +1037,12 @@ export function createSocial({
     // player who is no longer in it is exactly the one who has to be told.
     const victim = target.ws;
     // sq.leader, because ledSquad has just established that this caller IS
-    // the leader, on both halves. Passing anything else would make the
-    // machine a second, partial copy of that rule, and one that could hide a
-    // broken half of ledSquad from every test of it.
+    // the leader, on both halves. THE MACHINE'S OWN LEADER CHECK THEREFORE
+    // ALWAYS PASSES FOR THIS CALLER AND GUARDS NOTHING HERE: ledSquad is the
+    // only leadership check on this path, and nothing may lean on kick()'s.
+    // That is a choice, not an oversight. Passing the caller's identity
+    // instead made the machine a second, partial copy of the rule, and it
+    // hid a broken half of ledSquad from every test of it (task 3's F30).
     const res = squads.kick(sq.code, sq.leader, target.key);
     if (!res.ok) return squadReply(ws, msg, 'kick', { error: res.error });
     if (victim) safeSend(victim, { type: 'squad', op: 'ended', reason: 'kicked' });
@@ -1117,8 +1120,10 @@ export function createSocial({
     // seats". A number smuggles nothing, so out of range is dropped, not
     // refused.
     const max = lim.pick && Number.isInteger(msg.max) && msg.max >= lim.min && msg.max <= lim.max ? msg.max : null;
-    // sq.leader: ledSquad has established that this caller IS the leader —
-    // see squadKick for why nothing else is passed.
+    // sq.leader: ledSquad has established that this caller IS the leader.
+    // As in squadKick, THE MACHINE'S LEADER CHECK ALWAYS PASSES FOR THIS
+    // CALLER AND GUARDS NOTHING HERE — ledSquad is the only leadership check
+    // on this path, and nothing may lean on setMode()'s.
     const res = squads.setMode(sq.code, sq.leader, mode, tees, max);
     if (!res.ok) return no(res.error);
     // READY MEANS "MY RACK IS FULL FOR THE ARMED MODE". A rack readied for

@@ -293,10 +293,13 @@ export function createSquads({ now, capacity = 4, codeTaken = () => false } = {}
   // hoisted function cannot be reached before it is initialised.
   function leave(key) { return detach(byKey.get(key) || null, key); }
 
-  // `fromKey` is the member key of the row the kicker's socket holds, and
+  // `fromKey` is the key of the member the caller claims leads, and
   // `targetKey` the target's. The leader is always a signed-in account (see
   // create and detach), so a guest's socket key never equals it and a guest
-  // can never pass the first test.
+  // can never pass the first test. The one caller, server/social.js, passes
+  // the leader its ledSquad has already established, so for that caller this
+  // check always passes and guards nothing: ledSquad is the socket path's
+  // only leadership check, and this one guards a direct caller of the machine.
   function kick(code, fromKey, targetKey) {
     const squad = squads.get(code) || null;
     // `!squad.leader` closes the one case the rest of this file makes
@@ -336,7 +339,7 @@ export function createSquads({ now, capacity = 4, codeTaken = () => false } = {}
   // socket. Only `true` is ready; anything else stands the member down, which
   // is the harmless direction for a frame that is not quite what it should be.
   function setReady(key, ready, loadout) {
-    const squad = byKey.get(key) || null;
+    const squad = ofUser(key);
     const m = squad ? squad.members.find((x) => x.key === key) : null;
     if (!m) return { ok: false, squad: null, error: 'no_squad' };
     const want = ready === true;
@@ -350,17 +353,22 @@ export function createSquads({ now, capacity = 4, codeTaken = () => false } = {}
 
   // design 4.3, row 'mode'. LEADER ONLY, and a squad that has gone is answered
   // the same way: nobody leads a squad that does not exist, and a stale leader
-  // after a hand-off must get the refusal a stranger gets. `byKey` is the
-  // caller's member key; the leader is always an account id (see create and
-  // detach), so a guest's socket key and a null never match it, and
-  // `!squad.leader` is kick's guard against a leader of null.
+  // after a hand-off must get the refusal a stranger gets. `leaderKey` is
+  // the member key the caller claims leads; the leader is always an account
+  // id (see create and detach), so a guest's socket key and a null never
+  // match it, and `!squad.leader` is kick's guard against a leader of null.
+  // (Not named byKey: that is the member index above, and a later edit here
+  // reaching for the index must not get the caller's key instead.) The one
+  // caller, server/social.js, passes the leader its ledSquad has already
+  // established, so this check always passes for it: it guards a direct
+  // caller of the machine, not the socket path. kick() above is the same.
   //
   // WHAT IS A VALID MODE, TEE SET OR SEAT COUNT is not decided here, for the
   // reason setReady gives: server/social.js vets all three against the
   // engine's own MODE_SEATS and TEE_IDS, and is the only caller.
-  function setMode(code, byKey, mode, tees, max) {
+  function setMode(code, leaderKey, mode, tees, max) {
     const squad = squads.get(code) || null;
-    if (!squad || !squad.leader || squad.leader !== byKey) return { ok: false, squad: null, error: 'not_leader' };
+    if (!squad || !squad.leader || squad.leader !== leaderKey) return { ok: false, squad: null, error: 'not_leader' };
     squad.mode = mode;
     squad.tees = tees;
     squad.max = max;
