@@ -810,6 +810,25 @@ export function createSocial({
   // which create and join also leave (one squad per player).
   const squadsOfCaller = (ws, from) => [...new Set([squads.ofUser(from), squads.ofUser(identityKey(ws))])].filter(Boolean);
 
+  // THE SQUAD THIS SOCKET VALIDLY LEADS, or null. EVERY LEADER-ONLY OP CALLS
+  // THIS — kick, mode, and every later one (start, invite...) — and none
+  // re-derives the rule inline.
+  //
+  // LEADERSHIP IS AN ACCOUNT'S, SO BOTH HALVES MUST BE THE LEADER: the row
+  // this socket holds (squadKey) and the account signed in on it
+  // (identityKey). Either half alone is exploitable. The row alone would let
+  // a socket that signed out of the leader's account and into another keep
+  // commanding the squad. The account alone would let a socket that holds a
+  // GUEST row in one squad command ANOTHER squad its account leads from a
+  // second device — acting on a squad its own screen is not showing, with an
+  // index read off the one it is. A second device of the leader that holds
+  // no row passes both, because squadKey is then its identity.
+  function ledSquad(ws) {
+    const me = squadKey(ws);
+    const sq = squads.ofUser(me);
+    return sq && sq.leader === me && identityKey(ws) === me ? sq : null;
+  }
+
   // `you`: which row of this squad THIS SOCKET is, or -1 when it is none. The
   // socket first — the ordinary case, and the only one for a guest, whose key
   // IS a socket — then squadKey, which for a socket holding no row is its
@@ -1010,21 +1029,14 @@ export function createSocial({
   }
 
   async function squadKick(ws, msg) {
-    const me = squadKey(ws);
-    const sq = squads.ofUser(me);
-    // LEADERSHIP IS AN ACCOUNT'S, SO BOTH MUST BE THE LEADER: the row this
-    // socket holds (squadKey) and the account signed in on it (identityKey).
-    // The row alone would let a socket that signed out of the leader's
-    // account and into another keep commanding the squad; the account alone
-    // would let a second device aim a stale index at a squad its own screen
-    // is not showing.
-    if (!sq || sq.leader !== me || identityKey(ws) !== me) return squadReply(ws, msg, 'kick', { error: 'not_leader' });
+    const sq = ledSquad(ws);
+    if (!sq) return squadReply(ws, msg, 'kick', { error: 'not_leader' });
     const target = squadTarget(sq, msg);
     if (!target) return squadReply(ws, msg, 'kick', { error: 'no_such_member' });
     // Held BEFORE the removal: kick() takes the row off the squad, and a
     // player who is no longer in it is exactly the one who has to be told.
     const victim = target.ws;
-    const res = squads.kick(sq.code, me, target.key);
+    const res = squads.kick(sq.code, identityKey(ws), target.key);
     if (!res.ok) return squadReply(ws, msg, 'kick', { error: res.error });
     if (victim) safeSend(victim, { type: 'squad', op: 'ended', reason: 'kicked' });
     await pushSquad(sq, ws, msg);
