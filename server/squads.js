@@ -215,10 +215,10 @@ export function createSquads({ now, capacity = 4, codeTaken = () => false } = {}
     return null;
   }
 
-  // Every key a caller may hold a row under: the one this member's row will
-  // carry, and `fromKey`, the row the caller's socket holds now, when that is
+  // Every key a mover may hold a row under: the one this member's row will
+  // carry, and `fromKey`, the row the mover's socket holds now, when that is
   // a different key.
-  const callerKeys = (row, fromKey) => (fromKey != null && fromKey !== row.key ? [row.key, fromKey] : [row.key]);
+  const moverKeys = (row, fromKey) => (fromKey != null && fromKey !== row.key ? [row.key, fromKey] : [row.key]);
 
   // -> squad, or null for a GUEST. A SQUAD IS ALWAYS LED BY AN ACCOUNT: the
   // mode, the start and the kick all belong to the leader, and a leader of
@@ -234,7 +234,7 @@ export function createSquads({ now, capacity = 4, codeTaken = () => false } = {}
     // leaving first is what keeps `byKey` a map rather than a multimap. Both
     // the account's row and the row the caller's socket holds go. The old
     // squad survives under its next leader unless they were the last member.
-    for (const k of callerKeys(row, fromKey)) leave(k);
+    for (const k of moverKeys(row, fromKey)) leave(k);
     const code = mintCode();
     const squad = { code, leader: row.userId, created: now(), mode: 'duel', tees: null, max: null, members: [row] };
     squads.set(code, squad);
@@ -248,14 +248,24 @@ export function createSquads({ now, capacity = 4, codeTaken = () => false } = {}
     const squad = squads.get(code) || null;
     if (!squad) return { ok: false, squad: null, error: 'no_such_squad' };
     const row = mkMember(member);
-    const keys = callerKeys(row, fromKey);
+    const keys = moverKeys(row, fromKey);
     // ALREADY HERE IS NOT A JOIN — under either key. Without this the
     // one-squad-per-player leave below would remove this member and add them
     // again — and if they were the leader, the hand-off would give their
     // squad away on a frame that asked for nothing to change. A second device,
     // or a guest row whose socket has since signed in, is `resume`'s business,
     // not this one's: the squad keeps the row and the socket it already has.
-    if (squad.members.some((m) => keys.includes(m.key))) return { ok: true, squad, error: null };
+    //
+    // BUT ONE SOCKET NEVER SHOWS TWO SQUADS. When the match is on the
+    // ACCOUNT's row (another device of it is here) and the socket's own row,
+    // fromKey, is in some OTHER squad, that row goes: otherwise the socket is
+    // answered with this squad and then pushed the other one for as long as
+    // it stays connected. Only fromKey — the socket's own row. The account's
+    // other device keeps what it has.
+    if (squad.members.some((m) => keys.includes(m.key))) {
+      if (fromKey != null && fromKey !== row.key && byKey.has(fromKey) && byKey.get(fromKey) !== squad) leave(fromKey);
+      return { ok: true, squad, error: null };
+    }
     // THE CAP IS CHECKED BEFORE THE LEAVE, and the order is the whole point: a
     // refused join must not be the thing that costs a player the squad they
     // were already in.
@@ -306,15 +316,16 @@ export function createSquads({ now, capacity = 4, codeTaken = () => false } = {}
   // hoisted function cannot be reached before it is initialised.
   function leave(key) { return detach(byKey.get(key) || null, key); }
 
-  // `callerKey` is the CALLER's member key and `targetKey` the target's. The
-  // leader is always a signed-in account (see detach), so a guest's socket
-  // key never equals it and a guest can never pass the first test.
-  function kick(code, callerKey, targetKey) {
+  // `fromKey` is the member key of the row the kicker's socket holds, and
+  // `targetKey` the target's. The leader is always a signed-in account (see
+  // create and detach), so a guest's socket key never equals it and a guest
+  // can never pass the first test.
+  function kick(code, fromKey, targetKey) {
     const squad = squads.get(code) || null;
     // `!squad.leader` closes the one case the rest of this file makes
     // unreachable and a future caller could not: a leader of null must never
     // be matched by a caller whose account id is also null.
-    if (!squad || !squad.leader || squad.leader !== callerKey) return { ok: false, squad: null, error: 'not_leader' };
+    if (!squad || !squad.leader || squad.leader !== fromKey) return { ok: false, squad: null, error: 'not_leader' };
     // THE LEADER IS NOT A TARGET. Leave is the door they use, and a kick that
     // could remove the leader would run the leadership hand-off from the one
     // path that has no reason to.

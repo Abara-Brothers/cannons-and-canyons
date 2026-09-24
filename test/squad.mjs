@@ -448,10 +448,18 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
   // suite imports it in process, and a CC_TEST_CODE_BYTES left in somebody's
   // shell must not script its codes. Only the preload entry arms, and it
   // does. Fresh module instances (a query string) so both loads really run.
+  // THE PRELOAD ANNOUNCES ITSELF ON STDERR, which is right in a spawned
+  // server and noise in this suite's output, so stderr is CAPTURED for the
+  // length of the probe — and what it caught is asserted, which is also the
+  // proof that the preload really loaded and armed rather than merely that
+  // something set the property.
   {
     const own = () => Object.prototype.hasOwnProperty.call(globalThis.crypto, 'getRandomValues');
     const was = process.env.CC_TEST_CODE_BYTES;
+    const write = process.stderr.write;
+    const caught = [];
     process.env.CC_TEST_CODE_BYTES = '0,1,2,3';
+    process.stderr.write = (chunk) => { caught.push(String(chunk)); return true; };
     let helperArmed = null, preloadArmed = null;
     try {
       await import('./fixtures/scripted-code-bytes.mjs?probe=' + Date.now());
@@ -459,12 +467,13 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
       await import('./fixtures/scripted-code-bytes-preload.mjs?probe=' + Date.now());
       preloadArmed = own();
     } finally {
+      process.stderr.write = write;
       delete globalThis.crypto.getRandomValues;
       if (was === undefined) delete process.env.CC_TEST_CODE_BYTES; else process.env.CC_TEST_CODE_BYTES = was;
     }
-    if (helperArmed === false && preloadArmed === true && !own())
-      ok('(s2) importing the helper arms nothing even with CC_TEST_CODE_BYTES set; only the preload entry arms');
-    else fail('(s2) arming: helper ' + helperArmed + ', preload ' + preloadArmed);
+    if (helperArmed === false && preloadArmed === true && !own() && caught.join('') === '[code-bytes] armed 4\n')
+      ok('(s2) importing the helper arms nothing even with CC_TEST_CODE_BYTES set; only the preload entry arms, and says so on the stderr this probe captured');
+    else fail('(s2) arming: helper ' + helperArmed + ', preload ' + preloadArmed + ', stderr caught ' + JSON.stringify(caught));
   }
   // THE HOOK IS PROVED BEFORE ANYTHING RELIES ON IT. "ABCD" out of a real
   // CSPRNG is one chance in 923,521.
@@ -1374,6 +1383,32 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
       ok('(h9) a create from that socket leaves both the socket\'s row and the account\'s, and tells both squads');
     else fail('(h9) create across two squads: squad one saw ' + JSON.stringify(toldOne) + ', squad two\'s guest got ' + JSON.stringify(h.rx));
   }
+  // ONE SOCKET NEVER SHOWS TWO SQUADS, even when the join is a no-op for the
+  // account. g holds a guest row in X, signs in as B, whose other device is
+  // already in Y, and joins Y: the join matches on B's row and changes
+  // nothing in Y — but g's guest row in X must still go, or g is answered
+  // with Y and then pushed X.
+  {
+    const st = sqstore(); const S = sqSocial(st);
+    const wa = sqUp(S, sqws(SQA)), wc = sqUp(S, sqws(SQC)), wb = sqUp(S, sqws(SQB)), g = sqws(null);
+    await S.handle(wa, { type: 'squad', op: 'create' });
+    const X = sqat(wa, 'state').code;
+    await S.handle(wc, { type: 'squad', op: 'create' });
+    const Y = sqat(wc, 'state').code;
+    await S.handle(wb, { type: 'squad', op: 'join', code: Y });
+    await S.handle(g, { type: 'squad', op: 'join', code: X, name: 'G', skin: 'gold' });
+    g.userId = SQB; g.isGuest = false; S.onAuth(g);
+    g.rx.length = 0; wa.rx.length = 0;
+    await S.handle(g, { type: 'squad', op: 'join', code: Y, id: 'j' });
+    const answer = g.rx.find((f) => f.id === 'j') || {};
+    const toldX = sqat(wa, 'state');
+    g.rx.length = 0;
+    await S.handle(sqws(null), { type: 'squad', op: 'join', code: X, name: 'L', skin: 'gold' });
+    if (answer.code === Y && answer.members && answer.members.length === 2 && answer.you === 1
+      && toldX.code === X && toldX.members && toldX.members.length === 1 && g.rx.length === 0)
+      ok('(h9) a join that is a no-op for the account still takes the socket\'s guest row out of its other squad — one socket, one squad');
+    else fail('(h9) join-variant: answer ' + JSON.stringify(answer) + ', X told ' + JSON.stringify(toldX) + ', X still pushes ' + JSON.stringify(g.rx.map((f) => f.code + ' you=' + f.you)));
+  }
 }
 
 // ---- (h10) the actor's own socket throws: everyone else is still told -----
@@ -1421,6 +1456,22 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
     if (!threw && told.code === code && told.members && told.members.length === 1 && told.members[0].id === SQB)
       ok(`(h10) a ${op} whose mover's socket throws still tells the squad they left`);
     else fail(`(h10) ${op} with a throwing mover: threw ${threw && threw.message}, left-behind saw ${JSON.stringify(told)}`);
+  }
+  // LEAVE: the leaver's own `left` is the send that throws, and the members
+  // left behind must still get their roster.
+  {
+    const S = sqSocial(sqstore());
+    const wa = sqUp(S, brittle(SQA)), wb = sqUp(S, sqws(SQB));
+    await S.handle(wb, { type: 'squad', op: 'create' });
+    const code = sqat(wb, 'state').code;
+    await S.handle(wa, { type: 'squad', op: 'join', code });
+    wb.rx.length = 0;
+    let threw = null;
+    try { await S.handle(wa, { type: 'squad', op: 'leave' }); } catch (e) { threw = e; }
+    const told = sqat(wb, 'state');
+    if (!threw && told.code === code && told.members && told.members.length === 1 && told.members[0].id === SQB)
+      ok('(h10) a leave whose leaver\'s socket throws still pushes the roster to the members left behind');
+    else fail('(h10) leave with a throwing leaver: threw ' + (threw && threw.message) + ', left-behind saw ' + JSON.stringify(told));
   }
 }
 

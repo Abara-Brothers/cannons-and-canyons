@@ -749,14 +749,18 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
     catch { squadReply(ws, msg, op, { error: 'unavailable' }); }
   }
 
-  // WHO A SQUAD FRAME IS FROM. A signed-in member is their account id; a
+  // WHO IS ON THIS SOCKET NOW. A signed-in member is their account id; a
   // GUEST is their socket. A guest cannot be the former and must not be: an
   // ANONYMOUS account id is an identity this feature must never spend, the
   // snapshot says `id: null` for a guest, and this keeps that true all the
   // way down. A socket is also the one key no client can forge. The rule is
   // requireLinked's, so what the gate calls a guest is what the machine does.
+  //
+  // identityKey IS WHO, NOT WHERE. It is the key a NEW row for this socket
+  // would carry, and the account a leadership check must match — it is NOT
+  // how to find the row this socket already holds. For that, squadKey below.
   const squadGuest = (ws) => !(ws && ws.userId && !ws.isGuest);
-  const squadKey = (ws) => (squadGuest(ws) ? ws : wireId(ws.userId));
+  const identityKey = (ws) => (squadGuest(ws) ? ws : wireId(ws.userId));
   const squadMemberOf = (ws, msg) => ({
     userId: squadGuest(ws) ? null : wireId(ws.userId),
     guest: squadGuest(ws),
@@ -766,24 +770,35 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
     ws,
   });
 
-  // THE CALLER'S KEY: the row this SOCKET holds, and the account only when
-  // the socket holds none (a second device of a member). squadKey alone —
-  // account first — stranded a guest who signed in mid-squad: the client
-  // re-sends `hello` over the live socket, so the socket became an account
-  // while still holding a GUEST row keyed by itself, and leave answered
-  // `left` while the row stayed, and create made it lead a new squad while
-  // still a member of the old. Socket first is youIn's rule below as well, so
-  // the file has one answer to "which row is this caller".
-  const callerKey = (ws) => squads.keyOfSocket(ws) || squadKey(ws);
-  // Every squad the caller could be in before a move: the one its socket's
-  // row is in, and the one its account is in (another device's), which
-  // create and join both leave.
-  const squadsOfCaller = (ws, from) => [...new Set([squads.ofUser(from), squads.ofUser(squadKey(ws))])].filter(Boolean);
+  // squadKey IS WHERE: THE ROW THIS SOCKET HOLDS, and its identity only when
+  // it holds none — a second device of a member, or a fresh socket
+  // reconnecting. THIS is the key to reach for to find the caller's row, in
+  // this task and every later one (ready, mode, start, resume, the drop
+  // window), which is why it has the familiar name.
+  //
+  // The two differ in ordinary use. The client re-sends `hello` over the
+  // live socket after a sign-in, so a guest who signs in mid-squad is an
+  // account (identityKey) on a socket that still holds a GUEST row keyed by
+  // itself (squadKey). Finding the row by identity is what stranded that
+  // guest: leave answered `left` while the row stayed, and create made the
+  // socket lead a new squad while still a member of the old. The reverse is
+  // a socket that signed out and still holds its account's row. Socket first
+  // is youIn's rule below as well, so the file has one answer to "which row
+  // is this caller".
+  const squadKey = (ws) => squads.keyOfSocket(ws) || identityKey(ws);
+  // Every squad the caller could be in before a move — BOTH keys, on
+  // purpose: the squad its socket's row is in (`from`, a squadKey), and the
+  // squad its current identity is in, which may be another device's and
+  // which create and join also leave (one squad per player).
+  const squadsOfCaller = (ws, from) => [...new Set([squads.ofUser(from), squads.ofUser(identityKey(ws))])].filter(Boolean);
 
   // `you`: which row of this squad THIS SOCKET is, or -1 when it is none. The
   // socket first — the ordinary case, and the only one for a guest, whose key
-  // IS a socket — then the account, so a second device of a signed-in member
-  // (whose row still holds the first device) is shown its own row.
+  // IS a socket — then squadKey, which for a socket holding no row is its
+  // identity, so a second device of a signed-in member (whose row still holds
+  // the first device) is shown its own row. squadKey and not identityKey: a
+  // socket whose row is in ANOTHER squad is no row of this one, and must not
+  // be shown some other device's row as its own.
   function youIn(sq, ws) {
     const i = sq.members.findIndex((m) => m.ws === ws);
     if (i >= 0) return i;
@@ -919,7 +934,7 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
   };
 
   async function squadCreate(ws, msg) {
-    const from = callerKey(ws);
+    const from = squadKey(ws);
     const olds = squadsOfCaller(ws, from);
     const sq = squads.create(squadMemberOf(ws, msg), from);
     // THE SQUAD THEY JUST LEFT STILL HAS PEOPLE IN IT. create() leaves it as
@@ -938,7 +953,7 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
     // that is not a string. No shape test beside it — a string that is not a
     // live squad's code misses the machine's Map and is answered no_such_squad
     // either way, so a regex here could never be seen to do anything.
-    const from = callerKey(ws);
+    const from = squadKey(ws);
     const olds = squadsOfCaller(ws, from);
     const res = squads.join(codeOf(msg.code), squadMemberOf(ws, msg), from);
     if (!res.ok) return squadReply(ws, msg, 'join', { error: res.error });
@@ -947,27 +962,31 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
   }
 
   async function squadLeave(ws, msg) {
-    const res = squads.leave(callerKey(ws));
+    const res = squads.leave(squadKey(ws));
     // ANSWERED FIRST AND ALWAYS, INCLUDING WHEN THERE WAS NOTHING TO LEAVE.
     // The state the player asked for is the state they are in, and a second
     // word for it would be one more string to render. The leaver gets a
-    // REPLY; `ended` is reserved for members who did not ask. The push to
-    // those left behind cannot fail: it sends only through safeSend, and the
-    // snapshot behind it degrades rather than rejects — so no second answer
-    // saying the leave failed can ever follow this one.
-    squadReply(ws, msg, 'left', { ok: true });
+    // REPLY; `ended` is reserved for members who did not ask.
+    //
+    // THE MEMBERS LEFT BEHIND FIRST, THE LEAVER'S ANSWER LAST — pushSquad's
+    // rule. The push cannot fail (safeSend only, over a snapshot that
+    // degrades rather than rejects) and does not reach the leaver, who is
+    // already off the roster; the answer is the one send here that can throw,
+    // and a throw must not cost the others the roster the leave has changed.
     if (res.squad) await pushSquadAfterExit(res.squad);
+    squadReply(ws, msg, 'left', { ok: true });
   }
 
   async function squadKick(ws, msg) {
-    const me = callerKey(ws);
+    const me = squadKey(ws);
     const sq = squads.ofUser(me);
     // LEADERSHIP IS AN ACCOUNT'S, SO BOTH MUST BE THE LEADER: the row this
-    // socket holds, and the account signed in on it. The row alone would let
-    // a socket that signed out of the leader's account and into another keep
-    // commanding the squad; the account alone would let a second device aim
-    // a stale index at a squad its own screen is not showing.
-    if (!sq || sq.leader !== me || squadKey(ws) !== me) return squadReply(ws, msg, 'kick', { error: 'not_leader' });
+    // socket holds (squadKey) and the account signed in on it (identityKey).
+    // The row alone would let a socket that signed out of the leader's
+    // account and into another keep commanding the squad; the account alone
+    // would let a second device aim a stale index at a squad its own screen
+    // is not showing.
+    if (!sq || sq.leader !== me || identityKey(ws) !== me) return squadReply(ws, msg, 'kick', { error: 'not_leader' });
     const target = squadTarget(sq, msg);
     if (!target) return squadReply(ws, msg, 'kick', { error: 'no_such_member' });
     // Held BEFORE the removal: kick() takes the row off the squad, and a
