@@ -339,11 +339,18 @@ export function createSquads({ now, capacity = 4, codeTaken = () => false } = {}
   // socket. Only `true` is ready; anything else stands the member down, which
   // is the harmless direction for a frame that is not quite what it should be.
   function setReady(key, ready, loadout) {
-    const squad = ofUser(key);
-    const m = squad ? squad.members.find((x) => x.key === key) : null;
-    if (!m) return { ok: false, squad: null, error: 'no_squad' };
+    const found = memberOf(key);
+    if (!found) return { ok: false, squad: null, error: 'no_squad' };
+    const { squad, member: m } = found;
     const want = ready === true;
     if (want && !(Array.isArray(loadout) && loadout.length)) return { ok: false, squad: null, error: 'no_rack' };
+    // A DROPPED ROW IS NOT READY (design 4.3: "kept 60 s as dropped and not
+    // ready"), whoever asks (task 5's fix pass). A Ready with no socket behind
+    // it would show beside `dropped` and survive the resume that markResumed
+    // says hands no Ready back. Standing down is always allowed.
+    // server/social.js picks the row up first when the account readies it
+    // from a live device, so this refuses only a caller with no socket to give.
+    if (want && m.dropAt !== null) return { ok: false, squad: null, error: 'dropped' };
     m.ready = want;
     // A COPY. The array arrived off a client frame; a squad holding that same
     // array would seat the member with whatever it had since become.

@@ -3815,22 +3815,61 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     if (same(a, { type: 'squad', op: 'start', error: 'member_offline', at: 1, id: 's' }) && seated.length === 0)
       ok('(d17) a member whose socket just closed stops the start with member_offline, naming their row, and nobody is seated');
     else fail('(d17) start after a close: ' + JSON.stringify({ a, seated }));
-    // THEIR SECOND DEVICE READIES THE DROPPED ROW (the account's row, which
-    // task 3 lets a second device act on): still nobody on the other end of
-    // the seat's socket, and still refused.
+    // THEY COME BACK: the resume re-attaches them and does NOT hand their
+    // Ready back (markResumed), so the same start is not_ready — and once
+    // they ready AGAIN, on the socket now on the row, it seats the squad.
     const wm2 = up5(S, mkws5(MEM));
-    await S.handle(wm2, { type: 'squad', op: 'ready', ready: true, loadout: RACK5 });
+    await S.handle(wm2, { type: 'squad', op: 'resume', id: 'r' });
+    const back = (wm2.rx.find((f) => f.id === 'r') || {}).members || [];
     await S.handle(wl, { type: 'squad', op: 'start', loadout: RACK5, id: 't' });
     const b = wl.rx.find((f) => f.id === 't');
-    if (same(b, { type: 'squad', op: 'start', error: 'member_offline', at: 1, id: 't' }) && seated.length === 0)
-      ok('(d17) a dropped row readied from a second device is still member_offline — Ready does not put a socket in the seat');
-    else fail('(d17) readied dropped row: ' + JSON.stringify({ b, seated }));
-    // THE CONTROL: they resume, ready again, and the start seats both.
-    await S.handle(wm2, { type: 'squad', op: 'resume' });
+    await S.handle(wm2, { type: 'squad', op: 'ready', ready: true, loadout: RACK5 });
     await S.handle(wl, { type: 'squad', op: 'start', loadout: RACK5, id: 'u' });
     const c = wl.rx.find((f) => f.id === 'u');
-    if (c && c.ok === true && same(seated, [2])) ok('(d17) and once they resume, the same start seats the whole squad');
-    else fail('(d17) control: ' + JSON.stringify({ c, seated }));
+    if (back[1] && back[1].ready === false && back[1].dropped === false && same(b, { type: 'squad', op: 'start', error: 'not_ready', id: 't' })
+      && c && c.ok === true && same(seated, [2]))
+      ok('(d17) the member resumes without their Ready, the start is not_ready until they ready again, and then it seats the whole squad');
+    else fail('(d17) resume then ready again: ' + JSON.stringify({ back: back[1], b, c, seated }));
+  }
+
+  // ---- (d17b) A DROPPED ROW IS NEVER READY (review, Important 3) -----------
+  // "Kept 60 s as dropped and not ready." Task 3 lets an account's second
+  // device act on the account's row — including a DROPPED one, whose Ready
+  // then showed beside `dropped` and survived the resume. The machine now
+  // refuses a Ready on a dropped row outright; and a second device pressing
+  // Ready on it first PICKS THE ROW UP (resume's own rule: nobody live holds
+  // it, and this device is in the player's hand), so the Ready is true of a
+  // live socket and the seat goes to that device.
+  {
+    const S0 = createSquads({ now: now5 });
+    const sq = S0.create(mem5(LEAD, mkws5(LEAD)));
+    const wm = mkws5(MEM);
+    S0.join(sq.code, mem5(MEM, wm));
+    wm.readyState = 3;
+    S0.markDropped(MEM, CLOCK5);
+    const r = S0.setReady(MEM, true, RACK5);
+    const down = S0.setReady(MEM, false, null);
+    if (r.ok === false && r.error === 'dropped' && sq.members[1].ready === false && sq.members[1].loadout === null && down.ok === true)
+      ok('(d17b) the machine refuses a Ready on a dropped row (dropped), and a stand-down is still fine');
+    else fail('(d17b) machine: ' + JSON.stringify({ r: { ok: r.ok, error: r.error }, row: sq.members[1] }, noWs));
+  }
+  {
+    const seated = [];
+    const S = social5(store5(), { cw: mkClockwork(), seatSquad: (seats) => { seated.push(seats.map((x) => x.ws)); return { ok: true, code: 'RM17' }; } });
+    const { wl, wm } = await pair5(S);
+    close5(S, wm);
+    await flush5();
+    wl.rx.length = 0;
+    const wm2 = up5(S, mkws5(MEM));
+    await S.handle(wm2, { type: 'squad', op: 'ready', ready: true, loadout: RACK5, id: 'y' });
+    const answer = wm2.rx.find((f) => f.id === 'y');
+    const rows = sq5(wl, 'state').map((f) => f.members[1]);
+    await S.handle(wl, { type: 'squad', op: 'start', loadout: RACK5, id: 's' });
+    const started = wl.rx.find((f) => f.id === 's') || {};
+    if (answer && answer.ok === true && rows.length && rows.every((m) => !(m.dropped && m.ready)) && rows[rows.length - 1].ready === true
+      && rows[rows.length - 1].dropped === false && started.ok === true && seated.length === 1 && seated[0][1] === wm2)
+      ok('(d17b) a second device readying a dropped row picks it up first: never shown dropped and ready, and the seat goes to that device');
+    else fail('(d17b) second-device ready: ' + JSON.stringify({ answer, rows, started, seated: seated.length }));
   }
 
   // ---- (d8s) C4 AT THE SOCKET: THE LAST ACCOUNT GOES, THE GUESTS ARE TOLD ---

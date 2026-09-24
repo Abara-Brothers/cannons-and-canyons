@@ -1157,6 +1157,15 @@ export function createSocial({
     if (!found) return squadReply(ws, msg, 'ready', { error: 'no_squad' });
     const want = msg.ready === true;
     if (want && !validRack(found.squad.mode, msg.loadout)) return squadReply(ws, msg, 'ready', { error: 'no_rack' });
+    // A DROPPED ROW IS PICKED UP BEFORE IT IS READIED (task 5's fix pass).
+    // Only an account's other device can reach its dropped row (squadOf falls
+    // back to the account when the socket holds no row), and a dropped row is
+    // one nobody live holds — resume's own rule gives it to the account's
+    // device that asks, and this device is the one in the player's hand. So
+    // the Ready is true of a live socket, and the seat goes where the player
+    // is. The machine refuses a Ready on a dropped row outright; this is what
+    // keeps that refusal from reaching a player who is right here.
+    if (want && found.member.dropAt !== null && squads.markResumed(found.member.key, ws)) clearDropSweep(found.member.key);
     const res = squads.setReady(found.member.key, want, want ? msg.loadout : null);
     if (!res.ok) return squadReply(ws, msg, 'ready', { error: res.error });
     // pushSquad's rule: EVERYONE ELSE FIRST, then the sender its roster, and
