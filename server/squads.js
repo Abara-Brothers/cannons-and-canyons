@@ -40,8 +40,8 @@
 // WHO BUILT WHAT. Task 1: the container and its readers, has and get. Task 2:
 // the code minter and the MEMBERSHIP half — create, join, leave, kick,
 // removeMember, ofUser as a real lookup, and keyOfSocket. Task 3: setReady,
-// setMode and clearReady. Still to come: the drop window's markDropped,
-// markResumed and sweepDropped (task 5). `has` came first
+// setMode and clearReady. Task 5: the drop window's markDropped,
+// markResumed and sweepDropped. `has` came first
 // because the engine's codeTaken calls it on every candidate code, and one
 // code namespace had to exist before anything minted a code in it.
 //

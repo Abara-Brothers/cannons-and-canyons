@@ -3375,6 +3375,28 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     else fail(`(d11b) ${where}: answered ${JSON.stringify(got)}; rosters ${JSON.stringify([ids5(x), ids5(y)])}`);
   }
 
+  // ---- (d11c) deferred item 6a: A GUEST WHO SIGNS IN AND RE-JOINS THEIR OWN
+  // SQUAD ENDS WITH EXACTLY ONE ROW ------------------------------------------
+  // Both ways a guest signs in: a socket that never said hello (server.js
+  // runs no hook — it had no id), and an ANONYMOUS guest (server.js runs the
+  // hook with the socket open, because the anonymous id differs — the sign-
+  // out branch above must keep the guest row, not take it). Either way the
+  // re-join is task 2's already-here: the socket keeps the row it holds.
+  for (const [label, before] of [['a socket that never said hello', [null, false]], ['an anonymous guest', [ANON, true]]]) {
+    const S = social5(store5(), { cw: mkClockwork() });
+    const { wl, code } = await pair5(S);
+    const g = mkws5(before[0], before[1]);
+    await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+    switch5(S, g, THIRD);
+    await flush5();
+    await S.handle(g, { type: 'squad', op: 'join', code, id: 'j' });
+    const got = g.rx.find((f) => f.id === 'j') || {};
+    const roster = last5(wl, 'state') || {};
+    if (got.op === 'state' && same(ids5(got), [LEAD, MEM, 'guest']) && got.you === 2 && same(ids5(roster), [LEAD, MEM, 'guest']))
+      ok(`(d11c) ${label} who signs in and re-joins their own squad ends with exactly one row — the one their socket held`);
+    else fail(`(d11c) ${label}: answered ${JSON.stringify(ids5(got))} you ${got.you}; squad ${JSON.stringify(ids5(roster))}`);
+  }
+
   // ---- (d12) resume ---------------------------------------------------------
   // THE WIRE CONTRACT: a live squad answers the `state` snapshot as this
   // socket must see it (squadFrame: `you` is its row), with the request's id;
