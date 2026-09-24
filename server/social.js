@@ -1361,7 +1361,27 @@ export function createSocial({
     try {
       const key = squads.keyOfSocket(ws);
       if (key == null) return;
-      if (ws.readyState === 1) return;
+      // TWO CALLERS, TWO ANSWERS, AND readyState TELLS THEM APART. A CLOSED
+      // socket is a DROP: the player may be back inside the window, and the
+      // row is held for them. A socket still OPEN got here from the sign-out
+      // branch or from a hello for another account, and that is a LEAVE: the
+      // connection is nobody now, or somebody else, and holding the row would
+      // go on pushing the account's squad down it. It is also what keeps one
+      // socket to one row: a signed-out socket left holding the account's
+      // row was answered AS that account when it joined again as a guest.
+      if (ws.readyState === 1) {
+        // A GUEST ROW STAYS. Its key is this socket — a guest's squad
+        // identity is the connection, which signing in or out does not
+        // change — and task 2 keeps a guest who signs in mid-squad acting on
+        // that row. server.js runs this hook when an ANONYMOUS guest signs in,
+        // because the anonymous id differs from the new one.
+        if (typeof key !== 'string') return;
+        const res = squads.leave(key);
+        // pushSquadAfterExit: a roster for the survivors, or `ended` for the
+        // guests left in a squad nobody signed in can now lead.
+        if (res.squad) pushSquadAfterExit(res.squad).catch(() => {});
+        return;
+      }
       const at = now();
       const sq = squads.markDropped(key, at);
       if (!sq) return;

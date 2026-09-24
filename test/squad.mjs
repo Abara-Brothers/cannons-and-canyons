@@ -844,8 +844,10 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
   else fail('(h1) profilesByIds calls: ' + JSON.stringify(many));
   // `online` IS PRESENCE FOR AN ACCOUNT AND THE SOCKET FOR A GUEST. D's last
   // socket closes and the guest's goes; the next roster says so, and both
-  // rows are still there.
-  S.onClose(wd); g.readyState = 3;
+  // rows are still there. A REAL close — the socket is closed when server.js
+  // calls the hook (task 5: the hook on an OPEN socket is a sign-out, which
+  // is a leave).
+  wd.readyState = 3; S.onClose(wd); g.readyState = 3;
   const wb = sqUp(S, sqws(SQB));
   await S.handle(wb, { type: 'squad', op: 'join', code });
   const now4 = (sqlast(wa, 'state') || {}).members || [];
@@ -1299,15 +1301,21 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
       ok('(h9) join after signing in moves the socket: out of the old squad, which is told, and in as the account');
     else fail('(h9) join after sign-in: ' + JSON.stringify(now2) + ' old squad ' + JSON.stringify(told));
   }
-  // AND THE REVERSE: a socket that SIGNS OUT still holds its account's row,
-  // and its leave takes that row out, handing leadership on.
+  // AND THE REVERSE: a socket whose identity is gone while it still holds its
+  // account's row leaves THAT row, handing leadership on.
+  //
+  // THE STATE IS BUILT DIRECTLY, without server.js's hook. Since task 5 a
+  // sign-out runs the hook with the socket open, which is a LEAVE, so the
+  // server itself no longer leaves a signed-out socket holding the row (task
+  // 5's (d11) tests that sequence). This keeps squadKey's socket-first rule
+  // proved for an ACCOUNT row as well as a guest's.
   {
     const st = sqstore(); const S = sqSocial(st);
     const wa = sqUp(S, sqws(SQA)), wb = sqUp(S, sqws(SQB));
     await S.handle(wa, { type: 'squad', op: 'create' });
     const code = sqat(wa, 'state').code;
     await S.handle(wb, { type: 'squad', op: 'join', code });
-    S.onClose(wa); wa.userId = null; wa.isGuest = false;
+    wa.userId = null; wa.isGuest = false;
     wb.rx.length = 0;
     await S.handle(wa, { type: 'squad', op: 'leave', id: 'o' });
     const heir = sqat(wb, 'state');
@@ -1315,10 +1323,14 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
       ok('(h9) a socket that signed out leaves the account row it holds, and leadership passes on');
     else fail('(h9) leave after sign-out: ' + JSON.stringify(heir));
   }
-  // BUT LEADERSHIP IS THE ACCOUNT'S. A socket that signed out of the leader's
-  // account and into ANOTHER still holds the leader's row, and must not
-  // command that squad: the row it holds and the account on it must both be
-  // the leader.
+  // BUT LEADERSHIP IS THE ACCOUNT'S. A socket signed in as ANOTHER account
+  // while it still holds the leader's row must not command that squad: the
+  // row it holds and the account on it must both be the leader.
+  //
+  // THE STATE IS BUILT DIRECTLY, without server.js's hook: since task 5 an
+  // account switch runs the hook on the open socket, which is a leave, so the
+  // server no longer produces it. ledSquad's row half is defence in depth
+  // now, and this keeps it proved; task 5's (d11) tests the real sequence.
   {
     const st = sqstore(); const S = sqSocial(st);
     const wa = sqUp(S, sqws(SQA)), wb = sqUp(S, sqws(SQB)), g = sqws(null);
@@ -1326,7 +1338,7 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
     const code = sqat(wa, 'state').code;
     await S.handle(wb, { type: 'squad', op: 'join', code });
     await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
-    S.onClose(wa); wa.userId = SQE; wa.isGuest = false; S.onAuth(wa);
+    wa.userId = SQE; wa.isGuest = false; S.onAuth(wa);
     wa.rx.length = 0; g.rx.length = 0;
     await S.handle(wa, { type: 'squad', op: 'kick', i: 2, id: 'k' });
     await S.handle(wa, { type: 'squad', op: 'kick', id: SQB });
@@ -2209,13 +2221,15 @@ const FITS_BY_SIZE = [
   else fail('(s3l) cross-squad mode: ' + JSON.stringify(g.rx) + ' squad two got ' + JSON.stringify(h.rx.concat(wb.rx)));
 }
 {
-  // THE ROW ALONE: the leader's socket signs out and in as E, still holding
-  // the leader's row. It must not arm that squad.
+  // THE ROW ALONE: the leader's socket is signed in as E while still holding
+  // the leader's row. It must not arm that squad. Built directly, without
+  // server.js's hook, which since task 5 makes an account switch a leave
+  // (see (h9)'s note); ledSquad's row half stays proved as defence in depth.
   const S = sqSocial(sqstore());
   const wa = sqUp(S, sqws(SQA)), wb = sqUp(S, sqws(SQB));
   await S.handle(wa, { type: 'squad', op: 'create' });
   await S.handle(wb, { type: 'squad', op: 'join', code: sqat(wa, 'state').code });
-  S.onClose(wa); wa.userId = SQE; wa.isGuest = false; S.onAuth(wa);
+  wa.userId = SQE; wa.isGuest = false; S.onAuth(wa);
   wa.rx.length = 0; wb.rx.length = 0;
   await S.handle(wa, { type: 'squad', op: 'mode', mode: 'boss', id: 'y' });
   if (same(wa.rx, [{ type: 'squad', op: 'mode', error: 'not_leader', id: 'y' }]) && wb.rx.length === 0)
@@ -2429,12 +2443,13 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   else fail('(st6) control: ' + JSON.stringify(sqlast(wb, 'start')));
 }
 {
-  // THE ROW ALONE: the leader's socket signs out and in as E, still holding
-  // the leader's row.
+  // THE ROW ALONE: the leader's socket is signed in as E while still holding
+  // the leader's row. Built directly, without server.js's hook, which since
+  // task 5 makes an account switch a leave (see (h9)'s note).
   const seat = mkSeat();
   const S = sqSocial(sqstore(), { seatSquad: seat.fn });
   const { ws: [wa, wb] } = await stSquad(S);
-  S.onClose(wa); wa.userId = SQE; wa.isGuest = false; S.onAuth(wa);
+  wa.userId = SQE; wa.isGuest = false; S.onAuth(wa);
   await S.handle(wa, { type: 'squad', op: 'start', id: 'y' });
   if (same(wa.rx, [{ type: 'squad', op: 'start', error: 'not_leader', id: 'y' }]) && seat.calls.length === 0 && wb.rx.length === 0)
     ok('(st6) a socket now signed in as someone else cannot start from the leader\'s row it still holds');
@@ -3236,6 +3251,119 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     if (r.status === 0 && !r.signal && r.stdout.trim() === 'armed' && !r.stderr && took < 20000)
       ok(`(d10c) with a sixty-second window pending, a process that is done exits on its own (${took < 5000 ? 'promptly' : took + ' ms'})`);
     else fail('(d10c) the window held the process open: ' + JSON.stringify({ status: r.status, signal: r.signal, took, out: r.stdout, err: (r.stderr || '').slice(0, 300) }));
+  }
+
+  // ---- (d11) A SIGN-OUT IS A LEAVE, NOT A DROP -----------------------------
+  // server.js's sign-out branch calls onClose with the socket STILL OPEN, and
+  // a hello for a different account does the same. That connection is nobody
+  // now, or somebody else, and the account is not coming back on it: holding
+  // the row for a window would go on pushing that account's squad — its
+  // friends' callsigns — down a connection that no longer holds the account.
+  {
+    const cw = mkClockwork();
+    const S = social5(store5(), { cw });
+    const { wl, wm, code } = await pair5(S);
+    signOut5(S, wm);
+    await flush5();
+    const f = last5(wl, 'state');
+    if (f && same(ids5(f), [LEAD]) && sq5(wm).length === 0 && cw.all.length === 0)
+      ok('(d11) a sign-out takes the member out at once: the squad is told, nothing is held and nothing is armed');
+    else fail('(d11) sign-out: ' + JSON.stringify({ roster: ids5(f), toSignedOut: wm.rx, timers: cw.all.length }));
+    // AND NOTHING MORE IS PUSHED DOWN THAT CONNECTION.
+    const wt = up5(S, mkws5(THIRD));
+    await S.handle(wt, { type: 'squad', op: 'join', code, id: 'j' });
+    if (sq5(wt).some((x) => x.id === 'j' && x.op === 'state') && sq5(wm).length === 0)
+      ok('(d11) and the signed-out connection is sent nothing when the squad changes after');
+    else fail('(d11) the signed-out socket was still pushed: ' + JSON.stringify({ toSignedOut: wm.rx, joiner: wt.rx }));
+  }
+  {
+    // THE LEADER SIGNS OUT: leadership passes on, and the socket that was the
+    // leader's commands nothing.
+    const cw = mkClockwork();
+    const S = social5(store5(), { cw });
+    const { wl, wm } = await pair5(S);
+    signOut5(S, wl);
+    await flush5();
+    const f = last5(wm, 'state');
+    wl.rx.length = 0;
+    await S.handle(wl, { type: 'squad', op: 'mode', mode: 'boss', id: 'm' });
+    if (f && f.leader === MEM && same(ids5(f), [MEM]) && same(wl.rx, [{ type: 'squad', op: 'mode', error: 'no_squad', id: 'm' }]))
+      ok('(d11) the leader signing out hands the squad on, and their old socket is in no squad');
+    else fail('(d11) leader sign-out: ' + JSON.stringify({ heir: f, wl: wl.rx }));
+  }
+  {
+    // A HELLO FOR ANOTHER ACCOUNT on the member's socket: the same leave.
+    const S = social5(store5(), { cw: mkClockwork() });
+    const { wl, wm } = await pair5(S);
+    switch5(S, wm, FOURTH);
+    await flush5();
+    const f = last5(wl, 'state');
+    if (f && same(ids5(f), [LEAD])) ok('(d11) a hello for a different account on a member\'s socket is a leave too');
+    else fail('(d11) account switch: ' + JSON.stringify(ids5(f)));
+  }
+  {
+    // A GUEST ROW STAYS. A guest's squad identity IS the socket, and signing
+    // in or out does not change the socket. An anonymous guest signing in is
+    // a hello for a different account (server.js runs the hook, since the
+    // anonymous id differs), and task 2 keeps that guest acting on its guest
+    // row after it: this must not take the row away first.
+    const S = social5(store5(), { cw: mkClockwork() });
+    const { wl, code } = await pair5(S);
+    const g = mkws5(ANON, true);
+    await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+    wl.rx.length = 0;
+    switch5(S, g, THIRD);                      // signs in
+    signOut5(S, g);                            // and out again
+    await flush5();
+    const quiet = sq5(wl).length === 0;
+    g.rx.length = 0;
+    await S.handle(up5(S, mkws5(FOURTH)), { type: 'squad', op: 'join', code });
+    const mine = last5(g, 'state');
+    if (quiet && mine && same(ids5(mine), [LEAD, MEM, 'guest', FOURTH]) && mine.you === 2)
+      ok('(d11) a guest row survives its socket signing in and out — the socket, which is its identity, never changed');
+    else fail('(d11) guest row on sign-in/out: ' + JSON.stringify({ told: wl.rx, mine }));
+  }
+  {
+    // A SECOND DEVICE SIGNING OUT is not the account leaving: the row is on
+    // the first device, which is still signed in.
+    const S = social5(store5(), { cw: mkClockwork() });
+    const { wl, wm } = await pair5(S);
+    const wm2 = up5(S, mkws5(MEM));
+    signOut5(S, wm2);
+    await flush5();
+    wl.rx.length = 0;
+    await S.handle(wm, { type: 'squad', op: 'ready', ready: true, loadout: RACK5, id: 'r' });
+    const f = last5(wl, 'state');
+    if (f && same(ids5(f), [LEAD, MEM]) && f.members[1].ready === true)
+      ok('(d11) a second device signing out leaves the account\'s row, on the first device, exactly where it was');
+    else fail('(d11) second-device sign-out: ' + JSON.stringify(f));
+  }
+
+  // ---- (d11b) deferred item 3: SIGN-OUT, THEN RE-JOIN AS A GUEST ON THE SAME
+  // SOCKET — one row, and it is a guest's ----------------------------------
+  // Before this, the signed-out socket still held the ACCOUNT's row, so its
+  // guest join matched that row as "already here": a connection that was
+  // nobody was answered as the account, shown the account's name as its own
+  // row, and could ready or leave for it.
+  for (const where of ['the same squad', 'another squad']) {
+    const S = social5(store5(), { cw: mkClockwork() });
+    const { wl, wm, code } = await pair5(S);
+    const wt = up5(S, mkws5(THIRD));
+    await S.handle(wt, { type: 'squad', op: 'create' });
+    const other = last5(wt, 'state').code;
+    signOut5(S, wm);
+    await flush5();
+    await S.handle(wm, { type: 'squad', op: 'join', code: where === 'the same squad' ? code : other, name: 'G', skin: 'gold', id: 'j' });
+    const got = wm.rx.find((f) => f.id === 'j') || {};
+    // Both squads' rosters as they stand: every change to either was pushed
+    // to its leader, so the last one each leader holds is the truth.
+    const x = last5(wl, 'state') || {}, y = last5(wt, 'state') || {};
+    const all = [...(x.members || []), ...(y.members || [])];
+    const mine = got.members && got.members[got.you];
+    if (got.op === 'state' && mine && mine.guest === true && mine.id === null && !all.some((r) => r.id === MEM)
+      && all.filter((r) => r.guest).length === 1)
+      ok(`(d11b) signed out, then joined ${where} as a guest: exactly one row for that socket, a guest row, and the account is in no squad`);
+    else fail(`(d11b) ${where}: answered ${JSON.stringify(got)}; rosters ${JSON.stringify([ids5(x), ids5(y)])}`);
   }
 
   // ---- (end of task 5) ----
