@@ -229,6 +229,19 @@ const BLOCK_KEY_RE = /^[0-9a-f]{32}$/;
 // under server/ has the engine's safeTimeout — so every callback handed to it
 // here is wrapped by hand (see the drop window below).
 //
+// pushInvite(toUserId, { code, from, size, max }) -> Promise<boolean> — the
+// squad invite's PUSH transport (design 4.4), for an invited friend who holds
+// no live socket. Injected for the reason seatSquad is: the web push, FCM and
+// APNs senders live in server.js, and this module has no transport of its own.
+// `from` is the inviter's PROVED name and may be null, so the copy for a
+// nameless inviter is the transport's to write. It resolves `true` only when
+// an endpoint took the payload — that is the whole difference between
+// delivered:'push' and delivered:'none' — and every other answer, a throw
+// included, is 'none' (see squadInvite). THE DEFAULT DELIVERS NOTHING AND
+// SAYS SO: every host that wires no transport, and every suite, gets an honest
+// 'none', never a 'push' that went nowhere. Task 7 replaces this default from
+// server.js, and nothing in squadInvite changes when it does.
+//
 // THIS LIST ACCUMULATES (plan X2). A later task adds its option after these;
 // it never restates the line.
 export function createSocial({
@@ -238,6 +251,7 @@ export function createSocial({
   seats = {}, teeIds = [], validRack = () => false,
   seatSquad = () => ({ ok: false, error: 'unavailable' }),
   schedule = (fn, ms) => { const t = setTimeout(fn, ms); if (typeof t.unref === 'function') t.unref(); return () => clearTimeout(t); },
+  pushInvite = async () => false,
 }) {
 
   // userId -> that account's live sockets. "Online" is "the set is non-empty".
@@ -741,7 +755,16 @@ export function createSocial({
   // (server.js hands it hasSquad), and the squad minter refuses a code a live
   // room holds, through the roomExists server.js injects. Both directions are
   // proved against the real server.js by test/code_frame.mjs.
-  const squads = createSquads({ now, codeTaken: roomExists });
+  //
+  // THE SQUAD CAP IS ONE NUMBER FOR TWO RULES: the machine's join refuses the
+  // fifth member at it, and an invite refuses to reach a player the squad
+  // could not take. It is HANDED to the machine as its capacity rather than
+  // restated beside the machine's own default, so the two cannot drift: an
+  // invite cap above the join cap sends invites nobody can accept, and one
+  // below it refuses invites to a squad with room. The invited frame carries
+  // it as `max` (design 4.3: "size, max:4").
+  const SQUAD_MAX = 4;
+  const squads = createSquads({ now, capacity: SQUAD_MAX, codeTaken: roomExists });
 
   // op -> handler. A NULL PROTOTYPE, and that is not decoration: `op` comes
   // off the wire, and with a plain object literal SQUAD_OPS['constructor'] is
@@ -766,7 +789,12 @@ export function createSocial({
   // server/squads.js). requireLinked is REUSED rather than restated, so there
   // is one sign-in rule in this file and one piece of copy for it. A later op
   // that needs an account is added here.
-  const SQUAD_LINKED = new Set(['create', 'kick']);
+  //
+  // `invite` (task 6): an invite goes to a FRIEND, and a guest has none — the
+  // spec's own words are that a guest "cannot be invited, cannot invite". The
+  // gate refuses a guest before the friend bucket, the store or the push
+  // seam is touched.
+  const SQUAD_LINKED = new Set(['create', 'invite', 'kick']);
 
   const squadReply = (ws, msg, op, rest) => reply(ws, msg, { type: 'squad', op, ...rest });
 
@@ -846,8 +874,9 @@ export function createSocial({
   const squadsOfCaller = (ws, from) => [...new Set([squads.ofUser(from), squads.ofUser(identityKey(ws))])].filter(Boolean);
 
   // THE SQUAD THIS SOCKET VALIDLY LEADS, or null. EVERY LEADER-ONLY OP CALLS
-  // THIS — kick, mode, and every later one (start, invite...) — and none
-  // re-derives the rule inline.
+  // THIS — kick, mode, and every later one (start...) — and none re-derives
+  // the rule inline. Invite is NOT one: design 4.3 lets a leader or a member
+  // invite (see squadInvite).
   //
   // LEADERSHIP IS AN ACCOUNT'S, SO BOTH HALVES MUST BE THE LEADER: the row
   // this socket holds (squadKey) and the account signed in on it
@@ -1601,6 +1630,127 @@ export function createSocial({
     reply(ws, msg, frame);
   }
 
+  // EVERY ROW OF squad `sq` THAT ACCOUNT `id` STANDS ON: the account's own
+  // row, and any row held by a live socket signed in as that account. The
+  // second half is for the rows keyed by a CONNECTION rather than an account
+  // — a guest row whose socket has since signed in (the two-squads state
+  // claimOnSignIn leaves standing), and an anonymous account's guest row. A
+  // block and an invite name an ACCOUNT, and this is how they find the seat
+  // that account is in when the seat is keyed by a socket.
+  //
+  // IT SPENDS NO GUEST IDENTITY. A guest's squad identity is still its
+  // connection (identityKey): this reads the account a connection is signed
+  // in as, OFF THE SOCKET, and compares it in memory. It is never a row's key
+  // and never on a frame. For an anonymous account it is the id a block row
+  // already names — a guest may block and be blocked (requireAccount) — so the
+  // block's own teardown has to be able to find them.
+  //
+  // A DROPPED guest row has no socket to read and is not found. It can never
+  // be resumed (markResumed is by account) and Start refuses it
+  // (member_offline), and it is gone within the drop window.
+  const rowsOf = (sq, id) => (id ? sq.members.filter((m) => m.key === id || (m.ws && wireId(m.ws.userId) === id)) : []);
+
+  // ---- invite (design 4.3, the invite row; 4.4) -----------------------------
+  // LEADER OR MEMBER MAY INVITE (design 4.3). A squad of friends is not a
+  // hierarchy: mode, start and kick are the leader's and go through ledSquad,
+  // and this does NOT — every member's box has an Invite button.
+  //
+  // WHICH SQUAD: the one this socket's own row is in, else its account's —
+  // squadOf, squadKey's order, the file's one answer to "which row is this
+  // caller". The Invite button was pressed on THIS screen's squad. An
+  // account-first lookup would, for a socket holding a guest row in one squad
+  // while its account sits in another, invite a friend to the squad this
+  // screen is not showing.
+  //
+  // THE ANSWER: { ok:true, delivered } to the inviter, or an error. 'online':
+  // the frame went down every live socket the friend holds, and nothing is
+  // pushed (design 4.4: no push to a player who is online). 'push': no live
+  // socket, and the injected transport says an endpoint took it. 'none':
+  // neither — the invite is valid and nothing reached them.
+  //
+  // THE FRIEND BUCKET, FIRST, on top of the squad one handleSquad has already
+  // charged. An invite is aimed at a friend, costs the round trips a
+  // `friend op:'request'` does, and is the one frame in this layer that can
+  // reach a device's notification tray. Ten a minute is far above an honest
+  // client — a squad holds three other people. First for handleReport's
+  // reason: a refusal is still a reply, and a check after the guards would
+  // leave a loop of junk targets answered with no limit of its own.
+  //
+  // ONE ANSWER FOR EVERY MISS OF THE PAIR, 'not_friend': not a friend,
+  // blocked either way, a guest, no account, not a uuid. friendSearch fixes
+  // this shape — "no such player" and "that player has blocked you" must be
+  // one answer, or the frame is a way to enumerate blocks. The shape test
+  // comes before the store, for friendRequest's reason: store.js throws on a
+  // malformed id, and a round trip would be spent to answer 'unavailable'.
+  //
+  // A GUEST CANNOT BE INVITED (R12), AND THE FRIEND READ IS THE LINE THAT
+  // REFUSES ONE. A guest has no presence — onAuth returns early for an
+  // anonymous account — so socketsOf(guest) is always empty, and the obvious
+  // "online ? frame : push" answers a guest { ok:true, delivered:'none' }: an
+  // invite that looks accepted and reaches nobody. Every friend op is behind
+  // requireLinked, so no anonymous account is in anyone's friendIdsOf, and
+  // `!friendIds.includes(to)` refuses it before presence is ever asked. It is
+  // the only signal there is: nothing in the store says an account is
+  // anonymous.
+  //
+  // BLOCKS EITHER WAY, because blocking is not a mute: blockIdsOf answers
+  // { blocked, blockedBy } and every gate in this file reads both.
+  //
+  // WHAT MEMORY ANSWERS IS ASKED TWICE, before the reads and after them. The
+  // squad can move while they are out — somebody joins and it is full, the
+  // inviter is kicked, it ends — and the frame must carry the squad as it IS;
+  // asked before as well, so a refusal memory can give costs no round trip.
+  // And the SOCKET can become somebody else meanwhile (ws.authGen, squadResume's
+  // cancel): an invite asked for by one account must not go out from another
+  // account's squad under the first one's name. Its client has reset, so
+  // nothing is answered.
+  //
+  // THE FRAME carries no account id and no request id: a code, a proved name,
+  // the size and the cap are everything Join needs, and it answers no
+  // request, so it is sent by hand rather than through reply() — a client
+  // routes it ahead of its waiters, as it does `presence`. The name is
+  // displayName's, like every name this layer emits (BINDING 27), and a null
+  // name KEEPS THE INVITE: the box renders its no-name card.
+  async function squadInvite(ws, msg) {
+    const no = (error) => squadReply(ws, msg, 'invite', { error });
+    if (!rateOk(ws, 'friend', LIMITS.friend)) return no('slow_down');
+    const to = wireId(msg.to);
+    const vet = () => {
+      const found = squadOf(ws);
+      if (!found) return { error: 'no_squad' };
+      if (found.squad.members.length >= SQUAD_MAX) return { error: 'full' };
+      if (!isUuid(to)) return { error: 'not_friend' };
+      if (rowsOf(found.squad, to).length) return { error: 'already' };
+      return { sq: found.squad };
+    };
+    const before = vet();
+    if (before.error) return no(before.error);
+    const me = wireId(ws.userId);
+    const gen = ws.authGen;
+    const [friendIds, blocks, self] = await Promise.all([store.friendIdsOf(me), store.blockIdsOf(me), store.profileById(me)]);
+    if (ws.authGen !== gen) return;
+    if (!friendIds.includes(to)) return no('not_friend');
+    if (blocks.blocked.includes(to) || blocks.blockedBy.includes(to)) return no('not_friend');
+    const after = vet();
+    if (after.error) return no(after.error);
+    const { sq } = after;
+    const frame = { type: 'squad', op: 'invited', code: sq.code, from: { callsign: displayName(self) }, size: sq.members.length, max: SQUAD_MAX };
+    const live = socketsOf(to);
+    if (live.length) {
+      for (const w of live) safeSend(w, frame);
+      return squadReply(ws, msg, 'invite', { ok: true, delivered: 'online' });
+    }
+    // THE PUSH SEAM (see pushInvite at the top of createSocial). ONLY A
+    // LITERAL true IS A PUSH: a count, a word or a receipt says nothing about
+    // whether an endpoint took it. A THROW IS 'none', synchronous or not — a
+    // transport fault is no reason to fail an invite that was valid, and
+    // handleSquad's net would answer 'unavailable' for it.
+    let pushed = false;
+    try { pushed = (await pushInvite(to, { code: frame.code, from: frame.from.callsign, size: frame.size, max: frame.max })) === true; }
+    catch { pushed = false; }
+    squadReply(ws, msg, 'invite', { ok: true, delivered: pushed ? 'push' : 'none' });
+  }
+
   SQUAD_OPS.create = squadCreate;
   SQUAD_OPS.join = squadJoin;
   SQUAD_OPS.leave = squadLeave;
@@ -1610,6 +1760,7 @@ export function createSocial({
   SQUAD_OPS.start = squadStart;
   // NOT added to SQUAD_LINKED — see squadResume.
   SQUAD_OPS.resume = squadResume;
+  SQUAD_OPS.invite = squadInvite;
 
   const skinOf = (row) => (row && typeof row.skin === 'string' && SKIN_IDS.has(row.skin) ? row.skin : null);
 

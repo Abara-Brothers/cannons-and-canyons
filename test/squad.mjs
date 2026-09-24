@@ -4073,5 +4073,538 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   // ---- (end of task 5) ----
 }
 
+// ===========================================================================
+// TASK 6 — INVITES TO A CONNECTED FRIEND, AND WHAT A BLOCK DOES TO A SQUAD
+//
+// This section brings its own store double, its own clock and its own sockets
+// so a change to another section's fixture cannot break it — the rule
+// test/social.mjs's phase 6 block states above itself. It drives the REAL
+// createSocial and the REAL squad state machine: nothing here stubs the
+// function under test. What is injected is what server.js itself injects —
+// the engine's seat table, a seat-handle resolver, and the push transport,
+// which task 7 builds and which does not exist in this build at all.
+// ===========================================================================
+{
+  // Read INSIDE createSocial, per instance, and put back at the end of the
+  // section. 0 turns the friends fan-out's collapse off, so a block's two
+  // snapshots have arrived by the next await — the collapse runs on the WALL
+  // clock, and left on it would make these checks depend on how fast the
+  // machine is. The presence window is pushed out of reach for the same
+  // reason: a flush landing mid-section would put store reads into `calls`.
+  const prevPushMs = process.env.SOCIAL_PUSH_MS;
+  const prevPresenceMs = process.env.SOCIAL_PRESENCE_MS;
+  process.env.SOCIAL_PUSH_MS = '0';
+  process.env.SOCIAL_PRESENCE_MS = '3600000';
+
+  const uid6 = (n) => '00000000-0000-4000-8000-cc' + String(n).padStart(10, '0');
+  const A = uid6(1), B = uid6(2), C = uid6(3), D = uid6(4), E = uid6(5), NN = uid6(7), GU = uid6(9);
+  const ROWS6 = [
+    { id: A, callsign: 'Anvil Six',   friend_code: 'ABC234', callsign_key: 'anvil six',   callsign_set_at: null, skin: 'desert' },
+    { id: B, callsign: 'Bunker Nine', friend_code: 'BDF345', callsign_key: 'bunker nine', callsign_set_at: null, skin: 'gold' },
+    { id: C, callsign: 'Crater Two',  friend_code: 'CGH456', callsign_key: 'crater two',  callsign_set_at: null },
+    { id: D, callsign: 'Dune Four',   friend_code: 'DJK567', callsign_key: 'dune four',   callsign_set_at: null },
+    { id: E, callsign: 'Echo Seven',  friend_code: 'EMN678', callsign_key: 'echo seven',  callsign_set_at: null },
+    // NO PROVABLE NAME: free text in a column the account PATCHes itself,
+    // with no callsign_key beside it, so displayName answers null.
+    { id: NN, callsign: 'FOLLOW ME OK', friend_code: 'NPQ789', callsign_key: null, callsign_set_at: null },
+    // The ANONYMOUS account a guest actually arrives on (BINDING 1): an
+    // account id, a profile row, and never a friend.
+    { id: GU, callsign: 'Ghost', friend_code: 'GRS234', callsign_key: null, callsign_set_at: null },
+  ];
+  const UUID6 = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+  const PAIR6 = (a, b) => (a < b ? a + '|' + b : b + '|' + a);
+
+  // The store double: server/store.js's method set and return shapes.
+  // profilesByIds returns { id, callsign, callsign_key } and nothing else,
+  // exactly as `select=id,callsign,callsign_key` does, so a name can only be
+  // proved against the columns the real query fetches. `boom` fails a method;
+  // `hold` parks the next call to a method until released, and says when a
+  // call is parked there — so a test can act INSIDE a read without guessing
+  // how long one takes.
+  function t6store(rows) {
+    const profiles = new Map(rows.map((p) => [p.id, { ...p }]));
+    const friends = new Set(), requests = new Set(), blocks = new Set();
+    const gates = new Map();
+    const st = {
+      profiles, friends, requests, blocks, calls: [], boom: new Set(),
+      async _hit(m) {
+        st.calls.push(m);
+        if (st.boom.has(m)) throw new Error('sb GET 500');
+        const g = gates.get(m);
+        if (g) { gates.delete(m); g.entered(); await g.open; }
+      },
+      hold(m) {
+        let release, entered;
+        const open = new Promise((r) => { release = r; });
+        const inside = new Promise((r) => { entered = r; });
+        gates.set(m, { open, entered });
+        return { release, inside };
+      },
+      async ensureFriendCode(id) { await st._hit('ensureFriendCode'); const p = profiles.get(id); return p ? p.friend_code : null; },
+      async profileById(id) { await st._hit('profileById'); return profiles.get(id) || null; },
+      async profileByCallsignKey(k) { await st._hit('profileByCallsignKey'); return [...profiles.values()].find((p) => p.callsign_key === k) || null; },
+      async profilesByIds(ids) { await st._hit('profilesByIds'); const m = new Map(); for (const id of ids) { const p = profiles.get(id); if (p) m.set(id, { id, callsign: p.callsign, callsign_key: p.callsign_key ?? null }); } return m; },
+      async friendIdsOf(id) { await st._hit('friendIdsOf'); const o = []; for (const k of friends) { const [a, b] = k.split('|'); if (a === id) o.push(b); else if (b === id) o.push(a); } return o; },
+      async requestsOf(id) { await st._hit('requestsOf'); const incoming = [], outgoing = []; for (const k of requests) { const [f, t] = k.split('>'); if (t === id) incoming.push(f); else if (f === id) outgoing.push(t); } return { incoming, outgoing }; },
+      async blockIdsOf(id) { await st._hit('blockIdsOf'); const blocked = [], blockedBy = []; for (const k of blocks) { const [a, b] = k.split('>'); if (a === id) blocked.push(b); else if (b === id) blockedBy.push(a); } return { blocked, blockedBy }; },
+      async addFriendship(a, b) { await st._hit('addFriendship'); friends.add(PAIR6(a, b)); },
+      async removeFriendship(a, b) { await st._hit('removeFriendship'); friends.delete(PAIR6(a, b)); },
+      async addRequest(f, t) { await st._hit('addRequest'); requests.add(f + '>' + t); },
+      async deleteRequest(f, t) { await st._hit('deleteRequest'); requests.delete(f + '>' + t); },
+      async addBlock(a, b) { await st._hit('addBlock'); blocks.add(a + '>' + b); },
+      async removeBlock(a, b) { await st._hit('removeBlock'); blocks.delete(a + '>' + b); },
+    };
+    return st;
+  }
+
+  let CLOCK6 = Date.parse('2026-09-24T09:00:00Z');
+  // A socket as server.js leaves it after a verified hello. `throwOn`, when
+  // set, makes send() THROW for the frames it matches — the half-closed
+  // socket safeSend exists for — so a reply can be made undeliverable.
+  const t6ws = (userId, isGuest = false) => ({ readyState: 1, userId, isGuest, rx: [] });
+  // WHAT THE PUSH SEAM WAS ASKED FOR. Task 7 replaces the default inside
+  // server.js; recording the call here is what lets the payload be asserted
+  // where a wrong code or a missing size is visible.
+  const PUSHES = [];
+  let pushAnswer = true;
+  // THE SEND server.js REALLY USES, down to the wire: nothing reaches a
+  // socket that is not open, and what does has been through JSON.
+  const mkSocial6 = (store, extra = {}) => createSocial({
+    seats: MODE_SEATS, teeIds: TEE_IDS, validRack: validRackFor,
+    schedule: () => () => {},
+    pushInvite: async (to, payload) => { PUSHES.push([to, payload]); return pushAnswer; },
+    ...extra,
+    store, terms: [], now: () => CLOCK6,
+    send: (ws, f) => {
+      if (!ws || ws.readyState !== 1) return;
+      if (ws.throwOn && ws.throwOn(f)) throw new Error('half-closed socket');
+      ws.rx.push(JSON.parse(JSON.stringify(f)));
+    },
+  });
+  // Linked, and counted in presence by onAuth, as a verified hello leaves it.
+  const up6 = (S, id, isGuest = false) => { const w = t6ws(id, isGuest); S.onAuth(w); return w; };
+  const got6 = (w, type, op) => w.rx.filter((f) => f.type === type && (!op || f.op === op));
+  const last6 = (w, type, op) => { const f = got6(w, type, op); return f[f.length - 1] || null; };
+  const ans6 = (w, id) => w.rx.find((f) => f.id === id) || null;
+  const invited6 = (w) => got6(w, 'squad', 'invited');
+  const ids6 = (f) => (f && Array.isArray(f.members) ? f.members.map((m) => m.id) : null);
+  const same6 = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const clear6 = (...ws) => { for (const w of ws) w.rx.length = 0; };
+  // A squad, made the way a player makes one, its code read off the answer.
+  const create6 = async (S, w) => { await S.handle(w, { type: 'squad', op: 'create' }); return (last6(w, 'squad', 'state') || {}).code; };
+  const join6 = (S, w, code, name = 'Somebody') => S.handle(w, { type: 'squad', op: 'join', code, name, skin: 'olive' });
+  // true once `p` settles, false if it has not within fifty macrotask turns
+  // — so a read that is never entered fails its check instead of hanging the
+  // file on an await nothing will ever settle.
+  const within6 = async (p) => {
+    let done = false;
+    p.then(() => { done = true; }, () => { done = true; });
+    for (let i = 0; i < 50 && !done; i++) await new Promise((r) => setImmediate(r));
+    return done;
+  };
+
+  // ---- (inv-a) an online friend gets the invite down every socket ----------
+  {
+    const st = t6store(ROWS6);
+    await st.addFriendship(A, B);
+    const S = mkSocial6(st);
+    const wa = up6(S, A), wb1 = up6(S, B), wb2 = up6(S, B);
+    const code = await create6(S, wa);
+    clear6(wa, wb1, wb2); PUSHES.length = 0;
+    await S.handle(wa, { type: 'squad', op: 'invite', to: B, id: 'i1' });
+    const r = ans6(wa, 'i1');
+    if (same6(r, { type: 'squad', op: 'invite', ok: true, delivered: 'online', id: 'i1' }))
+      ok('(inv-a) invite: the inviter is told delivered:online, with the request id echoed');
+    else fail('(inv-a) invite reply: ' + JSON.stringify(r));
+    const inv = invited6(wb1);
+    // THE WHOLE FRAME, compared exactly: the code, the PROVED name, the
+    // size and the cap — and so nothing else: no request id, no account id.
+    if (inv.length === 1 && same6(inv[0], { type: 'squad', op: 'invited', code, from: { callsign: 'Anvil Six' }, size: 1, max: 4 }))
+      ok('(inv-a) invite: the frame is exactly the code, the proved name, the size and the cap');
+    else fail('(inv-a) invited frame: ' + JSON.stringify(inv));
+    if (invited6(wb2).length === 1) ok('(inv-a) invite: EVERY socket of the invited account, not only the newest');
+    else fail('(inv-a) second device got ' + JSON.stringify(wb2.rx));
+    if (inv[0] && inv[0].id === undefined && !UUID6.test(JSON.stringify(inv[0])))
+      ok('(inv-a) the invited frame carries no request id and no account id — it answers nothing, and Join needs only the code');
+    else fail('(inv-a) the invited frame carried an id: ' + JSON.stringify(inv[0]));
+    if (PUSHES.length === 0) ok('(inv-a) an online player is never also pushed (design 4.4)');
+    else fail('(inv-a) an online player was pushed: ' + JSON.stringify(PUSHES));
+    if (invited6(wa).length === 0 && got6(wa, 'squad').length === 1)
+      ok('(inv-a) and the inviter gets its answer and nothing else — no invite of its own, no roster');
+    else fail('(inv-a) the inviter got ' + JSON.stringify(wa.rx));
+  }
+
+  // ---- (inv-b) an offline friend goes to the push seam (task 7 fills it) ---
+  {
+    const st = t6store(ROWS6);
+    await st.addFriendship(A, B);
+    const S = mkSocial6(st);
+    const wa = up6(S, A);                           // B holds no socket at all
+    const code = await create6(S, wa);
+    PUSHES.length = 0; pushAnswer = true;
+    await S.handle(wa, { type: 'squad', op: 'invite', to: B, id: 'p1' });
+    const r = ans6(wa, 'p1');
+    if (same6(r, { type: 'squad', op: 'invite', ok: true, delivered: 'push', id: 'p1' })) ok('(inv-b) invite: an offline friend is delivered:push');
+    else fail('(inv-b) push reply: ' + JSON.stringify(r));
+    if (PUSHES.length === 1 && PUSHES[0][0] === B && same6(PUSHES[0][1], { code, from: 'Anvil Six', size: 1, max: 4 }))
+      ok('(inv-b) the seam is handed the account, the code, the proved name, the size and the cap — all task 7 renders');
+    else fail('(inv-b) seam call: ' + JSON.stringify(PUSHES));
+    // THE HALF THAT MAKES `delivered` HONEST: no endpoint took it.
+    pushAnswer = false;
+    await S.handle(wa, { type: 'squad', op: 'invite', to: B, id: 'p2' });
+    if ((ans6(wa, 'p2') || {}).delivered === 'none') ok('(inv-b) a seam that delivered nothing is reported none, not push');
+    else fail('(inv-b) undelivered push: ' + JSON.stringify(ans6(wa, 'p2')));
+    // ONLY A LITERAL true IS A PUSH. A transport that answers a count, a
+    // word or a receipt has said nothing about whether an endpoint took it.
+    const loose = [];
+    for (const [i, v] of [[3, 1], [4, 'sent'], [5, {}]]) {
+      pushAnswer = v;
+      await S.handle(wa, { type: 'squad', op: 'invite', to: B, id: 'p' + i });
+      if ((ans6(wa, 'p' + i) || {}).delivered !== 'none') loose.push([v, ans6(wa, 'p' + i)]);
+    }
+    pushAnswer = true;
+    if (!loose.length) ok('(inv-b) a seam answering anything but true — 1, a word, an object — is none');
+    else fail('(inv-b) a truthy non-true seam answer: ' + JSON.stringify(loose));
+    // A TRANSPORT THAT THROWS IS none, NOT unavailable: handleSquad's net
+    // would otherwise turn a failed notification into a failed invite. Both
+    // ways a transport can throw: rejecting, and throwing before it returns.
+    const thrown = [];
+    for (const seam of [async () => { throw new Error('apns 503'); }, () => { throw new Error('sync 503'); }]) {
+      const S2 = mkSocial6(st, { pushInvite: seam });
+      const w = up6(S2, A); await create6(S2, w);
+      await S2.handle(w, { type: 'squad', op: 'invite', to: B, id: 't' });
+      const r2 = ans6(w, 't');
+      if (!(r2 && r2.ok === true && r2.delivered === 'none')) thrown.push(r2);
+    }
+    if (!thrown.length) ok('(inv-b) a push transport that throws, async or not, is delivered:none — an invite is not failed by a notification');
+    else fail('(inv-b) throwing transport: ' + JSON.stringify(thrown));
+    // A SYNCHRONOUS seam that answers true is a push: task 7 may hand in a
+    // plain function, and the answer is awaited either way.
+    const S4 = mkSocial6(st, { pushInvite: () => true });
+    const w4 = up6(S4, A); await create6(S4, w4);
+    await S4.handle(w4, { type: 'squad', op: 'invite', to: B, id: 's' });
+    if ((ans6(w4, 's') || {}).delivered === 'push') ok('(inv-b) a synchronous seam answering true is a push');
+    else fail('(inv-b) synchronous seam: ' + JSON.stringify(ans6(w4, 's')));
+    // THE DEFAULT SEAM: no transport injected at all, which is what this
+    // build ships until task 7 wires server.js.
+    const S3 = createSocial({ store: st, terms: [], now: () => CLOCK6, schedule: () => () => {}, send: (w, f) => w.rx.push(JSON.parse(JSON.stringify(f))) });
+    const w3 = up6(S3, A); await create6(S3, w3);
+    await S3.handle(w3, { type: 'squad', op: 'invite', to: B, id: 'd' });
+    if (same6(ans6(w3, 'd'), { type: 'squad', op: 'invite', ok: true, delivered: 'none', id: 'd' }))
+      ok('(inv-b) with no transport injected the default seam answers none — task 7 replaces the default and nothing else');
+    else fail('(inv-b) default seam: ' + JSON.stringify(ans6(w3, 'd')));
+  }
+
+
+  // ---- (inv-c) the refusals, and not one of them delivers anything --------
+  {
+    const st = t6store(ROWS6);
+    await st.addFriendship(A, B);
+    const S = mkSocial6(st);
+    const wa = up6(S, A), wb = up6(S, B), wc = up6(S, C);
+    PUSHES.length = 0;
+    // NO SQUAD. The Friends tab's Invite button creates one first; the
+    // server does not create one behind a client's back.
+    await S.handle(wa, { type: 'squad', op: 'invite', to: B, id: 'c1' });
+    if (same6(ans6(wa, 'c1'), { type: 'squad', op: 'invite', error: 'no_squad', id: 'c1' })) ok('(inv-c) invite with no squad: no_squad');
+    else fail('(inv-c) no squad: ' + JSON.stringify(ans6(wa, 'c1')));
+    const code = await create6(S, wa);
+    // A MEMBER IS NOT A TARGET.
+    await join6(S, wb, code, 'Bunker Nine');
+    clear6(wb);
+    await S.handle(wa, { type: 'squad', op: 'invite', to: B, id: 'c2' });
+    if (same6(ans6(wa, 'c2'), { type: 'squad', op: 'invite', error: 'already', id: 'c2' })) ok('(inv-c) inviting somebody already in the squad: already');
+    else fail('(inv-c) already a member: ' + JSON.stringify(ans6(wa, 'c2')));
+    if (!invited6(wb).length) ok('(inv-c) and they are not invited to the squad they are sitting in');
+    else fail('(inv-c) a member was invited: ' + JSON.stringify(wb.rx));
+    // A STRANGER, AND A MALFORMED TARGET, IN THE SAME WORDS.
+    await S.handle(wa, { type: 'squad', op: 'invite', to: C, id: 'c3' });
+    if (same6(ans6(wa, 'c3'), { type: 'squad', op: 'invite', error: 'not_friend', id: 'c3' })) ok('(inv-c) inviting a stranger: not_friend');
+    else fail('(inv-c) stranger: ' + JSON.stringify(ans6(wa, 'c3')));
+    const junk = [];
+    for (const [i, to] of [[4, 'not-a-uuid'], [5, ''], [6, undefined], [7, 42]]) {
+      st.calls.length = 0;
+      await S.handle(wa, { type: 'squad', op: 'invite', to, id: 'c' + i });
+      if (!(same6(ans6(wa, 'c' + i), { type: 'squad', op: 'invite', error: 'not_friend', id: 'c' + i }) && st.calls.length === 0)) junk.push([to, ans6(wa, 'c' + i), [...st.calls]]);
+    }
+    if (!junk.length) ok('(inv-c) a malformed or missing target is refused in the same words and costs no round trip');
+    else fail('(inv-c) malformed target: ' + JSON.stringify(junk));
+    if (!invited6(wc).length) ok('(inv-c) the stranger was told nothing at all');
+    else fail('(inv-c) a stranger got an invite: ' + JSON.stringify(wc.rx));
+    // A STORE FAULT answers unavailable, WITH THE OP, and delivers nothing —
+    // handleSquad's own net, which is why this handler has no catch.
+    st.boom.add('friendIdsOf');
+    const wd = up6(S, D); await st.addFriendship(A, D);
+    await S.handle(wa, { type: 'squad', op: 'invite', to: D, id: 'c8' });
+    st.boom.delete('friendIdsOf');
+    if (same6(ans6(wa, 'c8'), { type: 'squad', op: 'invite', error: 'unavailable', id: 'c8' }) && !invited6(wd).length)
+      ok('(inv-c) a store fault answers unavailable with the op on it, and nobody is invited');
+    else fail('(inv-c) store fault: ' + JSON.stringify(ans6(wa, 'c8')) + ' ' + JSON.stringify(wd.rx));
+    if (PUSHES.length === 0) ok('(inv-c) not one refusal reached the push seam');
+    else fail('(inv-c) a refusal pushed: ' + JSON.stringify(PUSHES));
+  }
+
+  // ---- (inv-c2) a block refuses an invite in BOTH directions ---------------
+  // The friendship is written UNDER the block on purpose. In ordinary
+  // operation `block add` deletes it, so a one-directional gate would never be
+  // caught by a test that blocks through the handler — the friend read alone
+  // would refuse. This is the state that isolates the block read itself. B
+  // holds no socket in the second pass, so a leak there reaches the SEAM.
+  {
+    for (const dir of ['blocked', 'blockedBy']) {
+      for (const online of [true, false]) {
+        const st = t6store(ROWS6);
+        await st.addFriendship(A, B);
+        if (dir === 'blocked') await st.addBlock(A, B); else await st.addBlock(B, A);
+        const S = mkSocial6(st);
+        const wa = up6(S, A), wb = online ? up6(S, B) : t6ws(B);
+        await create6(S, wa);
+        clear6(wb); PUSHES.length = 0;
+        const tag = `${dir}, ${online ? 'online' : 'offline'}`;
+        await S.handle(wa, { type: 'squad', op: 'invite', to: B, id: 'k' });
+        if (same6(ans6(wa, 'k'), { type: 'squad', op: 'invite', error: 'not_friend', id: 'k' }))
+          ok(`(inv-c2) ${tag}: the invite is refused, in the same words a stranger gets`);
+        else fail(`(inv-c2) ${tag}: ` + JSON.stringify(ans6(wa, 'k')));
+        if (!invited6(wb).length && PUSHES.length === 0)
+          ok(`(inv-c2) ${tag}: and nothing reached them, by socket or by push`);
+        else fail(`(inv-c2) ${tag} leaked: ` + JSON.stringify(wb.rx) + ' ' + JSON.stringify(PUSHES));
+      }
+    }
+  }
+
+  // ---- (inv-d) a full squad cannot invite a fifth ------------------------
+  {
+    const st = t6store(ROWS6);
+    await st.addFriendship(A, B);
+    const S = mkSocial6(st);
+    const wa = up6(S, A), wb = up6(S, B);
+    const code = await create6(S, wa);
+    for (const [id, name] of [[C, 'Crater Two'], [D, 'Dune Four']]) await join6(S, up6(S, id), code, name);
+    // THE CONTROL: three is not full. A cap written one short passes the
+    // refusal below and fails here.
+    clear6(wb); PUSHES.length = 0;
+    await S.handle(wa, { type: 'squad', op: 'invite', to: B, id: 'd3' });
+    const three = invited6(wb)[0];
+    if ((ans6(wa, 'd3') || {}).delivered === 'online' && three && three.size === 3 && three.max === 4)
+      ok('(inv-d) a squad of three may still invite, and the frame says 3 of 4');
+    else fail('(inv-d) squad of three: ' + JSON.stringify(ans6(wa, 'd3')) + ' ' + JSON.stringify(three));
+    await join6(S, up6(S, E), code, 'Echo Seven');
+    clear6(wb); PUSHES.length = 0;
+    await S.handle(wa, { type: 'squad', op: 'invite', to: B, id: 'd4' });
+    if (same6(ans6(wa, 'd4'), { type: 'squad', op: 'invite', error: 'full', id: 'd4' })) ok('(inv-d) a squad of four refuses an invite: full');
+    else fail('(inv-d) full squad: ' + JSON.stringify(ans6(wa, 'd4')));
+    if (!invited6(wb).length && PUSHES.length === 0)
+      ok('(inv-d) and the fifth player is never told about a squad they cannot enter');
+    else fail('(inv-d) leaked to the fifth: ' + JSON.stringify(wb.rx) + ' ' + JSON.stringify(PUSHES));
+    // AND THE MACHINE AGREES: the fifth player's own join is refused too, so
+    // the invite cap and the join cap are the same number.
+    await join6(S, wb, code, 'Bunker Nine');
+    if ((last6(wb, 'squad', 'join') || {}).error === 'full') ok('(inv-d) the join cap is the same number: the fifth join is refused full');
+    else fail('(inv-d) fifth join: ' + JSON.stringify(wb.rx));
+  }
+
+  // ---- (inv-e) a null name keeps the invite -----------------------------
+  // displayName answers null for a rolled name, for a row whose callsign does
+  // not match its key, and for a name the blocklist has caught since. The rule
+  // is the panels' rule: a null name KEEPS THE ROW. An invite that dropped
+  // itself here would be a friend who simply cannot invite, with nothing on
+  // any screen to say why.
+  {
+    const st = t6store(ROWS6);
+    await st.addFriendship(NN, B);
+    const S = mkSocial6(st);
+    const wn = up6(S, NN), wb = up6(S, B);
+    await create6(S, wn);
+    clear6(wb);
+    await S.handle(wn, { type: 'squad', op: 'invite', to: B, id: 'e' });
+    const inv = invited6(wb)[0];
+    if ((ans6(wn, 'e') || {}).delivered === 'online' && inv && inv.from && inv.from.callsign === null)
+      ok('(inv-e) an inviter with no provable name still delivers, and the frame carries callsign:null');
+    else fail('(inv-e) null-name invite: ' + JSON.stringify(ans6(wn, 'e')) + ' ' + JSON.stringify(inv));
+    if (inv && !/FOLLOW ME OK/i.test(JSON.stringify(inv)))
+      ok('(inv-e) and the free text in the profile column never reaches the invited player');
+    else fail('(inv-e) an unproved name leaked: ' + JSON.stringify(inv));
+  }
+
+  // ---- (inv-e2) a guest cannot be invited, and presence is not why (R12) --
+  // onAuth returns early for an anonymous account, so a guest has no
+  // presence at all. That makes "online ? frame : push" answer a guest
+  // delivered:'none' — an invite that looks accepted and reaches nobody. The
+  // FRIEND READ is what refuses it, and the fault injection that removes that
+  // one line is what proves it.
+  {
+    const st = t6store(ROWS6);
+    const S = mkSocial6(st);
+    const wa = up6(S, A), wg = up6(S, GU, true);
+    if (!S.online.has(GU)) ok('(inv-e2) a guest is never counted online — onAuth returns early for an anonymous account');
+    else fail('(inv-e2) a guest was counted online: ' + JSON.stringify([...S.online.keys()]));
+    await create6(S, wa);
+    clear6(wg); PUSHES.length = 0;
+    await S.handle(wa, { type: 'squad', op: 'invite', to: GU, id: 'g' });
+    if (same6(ans6(wa, 'g'), { type: 'squad', op: 'invite', error: 'not_friend', id: 'g' })) ok('(inv-e2) inviting a guest is refused: not_friend');
+    else fail('(inv-e2) guest invite: ' + JSON.stringify(ans6(wa, 'g')));
+    if (wg.rx.length === 0 && PUSHES.length === 0)
+      ok('(inv-e2) and nothing at all was delivered — no frame, no push, no delivered:none');
+    else fail('(inv-e2) a guest was reached: ' + JSON.stringify(wg.rx) + ' ' + JSON.stringify(PUSHES));
+  }
+
+  // ---- (inv-f) invite is behind the sign-in gate, per op (R3) --------------
+  {
+    const st = t6store(ROWS6);
+    await st.addFriendship(A, B);
+    const S = mkSocial6(st);
+    const wg = up6(S, GU, true);             // a REAL uuid with isGuest true
+    st.calls.length = 0; PUSHES.length = 0;
+    await S.handle(wg, { type: 'squad', op: 'invite', to: B, id: 'g1' });
+    if (same6(wg.rx, [{ type: 'social', error: 'sign_in', id: 'g1' }]))
+      ok('(inv-f) a guest inviting is answered sign_in on type social, with its id echoed, and nothing else');
+    else fail('(inv-f) guest invite reply: ' + JSON.stringify(wg.rx));
+    if (st.calls.length === 0 && PUSHES.length === 0)
+      ok('(inv-f) and never reaches the store or the push seam');
+    else fail('(inv-f) a guest reached ' + JSON.stringify(st.calls) + ' ' + JSON.stringify(PUSHES));
+    const wn = t6ws(null);                   // a socket that never said hello
+    await S.handle(wn, { type: 'squad', op: 'invite', to: B, id: 'g2' });
+    if (same6(wn.rx, [{ type: 'social', error: 'sign_in', id: 'g2' }])) ok('(inv-f) and so is a socket with no account at all');
+    else fail('(inv-f) anonymous socket reply: ' + JSON.stringify(wn.rx));
+  }
+
+  // ---- (inv-g) an invite spends the friend bucket --------------------------
+  // design 4.2 sizes no squad-invite bucket. This op belongs in the friend
+  // one on every count: it is aimed at a friend, it costs the round trips a
+  // `friend op:'request'` does, and it is the one frame in this layer that can
+  // reach a device's notification tray. Ten a minute is far above any honest
+  // client — a squad holds three other people.
+  {
+    const st = t6store(ROWS6);
+    await st.addFriendship(A, B);
+    const S = mkSocial6(st);
+    const wa = up6(S, A), wb = up6(S, B);
+    await create6(S, wa);
+    for (let i = 0; i < 10; i++) await S.handle(wa, { type: 'friend', op: 'search', q: 'nobody at all' });
+    clear6(wb); PUSHES.length = 0; st.calls.length = 0;
+    await S.handle(wa, { type: 'squad', op: 'invite', to: B, id: 'r1' });
+    if (same6(ans6(wa, 'r1'), { type: 'squad', op: 'invite', error: 'slow_down', id: 'r1' }))
+      ok('(inv-g) ten friend ops in a minute leave no allowance for an invite — one bucket, deliberately shared');
+    else fail('(inv-g) invite after ten friend ops: ' + JSON.stringify(ans6(wa, 'r1')));
+    if (!invited6(wb).length && PUSHES.length === 0 && st.calls.length === 0)
+      ok('(inv-g) and a refused invite notifies nobody and costs no round trip');
+    else fail('(inv-g) a rate-refused invite still ran: ' + JSON.stringify(wb.rx) + ' ' + JSON.stringify(PUSHES) + ' ' + JSON.stringify(st.calls));
+    CLOCK6 += 60000;
+    await S.handle(wa, { type: 'squad', op: 'invite', to: B, id: 'r2' });
+    if ((ans6(wa, 'r2') || {}).delivered === 'online') ok('(inv-g) and the bucket refills: a minute later the invite goes');
+    else fail('(inv-g) after the refill: ' + JSON.stringify(ans6(wa, 'r2')));
+  }
+
+
+  // ---- (inv-h) a member who does not lead may invite -----------------------
+  // design 4.3: "leader or member may invite". Mode, start and kick are the
+  // leader's and go through ledSquad; invite must not, or every member's
+  // Invite button answers a refusal.
+  {
+    const st = t6store(ROWS6);
+    await st.addFriendship(B, C);
+    const S = mkSocial6(st);
+    const wa = up6(S, A), wb = up6(S, B), wc = up6(S, C);
+    const code = await create6(S, wa);
+    await join6(S, wb, code, 'Bunker Nine');
+    clear6(wc);
+    await S.handle(wb, { type: 'squad', op: 'invite', to: C, id: 'h' });
+    const inv = invited6(wc)[0];
+    if ((ans6(wb, 'h') || {}).delivered === 'online' && same6(inv, { type: 'squad', op: 'invited', code, from: { callsign: 'Bunker Nine' }, size: 2, max: 4 }))
+      ok('(inv-h) a member who does not lead invites their own friend, under their own proved name');
+    else fail('(inv-h) member invite: ' + JSON.stringify(ans6(wb, 'h')) + ' ' + JSON.stringify(inv));
+  }
+
+  // ---- (inv-i) WHICH squad: the row this socket holds ---------------------
+  // squadKey's order, the file's one answer to "which row is this caller":
+  // the socket's own row first, the account's only for a socket holding none.
+  // Built in the TWO-SQUADS state task 5 left standing on purpose (see
+  // claimOnSignIn): device 1 joined C's squad X as a guest and then signed in
+  // as A, while A leads squad Y from device 2. The Invite button pressed on
+  // device 1 is on X's box; an account-first lookup would invite to Y.
+  {
+    const st = t6store(ROWS6);
+    await st.addFriendship(A, B); await st.addFriendship(A, C);
+    const S = mkSocial6(st);
+    const wc = up6(S, C);
+    const X = await create6(S, wc);
+    const wa2 = up6(S, A);
+    const Y = await create6(S, wa2);
+    const wa1 = t6ws(null);
+    await join6(S, wa1, X, 'Anvil');
+    // server.js's hello, in its order: the generation, the identity, onAuth.
+    wa1.authGen = 1; wa1.userId = A; wa1.isGuest = false; S.onAuth(wa1);
+    const wb = up6(S, B);
+    await S.handle(wa1, { type: 'squad', op: 'invite', to: B, id: 'x' });
+    const inv = invited6(wb)[0];
+    if (X !== Y && (ans6(wa1, 'x') || {}).delivered === 'online' && inv && inv.code === X && inv.size === 2)
+      ok('(inv-i) a socket holding a row invites to THAT squad — the one on its screen — not the one its account leads elsewhere');
+    else fail('(inv-i) invite from the guest row\'s socket: ' + JSON.stringify({ X, Y, answer: ans6(wa1, 'x'), inv }));
+    // A SECOND DEVICE HOLDING NO ROW invites to the ACCOUNT's squad.
+    const wa3 = up6(S, A);
+    clear6(wb);
+    await S.handle(wa3, { type: 'squad', op: 'invite', to: B, id: 'y' });
+    const inv2 = invited6(wb)[0];
+    if ((ans6(wa3, 'y') || {}).delivered === 'online' && inv2 && inv2.code === Y && inv2.size === 1)
+      ok('(inv-i) a device holding no row invites to the squad its account is in');
+    else fail('(inv-i) invite from a rowless device: ' + JSON.stringify({ answer: ans6(wa3, 'y'), inv2 }));
+    // AND A PLAYER WHOSE SOCKET STANDS IN THE SQUAD IS ALREADY THERE, on a
+    // guest row as much as on their own: C invites A, and A's device 1 is
+    // sitting in X. Asked by row KEY alone, A would be invited to the squad
+    // their own screen is showing.
+    clear6(wa1, wa2, wa3); PUSHES.length = 0;
+    await S.handle(wc, { type: 'squad', op: 'invite', to: A, id: 'z' });
+    if (same6(ans6(wc, 'z'), { type: 'squad', op: 'invite', error: 'already', id: 'z' }) && ![wa1, wa2, wa3].some((w) => invited6(w).length) && PUSHES.length === 0)
+      ok('(inv-i) an account whose socket stands in the squad on a guest row is already there, and is not invited to it');
+    else fail('(inv-i) invite to a player on a guest row: ' + JSON.stringify({ answer: ans6(wc, 'z'), a1: wa1.rx, a2: wa2.rx, a3: wa3.rx, PUSHES }));
+  }
+
+  // ---- (inv-k) the squad and the socket can move while the reads are out --
+  {
+    // (i) THE SQUAD FILLS DURING THE FRIEND READ. The frame must carry the
+    // squad as it IS, and a squad that is full now must not invite a fifth.
+    const st = t6store(ROWS6);
+    await st.addFriendship(A, B);
+    const S = mkSocial6(st);
+    const wa = up6(S, A), wb = up6(S, B);
+    const code = await create6(S, wa);
+    clear6(wb); PUSHES.length = 0;
+    const gate = st.hold('friendIdsOf');
+    const pending = S.handle(wa, { type: 'squad', op: 'invite', to: B, id: 'k1' });
+    const inside = await within6(gate.inside);
+    if (inside) for (const id of [C, D, E]) await join6(S, up6(S, id), code);
+    gate.release(); await pending;
+    if (inside && same6(ans6(wa, 'k1'), { type: 'squad', op: 'invite', error: 'full', id: 'k1' }) && !invited6(wb).length && PUSHES.length === 0)
+      ok('(inv-k) a squad that filled while the friend read was out answers full, and invites nobody');
+    else fail('(inv-k) filled during the read: ' + JSON.stringify({ inside, answer: ans6(wa, 'k1'), b: wb.rx, PUSHES }));
+  }
+  {
+    // (ii) THE SOCKET BECOMES ANOTHER ACCOUNT DURING THE READ. server.js's
+    // hello for a different account, in its order: the generation, the close
+    // hook (A's row leaves — the socket is still open), the new identity,
+    // onAuth. D leads a squad of their own, so a handler that carried on
+    // would invite A's friend to D's squad, under A's name.
+    const st = t6store(ROWS6);
+    await st.addFriendship(A, B);
+    const S = mkSocial6(st);
+    const wa = up6(S, A), wb = up6(S, B);
+    await create6(S, wa);
+    await create6(S, up6(S, D));
+    clear6(wb); PUSHES.length = 0;
+    const gate = st.hold('friendIdsOf');
+    const pending = S.handle(wa, { type: 'squad', op: 'invite', to: B, id: 'k2' });
+    const inside = await within6(gate.inside);
+    wa.authGen = (wa.authGen || 0) + 1; S.onClose(wa); wa.userId = D; wa.isGuest = false; S.onAuth(wa);
+    gate.release(); await pending;
+    if (inside && !invited6(wb).length && PUSHES.length === 0)
+      ok('(inv-k) a socket that became another account during the read invites nobody, from nobody\'s squad');
+    else fail('(inv-k) identity changed during the read: ' + JSON.stringify({ inside, answer: ans6(wa, 'k2'), b: wb.rx, PUSHES }));
+  }
+
+  // ---- (end of task 6 checks) ----
+  if (prevPushMs === undefined) delete process.env.SOCIAL_PUSH_MS; else process.env.SOCIAL_PUSH_MS = prevPushMs;
+  if (prevPresenceMs === undefined) delete process.env.SOCIAL_PRESENCE_MS; else process.env.SOCIAL_PRESENCE_MS = prevPresenceMs;
+}
+
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall squad checks passed');
 process.exit(out.errors.length ? 1 : 0);
