@@ -411,6 +411,23 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
   if (next !== sq && S.ofUser(SQA) === next && sq.members.length === 1 && sq.members[0].userId === SQB && sq.leader === SQB && S.has(sq.code))
     ok('(s1) creating while in a squad leaves it first: off its roster, leadership handed on');
   else fail('(s1) create-while-in-a-squad: old roster ' + JSON.stringify(sq.members.map((m) => m.userId)) + ', old leader ' + sq.leader);
+  // A SQUAD IS ALWAYS LED BY AN ACCOUNT, and the machine holds that rule
+  // itself rather than trusting the one gate in front of it. A guest's create
+  // is refused with no squad, no index entry and no code spent — and a guest
+  // already in a squad keeps it, because a refusal must cost nothing.
+  const T = sqMachine();
+  const g = sqws(null), g2 = sqws('00000000-0000-4000-8000-a00000000009', true);
+  const host = T.create(sqM(SQC, sqws(SQC)));
+  T.join(host.code, sqG(g2));
+  const spent = scriptCodeBytes([]);
+  let refusedA;
+  try { refusedA = T.create(sqG(g)); } finally { spent.restore(); }
+  const refusedB = T.create(sqG(g2));
+  const refusedC = T.create({ userId: null, guest: false, name: 'X', skin: null, ws: sqws(null) });
+  if (refusedA === null && spent.oneByte === 0 && refusedB === null && refusedC === null && T.ofUser(g) === null
+    && T.ofUser(g2) === host && host.members.length === 2 && host.leader === SQC)
+    ok('(s1) create refuses a guest — no squad is ever led by null — and the refused guest keeps the squad they had');
+  else fail('(s1) guest create: ' + JSON.stringify([refusedA, refusedB, refusedC], noWs) + ', bytes drawn ' + spent.oneByte + ', host members ' + host.members.length);
 }
 
 // ---- (s2) the code minter: one byte a character, one namespace -------------
@@ -427,6 +444,28 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
   };
   const engineChars = (read('public/room-engine.js').match(/const CODE_CHARS = '([A-Z0-9]+)';/) || [])[1] || '';
 
+  // IMPORTING THE HELPER NEVER ARMS IT, whatever the environment says — this
+  // suite imports it in process, and a CC_TEST_CODE_BYTES left in somebody's
+  // shell must not script its codes. Only the preload entry arms, and it
+  // does. Fresh module instances (a query string) so both loads really run.
+  {
+    const own = () => Object.prototype.hasOwnProperty.call(globalThis.crypto, 'getRandomValues');
+    const was = process.env.CC_TEST_CODE_BYTES;
+    process.env.CC_TEST_CODE_BYTES = '0,1,2,3';
+    let helperArmed = null, preloadArmed = null;
+    try {
+      await import('./fixtures/scripted-code-bytes.mjs?probe=' + Date.now());
+      helperArmed = own();
+      await import('./fixtures/scripted-code-bytes-preload.mjs?probe=' + Date.now());
+      preloadArmed = own();
+    } finally {
+      delete globalThis.crypto.getRandomValues;
+      if (was === undefined) delete process.env.CC_TEST_CODE_BYTES; else process.env.CC_TEST_CODE_BYTES = was;
+    }
+    if (helperArmed === false && preloadArmed === true && !own())
+      ok('(s2) importing the helper arms nothing even with CC_TEST_CODE_BYTES set; only the preload entry arms');
+    else fail('(s2) arming: helper ' + helperArmed + ', preload ' + preloadArmed);
+  }
   // THE HOOK IS PROVED BEFORE ANYTHING RELIES ON IT. "ABCD" out of a real
   // CSPRNG is one chance in 923,521.
   {
@@ -668,13 +707,14 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
   if (S.kick('ZZZZ', SQB, SQB).error === 'not_leader') ok('(s8) a kick against a squad that does not exist answers not_leader');
   else fail('(s8) kick against an unknown code did not answer not_leader');
   // A LEADER OF null MUST NEVER MATCH A CALLER OF null. Unreachable through
-  // the handlers — create is gated on a linked account — and reachable from
-  // this surface, which later tasks call directly; the guard is here for
-  // them. A signed-in member is in the squad, because that is who a null
-  // caller could otherwise remove.
+  // this surface as it stands — create refuses a guest and the hand-off only
+  // ever picks an account — so the squad is put in that state BY HAND, the
+  // way a later caller's bug would leave it. A signed-in member is in the
+  // squad, because that is who a null caller could otherwise remove.
   const N = sqMachine();
-  const n = N.create({ userId: null, guest: true, name: 'G', skin: null, ws: sqws(null) });
+  const n = N.create(sqM(SQA, sqws(SQA)));
   N.join(n.code, sqM(SQB, sqws(SQB)));
+  n.leader = null;
   const nk = N.kick(n.code, null, SQB);
   if (n.leader === null && nk.ok === false && nk.error === 'not_leader' && n.members.length === 2 && N.ofUser(SQB) === n)
     ok('(s8) a squad with a null leader cannot be commanded by a caller with no account');
@@ -731,6 +771,55 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
   if (eng.includes(clamp) && eng.includes(floor))
     ok('(s10) the engine still clamps seats and floors startMatch exactly as SQUAD_SEATS copies');
   else fail('(s10) room-engine.js seat rules have MOVED — SQUAD_SEATS is now a second opinion: clamp ' + eng.includes(clamp) + ', floor ' + eng.includes(floor));
+}
+
+// ---- (s11) the caller's row is found by SOCKET, and a move leaves it -------
+// A socket's row and its signed-in account are not always the same key: a
+// guest who signs in on the same socket still holds a GUEST row, keyed by
+// that socket, while the account now names somebody the squad has never
+// seen. keyOfSocket finds the row a socket IS; create and join take it as
+// `fromKey` and leave it, so one socket is never two members.
+{
+  const S = sqMachine();
+  const wa = sqws(SQA), g = sqws(null), stranger = sqws(SQE);
+  const sq = S.create(sqM(SQA, wa));
+  S.join(sq.code, sqG(g));
+  if (S.keyOfSocket(g) === g && S.keyOfSocket(wa) === SQA && S.keyOfSocket(stranger) === null && S.keyOfSocket(null) === null && S.keyOfSocket(undefined) === null)
+    ok('(s11) keyOfSocket names the row a socket holds — a guest\'s socket, an account\'s id — and nothing for a stranger or null');
+  else fail('(s11) keyOfSocket: ' + JSON.stringify([S.keyOfSocket(g) === g, S.keyOfSocket(wa), S.keyOfSocket(stranger), S.keyOfSocket(null)]));
+  // The guest signs in as B on the same socket, and creates.
+  const mine = S.create(sqM(SQB, g), g);
+  if (mine && mine !== sq && mine.leader === SQB && sq.members.length === 1 && sq.members[0].userId === SQA
+    && S.ofUser(g) === null && S.ofUser(SQB) === mine && S.keyOfSocket(g) === SQB)
+    ok('(s11) create with fromKey leaves the caller\'s guest row: one socket, one row, in the new squad only');
+  else fail('(s11) create from a guest row: old roster ' + JSON.stringify(sq.members.map((m) => m.userId)) + ', ofUser(g) ' + !!S.ofUser(g));
+  // JOIN with fromKey: the old row goes only AFTER the cap check.
+  const T = sqMachine();
+  const h = sqws(null);
+  const t1 = T.create(sqM(SQA, sqws(SQA)));
+  T.join(t1.code, sqG(h));
+  const t2 = T.create(sqM(SQC, sqws(SQC)));
+  for (const id of [SQD, SQE]) T.join(t2.code, sqM(id, sqws(id)));
+  T.join(t2.code, sqG(sqws(null)));
+  const full = T.join(t2.code, sqM(SQB, h), h);
+  if (full.ok === false && full.error === 'full' && T.ofUser(h) === t1 && t1.members.length === 2)
+    ok('(s11) a join refused full keeps the caller\'s old row, whichever key it is under');
+  else fail('(s11) full join from a guest row: ' + JSON.stringify(full, noWs) + ', still in t1 ' + (T.ofUser(h) === t1));
+  T.leave(SQE);
+  const moved = T.join(t2.code, sqM(SQB, h), h);
+  if (moved.ok && T.ofUser(h) === null && T.ofUser(SQB) === t2 && t1.members.length === 1 && T.keyOfSocket(h) === SQB)
+    ok('(s11) a join with fromKey leaves the caller\'s guest row and adds the account row');
+  else fail('(s11) join from a guest row: t1 roster ' + t1.members.length + ', ofUser(h) ' + !!T.ofUser(h));
+  // JOINING THE SQUAD THE SOCKET IS ALREADY IN changes nothing: the squad
+  // keeps the row it has, and no seat is spent on a second one.
+  const U = sqMachine();
+  const k = sqws(null);
+  const u = U.create(sqM(SQA, sqws(SQA)));
+  U.join(u.code, sqG(k));
+  const same2 = U.join(u.code, sqM(SQB, k), k);
+  if (same2.ok && same2.squad === u && u.members.length === 2 && u.members[1].guest === true && U.ofUser(SQB) === null)
+    ok('(s11) joining the squad the socket is already in is a no-op, not a second row');
+  else fail('(s11) re-join from a guest row: members ' + u.members.length);
 }
 
 // ---- (h1) the snapshot: proved names, a guest row, and one round trip -----
@@ -1070,84 +1159,268 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
   else fail('(h7) full: ' + JSON.stringify(we.rx));
 }
 
-// ---- (h8) a store that fails: one honest answer, never two -----------------
+// ---- (h8) a name read that fails: the squad is still told the truth --------
+// profilesByIds is COSMETIC to a squad. By the time a snapshot is built the
+// operation has already landed — the member has joined, the kick has
+// happened — so a failed name read must not turn into an "unavailable" that
+// splits the squad: the joiner's client showing the old squad while the new
+// one carries a member it was never told about, who takes a seat and changes
+// `fits`. The snapshot degrades instead: every row is KEPT and every name is
+// null, which is displayName's own answer for a name it cannot vouch for.
 {
-  // THE ACTOR'S OWN SNAPSHOT FAILS: the net inside handleSquad answers, and
-  // its answer carries the OP — handle()'s outer net would answer
-  // { type:'squad', error } with no op, which a client with two squad
-  // requests outstanding cannot place.
+  // CREATE: the creator gets the real frame, their row kept, their name null.
   {
     const st = sqstore(); const S = sqSocial(st);
     st.boom.add(SQA);
     const wa = sqUp(S, sqws(SQA));
     await S.handle(wa, { type: 'squad', op: 'create', id: 'c' });
-    if (wa.rx.length === 1 && JSON.stringify(wa.rx[0]) === JSON.stringify({ type: 'squad', op: 'create', error: 'unavailable', id: 'c' }))
-      ok('(h8) a create whose snapshot cannot be built is answered unavailable, carrying its op');
-    else fail('(h8) create over a failing store got ' + JSON.stringify(wa.rx));
+    const r = wa.rx[0] || {};
+    if (wa.rx.length === 1 && r.op === 'state' && r.id === 'c' && SQCODE_RE.test(r.code) && r.you === 0
+      && JSON.stringify(r.members) === JSON.stringify([{ id: SQA, callsign: null, guest: false, online: true, ready: false, dropped: false }]))
+      ok('(h8) a create whose name read fails is answered with the real squad, the row kept and the name null');
+    else fail('(h8) create over a failing name read got ' + JSON.stringify(wa.rx));
   }
-  // A COURTESY PUSH THAT FAILS AFTER THE ANSWER IS SWALLOWED. The leaver has
-  // been told `left`; a second frame saying the leave failed would be false.
-  {
-    const st = sqstore(); const S = sqSocial(st);
-    const wa = sqUp(S, sqws(SQA)), wb = sqUp(S, sqws(SQB));
-    await S.handle(wa, { type: 'squad', op: 'create' });
-    const code = (sqlast(wa, 'state') || {}).code;
-    await S.handle(wb, { type: 'squad', op: 'join', code });
-    wa.rx.length = 0; wb.rx.length = 0;
-    st.boom.add(SQB);
-    await S.handle(wa, { type: 'squad', op: 'leave', id: 'l' });
-    if (wa.rx.length === 1 && wa.rx[0].op === 'left' && wa.rx[0].ok === true && wa.rx[0].id === 'l')
-      ok('(h8) a leave is answered left exactly once, even when the roster push behind it fails');
-    else fail('(h8) leave over a failing push got ' + JSON.stringify(wa.rx));
-  }
-  // AND THE SAME FOR THE SQUAD A CREATOR LEFT: the creator's new squad
-  // builds, the old squad's push fails, and the creator hears only success.
-  {
-    const st = sqstore(); const S = sqSocial(st);
-    const wa = sqUp(S, sqws(SQA)), wb = sqUp(S, sqws(SQB));
-    await S.handle(wa, { type: 'squad', op: 'create' });
-    const code = (sqlast(wa, 'state') || {}).code;
-    await S.handle(wb, { type: 'squad', op: 'join', code });
-    wa.rx.length = 0;
-    st.boom.add(SQB);
-    await S.handle(wa, { type: 'squad', op: 'create', id: 'c2' });
-    if (wa.rx.length === 1 && wa.rx[0].op === 'state' && wa.rx[0].id === 'c2' && wa.rx[0].code !== code)
-      ok('(h8) a create is answered with its new squad once, even when telling the old squad fails');
-    else fail('(h8) create-from-a-squad over a failing push got ' + JSON.stringify(wa.rx));
-  }
-  // THE OTHER WAY ROUND: the mover's OWN answer fails, and the squad they
-  // left has still changed under the people in it — so it is still told.
+  // JOIN: the mover, EVERY member of the squad they joined, and the squad
+  // they left are all told — the one squad state, on every screen.
   {
     const st = sqstore(); const S = sqSocial(st);
     const wa = sqUp(S, sqws(SQA)), wb = sqUp(S, sqws(SQB)), wc = sqUp(S, sqws(SQC));
     await S.handle(wa, { type: 'squad', op: 'create' });
-    const code = (sqlast(wa, 'state') || {}).code;
+    const code = sqat(wa, 'state').code;
     await S.handle(wb, { type: 'squad', op: 'join', code });
     await S.handle(wc, { type: 'squad', op: 'create' });
-    const other = (sqlast(wc, 'state') || {}).code;
-    wa.rx.length = 0; wb.rx.length = 0;
-    st.boom.add(SQC);                 // any snapshot with C in it fails
-    await S.handle(wa, { type: 'squad', op: 'join', code: other, id: 'j' });
-    const told = sqlast(wb, 'state');
-    if (wa.rx.length === 1 && wa.rx[0].op === 'join' && wa.rx[0].error === 'unavailable'
-      && told && told.code === code && told.leader === SQB && told.members.length === 1)
-      ok('(h8) a join whose own answer fails still tells the squad the mover left');
-    else fail('(h8) failed join: mover ' + JSON.stringify(wa.rx) + ' left-behind ' + JSON.stringify(told));
+    const other = sqat(wc, 'state').code;
+    wa.rx.length = 0; wb.rx.length = 0; wc.rx.length = 0;
+    st.boom.add(SQC);                 // any snapshot with C in it cannot be named
+    await S.handle(wb, { type: 'squad', op: 'join', code: other, id: 'j' });
+    const mine = wb.rx[0] || {}, host = sqat(wc, 'state'), left = sqat(wa, 'state');
+    const nulls = [{ id: SQC, callsign: null, guest: false, online: true, ready: false, dropped: false },
+      { id: SQB, callsign: null, guest: false, online: true, ready: false, dropped: false }];
+    if (wb.rx.length === 1 && mine.op === 'state' && mine.id === 'j' && mine.code === other && mine.you === 1
+      && JSON.stringify(mine.members) === JSON.stringify(nulls)
+      && host.code === other && host.you === 0 && JSON.stringify(host.members) === JSON.stringify(nulls)
+      && JSON.stringify(host.fits) === JSON.stringify(fitsFor(2))
+      && left.code === code && left.members.length === 1 && left.members[0].callsign === 'Anvil Six')
+      ok('(h8) a join whose name read fails tells the joiner, every member of the new squad and the squad left behind');
+    else fail('(h8) join over a failing name read: mover ' + JSON.stringify(wb.rx) + ' host ' + JSON.stringify(host) + ' left ' + JSON.stringify(left));
   }
+  // LEAVE and KICK: one answer each, and the members still in the squad are
+  // pushed their roster with the rows intact.
+  {
+    const st = sqstore(); const S = sqSocial(st);
+    const wa = sqUp(S, sqws(SQA)), wb = sqUp(S, sqws(SQB)), wc = sqUp(S, sqws(SQC));
+    await S.handle(wa, { type: 'squad', op: 'create' });
+    const code = sqat(wa, 'state').code;
+    await S.handle(wb, { type: 'squad', op: 'join', code });
+    await S.handle(wc, { type: 'squad', op: 'join', code });
+    wa.rx.length = 0; wb.rx.length = 0; wc.rx.length = 0;
+    st.boom.add(SQA);
+    await S.handle(wc, { type: 'squad', op: 'leave', id: 'l' });
+    const seen = sqat(wb, 'state');
+    if (wc.rx.length === 1 && wc.rx[0].op === 'left' && wc.rx[0].id === 'l'
+      && seen.members && seen.members.length === 2 && seen.members.every((m) => m.callsign === null) && seen.you === 1)
+      ok('(h8) a leave is answered once and the members left behind get their roster, rows kept, names null');
+    else fail('(h8) leave over a failing name read: leaver ' + JSON.stringify(wc.rx) + ' seen ' + JSON.stringify(seen));
+    wa.rx.length = 0; wb.rx.length = 0;
+    await S.handle(wa, { type: 'squad', op: 'kick', id: SQB });
+    const k = wa.rx[0] || {};
+    if (wa.rx.length === 1 && k.op === 'state' && k.id === SQB && k.members.length === 1 && k.members[0].callsign === null
+      && sqat(wb).op === 'ended' && sqat(wb).reason === 'kicked')
+      ok('(h8) a kick whose name read fails is answered with the real roster, and the kicked member is told');
+    else fail('(h8) kick over a failing name read: leader ' + JSON.stringify(wa.rx) + ' kicked ' + JSON.stringify(wb.rx));
+  }
+  // THE NET INSIDE handleSquad STILL CARRIES THE OP for a throw that is not
+  // a name read. Nothing in these four ops throws on a frame JSON can carry,
+  // so the stand-in is a frame whose `code` throws when it is read.
+  {
+    const S = sqSocial(sqstore());
+    const w = sqUp(S, sqws(SQA));
+    await S.handle(w, { type: 'squad', op: 'join', get code() { throw new Error('unexpected'); }, id: 'x' });
+    if (w.rx.length === 1 && JSON.stringify(w.rx[0]) === JSON.stringify({ type: 'squad', op: 'join', error: 'unavailable', id: 'x' }))
+      ok('(h8) any other throw inside an op is answered unavailable, carrying its op');
+    else fail('(h8) a throwing op answered ' + JSON.stringify(w.rx));
+  }
+}
+
+// ---- (h9) a guest who signs in on the same socket is not stuck -------------
+// The client re-sends `hello` over the LIVE socket after a sign-in
+// (public/app.js, both sign-in paths), and server.js's hello branch sets
+// ws.userId and ws.isGuest and calls onAuth — no onClose, because nothing
+// closed. An anonymous account upgraded in place is the same socket with
+// isGuest flipped. Either way the socket still holds its GUEST row, keyed by
+// the socket, and every squad op must act on THAT row.
+{
+  for (const [label, before, after] of [
+    ['a socket that never said hello', [null, false], [SQB, false]],
+    ['an anonymous account upgraded in place', ['00000000-0000-4000-8000-a00000000002', true], ['00000000-0000-4000-8000-a00000000002', false]],
+  ]) {
+    const st = sqstore(); const S = sqSocial(st);
+    const wa = sqUp(S, sqws(SQA));
+    const g = sqws(before[0], before[1]);
+    await S.handle(wa, { type: 'squad', op: 'create' });
+    const code = sqat(wa, 'state').code;
+    await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+    // SIGN IN, exactly as server.js's hello branch does it.
+    g.userId = after[0]; g.isGuest = after[1]; S.onAuth(g);
+    // LEAVE: exactly one answer, the guest row gone, and nothing more pushed
+    // down this socket from the squad it left.
+    g.rx.length = 0; wa.rx.length = 0;
+    await S.handle(g, { type: 'squad', op: 'leave', id: 'l' });
+    const roster = sqat(wa, 'state').members || [];
+    await S.handle(sqws(null), { type: 'squad', op: 'join', code, name: 'H', skin: 'gold' });
+    if (g.rx.length === 1 && g.rx[0].op === 'left' && roster.length === 1 && roster[0].id === SQA)
+      ok(`(h9) ${label}, signed in mid-squad: leave takes its guest row out, and the squad stops pushing to it`);
+    else fail(`(h9) ${label}: leave left the guest row behind — socket got ${JSON.stringify(g.rx)}, roster ${JSON.stringify(roster)}`);
+  }
+  // CREATE after signing in: the new squad is led by the account, the old
+  // squad has lost the guest row and is told, and the socket is pushed ONE
+  // squad from then on.
+  {
+    const st = sqstore(); const S = sqSocial(st);
+    const wa = sqUp(S, sqws(SQA)), g = sqws(null);
+    await S.handle(wa, { type: 'squad', op: 'create' });
+    const code = sqat(wa, 'state').code;
+    await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+    g.userId = SQB; g.isGuest = false; S.onAuth(g);
+    g.rx.length = 0; wa.rx.length = 0;
+    await S.handle(g, { type: 'squad', op: 'create', id: 'c' });
+    const made = g.rx.find((f) => f.id === 'c') || {};
+    const told = sqat(wa, 'state');
+    g.rx.length = 0;
+    await S.handle(sqws(null), { type: 'squad', op: 'join', code, name: 'H', skin: 'gold' });
+    if (made.op === 'state' && made.code !== code && made.leader === SQB && made.members.length === 1 && made.you === 0
+      && told.code === code && told.members.length === 1 && g.rx.length === 0)
+      ok('(h9) create after signing in leads a new squad and leaves the old one — which is told, and never pushes to this socket again');
+    else fail('(h9) create after sign-in: made ' + JSON.stringify(made) + ', old squad told ' + JSON.stringify(told) + ', later pushes ' + g.rx.length);
+  }
+  // JOIN after signing in: out of the old squad (told), into the new one.
+  {
+    const st = sqstore(); const S = sqSocial(st);
+    const wa = sqUp(S, sqws(SQA)), wc = sqUp(S, sqws(SQC)), g = sqws(null);
+    await S.handle(wa, { type: 'squad', op: 'create' });
+    const code = sqat(wa, 'state').code;
+    await S.handle(wc, { type: 'squad', op: 'create' });
+    const other = sqat(wc, 'state').code;
+    await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+    g.userId = SQB; g.isGuest = false; S.onAuth(g);
+    wa.rx.length = 0; g.rx.length = 0;
+    await S.handle(g, { type: 'squad', op: 'join', code: other, id: 'j' });
+    const now2 = g.rx.find((f) => f.id === 'j') || {};
+    const told = sqat(wa, 'state');
+    if (now2.code === other && now2.you === 1 && now2.members[1].id === SQB && told.members && told.members.length === 1)
+      ok('(h9) join after signing in moves the socket: out of the old squad, which is told, and in as the account');
+    else fail('(h9) join after sign-in: ' + JSON.stringify(now2) + ' old squad ' + JSON.stringify(told));
+  }
+  // AND THE REVERSE: a socket that SIGNS OUT still holds its account's row,
+  // and its leave takes that row out, handing leadership on.
   {
     const st = sqstore(); const S = sqSocial(st);
     const wa = sqUp(S, sqws(SQA)), wb = sqUp(S, sqws(SQB));
     await S.handle(wa, { type: 'squad', op: 'create' });
-    const code = (sqlast(wa, 'state') || {}).code;
+    const code = sqat(wa, 'state').code;
     await S.handle(wb, { type: 'squad', op: 'join', code });
-    wa.rx.length = 0; wb.rx.length = 0;
-    st.boom.add(SQA);                 // A's new squad cannot be named; A's old one, now B's alone, can
-    await S.handle(wa, { type: 'squad', op: 'create', id: 'c' });
-    const heir = sqlast(wb, 'state');
-    if (wa.rx.length === 1 && wa.rx[0].op === 'create' && wa.rx[0].error === 'unavailable'
-      && heir && heir.code === code && heir.leader === SQB && heir.members.length === 1)
-      ok('(h8) a create whose own answer fails still tells the squad the creator left');
-    else fail('(h8) failed create: creator ' + JSON.stringify(wa.rx) + ' left-behind ' + JSON.stringify(heir));
+    S.onClose(wa); wa.userId = null; wa.isGuest = false;
+    wb.rx.length = 0;
+    await S.handle(wa, { type: 'squad', op: 'leave', id: 'o' });
+    const heir = sqat(wb, 'state');
+    if (sqat(wa).op === 'left' && heir.leader === SQB && heir.members && heir.members.length === 1)
+      ok('(h9) a socket that signed out leaves the account row it holds, and leadership passes on');
+    else fail('(h9) leave after sign-out: ' + JSON.stringify(heir));
+  }
+  // BUT LEADERSHIP IS THE ACCOUNT'S. A socket that signed out of the leader's
+  // account and into ANOTHER still holds the leader's row, and must not
+  // command that squad: the row it holds and the account on it must both be
+  // the leader.
+  {
+    const st = sqstore(); const S = sqSocial(st);
+    const wa = sqUp(S, sqws(SQA)), wb = sqUp(S, sqws(SQB)), g = sqws(null);
+    await S.handle(wa, { type: 'squad', op: 'create' });
+    const code = sqat(wa, 'state').code;
+    await S.handle(wb, { type: 'squad', op: 'join', code });
+    await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+    S.onClose(wa); wa.userId = SQE; wa.isGuest = false; S.onAuth(wa);
+    wa.rx.length = 0; g.rx.length = 0;
+    await S.handle(wa, { type: 'squad', op: 'kick', i: 2, id: 'k' });
+    await S.handle(wa, { type: 'squad', op: 'kick', id: SQB });
+    if (wa.rx.length === 2 && wa.rx.every((f) => f.op === 'kick' && f.error === 'not_leader') && g.rx.length === 0 && sqf(wb, 'ended').length === 0)
+      ok('(h9) a socket now signed in as someone else cannot kick from the leader\'s row it still holds');
+    else fail('(h9) kick after an account switch: ' + JSON.stringify(wa.rx));
+  }
+  // AND THE OTHER HALF: a socket still holding a GUEST row in one squad does
+  // not command another squad that its new account leads from a different
+  // device — its screen is showing the first one, and an index it sends was
+  // read off that screen.
+  {
+    const st = sqstore(); const S = sqSocial(st);
+    const wa = sqUp(S, sqws(SQA)), wb = sqUp(S, sqws(SQB)), g = sqws(null), h = sqws(null);
+    await S.handle(wa, { type: 'squad', op: 'create' });
+    const one = sqat(wa, 'state').code;
+    await S.handle(g, { type: 'squad', op: 'join', code: one, name: 'G', skin: 'gold' });
+    await S.handle(wb, { type: 'squad', op: 'create' });
+    const two = sqat(wb, 'state').code;
+    await S.handle(h, { type: 'squad', op: 'join', code: two, name: 'H', skin: 'gold' });
+    g.userId = SQB; g.isGuest = false; S.onAuth(g);   // g's account now leads squad two, elsewhere
+    g.rx.length = 0; h.rx.length = 0;
+    await S.handle(g, { type: 'squad', op: 'kick', i: 1, id: 'k' });
+    if (g.rx.length === 1 && g.rx[0].op === 'kick' && g.rx[0].error === 'not_leader' && h.rx.length === 0)
+      ok('(h9) a socket holding a guest row cannot kick in the squad its account leads from another device');
+    else fail('(h9) cross-squad kick: ' + JSON.stringify(g.rx) + ' guest in squad two got ' + JSON.stringify(h.rx));
+    // AND WHEN THAT SOCKET CREATES, the account's row in squad two goes too —
+    // one squad per player — and squad two is told, not just squad one.
+    wa.rx.length = 0; h.rx.length = 0;
+    await S.handle(g, { type: 'squad', op: 'create', id: 'c' });
+    const toldOne = sqat(wa, 'state'), toldTwo = sqat(h);
+    if (toldOne.code === one && toldOne.members.length === 1 && toldTwo.op === 'ended' && toldTwo.reason === 'no_leader')
+      ok('(h9) a create from that socket leaves both the socket\'s row and the account\'s, and tells both squads');
+    else fail('(h9) create across two squads: squad one saw ' + JSON.stringify(toldOne) + ', squad two\'s guest got ' + JSON.stringify(h.rx));
+  }
+}
+
+// ---- (h10) the actor's own socket throws: everyone else is still told -----
+// Once the snapshot cannot reject, the one send in a push that can throw is
+// the actor's REPLY — a half-closed socket whose send() raises, the case
+// safeSend exists for. The operation has already landed, so the rest of the
+// squad, and the squad the actor left, must still get the truth.
+{
+  // A linked socket whose every send throws.
+  const brittle = (id) => ({ readyState: 1, userId: id, isGuest: false, rx: { push() { throw new Error('half-closed'); } } });
+  // KICK: the leader is row 0, so a push that answered the actor first would
+  // throw before reaching anybody after them.
+  {
+    const S = sqSocial(sqstore());
+    const wa = sqUp(S, sqws(SQA)), wc = sqUp(S, sqws(SQC)), g = sqws(null);
+    await S.handle(wa, { type: 'squad', op: 'create' });
+    const code = sqat(wa, 'state').code;
+    await S.handle(wc, { type: 'squad', op: 'join', code });
+    await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+    const ra = wa.rx;
+    Object.assign(wa, { rx: { push() { throw new Error('half-closed'); } } });
+    wc.rx.length = 0;
+    let threw = null;
+    try { await S.handle(wa, { type: 'squad', op: 'kick', i: 2, id: 'k' }); } catch (e) { threw = e; }
+    wa.rx = ra;
+    const seen = sqat(wc, 'state');
+    if (!threw && seen.members && seen.members.length === 2 && sqat(g).op === 'ended')
+      ok('(h10) a kick whose leader\'s socket throws still pushes the new roster to everyone else');
+    else fail('(h10) kick with a throwing actor: threw ' + (threw && threw.message) + ', member saw ' + JSON.stringify(seen));
+  }
+  // CREATE and JOIN from inside a squad: the squad left behind is told even
+  // though the mover's own answer throws.
+  for (const op of ['create', 'join']) {
+    const S = sqSocial(sqstore());
+    const wa = sqUp(S, brittle(SQA)), wb = sqUp(S, sqws(SQB)), wc = sqUp(S, sqws(SQC));
+    await S.handle(wb, { type: 'squad', op: 'create' });
+    const code = sqat(wb, 'state').code;
+    await S.handle(wc, { type: 'squad', op: 'create' });
+    const other = sqat(wc, 'state').code;
+    await S.handle(wa, { type: 'squad', op: 'join', code });
+    wb.rx.length = 0;
+    let threw = null;
+    try { await S.handle(wa, op === 'create' ? { type: 'squad', op } : { type: 'squad', op, code: other }); } catch (e) { threw = e; }
+    const told = sqat(wb, 'state');
+    if (!threw && told.code === code && told.members && told.members.length === 1 && told.members[0].id === SQB)
+      ok(`(h10) a ${op} whose mover's socket throws still tells the squad they left`);
+    else fail(`(h10) ${op} with a throwing mover: threw ${threw && threw.message}, left-behind saw ${JSON.stringify(told)}`);
   }
 }
 

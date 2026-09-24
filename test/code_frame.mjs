@@ -70,13 +70,28 @@ const finish = async () => {
   console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall code-frame checks passed');
   process.exit(out.errors.length ? 1 : 0);
 };
-setTimeout(() => { fail('timeout — the suite did not finish in 45 s'); finish(); }, 45000).unref();
+// THE WATCHDOG'S BUDGET GROWS WITH EVERY SERVER BOOTED. A fixed 45 s once
+// covered two boots; world 3 made it four, each allowed up to 10 s to report
+// listening, and on a machine other sessions are loading a fixed budget
+// times out a suite that is merely slow — which refuses the owner's push for
+// no reason. So: 20 s for the suite's own work, and 20 s more for each boot
+// (its 10 s listening window plus the checks run against it). A genuine hang
+// still ends the run.
+let deadline = Date.now() + 20000;
+const watchdog = setInterval(() => {
+  if (Date.now() <= deadline) return;
+  clearInterval(watchdog);
+  fail('timeout — the suite overran its budget (20 s, plus 20 s for each of ' + servers.length + ' servers booted)');
+  finish();
+}, 250);
+watchdog.unref();
 
 // Spawn this checkout's server.js with the Supabase env REPLACED by `sb` (all
 // three keys deleted first, so a stray key in the caller's shell can never
 // decide which world this is). `node` is extra arguments for node itself,
 // ahead of the script: world 3 preloads its byte script with --import.
 async function boot(sb, extra = {}, node = []) {
+  deadline += 20000;
   const port = await freePort();
   const env = { ...process.env, PORT: String(port) };
   delete env.SUPABASE_URL; delete env.SUPABASE_PUBLISHABLE_KEY; delete env.SUPABASE_SECRET_KEY;
@@ -423,8 +438,9 @@ async function layerOn() {
 // HOW. Both minters draw one one-byte getRandomValues per character
 // (public/room-engine.js makeCode, server/squads.js mintCode), and byte b
 // becomes the alphabet's b-th character, so 0,1,2,3 mints "ABCD".
-// test/fixtures/scripted-code-bytes.mjs is preloaded into the spawned server
-// with --import and serves ONE-BYTE requests from CC_TEST_CODE_BYTES, passing
+// test/fixtures/scripted-code-bytes-preload.mjs (the --import entry for
+// test/fixtures/scripted-code-bytes.mjs) is preloaded into the spawned server
+// and serves ONE-BYTE requests from CC_TEST_CODE_BYTES, passing
 // every other length to the real CSPRNG, and reports each one-byte request on
 // stderr. The script here is 0,1,2,3 then 0,1,2,3,4,5,6,7: the first minter
 // takes "ABCD", and the second is made to try "ABCD" first and must move on
@@ -435,7 +451,7 @@ async function layerOn() {
 // did not take effect, or something else drew a byte first, that is the
 // assertion that says so, and the direction check is not run — so it can
 // never pass or fail for a reason nobody chose.
-const PRELOAD = ['--import', pathToFileURL(ROOT + 'test/fixtures/scripted-code-bytes.mjs').href];
+const PRELOAD = ['--import', pathToFileURL(ROOT + 'test/fixtures/scripted-code-bytes-preload.mjs').href];
 const SCRIPT = '0,1,2,3,0,1,2,3,4,5,6,7';
 // Every one-byte request the preload served, as "script:N" or "real:N", in
 // order. stderr is a pipe and may land after the socket frame that the draw

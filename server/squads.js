@@ -39,11 +39,11 @@
 //
 // WHO BUILT WHAT. Task 1: the container and its readers, has and get. Task 2:
 // the code minter and the MEMBERSHIP half — create, join, leave, kick,
-// removeMember, and ofUser as a real lookup. Still to come: setReady, setMode
-// and clearReady (task 3), and the drop window's markDropped, markResumed and
-// sweepDropped (task 5). `has` came first because the engine's codeTaken calls
-// it on every candidate code, and one code namespace had to exist before
-// anything minted a code in it.
+// removeMember, ofUser as a real lookup, and keyOfSocket. Still to come:
+// setReady, setMode and clearReady (task 3), and the drop window's
+// markDropped, markResumed and sweepDropped (task 5). `has` came first
+// because the engine's codeTaken calls it on every candidate code, and one
+// code namespace had to exist before anything minted a code in it.
 //
 // THE MEMBER KEY. Every method below that addresses a member takes a KEY, not
 // an account id, whatever the plan's surface calls the parameter: the
@@ -193,13 +193,48 @@ export function createSquads({ now, capacity = 4, codeTaken = () => false } = {}
     return byKey.get(key) || null;
   }
 
-  function create(member) {
+  // THE ROW A SOCKET IS, found by the SOCKET rather than by who is signed in
+  // on it — and the two differ in ordinary use. The client re-sends `hello`
+  // over the live socket after a sign-in, so a guest who signs in mid-squad is
+  // an account on a socket that still holds a GUEST row, keyed by that
+  // socket; an anonymous account upgraded in place is the same. The reverse
+  // is a socket that signed out and still holds its account's row. Every op a
+  // socket sends acts on the row it holds, so the caller's key comes from
+  // here first and from the account only when the socket holds no row (a
+  // second device of a member).
+  //
+  // A SCAN, bounded by the live squads (at most four rows each) and run once
+  // per squad frame, which the rate bucket caps. Deliberately not a second
+  // index: task 5 writes member.ws on drop and on resume, and an index beside
+  // it would be one more thing that could fall out of step with the rows.
+  function keyOfSocket(ws) {
+    if (!ws) return null;
+    for (const squad of squads.values()) {
+      for (const m of squad.members) if (m.ws === ws) return m.key;
+    }
+    return null;
+  }
+
+  // Every key a caller may hold a row under: the one this member's row will
+  // carry, and `fromKey`, the row the caller's socket holds now, when that is
+  // a different key.
+  const callerKeys = (row, fromKey) => (fromKey != null && fromKey !== row.key ? [row.key, fromKey] : [row.key]);
+
+  // -> squad, or null for a GUEST. A SQUAD IS ALWAYS LED BY AN ACCOUNT: the
+  // mode, the start and the kick all belong to the leader, and a leader of
+  // null would be matched by every caller with no account. The handler's gate
+  // refuses a guest first; this is the machine holding its own rule rather
+  // than trusting the one gate in front of it. Refused BEFORE any leave, so a
+  // refusal costs a guest nothing.
+  function create(member, fromKey) {
     const row = mkMember(member);
-    // ONE SQUAD PER PLAYER. Create is also a LEAVE: a player creating while
-    // already in a squad is asking for a new one, and leaving first is what
-    // keeps `byKey` a map rather than a multimap. The old squad survives under
-    // its next leader unless they were the last member of it.
-    leave(row.key);
+    if (!row.userId) return null;
+    // ONE SQUAD PER PLAYER, AND ONE ROW PER SOCKET. Create is also a LEAVE: a
+    // player creating while already in a squad is asking for a new one, and
+    // leaving first is what keeps `byKey` a map rather than a multimap. Both
+    // the account's row and the row the caller's socket holds go. The old
+    // squad survives under its next leader unless they were the last member.
+    for (const k of callerKeys(row, fromKey)) leave(k);
     const code = mintCode();
     const squad = { code, leader: row.userId, created: now(), mode: 'duel', tees: null, max: null, members: [row] };
     squads.set(code, squad);
@@ -207,21 +242,25 @@ export function createSquads({ now, capacity = 4, codeTaken = () => false } = {}
     return squad;
   }
 
-  function join(code, member) {
+  // `fromKey` is the row the caller's socket holds now (keyOfSocket), when it
+  // is not the key this member's row will carry — see create.
+  function join(code, member, fromKey) {
     const squad = squads.get(code) || null;
     if (!squad) return { ok: false, squad: null, error: 'no_such_squad' };
     const row = mkMember(member);
-    // ALREADY HERE IS NOT A JOIN. Without this the one-squad-per-player leave
-    // below would remove this member and add them again — and if they were the
-    // leader, the hand-off would give their squad away on a frame that asked
-    // for nothing to change. A second device is `resume`'s business, not this
-    // one's: the squad keeps the socket it already has.
-    if (squad.members.some((m) => m.key === row.key)) return { ok: true, squad, error: null };
+    const keys = callerKeys(row, fromKey);
+    // ALREADY HERE IS NOT A JOIN — under either key. Without this the
+    // one-squad-per-player leave below would remove this member and add them
+    // again — and if they were the leader, the hand-off would give their
+    // squad away on a frame that asked for nothing to change. A second device,
+    // or a guest row whose socket has since signed in, is `resume`'s business,
+    // not this one's: the squad keeps the row and the socket it already has.
+    if (squad.members.some((m) => keys.includes(m.key))) return { ok: true, squad, error: null };
     // THE CAP IS CHECKED BEFORE THE LEAVE, and the order is the whole point: a
     // refused join must not be the thing that costs a player the squad they
     // were already in.
     if (squad.members.length >= capacity) return { ok: false, squad, error: 'full' };
-    leave(row.key);
+    for (const k of keys) leave(k);
     squad.members.push(row);
     byKey.set(row.key, squad);
     return { ok: true, squad, error: null };
@@ -296,5 +335,5 @@ export function createSquads({ now, capacity = 4, codeTaken = () => false } = {}
     return { squad, ended };
   }
 
-  return { has, get, ofUser, create, join, leave, kick, removeMember };
+  return { has, get, ofUser, keyOfSocket, create, join, leave, kick, removeMember };
 }

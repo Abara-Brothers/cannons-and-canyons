@@ -766,6 +766,20 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
     ws,
   });
 
+  // THE CALLER'S KEY: the row this SOCKET holds, and the account only when
+  // the socket holds none (a second device of a member). squadKey alone —
+  // account first — stranded a guest who signed in mid-squad: the client
+  // re-sends `hello` over the live socket, so the socket became an account
+  // while still holding a GUEST row keyed by itself, and leave answered
+  // `left` while the row stayed, and create made it lead a new squad while
+  // still a member of the old. Socket first is youIn's rule below as well, so
+  // the file has one answer to "which row is this caller".
+  const callerKey = (ws) => squads.keyOfSocket(ws) || squadKey(ws);
+  // Every squad the caller could be in before a move: the one its socket's
+  // row is in, and the one its account is in (another device's), which
+  // create and join both leave.
+  const squadsOfCaller = (ws, from) => [...new Set([squads.ofUser(from), squads.ofUser(squadKey(ws))])].filter(Boolean);
+
   // `you`: which row of this squad THIS SOCKET is, or -1 when it is none. The
   // socket first — the ordinary case, and the only one for a guest, whose key
   // IS a socket — then the account, so a second device of a signed-in member
@@ -797,9 +811,23 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
   // would make one leave four round trips. The rows are built AFTER the read,
   // from the roster as it stands then, so a push's frames and their `you`
   // indexes always describe the same roster.
+  //
+  // A FAILED NAME READ DEGRADES THE NAMES, NEVER THE SQUAD. By the time a
+  // snapshot is built the operation has already landed — the join happened,
+  // the kick happened — and the names are the one cosmetic part of the frame.
+  // Rejecting here once answered the actor 'unavailable' for a join that had
+  // succeeded: their screen kept the old squad while the new one carried a
+  // member it was never told about, who took a seat and changed `fits`. So a
+  // failed read answers every name null — displayName's own answer for a name
+  // it cannot vouch for — and keeps every row, the plan's rule for a null
+  // name. The next snapshot that can read names shows them.
   async function squadSnapshot(sq) {
     const ids = sq.members.filter((m) => m.userId).map((m) => m.userId);
-    const names = ids.length ? await store.profilesByIds(ids) : new Map();
+    let names = new Map();
+    if (ids.length) {
+      try { names = await store.profilesByIds(ids); }
+      catch { /* every name null; every row kept */ }
+    }
     return {
       type: 'squad', op: 'state', code: sq.code, leader: sq.leader,
       mode: sq.mode, tees: sq.tees, max: sq.max,
@@ -839,19 +867,18 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
   // request, and one that was never answered holds the client's waiter for
   // its full twelve seconds.
   //
-  // It REJECTS when the snapshot cannot be built: create, join and kick
-  // answer their actor from inside it, and handleSquad's catch is then the
-  // one honest answer. Callers pushing to people who did not ask swallow it.
+  // EVERYONE ELSE FIRST, THE ACTOR LAST. The actor's frame is the one send
+  // here that is a reply rather than a safeSend, so it is the one that can
+  // throw — a half-closed socket whose send() raises, the case safeSend
+  // exists for — and a throw must not cost the rest of the squad the roster
+  // the operation has already changed under them. The snapshot itself no
+  // longer rejects (see squadSnapshot), so this is the only throw left.
   async function pushSquad(sq, actor, msg) {
     const base = await squadSnapshot(sq);
-    let answered = false;
     for (const m of sq.members) {
-      if (!m.ws) continue;
-      const frame = { ...base, you: youIn(sq, m.ws) };
-      if (m.ws === actor) { reply(actor, msg, frame); answered = true; }
-      else safeSend(m.ws, frame);
+      if (m.ws && m.ws !== actor) safeSend(m.ws, { ...base, you: youIn(sq, m.ws) });
     }
-    if (actor && !answered) reply(actor, msg, { ...base, you: youIn(sq, actor) });
+    if (actor) reply(actor, msg, { ...base, you: youIn(sq, actor) });
   }
 
   // A SQUAD SOMEBODY HAS JUST LEFT. `has` is the test, because the machine
@@ -892,17 +919,17 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
   };
 
   async function squadCreate(ws, msg) {
-    const prev = squads.ofUser(squadKey(ws));
-    const sq = squads.create(squadMemberOf(ws, msg));
+    const from = callerKey(ws);
+    const olds = squadsOfCaller(ws, from);
+    const sq = squads.create(squadMemberOf(ws, msg), from);
     // THE SQUAD THEY JUST LEFT STILL HAS PEOPLE IN IT. create() leaves it as
     // its first act, so those left behind have a new leader — or none of them
     // can lead and it is gone. Either way they are owed the truth and nobody
     // is going to ask for it on their behalf. Told AFTER the creator is
-    // answered, and in a finally so a creator whose own answer failed does
-    // not also cost them it; a failure telling them is swallowed, because the
-    // creator has been answered and a second answer would be false.
+    // answered, and in a finally, so a creator whose own socket throws on the
+    // answer does not also cost them it.
     try { await pushSquad(sq, ws, msg); }
-    finally { if (prev) await pushSquadAfterExit(prev).catch(() => {}); }
+    finally { for (const o of olds) if (o !== sq) await pushSquadAfterExit(o); }
   }
 
   async function squadJoin(ws, msg) {
@@ -911,30 +938,36 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
     // that is not a string. No shape test beside it — a string that is not a
     // live squad's code misses the machine's Map and is answered no_such_squad
     // either way, so a regex here could never be seen to do anything.
-    const prev = squads.ofUser(squadKey(ws));
-    const res = squads.join(codeOf(msg.code), squadMemberOf(ws, msg));
+    const from = callerKey(ws);
+    const olds = squadsOfCaller(ws, from);
+    const res = squads.join(codeOf(msg.code), squadMemberOf(ws, msg), from);
     if (!res.ok) return squadReply(ws, msg, 'join', { error: res.error });
     try { await pushSquad(res.squad, ws, msg); }
-    finally { if (prev && prev !== res.squad) await pushSquadAfterExit(prev).catch(() => {}); }
+    finally { for (const o of olds) if (o !== res.squad) await pushSquadAfterExit(o); }
   }
 
   async function squadLeave(ws, msg) {
-    const res = squads.leave(squadKey(ws));
+    const res = squads.leave(callerKey(ws));
     // ANSWERED FIRST AND ALWAYS, INCLUDING WHEN THERE WAS NOTHING TO LEAVE.
     // The state the player asked for is the state they are in, and a second
     // word for it would be one more string to render. The leaver gets a
     // REPLY; `ended` is reserved for members who did not ask. The push to
-    // those left behind is a courtesy after the answer, and a failure in it
-    // must not reach handleSquad's catch and send the leaver a second answer
-    // saying the leave failed.
+    // those left behind cannot fail: it sends only through safeSend, and the
+    // snapshot behind it degrades rather than rejects — so no second answer
+    // saying the leave failed can ever follow this one.
     squadReply(ws, msg, 'left', { ok: true });
-    if (res.squad) await pushSquadAfterExit(res.squad).catch(() => {});
+    if (res.squad) await pushSquadAfterExit(res.squad);
   }
 
   async function squadKick(ws, msg) {
-    const me = squadKey(ws);
+    const me = callerKey(ws);
     const sq = squads.ofUser(me);
-    if (!sq || sq.leader !== me) return squadReply(ws, msg, 'kick', { error: 'not_leader' });
+    // LEADERSHIP IS AN ACCOUNT'S, SO BOTH MUST BE THE LEADER: the row this
+    // socket holds, and the account signed in on it. The row alone would let
+    // a socket that signed out of the leader's account and into another keep
+    // commanding the squad; the account alone would let a second device aim
+    // a stale index at a squad its own screen is not showing.
+    if (!sq || sq.leader !== me || squadKey(ws) !== me) return squadReply(ws, msg, 'kick', { error: 'not_leader' });
     const target = squadTarget(sq, msg);
     if (!target) return squadReply(ws, msg, 'kick', { error: 'no_such_member' });
     // Held BEFORE the removal: kick() takes the row off the squad, and a

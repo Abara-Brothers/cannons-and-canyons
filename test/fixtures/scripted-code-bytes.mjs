@@ -22,12 +22,14 @@
 // where its byte came from, so a test can prove nothing else consumed the
 // script before relying on it.
 //
-// Two ways in:
-//   * `node --import <this file> server.js` with CC_TEST_CODE_BYTES="0,1,2,3"
-//     installs it at load and reports each one-byte request on stderr as
-//     `[code-bytes] <n> <script|real> <byte>`.
-//   * `import { scriptCodeBytes }` installs it in the importing process for
-//     the length of one test, and `restore()` takes it out again.
+// Two ways in, in two files, so that one can never be the other:
+//   * `import { scriptCodeBytes }` from THIS file installs it in the
+//     importing process for the length of one test, and `restore()` takes it
+//     out again. Importing this file never arms anything by itself, whatever
+//     the environment says — test/squad.mjs imports it in process.
+//   * `node --import test/fixtures/scripted-code-bytes-preload.mjs server.js`
+//     with CC_TEST_CODE_BYTES="0,1,2,3" installs it at load and reports each
+//     one-byte request on stderr as `[code-bytes] <n> <script|real> <byte>`.
 
 export function scriptCodeBytes(bytes, { log = null } = {}) {
   const queue = [...bytes];
@@ -68,12 +70,3 @@ export function scriptCodeBytes(bytes, { log = null } = {}) {
   return st;
 }
 
-const env = process.env.CC_TEST_CODE_BYTES;
-if (env !== undefined) {
-  // A malformed script THROWS at load rather than degrading to random bytes:
-  // a world that believed it had scripted "ABCD" and was minting at random
-  // would pass or fail for a reason nobody chose.
-  const bytes = env.split(',').map((s) => s.trim()).filter((s) => s !== '').map(Number);
-  scriptCodeBytes(bytes, { log: (line) => process.stderr.write(line + '\n') });
-  process.stderr.write(`[code-bytes] armed ${bytes.length}\n`);
-}
