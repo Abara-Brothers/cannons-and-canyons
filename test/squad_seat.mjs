@@ -23,6 +23,11 @@ import WebSocket from 'ws';
 // this process only; every server spawned below has its own.
 import { rooms, handleClientMessage, abandonRoom } from '../public/room-engine.js';
 import { LOADOUT_POOL } from '../public/game-core.js';
+// THE REAL SEATING, the factory server.js builds seatSquad from. Section C
+// hands it the real engine in THIS process, so the paths no correct squad can
+// reach over the wire — a join refused part way, a room that will not start,
+// an engine that throws — run for real, against real rooms.
+import { createSeatSquad } from '../server/seat-squad.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const out = { errors: [] };
@@ -140,6 +145,130 @@ const roomsAtStart = rooms.size;
 if (rooms.size === roomsAtStart) ok('(A9) section A leaves the rooms Map as it found it');
 else fail(`(A9) rooms went from ${roomsAtStart} to ${rooms.size}`);
 
+// ---- SECTION C: the real seatSquad's last-resort paths, in process ---------
+// Over the wire the start handler's gates stop every squad that could reach
+// these: fits sizes the room, only live sockets are handed over, and the
+// engine starts every room it fills. They are the defence behind those gates,
+// so they are driven here directly — the real factory, the real engine, and
+// seat lists the handler would never send — rather than trusted.
+const P = LOADOUT_POOL;
+const seatsOf = (n) => Array.from({ length: n }, (_, i) => ({ ws: mkws(), name: '', skin: 'olive', loadout: P.slice(i, i + 5) }));
+const seatRig = (wrap) => {
+  const rig = { reports: [], logs: [] };
+  rig.seat = createSeatSquad({
+    rooms, abandonRoom,
+    handleClientMessage: wrap ? (ws, msg) => wrap(ws, msg, handleClientMessage) : handleClientMessage,
+    report: (kind, err) => rig.reports.push([kind, err && err.message]),
+    log: (line) => rig.logs.push(line),
+  });
+  return rig;
+};
+const codeOn = (ws) => (got(ws, 'created')[0] || {}).code;
+const released = (seats) => seats.every((s) => s.ws.roomCode === null || s.ws.roomCode === undefined);
+const roomsBeforeC = rooms.size;
+{
+  // (C1) A JOIN REFUSED PART WAY. Three seats handed over for a duel: the
+  // second join fills the room and the engine starts it, so the third is
+  // refused ("already started"). The room goes; the two already in a started
+  // match are told (they are on the match screen), every seat is released.
+  const rig = seatRig();
+  const seats = seatsOf(3);
+  let r; try { r = rig.seat(seats, { mode: 'duel', squad: 'SQC1' }); } catch (e) { r = 'threw ' + e.message; }
+  const code = codeOn(seats[0].ws);
+  if (JSON.stringify(r) === JSON.stringify({ ok: false, error: 'refused', at: 2 }) && code && !rooms.has(code) && released(seats)
+    && got(seats[0].ws, 'opponentLeft').length === 1 && got(seats[1].ws, 'opponentLeft').length === 1
+    && got(seats[2].ws, 'joinError').length === 1 && rig.logs.length === 0)
+    ok('(C1) a join refused part way tears the room down: refused at 2, the room gone, every seat released, the started seats told');
+  else fail('(C1) ' + JSON.stringify({ r, code, live: code && rooms.has(code), seats: seats.map((s) => s.ws._rx.map((m) => m.type)), logs: rig.logs }));
+}
+{
+  // (C2) A ROOM THAT WILL NOT START. One seat handed over for a duel: the
+  // create makes a two-seat room, and the leader's startMatch is refused
+  // (two commanders needed). A room still waiting is not a started squad, so
+  // it goes — quietly, as it never left the lobby.
+  const rig = seatRig();
+  const seats = seatsOf(1);
+  let r; try { r = rig.seat(seats, { mode: 'duel', squad: 'SQC2' }); } catch (e) { r = 'threw ' + e.message; }
+  const code = codeOn(seats[0].ws);
+  if (JSON.stringify(r) === JSON.stringify({ ok: false, error: 'refused', at: 0 }) && code && !rooms.has(code) && released(seats)
+    && got(seats[0].ws, 'opponentLeft').length === 0 && rig.logs.length === 0)
+    ok('(C2) a room still waiting after the start is abandoned and refused, never reported as a start');
+  else fail('(C2) ' + JSON.stringify({ r, code, live: code && rooms.has(code), rx: seats[0].ws._rx.map((m) => m.type), logs: rig.logs }));
+}
+{
+  // (C3) AN ENGINE THAT THROWS mid-seating, at three points: before any room
+  // exists, inside the leader's create after the room was made, and on a
+  // member's join. Each is reported, refused, and leaves no room standing.
+  const said = [];
+  for (const [label, when] of [['before the room', (ws, msg, n) => msg.type === 'create' && n === 0],
+    ['inside the create', (ws, msg, n) => msg.type === 'create' && n === 1],
+    ['on a member\'s join', (ws, msg, n) => msg.type === 'join' && msg.name === 'BOOM' && n === 0]]) {
+    const before = rooms.size;
+    const rig = seatRig((ws, msg, real) => {
+      if (when(ws, msg, 0)) throw new Error('injected engine fault');
+      real(ws, msg);
+      if (when(ws, msg, 1)) throw new Error('injected engine fault');
+    });
+    const seats = seatsOf(3);
+    seats[2].name = 'BOOM';
+    let r; try { r = rig.seat(seats, { mode: 'ffa', squad: 'SQC3' }); } catch (e) { r = 'threw ' + e.message; }
+    said.push([label, r, rooms.size - before, released(seats), rig.reports]);
+  }
+  if (said.every(([, r, grew, rel, reps]) => JSON.stringify(r) === JSON.stringify({ ok: false, error: 'refused', at: -1 }) && grew === 0 && rel
+    && JSON.stringify(reps) === JSON.stringify([['seatSquad', 'injected engine fault']])))
+    ok('(C3) an engine throw before the room, inside the create, or on a join is reported once, refused, and leaves no room and no seat behind');
+  else fail('(C3) ' + JSON.stringify(said));
+}
+{
+  // (C3b) ONLY WHAT THIS CALL BUILT. A leader sitting alone in a lobby of
+  // their own, and the engine faults before the squad's create has run: the
+  // lobby they already had is not the squad's room, so the net must not mark
+  // it and take it down.
+  const rig = seatRig((ws, msg, real) => { if (msg.type === 'create') throw new Error('injected engine fault'); real(ws, msg); });
+  const seats = seatsOf(2);
+  handleClientMessage(seats[0].ws, { type: 'create', name: 'Ava', skin: 'olive', mode: 'ffa', max: 4, loadout: FIVE });
+  const own = seats[0].ws.roomCode;
+  const r = rig.seat(seats, { mode: 'duel', squad: 'SQC3' });
+  const lobby = own && rooms.get(own);
+  if (r && r.error === 'refused' && lobby && !lobby.squad && seats[0].ws.roomCode === own && got(seats[0].ws, 'opponentLeft').length === 0)
+    ok('(C3) an engine fault before the create leaves the leader\'s own lobby exactly as it was');
+  else fail('(C3) own lobby after a fault: ' + JSON.stringify({ r, own, kept: !!lobby, marked: lobby && lobby.squad, code: seats[0].ws.roomCode }));
+  handleClientMessage(seats[0].ws, { type: 'leave' });
+}
+{
+  // (C4) SEATING TRUSTS NO CALLER FOR A LIVE SOCKET. The engine's join seats
+  // a closed socket as a ghost; the start handler refuses one first, and so
+  // does the seating, before it touches anything.
+  const said = [];
+  for (const breakIt of [(s) => { s[1].ws.readyState = 3; }, (s) => { s[0].ws.readyState = 2; }, (s) => { s[1].ws = null; }, (s) => { s[1] = null; }]) {
+    const rig = seatRig();
+    const seats = seatsOf(2);
+    breakIt(seats);
+    const before = rooms.size;
+    let r; try { r = rig.seat(seats, { mode: 'duel', squad: 'SQC4' }); } catch (e) { r = 'threw ' + e.message; }
+    said.push([r, rooms.size - before, seats.filter(Boolean).reduce((n, s) => n + (s.ws ? s.ws._rx.length : 0), 0)]);
+  }
+  const want = [[{ ok: false, error: 'member_offline', at: 1 }, 0, 0], [{ ok: false, error: 'member_offline', at: 0 }, 0, 0],
+    [{ ok: false, error: 'member_offline', at: 1 }, 0, 0], [{ ok: false, error: 'member_offline', at: 1 }, 0, 0]];
+  if (JSON.stringify(said) === JSON.stringify(want)) ok('(C4) a seat without a live socket is refused member_offline at its index, before any frame is sent');
+  else fail('(C4) ' + JSON.stringify(said));
+}
+{
+  // (C5) A START IS LOGGED, and only a start: one line, the squad code, the
+  // room code, the mode and the seat count, and no player's name.
+  const rig = seatRig();
+  const seats = seatsOf(2);
+  seats[0].name = 'Rolling Thunder'; seats[1].name = 'Iron Viper';
+  const r = rig.seat(seats, { mode: 'duel', squad: 'SQC5' });
+  const code = r && r.code;
+  if (r && r.ok === true && JSON.stringify(rig.logs) === JSON.stringify([`[squad] SQC5 seated 2 into ${code} (duel)`]) && !/Thunder|Viper/.test(rig.logs.join()))
+    ok('(C5) a start logs one line — squad, room, mode, seat count — and no name');
+  else fail('(C5) ' + JSON.stringify({ r, logs: rig.logs }));
+  for (const s of seats) handleClientMessage(s.ws, { type: 'leave' });
+}
+if (rooms.size === roomsBeforeC) ok('(C*) section C leaves the rooms Map as it found it');
+else fail(`(C*) rooms went from ${roomsBeforeC} to ${rooms.size}`);
+
 // ---- SECTION B: the real seatSquad, end to end -------------------------------
 // Every server below is this checkout's server.js, spawned on a free port with
 // the social layer ON against a local mock of GoTrue and PostgREST. Nothing in
@@ -205,9 +334,11 @@ async function boot(extra = {}) {
   const port = await freePort();
   const env = { ...process.env, PORT: String(port), SUPABASE_URL: `http://127.0.0.1:${mock.address().port}`,
     SUPABASE_PUBLISHABLE_KEY: 'pk_test', SUPABASE_SECRET_KEY: 'sk_test', SOCIAL_PRESENCE_MS: '600000', ...extra };
-  const s = { port, log: '', proc: spawn(process.execPath, ['server.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] }) };
-  s.proc.stdout.on('data', (d) => { s.log += d; });
-  s.proc.stderr.on('data', (d) => { s.log += d; });
+  // Both streams into `log`, and each kept apart as well: a start is logged on
+  // STDOUT, and a check below holds it to that.
+  const s = { port, log: '', out: '', err: '', proc: spawn(process.execPath, ['server.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] }) };
+  s.proc.stdout.on('data', (d) => { s.log += d; s.out += d; });
+  s.proc.stderr.on('data', (d) => { s.log += d; s.err += d; });
   servers.push(s);
   for (let i = 0; i < 100 && !/running at/.test(s.log); i++) await sleep(100);
   if (!/running at/.test(s.log)) { fail('a server never reported listening:\n' + s.log); return null; }
@@ -319,10 +450,15 @@ const liveCodes = async (port, socks) => {
   return live;
 };
 // Nothing on a server's output beyond its banner, the [boot] line, and the one
-// expected warning (a local mock is never the browser's config.js Supabase).
-const strayLines = (s, extra) => s.log.split('\n').filter((l) => l.trim()
-  && !/running at|^\[boot\]|^\[shutdown\] SIGTERM|^\[csp\] WARNING: public\/config\.js points the browser at /.test(l)
-  && !(extra && extra.test(l)));
+// expected warning (a local mock is never the browser's config.js Supabase) —
+// plus, on STDOUT ONLY, the one line a squad start logs, in its exact shape:
+// squad code, room code, mode, seat count, and nothing else.
+const BENIGN = /running at|^\[boot\]|^\[shutdown\] SIGTERM|^\[csp\] WARNING: public\/config\.js points the browser at /;
+const SEAT_LINE = /^\[squad\] [A-Z2-9]{4} seated [1-4] into [A-Z2-9]{4} \((duel|ffa|boss|aliens|golf)\)$/;
+const strayLines = (s, extra) => [
+  ...s.out.split('\n').filter((l) => l.trim() && !BENIGN.test(l) && !SEAT_LINE.test(l) && !(extra && extra.test(l))),
+  ...s.err.split('\n').filter((l) => l.trim() && !BENIGN.test(l) && !(extra && extra.test(l))),
+];
 
 async function sectionB() {
   const S = await boot();
@@ -378,6 +514,13 @@ async function sectionB() {
       if (order.slice(1).every((o) => o.spent) && leaderState && leaderState.members.every((m) => m.ready === false))
         ok('(B1) the start spends every Ready — each member is pushed a roster with nobody ready');
       else fail('(B1) readies after the start: ' + JSON.stringify(order.map((o) => o.spent)) + ' leader ' + JSON.stringify(leaderState && leaderState.members));
+      // THE SERVER SAYS SO, ON STDOUT: one line naming the squad, the room, the
+      // mode and the seat count — and neither stream carries a callsign.
+      const line = `[squad] ${s.code} seated 4 into ${answer && answer.code} (ffa)`;
+      const outLines = S.out.split('\n').filter((l) => l.startsWith('[squad]'));
+      if (outLines.length === 1 && outLines[0] === line && !S.err.includes('[squad]') && !/Pilot\d/.test(S.log))
+        ok('(B1) the start is one line on the server\'s stdout — squad, room, mode, seat count, no name — and nothing on stderr');
+      else fail('(B1) server log: out ' + JSON.stringify(outLines) + ' want ' + JSON.stringify(line) + ' err has [squad]: ' + S.err.includes('[squad]'));
       await closeAll(s.ws);
     }
   }
@@ -492,15 +635,20 @@ async function sectionB() {
       else fail('(B4) rooms left standing after the refusal: ' + JSON.stringify(left));
       // A CLOSED SOCKET. Arm a mode the three fit, then one member's socket
       // goes. The engine's join would SEAT a closed socket — it never looks —
-      // so this gate is the only thing between the squad and a ghost seat.
+      // so the start handler refuses first. It is the HANDLER's refusal that is
+      // wanted here, which answers the leader alone: the seating refuses a
+      // closed socket too (section C), but its refusal is told to every
+      // member, and the live member being sent nothing is what tells them apart.
       const m = await ask(s.ws[0], { op: 'mode', mode: 'ffa' });
       s.ws[2].close();
       for (let i = 0; i < 100 && s.ws[2]._closed === null; i++) await sleep(10);
+      await settle(s.ws.slice(0, 2));
+      const quietFrom = s.ws[1]._rx.length;
       const b = await ask(s.ws[0], { op: 'start' });
       await settle(s.ws.slice(0, 2));
-      if (m && m.ok && s.ws[2]._closed !== null && b && b.error === 'member_offline'
+      if (m && m.ok && s.ws[2]._closed !== null && b && b.error === 'member_offline' && s.ws[1]._rx.length === quietFrom
         && !s.ws.slice(0, 2).some((w) => seen(w, 'created').length || seen(w, 'lobby').length))
-        ok('(B4) a member whose socket has closed stops the start (member_offline), and nothing is built');
+        ok('(B4) a member whose socket has closed stops the start (member_offline) at the handler, and nothing is built');
       else fail('(B4) closed member: ' + JSON.stringify([m, b]) + ' ' + JSON.stringify(s.ws.map(types)));
       await closeAll(s.ws);
     }
@@ -778,6 +926,29 @@ async function sectionB() {
         const st = await wait(b, (m) => m.type === 'start');
         if (y && y.ok === true && st && st.code === y.code) ok('(B6) once there is room, the same squad starts with the Readies it already had');
         else fail('(B6) retry: ' + JSON.stringify(y));
+        // A QUEUED MEMBER STAYS QUEUED WHEN THE START IS REFUSED AT THE CREATE.
+        // The cap is full again — the squad above holds its only room — so a
+        // second squad is refused capacity while its member is searching for a
+        // quick match. Nothing was built, so nothing may have been taken from
+        // them: once the cap frees, the next quick seeker is paired with them.
+        const q = await squadUp(C.port, [3, 4], 'duel');
+        if (q) {
+          const [qa, qb] = q.ws;
+          put(qb, { type: 'quick', name: 'Pilot4', skin: 'desert', loadout: RACK(1) });
+          const queued = await wait(qb, (m) => m.type === 'queued');
+          const no = await ask(qa, { op: 'start' });
+          await settle(q.ws);
+          put(a, { type: 'leave' }); put(b, { type: 'leave' });
+          await settle([a, b]);
+          const seeker = await open(C.port);
+          put(seeker, { type: 'quick', name: 'Nomad', skin: 'gold', loadout: RACK(0) });
+          const paired = await wait(seeker, (m) => m.type === 'start' || m.type === 'queued' || m.type === 'joinError');
+          const mine = await wait(qb, (m) => m.type === 'start', 3000);
+          if (queued && no && no.error === 'capacity' && paired && paired.type === 'start' && mine && mine.code === paired.code)
+            ok('(B6) a start refused at the create leaves a queued member queued — the next quick seeker is paired with them');
+          else fail('(B6) queued member after a refused start: ' + JSON.stringify({ queued: !!queued, no, seeker: paired && paired.type, member: types(qb) }));
+          await closeAll([seeker, ...q.ws]);
+        }
         await closeAll(s.ws);
       }
       await closeAll([hog]);
