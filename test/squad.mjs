@@ -1556,6 +1556,37 @@ const SEAT_MATRIX = [
   }
   if (!odd.length) ok('(s3a) an unknown mode, prototype names included, is a duel of two, as it always was');
   else fail('(s3a) unknown modes seated ' + JSON.stringify(odd));
+  // AN ARRAY IS NOT A MODE EITHER. hasOwnProperty COERCES its key to a
+  // string, so to a bare lookup ['aliens'] "is" 'aliens': a room was stored
+  // with mode ["aliens"], kept that row's one-seat minimum, started with a
+  // lone human, played as a duel against nobody, and handed the match ledger
+  // a solo win. At da6b016 every one of these made a duel of two that
+  // refuses to start alone — run against that engine and passing there —
+  // and that is exactly what each must still make.
+  const arrays = [];
+  for (const [mode, max] of [[['aliens']], [['boss']], [[['aliens']]], [['golf'], 1], [['ffa'], 4], [['duel']]]) {
+    const w = mkws();
+    handleClientMessage(w, { type: 'create', name: 'T', skin: 'olive', mode, max });
+    const cr = frames(w, 'created')[0];
+    const r = cr ? rooms.get(cr.code) : null;
+    handleClientMessage(w, { type: 'startMatch' });
+    const refused = w._rx.some((m) => m.type === 'joinError' && m.reason === 'Need at least 2 commanders.');
+    if (!(r && r.mode === 'duel' && r.max === 2 && cr.mode === 'duel' && cr.max === 2 && r.state === 'waiting' && refused))
+      arrays.push([mode, cr, r && r.state, refused]);
+    handleClientMessage(w, { type: 'leave' });
+  }
+  if (!arrays.length) ok('(s3a) a mode sent as an array is a duel of two that will not start alone, exactly as at da6b016');
+  else fail('(s3a) array modes seated ' + JSON.stringify(arrays));
+  // The CPU entry point takes a mode too; its strict === has always refused
+  // an array, and a CPU game from ['ffa'] is still a duel against one CPU.
+  {
+    const w = mkws();
+    handleClientMessage(w, { type: 'ai', name: 'T', skin: 'olive', mode: ['ffa'], max: 4, difficulty: 'easy' });
+    const r = rooms.get(w.roomCode);
+    if (r && r.mode === 'duel' && r.max === 2 && r.players.length === 2) ok('(s3a) a CPU game asked for as [\'ffa\'] is a duel against one CPU, as it always was');
+    else fail('(s3a) CPU game from an array mode: ' + JSON.stringify(r && [r.mode, r.max, r.players.length]));
+    handleClientMessage(w, { type: 'leave' });
+  }
   if (rooms.size === before) ok('(s3a) every room this block made is gone again');
   else fail(`(s3a) rooms leaked: ${before} -> ${rooms.size}`);
 
@@ -1708,9 +1739,9 @@ const keptOnCreate = (mode, rack) => {
     ['duel', ['mortar', 'mortar', 'mortar', 'mortar', 'mortar']],
     ['duel', ['mortar', 'volley', 'cluster', 'napalm', 'nosuchweapon']],
     ['duel', null], ['duel', []], ['duel', 'mortar,volley,cluster,napalm,gas'], ['golf', []],
-    ['battleroyale', RACK5], ['constructor', RACK5], [undefined, RACK5],
+    ['battleroyale', RACK5], ['constructor', RACK5], [undefined, RACK5], [['duel'], RACK5], [['boss'], RACK7],
   ].filter(([mode, picks]) => validRackFor(mode, picks) !== false);
-  if (!junk.length) ok('(s3c) validRackFor refuses duplicates, an unknown weapon, a non-array, an empty rack, and any rack for a mode that is not one');
+  if (!junk.length) ok('(s3c) validRackFor refuses duplicates, an unknown weapon, a non-array, an empty rack, and any rack for a mode that is not one — an array naming a mode included');
   else fail('(s3c) validRackFor accepted ' + JSON.stringify(junk));
 
   // THREE CLAIMS ABOUT ONE NUMBER: the table, game-core, and public/bay.js's
@@ -1725,6 +1756,26 @@ const keptOnCreate = (mode, rack) => {
     !(MODE_SEATS[id].rack === want && (loadoutSizeFor(id) || 5) === want && bayDraft(id) === want));
   if (!drift.length) ok('(s3c) the rack is one number in MODE_SEATS, in game-core and in the box, for every mode');
   else fail('(s3c) rack sizes disagree: ' + JSON.stringify(drift.map(([id]) => [id, MODE_SEATS[id].rack, loadoutSizeFor(id), bayDraft(id)])));
+
+  // AN ARRAY IS NOT A TEE SET — AND THIS ONE PREDATES SQUADS. At da6b016
+  // {tees:['champ']} was stored as the array: the course lookup coerced it
+  // and played the championship tees, while every player in the room was
+  // sent teeSet ["champ"], which the client's tee marker compares with ===,
+  // so the played tee never lit and, zoomed out, no tee box was drawn at
+  // all. It falls back to mens like any other value that is not a tee set,
+  // and the started hole says so as a string.
+  const teeArrays = [];
+  for (const t of [['champ'], [['womens']], ['junior', 'x']]) {
+    const w = mkws();
+    handleClientMessage(w, { type: 'create', name: 'T', skin: 'olive', mode: 'golf', max: 1, tees: t });
+    const cr = frames(w, 'created')[0];
+    const g = cr ? rooms.get(cr.code) : null;
+    const gs = (frames(w, 'start')[0] || {}).golf;
+    if (!(g && g.tees === 'mens' && gs && gs.teeSet === 'mens' && gs.tee === gs.tees.mens)) teeArrays.push([t, g && g.tees, gs && gs.teeSet]);
+    handleClientMessage(w, { type: 'leave' });
+  }
+  if (!teeArrays.length) ok('(s3c) a tee set sent as an array is mens, and the started hole plays and names mens as a string');
+  else fail('(s3c) array tees: ' + JSON.stringify(teeArrays));
 
   // TEE_IDS IS THE SET THE ENGINE TOOK, not a list beside it.
   const took = Object.keys(tees).filter((t) => tees[t] === t);

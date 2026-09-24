@@ -472,9 +472,15 @@ const MODE_SEATS = Object.freeze({
   aliens: Object.freeze({ min: 1, max: 2, def: 2, pick: false, rack: loadoutSizeFor('aliens') || 5 }),
   golf:   Object.freeze({ min: 1, max: 4, def: 2, pick: true,  rack: loadoutSizeFor('golf') || 5 }),
 });
-// hasOwnProperty, never `in` or a bare index: a mode off the wire named
-// 'constructor' must not find Object.prototype's. sanitizeTees's form.
-const knownMode = (mode) => Object.prototype.hasOwnProperty.call(MODE_SEATS, mode);
+// A STRING, AND ONE OF THE TABLE'S OWN KEYS. Both halves are load-bearing.
+// hasOwnProperty, never `in` or a bare index, so a mode named 'constructor'
+// does not find Object.prototype's. And typeof first, because hasOwnProperty
+// COERCES its key to a string: without it ['aliens'] off the wire "is"
+// 'aliens', the room is stored with an ARRAY for a mode, keeps that row's
+// one-seat minimum, starts with a lone human as a duel against nobody, and
+// hands the match ledger a solo win. The array createRoom used to check with
+// includes() never coerced, so an array has always meant a duel.
+const knownMode = (mode) => typeof mode === 'string' && Object.prototype.hasOwnProperty.call(MODE_SEATS, mode);
 
 // THE RACK A SEAT OF THIS MODE KEEPS. ONE predicate: the create and join paths
 // below apply it through sanitizeLoadoutFor, and server.js hands the same
@@ -814,7 +820,13 @@ const GOLF_HOLES = [
   { d: 155000, par: 5, biome: 'alpine' }, { d: 19500,  par: 3, biome: 'desert' }, { d: 124200, par: 4, biome: 'ice' },
 ];
 const TEE_SETS = { champ: 1.0, mens: 0.92, womens: 0.84, junior: 0.72 };
-const sanitizeTees = (t) => (Object.prototype.hasOwnProperty.call(TEE_SETS, t) ? t : 'mens');
+// A STRING FIRST, for knownMode's reason: hasOwnProperty coerces, so without
+// the typeof a tee set sent as ['champ'] was STORED as that array (true
+// before squads existed). The course lookup coerced it too and played the
+// championship tees, but every player was sent teeSet ["champ"], which the
+// client's tee marker compares with === — the played tee never lit, and
+// zoomed out no tee box was drawn at all.
+const sanitizeTees = (t) => (typeof t === 'string' && Object.prototype.hasOwnProperty.call(TEE_SETS, t) ? t : 'mens');
 // The tee sets as ids, exported beside MODE_SEATS so the squad layer can vet a
 // leader's choice against the set a golf room really takes before it echoes
 // that choice to every other member.
@@ -2121,8 +2133,10 @@ export function handleClientMessage(ws, msg) {
       if (!r || r.state !== 'waiting') break;
       if (ws.seat !== r.hostSeat) break;                  // only the host starts early
       // From MODE_SEATS, not a second copy of it. r.mode came out of
-      // createRoom, so it is always one of the table's keys. The copy below
-      // says "2" and is right: only duel and ffa have a minimum above one.
+      // createRoom, which admits only a STRING key of the table (knownMode —
+      // an array naming a mode is a duel), so the row is always there. The
+      // copy below says "2" and is right: only duel and ffa have a minimum
+      // above one.
       const minSeats = MODE_SEATS[r.mode].min;
       if (seatCount(r) < minSeats) { send(ws, { type: 'joinError', reason: 'Need at least 2 commanders.' }); break; }
       compactRoster(r);
