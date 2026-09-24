@@ -2215,6 +2215,48 @@ export { rooms, send, handleClose };
 // predicate that goes with them, validRackFor, is exported where it is
 // declared, beside MODE_SEATS.
 export { MODE_SEATS, TEE_IDS };
+// THE ONE WAY TO ABANDON A ROOM A SQUAD START IS STILL BUILDING, and its only
+// caller is server.js's seatSquad (plan R6). A squad start creates a room with
+// the engine's own `create` frame and seats each member with its own `join`,
+// one frame at a time. If a seat is refused, what is left is half a room that
+// the rest of the squad cannot reach, and it has to go.
+//
+// WHY THE FRAME VOCABULARY CANNOT DO IT, which is the bar the note above sets
+// for adding to this surface. Every exit a socket has from a WAITING room it
+// hosts ends at `teardown(room, true)` — `case 'leave'`'s else branch, and
+// handleClose's `if (seat === room.hostSeat) return teardown(room, true)` —
+// and that flag broadcasts `opponentLeft` to the leaver as well. The squad
+// layer is about to tell those players the real reason; 'Opponent left' on top
+// of it is the second, contradictory card releasePriorRoom's note calls
+// undismissable. The quiet `teardown(prev, false)` inside releasePriorRoom is
+// the behaviour wanted, and nothing outside this file can reach it.
+//
+// NOT A GENERAL DELETE, three ways:
+//   * ONLY A ROOM THE HOST MARKED. seatSquad writes `room.squad` on the room
+//     its create just made, before any member is seated; an ordinary player's
+//     room never carries it, so this refuses every room a squad start did not
+//     build, whatever code it is handed. `rooms` is a Map, so a code that is
+//     not a string (an array naming a live code, say) misses it rather than
+//     being coerced into a hit.
+//   * QUIET ONLY FOR `own`, AND ONLY WHILE THE ROOM IS A LOBBY. `own` is the
+//     sockets the caller is answering itself. Any other seat is told, because
+//     nobody else will tell it. And once the room has STARTED — a duel starts
+//     the instant its second seat lands — its clients are on the match screen,
+//     where the squad's refusal is not drawn; the 'Opponent left' card is the
+//     one thing that takes them out of a match whose room is gone, so then
+//     everyone is told.
+//   * EVERY SOCKET IT EVICTS IS RELEASED, so no client keeps a code that names
+//     nothing, and the real teardown() runs, so no timer outlives the room.
+// Nothing a client sends reaches this: handleClientMessage has no arm for it.
+export function abandonRoom(code, own = []) {
+  const room = rooms.get(code);
+  if (!room || !room.squad) return false;
+  const quiet = room.state === 'waiting' ? new Set(Array.isArray(own) ? own : []) : new Set();
+  for (const p of room.players) if (p && p.ws && !quiet.has(p.ws)) send(p.ws, { type: 'opponentLeft' });
+  for (const p of room.players) if (p && p.ws) { p.ws.roomCode = null; p.ws.seat = null; }
+  teardown(room, false);
+  return true;
+}
 // The ONE way back from a seat handle to an account, and the host's only route
 // in. server.js injects it into the social layer as `resolveHandle`; report and
 // block call it and nothing else does.
