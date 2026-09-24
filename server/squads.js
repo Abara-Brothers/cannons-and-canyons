@@ -24,8 +24,8 @@
 //     leader,                    // userId
 //     created,                   // ms
 //     mode: 'duel',              // the armed mode; leader's choice
-//     tees: null,                // golf tee count, null otherwise
-//     max: null,                 // ffa/golf seat choice; null = the mode's own max
+//     tees: null,                // golf tee set, one of the engine's TEE_IDS; null otherwise
+//     max: null,                 // ffa/golf seat choice; null = the mode's own seats
 //     members: [{
 //       userId,                  // null for a guest
 //       guest,                   // bool
@@ -39,9 +39,9 @@
 //
 // WHO BUILT WHAT. Task 1: the container and its readers, has and get. Task 2:
 // the code minter and the MEMBERSHIP half — create, join, leave, kick,
-// removeMember, ofUser as a real lookup, and keyOfSocket. Still to come:
-// setReady, setMode and clearReady (task 3), and the drop window's
-// markDropped, markResumed and sweepDropped (task 5). `has` came first
+// removeMember, ofUser as a real lookup, and keyOfSocket. Task 3: setReady,
+// setMode and clearReady. Still to come: the drop window's markDropped,
+// markResumed and sweepDropped (task 5). `has` came first
 // because the engine's codeTaken calls it on every candidate code, and one
 // code namespace had to exist before anything minted a code in it.
 //
@@ -346,5 +346,63 @@ export function createSquads({ now, capacity = 4, codeTaken = () => false } = {}
     return { squad, ended };
   }
 
-  return { has, get, ofUser, keyOfSocket, create, join, leave, kick, removeMember };
+  // ---- readiness and the armed mode (task 3) --------------------------------
+  // design 4.3, row 'ready'. THE MEMBERSHIP INVARIANT ONLY: a ready member
+  // holds a rack, and a member who stands down drops it. What counts as a rack
+  // is the armed mode's draft size, and that number is the ENGINE's —
+  // server/social.js checks it with the validRackFor server.js injects, the
+  // predicate the room applies when it seats the member. This file holds no
+  // mode table and must not grow one, or there are two answers to "how many
+  // weapons" and a squad readies against the wrong one.
+  //
+  // By MEMBER KEY, like every method here: the account id, or a guest's
+  // socket. Only `true` is ready; anything else stands the member down, which
+  // is the harmless direction for a frame that is not quite what it should be.
+  function setReady(key, ready, loadout) {
+    const squad = byKey.get(key) || null;
+    const m = squad ? squad.members.find((x) => x.key === key) : null;
+    if (!m) return { ok: false, squad: null, error: 'no_squad' };
+    const want = ready === true;
+    if (want && !(Array.isArray(loadout) && loadout.length)) return { ok: false, squad: null, error: 'no_rack' };
+    m.ready = want;
+    // A COPY. The array arrived off a client frame; a squad holding that same
+    // array would seat the member with whatever it had since become.
+    m.loadout = want ? loadout.slice() : null;
+    return { ok: true, squad, error: null };
+  }
+
+  // design 4.3, row 'mode'. LEADER ONLY, and a squad that has gone is answered
+  // the same way: nobody leads a squad that does not exist, and a stale leader
+  // after a hand-off must get the refusal a stranger gets. `byKey` is the
+  // caller's member key; the leader is always an account id (see create and
+  // detach), so a guest's socket key and a null never match it, and
+  // `!squad.leader` is kick's guard against a leader of null.
+  //
+  // WHAT IS A VALID MODE, TEE SET OR SEAT COUNT is not decided here, for the
+  // reason setReady gives: server/social.js vets all three against the
+  // engine's own MODE_SEATS and TEE_IDS, and is the only caller.
+  function setMode(code, byKey, mode, tees, max) {
+    const squad = squads.get(code) || null;
+    if (!squad || !squad.leader || squad.leader !== byKey) return { ok: false, squad: null, error: 'not_leader' };
+    squad.mode = mode;
+    squad.tees = tees;
+    squad.max = max;
+    return { ok: true, squad, error: null };
+  }
+
+  // After a start (design 4.3: "Ready flags reset to false on the server when
+  // the room is created, so the next start needs fresh Readies"). THE RACKS GO
+  // WITH THE FLAGS: loadout is null until ready, and a rack left behind is one
+  // the NEXT start would seat a member with although they never touched Ready.
+  //
+  // DESTRUCTIVE, SO THE ORDER IS THE CALLER'S TO GET RIGHT: read every
+  // member's rack and seat them FIRST, then call this.
+  function clearReady(code) {
+    const squad = squads.get(code) || null;
+    if (!squad) return null;
+    for (const m of squad.members) { m.ready = false; m.loadout = null; }
+    return squad;
+  }
+
+  return { has, get, ofUser, keyOfSocket, create, join, leave, kick, removeMember, setReady, setMode, clearReady };
 }

@@ -1750,5 +1750,111 @@ const keptOnCreate = (mode, rack) => {
   else fail('(s3c) TEE_IDS is ' + JSON.stringify(TEE_IDS) + ', the engine took ' + JSON.stringify(took));
 }
 
+// ---- (s3e) setReady: the membership invariant, addressed by MEMBER KEY -----
+// A ready member holds a rack, and a member who stands down drops it. WHAT
+// COUNTS AS A RACK is the armed mode's and belongs to the engine — the
+// handler checks it with the injected validRackFor, (s3f) — so the machine
+// holds only this invariant. A member is addressed by the key task 2 gave the
+// row: the account id, or for a guest THE SOCKET, because a guest's userId is
+// null and two guests would otherwise share it.
+{
+  const S = sqMachine();
+  const wa = sqws(SQA), wb = sqws(SQB), g = sqws(null), stray = sqws(null);
+  const sq = S.create(sqM(SQA, wa));
+  S.join(sq.code, sqM(SQB, wb));
+  S.join(sq.code, sqG(g));
+  const row = (k) => sq.members.find((m) => m.key === k);
+  const flags = () => sq.members.map((m) => [m.ready, m.loadout && m.loadout.length]);
+
+  const strangers = [SQE, null, undefined, stray, 'nobody'].map((k) => S.setReady(k, true, RACK5));
+  if (strangers.every((r) => r.ok === false && r.error === 'no_squad' && r.squad === null) && same(flags(), [[false, null], [false, null], [false, null]]))
+    ok('(s3e) a key in no squad — an account, null, undefined, a stray socket — is refused no_squad and nobody moves');
+  else fail('(s3e) strangers: ' + JSON.stringify(strangers, noWs) + ' ' + JSON.stringify(flags()));
+
+  const racks = [null, [], 'mortar', undefined].map((l) => S.setReady(SQA, true, l));
+  if (racks.every((r) => r.ok === false && r.error === 'no_rack') && row(SQA).ready === false && row(SQA).loadout === null)
+    ok('(s3e) ready with no rack is refused no_rack and records nothing');
+  else fail('(s3e) no rack: ' + JSON.stringify(racks, noWs) + ' ' + JSON.stringify(row(SQA), noWs));
+
+  const mine = RACK5.slice();
+  const r3 = S.setReady(SQA, true, mine);
+  if (r3.ok && r3.squad === sq && r3.error === null && row(SQA).ready === true && same(row(SQA).loadout, RACK5))
+    ok('(s3e) ready with a rack records the flag and the rack, and answers the squad');
+  else fail('(s3e) ready: ' + JSON.stringify(r3, noWs) + ' ' + JSON.stringify(row(SQA), noWs));
+  // THE STORED RACK IS A COPY. The array came off a client frame; a squad
+  // that shared it would seat a member with whatever it became.
+  mine[0] = 'nosuchweapon';
+  if (row(SQA).loadout[0] === RACK5[0]) ok('(s3e) the stored rack is a copy, not the caller\'s array');
+  else fail('(s3e) the squad shares the caller\'s rack array');
+
+  // A GUEST IS ADDRESSED BY ITS SOCKET, and only its own row moves.
+  const rg = S.setReady(g, true, RACK7);
+  if (rg.ok && row(g).ready === true && same(row(g).loadout, RACK7) && row(SQB).ready === false && row(SQB).loadout === null)
+    ok('(s3e) a guest readies by its socket key, and nobody else\'s row moves');
+  else fail('(s3e) guest ready: ' + JSON.stringify(rg, noWs) + ' ' + JSON.stringify(flags()));
+
+  // STANDING DOWN drops the rack, whatever rack the frame carried; and only
+  // `true` is ready — a truthy string is not a yes.
+  const r4 = S.setReady(SQA, false, RACK5);
+  const r5 = S.setReady(g, 'yes', RACK7);
+  if (r4.ok && r5.ok && row(SQA).ready === false && row(SQA).loadout === null && row(g).ready === false && row(g).loadout === null)
+    ok('(s3e) standing down clears the flag and the rack, and anything but true stands down');
+  else fail('(s3e) stand down: ' + JSON.stringify([r4, r5], noWs) + ' ' + JSON.stringify(flags()));
+}
+
+// ---- (s3g) setMode: the armed mode is the leader's --------------------------
+// The machine checks WHO; the handler checks WHAT (mode, tees and max against
+// the engine's own table). The leader is always an account id, so a guest's
+// socket key and a null can never match it.
+{
+  const S = sqMachine();
+  const wa = sqws(SQA), wb = sqws(SQB), g = sqws(null);
+  const sq = S.create(sqM(SQA, wa));
+  S.join(sq.code, sqM(SQB, wb));
+  S.join(sq.code, sqG(g));
+  const armed = () => [sq.mode, sq.tees, sq.max];
+  const refused = [[sq.code, SQB], [sq.code, g], [sq.code, null], [sq.code, undefined], ['ZZZZ', SQA]]
+    .map(([code, k]) => S.setMode(code, k, 'golf', 'champ', 3));
+  if (refused.every((r) => r.ok === false && r.error === 'not_leader' && r.squad === null) && same(armed(), ['duel', null, null]))
+    ok('(s3g) a member, a guest, a null, and a squad that is gone are all refused not_leader, and nothing is armed');
+  else fail('(s3g) refusals: ' + JSON.stringify(refused, noWs) + ' ' + JSON.stringify(armed()));
+  const m3 = S.setMode(sq.code, SQA, 'golf', 'champ', 3);
+  if (m3.ok && m3.squad === sq && m3.error === null && same(armed(), ['golf', 'champ', 3]))
+    ok('(s3g) the leader arms the mode, the tees and the seat choice');
+  else fail('(s3g) leader setMode: ' + JSON.stringify(m3, noWs) + ' ' + JSON.stringify(armed()));
+  // AFTER A HAND-OFF the old leader is a stranger to this and the heir is not.
+  S.leave(SQA);
+  const stale = S.setMode(sq.code, SQA, 'duel', null, null);
+  const heir = S.setMode(sq.code, SQB, 'boss', null, null);
+  if (stale.error === 'not_leader' && heir.ok && same(armed(), ['boss', null, null]))
+    ok('(s3g) after a hand-off the old leader is refused and the heir arms the mode');
+  else fail('(s3g) hand-off: ' + JSON.stringify([stale, heir], noWs) + ' ' + JSON.stringify(armed()));
+}
+
+// ---- (s3h) clearReady: after a start, the flags AND the racks go -------------
+// "Ready flags reset to false on the server when the room is created, so the
+// next start needs fresh Readies" (design 4.3). The racks go with the flags:
+// loadout is null until ready, and a rack left behind is one the NEXT start
+// would seat a member with although they never touched Ready. Destructive, so
+// the start reads every rack and seats first, then calls this.
+{
+  const S = sqMachine();
+  const g = sqws(null);
+  const sq = S.create(sqM(SQA, sqws(SQA)));
+  S.join(sq.code, sqM(SQB, sqws(SQB)));
+  S.join(sq.code, sqG(g));
+  S.setReady(SQA, true, RACK5); S.setReady(g, true, RACK5);
+  const before = sq.members.map((m) => [m.ready, m.loadout && m.loadout.length]);
+  const got = S.clearReady(sq.code);
+  const after = sq.members.map((m) => [m.ready, m.loadout]);
+  if (same(before, [[true, 5], [false, null], [true, 5]]) && got === sq && same(after, [[false, null], [false, null], [false, null]]))
+    ok('(s3h) clearReady drops every flag and every rack, and answers the squad');
+  else fail('(s3h) ' + JSON.stringify(before) + ' -> ' + JSON.stringify(after) + ' returned the squad: ' + (got === sq));
+  if (S.clearReady('ZZZZ') === null && S.clearReady(undefined) === null) ok('(s3h) clearReady on a squad that is gone answers null');
+  else fail('(s3h) clearReady on a missing squad did not answer null');
+  if (S.setReady(SQB, true, RACK5).ok && sq.members[1].ready === true) ok('(s3h) after a clear, Ready works again');
+  else fail('(s3h) Ready after a clear did not take');
+}
+
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall squad checks passed');
 process.exit(out.errors.length ? 1 : 0);
