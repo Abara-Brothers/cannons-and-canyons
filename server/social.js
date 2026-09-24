@@ -398,7 +398,8 @@ export function createSocial({
   // EVERY KIND OF ACCOUNT, GUESTS INCLUDED, GOES THROUGH THE SIGN-IN DOOR of
   // D-BLOCK-2 B (signInDoor): a block can name an anonymous account too.
   //
-  // THE DOOR OPENS WHEN THE SOCKET BECOMES AN ACCOUNT, not on every hello.
+  // THE DOOR OPENS WHEN THE SOCKET BECOMES AN ACCOUNT, not on every hello,
+  // and only on a GUEST row (see signInDoor).
   // `squadAs` is the account this socket was last let in as, and onClose
   // clears it on a sign-out and on a hello for another account, so it
   // answers "the same account again" and nothing else. A re-hello with a
@@ -1694,8 +1695,10 @@ export function createSocial({
   // ONE WAY IN DOES NOT PASS HERE, and it is not this file's: server.js's
   // push-subscription sink sets ws.userId from a token on a socket that
   // never said hello, with no onAuth (pre-existing, routed to Task 12, whose
-  // fix must go through onAuth). Until then such a row goes through this
-  // door at the socket's next hello, which `squadAs` counts as a new account.
+  // fix must go through onAuth). Until then a guest row such a socket holds
+  // goes through this door at the socket's next hello, which `squadAs`
+  // counts as a new account. An account row it makes by a join was vetted
+  // by that join, and it has no door.
   //
   // THE ROW IS REMOVED AS A KICK: its socket gets exactly squadKick's victim
   // frame and the rest of the squad the roster a kick gives them. Nothing
@@ -1743,11 +1746,20 @@ export function createSocial({
     doorOut.set(row, mark);
     doorCheck(ws, id, row, mark);
   }
+  // ONLY A GUEST ROW HAS A DOOR (T6-R2-3). A row keyed by an account was made
+  // by an op that vetted that account: a join read its blocks, a create had
+  // nobody else in it, and a resume or a claim takes a row that was vetted
+  // already. A failed door clears `squadAs`, and a create or a join
+  // afterwards does not set it again. So the account's next hello is counted
+  // as new, and without this test it would re-read an account row that was
+  // already vetted. A store fault would then keep that row, the leader's
+  // included, out of Start, and a block row the store held unseen would
+  // remove the leader, which no block may do.
   function signInDoor(ws) {
     try {
       const key = squads.keyOfSocket(ws);
       const id = wireId(ws.userId);
-      const held = key == null || !isUuid(id) ? null : squads.memberOf(key);
+      const held = key == null || typeof key === 'string' || !isUuid(id) ? null : squads.memberOf(key);
       if (!held) return false;
       openDoor(ws, id, held.member);
       return true;
@@ -2418,9 +2430,16 @@ export function createSocial({
   // same turn, so each removed row's socket is sent its frame in the turn
   // its row goes, as squadKick sends its victim's, and awaits the rest (the
   // roster pushes) before its reply (members first, actor last), so neither
-  // a reply that throws nor anything after it can skip either. One squad at
-  // a time: a throw costs that squad only, and a squad that lost a row is
-  // always told.
+  // a reply that throws nor anything after it can skip either.
+  //
+  // EVERY SQUAD'S FRAMES FIRST, THEN THE ROSTERS (T6-R2-2). A roster push
+  // waits on a name read. When the pair share two squads, frames sent squad
+  // by squad would hold the second squad's kick behind the first squad's
+  // read. In that gap a resume from the removed player answers gone before
+  // the kick arrives, which is an order no real kick produces. So every
+  // frame goes out synchronously, before the first await, whatever order the
+  // squads were made in. The rosters then follow one squad at a time: a
+  // throw costs that squad only, and a squad that lost a row is always told.
   //
   // THE BLOCKER IS WHO ASKED, NOT WHO THE SOCKET IS NOW (D-BLOCK-2 D).
   // handleBlock captures the account before its first await and hands it
@@ -2451,10 +2470,8 @@ export function createSocial({
       } catch { /* this squad's teardown only */ }
     }
     return async () => {
-      for (const t of tell) {
-        for (const w of t.out) safeSend(w, t.frame);
-        await pushSquadAfterExit(t.sq).catch(() => {});
-      }
+      for (const t of tell) for (const w of t.out) safeSend(w, t.frame);
+      for (const t of tell) await pushSquadAfterExit(t.sq).catch(() => {});
     };
   }
 
@@ -2481,7 +2498,8 @@ export function createSocial({
   // same turn as the log, before the unfriend and the request deletes: a
   // squad is memory, so it moves none of the writes, and running it after
   // them left the pair co-members for three round trips, when a Start could
-  // seat them together (T6-R1-1). The blocked
+  // seat them together (T6-R1-1). An addBlock that throws is treated as
+  // landed for this half, because it may have been (T6-R2-4). The blocked
   // party leaves the blocker's squad when the blocker leads it, otherwise the
   // blocker leaves theirs; what the others receive is a kick or a leave
   // (D-BLOCK): no frame names the block, though probing can still infer it
@@ -2601,6 +2619,12 @@ export function createSocial({
     // now reports what actually happened: the block stands, the cleanup is what
     // was lost, and the read model covers for it.
     let wrote = false;
+    // SET AS addBlock IS ASKED, and never cleared: from that moment a block
+    // row MAY be in force, whether or not its answer ever arrives (T6-R2-4).
+    // A write can commit and still report a failure (sbAdmin's 8 s timeout,
+    // or a 5xx or a dropped connection after the commit). This is the flag
+    // the R16 net below hangs off.
+    let asked = false;
     // The squad half's telling, once it has started (see R16 below).
     let telling = null;
     try {
@@ -2608,6 +2632,7 @@ export function createSocial({
         const who = await store.profileById(id);
         if (!who) outcome = { type: 'block', op, error: 'no_such_user' };
         else {
+          asked = true;
           await store.addBlock(blocker, id);
           wrote = true;
           // LOGGED IN THE SAME TURN THE ROW LANDS, before the teardown: a
@@ -2617,12 +2642,13 @@ export function createSocial({
           // AND THE PAIR IS PARTED IN THAT SAME TURN (R16, T6-R1-1), not
           // after the three writes below: those are three more round trips,
           // up to 24 s on a slow store, and Start reads no blocks, so a Start
-          // in between would seat the pair side by side. The removed rows'
-          // sockets are told in this turn too, as squadKick tells its victim
-          // in the turn it removes the row; the roster push that follows runs
-          // beside the writes and is awaited before the reply. It cannot
-          // reject (the telling contains its own faults), and the catch is
-          // there so that nothing ever could while the writes are awaited.
+          // in between would seat the pair side by side. Every removed row's
+          // socket, in every squad the pair share, is told in this turn too,
+          // as squadKick tells its victim in the turn it removes the row; the
+          // roster pushes that follow run beside the writes and are awaited
+          // before the reply. They cannot reject (the telling contains its
+          // own faults), and the catch is there so that nothing ever could
+          // while the writes are awaited.
           telling = squadBlockTeardown(blocker, id)().catch(() => {});
           await store.removeFriendship(blocker, id);
           await store.deleteRequest(blocker, id);
@@ -2643,18 +2669,29 @@ export function createSocial({
       // it, the block is in force and saying otherwise is the misleading half of
       // a half-finished operation; the pushes go out for the same reason.
       if (wrote) { outcome = { type: 'block', op, ok: true }; if (op === 'add') alsoPush = id; }
-      else outcome = { type: 'block', op, error: 'unavailable' };
+      else {
+        outcome = { type: 'block', op, error: 'unavailable' };
+        // AN addBlock THAT THREW MAY STILL HAVE LANDED (T6-R2-4). Nothing
+        // here can tell, so it is treated as landed, which is the safe way
+        // round: the pair is logged for any read already out, and parted by
+        // the net below. If the row did not land, the parting is a kick or a
+        // leave that the blocker asked for, and it names nothing. The player
+        // is still answered unavailable, because the block may not stand, and
+        // a retry is idempotent.
+        if (asked) { try { logBlock(blocker, id); } catch { /* the net below still parts them */ } }
+      }
     }
     // R16, THE SQUAD HALF OF A BLOCK. It ran above, as the row landed. Here is
-    // the net for a block whose row landed and whose teardown never started —
-    // a throw between the two — and it hangs off `alsoPush` because that is
-    // the one flag set on BOTH paths that leave a block row behind (the clean
-    // one and the catch's `wrote === true`): skipped, it would leave the
-    // blocked party in the squad of the player who just blocked them, to be
-    // seated beside them by the next Start. The removal and the telling are
-    // both done BEFORE the reply — members first, actor last (pushSquad's
-    // rule) — so a reply that throws cannot skip either.
-    if (!telling && alsoPush) telling = squadBlockTeardown(blocker, alsoPush)().catch(() => {});
+    // the net for every other way a block row may be left in force: the row
+    // landed but a throw came before its teardown started, or addBlock threw
+    // after its row committed (T6-R2-4). It hangs off `asked`, the one flag
+    // set on every path that may leave a block row behind (the clean one, the
+    // catch's `wrote === true`, and an addBlock that threw). Skipped, it
+    // would leave the blocked party in the squad of the player who just
+    // blocked them, to be seated beside them by the next Start. The removal
+    // and the telling are both done BEFORE the reply (members first, actor
+    // last: pushSquad's rule), so a reply that throws cannot skip either.
+    if (!telling && asked) telling = squadBlockTeardown(blocker, id)().catch(() => {});
     if (telling) await telling;
     reply(ws, msg, outcome);
     if (!outcome.ok) return;
