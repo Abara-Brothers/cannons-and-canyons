@@ -2081,21 +2081,39 @@ const FITS_BY_SIZE = [
     ok('(s3g) tees ride with golf only: any other mode drops them unechoed, and golf with none arms null');
   else fail('(s3g) tees off golf: ' + JSON.stringify([ffaTees, leaked, armed(wb)]));
 
-  // THE SEAT CHOICE is vetted against the same table: an integer within the
-  // mode's seats for a mode that takes one, and otherwise null, "the mode's
-  // own seats". A number smuggles nothing, so out of range drops, not refuses.
-  const maxCases = [['ffa', 2, 2], ['ffa', 3, 3], ['ffa', 4, 4], ['ffa', 9, null], ['ffa', 1, null], ['ffa', '3', null], ['ffa', 3.5, null],
-    ['golf', 1, 1], ['golf', 4, 4], ['golf', 0, null], ['golf', -1, null], ['duel', 2, null], ['boss', 2, null], ['aliens', 1, null]];
+  // THE SEAT CHOICE is vetted against the same table. For a mode the host may
+  // choose for (ffa, golf) it is an integer inside the mode's own seats, or
+  // absent/null for "the mode's own seats" — and ANYTHING ELSE IS REFUSED
+  // bad_max, never quietly replaced: the leader's box shows the number it
+  // sent, and an ok that armed null would show 3 while the squad seats 4.
+  // Nothing is coerced — '3' (a <select>'s .value) is refused, not read as 3.
+  // A mode with no choice has no number on screen to disagree with, so a max
+  // sent with it is dropped unechoed, as tees are off golf.
   // The leader's socket has spent its twenty frames a minute on the checks
   // above; a minute passes so these are answered rather than slowed.
   SQCLOCK += 60000;
   const badMax = [];
+  for (const [mode, max] of [['ffa', 9], ['ffa', 1], ['ffa', '3'], ['ffa', 3.5], ['ffa', true], ['ffa', [3]], ['golf', 0], ['golf', -1], ['golf', '2']]) {
+    clear();
+    await S.handle(wa, { type: 'squad', op: 'mode', mode, max, id: 'mx' });
+    if (!(same(wa.rx, [{ type: 'squad', op: 'mode', error: 'bad_max', id: 'mx' }]) && wb.rx.length === 0 && g.rx.length === 0)) badMax.push([mode, max, [...wa.rx]]);
+  }
+  // Nothing moved: the next roster anyone is pushed still shows what was armed.
+  await S.handle(g, { type: 'squad', op: 'ready', ready: false });
+  if (!badMax.length && same(armed(wb), ['golf', null, null]))
+    ok('(s3g) a seat choice outside the mode\'s seats, or not an integer — a numeric string included — is refused bad_max, and nothing is armed or pushed');
+  else fail('(s3g) bad seat choices: ' + JSON.stringify(badMax) + ' armed ' + JSON.stringify(armed(wb)));
+  SQCLOCK += 60000;
+  const maxCases = [['ffa', 2, 2], ['ffa', 3, 3], ['ffa', 4, 4], ['ffa', null, null], ['ffa', undefined, null], ['golf', 1, 1], ['golf', 4, 4],
+    ['duel', 2, null], ['duel', 3, null], ['boss', 2, null], ['aliens', 'MEET ME', null]];
+  const keptMax = [];
   for (const [mode, max, want] of maxCases) {
     await S.handle(wa, { type: 'squad', op: 'mode', mode, max });
-    if (!same(armed(wb), [mode, null, want])) badMax.push([mode, max, armed(wb)]);
+    if (!(sqat(wa, 'mode').ok === true && same(armed(wb), [mode, null, want]))) keptMax.push([mode, max, armed(wb), sqlast(wa, 'mode')]);
   }
-  if (!badMax.length) ok('(s3g) the seat choice is kept only inside the mode\'s own seats and only for ffa and golf; anything else arms null');
-  else fail('(s3g) seat choices: ' + JSON.stringify(badMax));
+  const echoed = JSON.stringify(wb.rx).includes('MEET ME');
+  if (!keptMax.length && !echoed) ok('(s3g) a seat choice inside the mode\'s seats is armed, none arms null, and a mode with no choice drops one unechoed');
+  else fail('(s3g) seat choices: ' + JSON.stringify(keptMax) + ' echoed ' + echoed);
 
   // NOT THE LEADER: a member and a guest member are not_leader (never
   // sign_in — this op has no sign-in gate); someone in no squad is no_squad.

@@ -1115,11 +1115,20 @@ export function createSocial({
       if (!teeIds.includes(msg.tees)) return no('bad_tees');
       tees = msg.tees;
     }
-    // THE SEAT CHOICE: an integer within the mode's own seats, for a mode the
-    // host may choose for (ffa, golf). Anything else is null, "the mode's own
-    // seats". A number smuggles nothing, so out of range is dropped, not
-    // refused.
-    const max = lim.pick && Number.isInteger(msg.max) && msg.max >= lim.min && msg.max <= lim.max ? msg.max : null;
+    // THE SEAT CHOICE, for a mode the host may choose for (ffa, golf): absent
+    // or null is "the mode's own seats"; anything else must be an integer
+    // inside the mode's own seats, or the frame is REFUSED bad_max. Refused,
+    // not quietly replaced: the leader's box shows the number it sent, and an
+    // ok that armed something else would show 3 while the squad seats 4. And
+    // NEVER COERCED: '3' (a <select>'s .value) is refused, not read as 3 — a
+    // lookup that coerced its key is how an array once became a room's mode.
+    // A mode with no choice has no number on screen to disagree with, so a
+    // max sent with it is dropped unechoed, as tees are off golf.
+    let max = null;
+    if (lim.pick && msg.max != null) {
+      if (!(Number.isInteger(msg.max) && msg.max >= lim.min && msg.max <= lim.max)) return no('bad_max');
+      max = msg.max;
+    }
     // sq.leader: ledSquad has established that this caller IS the leader.
     // As in squadKick, THE MACHINE'S LEADER CHECK ALWAYS PASSES FOR THIS
     // CALLER AND GUARDS NOTHING HERE — ledSquad is the only leadership check
