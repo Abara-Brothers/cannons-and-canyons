@@ -3833,6 +3833,35 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     else fail('(d17) control: ' + JSON.stringify({ c, seated }));
   }
 
+  // ---- (d8s) C4 AT THE SOCKET: THE LAST ACCOUNT GOES, THE GUESTS ARE TOLD ---
+  // task 2: a squad nobody signed in is left to lead ENDS, and the guests
+  // standing in it are told { op:'ended', reason:'no_leader' } — never pushed
+  // a roster of a squad that no longer exists, and never left with none. Both
+  // of this task's removals reach that end: the drop window sweeping the
+  // leader, and the leader signing out.
+  for (const how of ['swept by the drop window', 'signing out']) {
+    const cw = mkClockwork();
+    const S = social5(store5(), { cw });
+    const wl = up5(S, mkws5(LEAD));
+    await S.handle(wl, { type: 'squad', op: 'create' });
+    const code = last5(wl, 'state').code;
+    const g1 = mkws5(null), g2 = mkws5(ANON, true);
+    await S.handle(g1, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+    await S.handle(g2, { type: 'squad', op: 'join', code, name: 'H', skin: 'gold' });
+    if (how === 'swept by the drop window') { close5(S, wl); await flush5(); }
+    g1.rx.length = 0; g2.rx.length = 0;
+    if (how === 'signing out') signOut5(S, wl);
+    else { CLOCK5 += 60000; cw.fire(); }
+    await flush5();
+    const told = (w) => same(w.rx, [{ type: 'squad', op: 'ended', reason: 'no_leader' }]);
+    const both = told(g1) && told(g2);
+    await S.handle(g1, { type: 'squad', op: 'resume', code, id: 'r' });
+    const after = g1.rx.find((f) => f.id === 'r');
+    if (both && same(after, GONE('r')))
+      ok(`(d8s) the leader ${how} with only guests left: every guest is told ended: no_leader, and the squad is gone`);
+    else fail(`(d8s) leader ${how}: ` + JSON.stringify({ g1: g1.rx, g2: g2.rx }));
+  }
+
   // ---- (d18) ONE ACCOUNT, ONE ROW, ONE SEAT (review, Important 4) ----------
   // "Each member is seated exactly once when the squad starts." A GUEST row
   // is keyed by its socket, and that socket can sign in afterwards, so the
