@@ -887,16 +887,24 @@ async function sectionB() {
     }
   }
   {
-    // THE ROW ALONE IS NOT LEADERSHIP. The leader's socket signs in as someone
-    // else and still holds the leader's row.
+    // THE LEADER'S SOCKET SIGNS IN AS SOMEONE ELSE. Since task 5 server.js's
+    // hello-for-another-account hook is a LEAVE for the account row that
+    // socket holds, so the socket no longer holds the leader's row at all:
+    // Start from it finds no squad, nothing is built, and leadership has
+    // passed to the member left behind, who is told. (The state this test
+    // used to build — the row still held under another account — is now
+    // reached only by building it directly; test/squad.mjs (st6) does, and
+    // keeps ledSquad's row half proved there.)
     const s = await squadUp(S.port, [1, 2], 'duel');
     if (s) {
       put(s.ws[0], { type: 'hello', token: 'tok-5' });
       const r = await ask(s.ws[0], { op: 'start' });
       await settle(s.ws);
-      if (r && r.error === 'not_leader' && !s.ws.some((w) => seen(w, 'created').length || seen(w, 'start').length))
-        ok('(B11) a socket now signed in as someone else cannot start from the leader\'s row it still holds');
-      else fail('(B11) account-switched start: ' + JSON.stringify(r) + ' ' + JSON.stringify(s.ws.map(types)));
+      const heir = s.ws[1]._rx.filter((m) => m.type === 'squad' && m.op === 'state').pop();
+      if (r && r.error === 'no_squad' && !s.ws.some((w) => seen(w, 'created').length || seen(w, 'start').length)
+        && heir && heir.members.length === 1 && heir.you === 0 && heir.leader === heir.members[0].id)
+        ok('(B11) a leader\'s socket signed in as someone else has left the squad: its Start finds none, nothing is built, and the member left leads');
+      else fail('(B11) account-switched start: ' + JSON.stringify(r) + ' heir ' + JSON.stringify(heir) + ' ' + JSON.stringify(s.ws.map(types)));
       await closeAll(s.ws);
     }
   }

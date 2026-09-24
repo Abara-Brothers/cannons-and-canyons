@@ -768,6 +768,14 @@ export function createSocial({
   const squadReply = (ws, msg, op, rest) => reply(ws, msg, { type: 'squad', op, ...rest });
 
   async function handleSquad(ws, msg) {
+    // A SOCKET THAT HAS CLOSED ACTS ON NOTHING (task 5). A frame can wait on
+    // this socket's queue, or on its hello, past the socket's own close — and
+    // the close has already dropped the row it held. A join or resume run
+    // after it would put the DEAD socket on a row with no drop stamped: a
+    // member no window ever sweeps, holding a seat's socket nothing can
+    // answer. There is nobody to reply to either: send() delivers nothing to
+    // a socket that is not open.
+    if (!ws || ws.readyState !== 1) return;
     const op = typeof msg.op === 'string' ? msg.op : '';
     const fn = SQUAD_OPS[op];
     // THE RATE CHECK BEFORE ANY ANSWER, INCLUDING FOR AN OP THAT DOES NOT
@@ -984,6 +992,26 @@ export function createSocial({
     for (const m of sq.members) if (m.ws) safeSend(m.ws, { type: 'squad', op: 'ended', reason: 'no_leader' });
   }
 
+  // A SOCKET WHOSE ROW HAS GONE SOMEWHERE ELSE (task 5) — removed by a leave,
+  // create or join from ANOTHER device of the account (which acts on the
+  // account's row: a second device holds none of its own), or taken over by
+  // that device's resume. Its box is showing a squad it will never be pushed
+  // again, and nothing else would tell it. `ended` because this device's
+  // squad has; `elsewhere` because the account's has not, necessarily.
+  const endedElsewhere = (w) => safeSend(w, { type: 'squad', op: 'ended', reason: 'elsewhere' });
+  // The socket on the row `key` holds now, or null.
+  const rowSocketOf = (key) => {
+    const sq = squads.ofUser(key);
+    const m = sq ? sq.members.find((x) => x.key === key) : null;
+    return m ? m.ws : null;
+  };
+  // Read BEFORE an op that may remove or move rows: every [key, socket] for a
+  // row under `keys` held by a socket other than the caller's. AFTER it,
+  // tellMoved tells each of those sockets whose row is no longer on it — and
+  // nobody whose row the op left where it was.
+  const heldElsewhere = (ws, keys) => [...new Set(keys)].map((k) => [k, rowSocketOf(k)]).filter(([, w]) => w && w !== ws);
+  const tellMoved = (held) => { for (const [k, w] of held) if (rowSocketOf(k) !== w) endedElsewhere(w); };
+
   // WHO A KICK IS AIMED AT. Two forms, and — the rule targetId below applies
   // to `handle` — ONE FORM, NEVER EITHER:
   //   `i`  — the row's index in the last snapshot, and the ONLY way to name a
@@ -1011,6 +1039,9 @@ export function createSocial({
   async function squadCreate(ws, msg) {
     const from = squadKey(ws);
     const olds = squadsOfCaller(ws, from);
+    // The account's row may be on ANOTHER device, and this create takes it
+    // (one squad per player): that device is told, in the finally below.
+    const held = heldElsewhere(ws, [from, identityKey(ws)]);
     const sq = squads.create(squadMemberOf(ws, msg), from);
     // THE SQUAD THEY JUST LEFT STILL HAS PEOPLE IN IT. create() leaves it as
     // its first act, so those left behind have a new leader — or none of them
@@ -1019,7 +1050,10 @@ export function createSocial({
     // answered, and in a finally, so a creator whose own socket throws on the
     // answer does not also cost them it.
     try { await pushSquad(sq, ws, msg); }
-    finally { for (const o of olds) if (o !== sq) await pushSquadAfterExit(o); }
+    finally {
+      tellMoved(held);
+      for (const o of olds) if (o !== sq) await pushSquadAfterExit(o);
+    }
   }
 
   async function squadJoin(ws, msg) {
@@ -1030,14 +1064,25 @@ export function createSocial({
     // either way, so a regex here could never be seen to do anything.
     const from = squadKey(ws);
     const olds = squadsOfCaller(ws, from);
+    // create's rule: the account's row on another device is told if this
+    // join takes it — and only then, so an already-here join tells nobody.
+    const held = heldElsewhere(ws, [from, identityKey(ws)]);
     const res = squads.join(codeOf(msg.code), squadMemberOf(ws, msg), from);
     if (!res.ok) return squadReply(ws, msg, 'join', { error: res.error });
     try { await pushSquad(res.squad, ws, msg); }
-    finally { for (const o of olds) if (o !== res.squad) await pushSquadAfterExit(o); }
+    finally {
+      tellMoved(held);
+      for (const o of olds) if (o !== res.squad) await pushSquadAfterExit(o);
+    }
   }
 
   async function squadLeave(ws, msg) {
-    const res = squads.leave(squadKey(ws));
+    const key = squadKey(ws);
+    // A SECOND DEVICE'S LEAVE takes the account's row off the device holding
+    // it, which is told `ended: elsewhere` — the leaver is answered below.
+    const held = heldElsewhere(ws, [key]);
+    const res = squads.leave(key);
+    tellMoved(held);
     // ANSWERED FIRST AND ALWAYS, INCLUDING WHEN THERE WAS NOTHING TO LEAVE.
     // The state the player asked for is the state they are in, and a second
     // word for it would be one more string to render. The leaver gets a
@@ -1212,6 +1257,18 @@ export function createSocial({
     // engine's own seat table, minimum AND maximum (plan X6). A squad of one
     // does not start a duel; three do not start one either.
     if (!fitsFor(sq.members.length)[sq.mode]) return no('wont_fit');
+    // A LIVE SOCKET FOR EVERY MEMBER. The engine's join does not look at a
+    // socket's state, so a closed one would be SEATED: a ghost seat, marked
+    // connected, that the match would one day hand the turn to. Nothing is
+    // seated unless every seat has somebody on it. `at` is the roster row of
+    // the first member who is not there, so the box can mark them.
+    //
+    // ASKED BEFORE READY (task 5). A member whose socket goes is DROPPED, and
+    // a dropped member is not ready (design 4.3), so the ready gate below
+    // would answer every such start `not_ready` — true, but not the reason:
+    // they cannot ready from a socket that is gone. This names who is missing.
+    const off = sq.members.findIndex((m) => !(m.ws && m.ws.readyState === 1 && m.dropAt == null));
+    if (off >= 0) return squadReply(ws, msg, 'start', { error: 'member_offline', at: off });
     if (!sq.members.every((m) => (m === lead && sent) || m.ready === true)) return no('not_ready');
     // THE LAST GATE ON THE RACKS. Arming a mode stands down every member
     // whose rack it would not keep (squadMode, above), but this is the last
@@ -1226,13 +1283,6 @@ export function createSocial({
       await pushSquad(sq, ws, null);
       return no('not_ready');
     }
-    // A LIVE SOCKET FOR EVERY MEMBER. The engine's join does not look at a
-    // socket's state, so a closed one would be SEATED: a ghost seat, marked
-    // connected, that the match would one day hand the turn to. Nothing is
-    // seated unless every seat has somebody on it. `at` is the roster row of
-    // the first member who is not there, so the box can mark them.
-    const off = sq.members.findIndex((m) => !(m.ws && m.ws.readyState === 1 && m.dropAt == null));
-    if (off >= 0) return squadReply(ws, msg, 'start', { error: 'member_offline', at: off });
     // R5: THE ORDER IS THE ORDER THE ROOM FILLS IN. The leader first, because
     // the create makes them the host seat; everyone else in roster order, and
     // the match begins as the last one lands. Each seat is handed a COPY of
@@ -1389,13 +1439,6 @@ export function createSocial({
       pushSquad(sq, null, null).catch(() => {});
     } catch { /* the squad row waits for the next sweep; the close goes on */ }
   }
-
-  // A socket whose row has gone somewhere else — taken over by a resume, or
-  // removed by a leave, create or join from another device of the account.
-  // Its box is showing a squad it will no longer be pushed, and nothing else
-  // would ever tell it. `ended` because this device's squad has; `elsewhere`
-  // because the account's has not, necessarily.
-  const endedElsewhere = (w) => safeSend(w, { type: 'squad', op: 'ended', reason: 'elsewhere' });
 
   // ---- squad resume (task 5; design 4.3 and 5.4) ----------------------------
   // THE WIRE: the `state` snapshot as this socket must see it (squadFrame —

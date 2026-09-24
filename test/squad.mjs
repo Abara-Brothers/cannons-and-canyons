@@ -3654,6 +3654,123 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     else fail('(d14) a squad outlived the process: ' + JSON.stringify(w.rx));
   }
 
+  // ---- (d15) deferred items 2 and 6b: DEVICE A IS TOLD WHEN DEVICE B TAKES
+  // ITS ROW AWAY ------------------------------------------------------------
+  // The account's row is on device A (wm). Device B (wm2) holds no row, so
+  // its leave, create or join acts on the account's row — task 2's rule —
+  // and A's box went on showing a squad it would never be pushed again.
+  const ELSEWHERE = { type: 'squad', op: 'ended', reason: 'elsewhere' };
+  for (const [what, act] of [
+    ['a leave', async (S, w2) => { await S.handle(w2, { type: 'squad', op: 'leave', id: 'x' }); }],
+    ['a create', async (S, w2) => { await S.handle(w2, { type: 'squad', op: 'create', id: 'x' }); }],
+    ['a join to another squad', async (S, w2) => {
+      const wt = up5(S, mkws5(THIRD));
+      await S.handle(wt, { type: 'squad', op: 'create' });
+      await S.handle(w2, { type: 'squad', op: 'join', code: last5(wt, 'state').code, id: 'x' });
+    }],
+  ]) {
+    const S = social5(store5(), { cw: mkClockwork() });
+    const { wl, wm } = await pair5(S);
+    const wm2 = up5(S, mkws5(MEM));
+    await act(S, wm2);
+    await S.handle(wl, { type: 'squad', op: 'mode', mode: 'duel' });  // a later change in the old squad
+    const answered = wm2.rx.some((f) => f.id === 'x');
+    if (answered && same(wm.rx, [ELSEWHERE]) && same(ids5(last5(wl, 'state')), [LEAD]))
+      ok(`(d15) ${what} from device B tells device A, whose row it took, ended: elsewhere — and nothing after`);
+    else fail(`(d15) ${what} from device B: device A got ${JSON.stringify(wm.rx)}, B answered ${answered}`);
+  }
+  {
+    // NOBODY IS TOLD WHAT DID NOT HAPPEN: device B joining the squad the
+    // account is already in moves nothing, and a device leaving its OWN row
+    // is the actor, answered `left`, not told it was left elsewhere.
+    const S = social5(store5(), { cw: mkClockwork() });
+    const { wm, code } = await pair5(S);
+    const wm2 = up5(S, mkws5(MEM));
+    await S.handle(wm2, { type: 'squad', op: 'join', code, id: 'j' });
+    // (A join re-pushes the roster to the squad — task 2's rule — so the row's
+    // socket does get a `state`; what it must not get is an `ended`.)
+    const quiet = sq5(wm, 'ended').length === 0 && sq5(wm, 'state').length === 1;
+    wm.rx.length = 0;
+    await S.handle(wm, { type: 'squad', op: 'leave', id: 'l' });
+    if (quiet && same(wm.rx, [{ type: 'squad', op: 'left', ok: true, id: 'l' }]))
+      ok('(d15) a join that is already-here tells the other device nothing, and a device leaving its own row is only answered');
+    else fail('(d15) over-told: ' + JSON.stringify(wm.rx));
+  }
+  {
+    // A KICK ALREADY TELLS THE ROW'S SOCKET, from whichever device of the
+    // leader sends it (task 2 holds the victim's socket before the removal).
+    const S = social5(store5(), { cw: mkClockwork() });
+    const { wm } = await pair5(S);
+    const wl2 = up5(S, mkws5(LEAD));
+    await S.handle(wl2, { type: 'squad', op: 'kick', id: MEM });
+    if (same(wm.rx, [{ type: 'squad', op: 'ended', reason: 'kicked' }]))
+      ok('(d15) a kick sent from the leader\'s second device tells the member on the row: ended, kicked');
+    else fail('(d15) kick from a second device: ' + JSON.stringify(wm.rx));
+  }
+
+  // ---- (d16) A SQUAD OP THAT OUTLIVES ITS SOCKET ATTACHES NOTHING -----------
+  // A frame can wait on the per-socket queue (behind a slow name read) or on
+  // the hello, and the socket can close while it waits. The close has already
+  // dropped the row it held; a join that ran afterwards would put the DEAD
+  // socket on a row with no drop stamped — a member no window would ever
+  // sweep, and a socket nothing can answer.
+  {
+    const st = store5();
+    const S = social5(st, { cw: mkClockwork() });
+    const { wl, code } = await pair5(S);
+    const w = up5(S, mkws5(THIRD));
+    await S.handle(w, { type: 'squad', op: 'create' });              // THIRD's own squad
+    const release = st.hold();
+    const p1 = S.handle(w, { type: 'squad', op: 'resume', id: 'q1' }); // waits in its name read
+    const inside = await within5(st.entered);
+    const p2 = S.handle(w, { type: 'squad', op: 'join', code, id: 'q2' }); // queued behind it
+    close5(S, w);
+    release();
+    await p1; await p2;
+    await flush5();
+    const x = last5(wl, 'state');
+    if (inside && !(x && x.members.some((r) => r.id === THIRD)))
+      ok('(d16) a join queued before its socket closed does not run after: the squad gains no dead member');
+    else fail('(d16) a closed socket joined: ' + JSON.stringify({ inside, roster: ids5(x) }));
+  }
+
+  // ---- (d17) deferred item 9: START AND A MEMBER WHOSE SOCKET JUST CLOSED ---
+  // task 4's member_offline gate is the only thing between a closed socket
+  // and a seat — the engine's join never looks. The drop clears the member's
+  // Ready (design 4.3), so the start must ask who is MISSING before it asks
+  // who is not ready: the answer names the member who is gone (`at`), which
+  // is the reason the leader can act on, and nobody is seated.
+  {
+    const seated = [];
+    const S = social5(store5(), { cw: mkClockwork(), seatSquad: (seats) => { seated.push(seats.length); return { ok: true, code: 'RM05' }; } });
+    const { wl, wm } = await pair5(S);
+    await S.handle(wm, { type: 'squad', op: 'ready', ready: true, loadout: RACK5 });
+    close5(S, wm);
+    await flush5();
+    wl.rx.length = 0;
+    await S.handle(wl, { type: 'squad', op: 'start', loadout: RACK5, id: 's' });
+    const a = wl.rx.find((f) => f.id === 's');
+    if (same(a, { type: 'squad', op: 'start', error: 'member_offline', at: 1, id: 's' }) && seated.length === 0)
+      ok('(d17) a member whose socket just closed stops the start with member_offline, naming their row, and nobody is seated');
+    else fail('(d17) start after a close: ' + JSON.stringify({ a, seated }));
+    // THEIR SECOND DEVICE READIES THE DROPPED ROW (the account's row, which
+    // task 3 lets a second device act on): still nobody on the other end of
+    // the seat's socket, and still refused.
+    const wm2 = up5(S, mkws5(MEM));
+    await S.handle(wm2, { type: 'squad', op: 'ready', ready: true, loadout: RACK5 });
+    await S.handle(wl, { type: 'squad', op: 'start', loadout: RACK5, id: 't' });
+    const b = wl.rx.find((f) => f.id === 't');
+    if (same(b, { type: 'squad', op: 'start', error: 'member_offline', at: 1, id: 't' }) && seated.length === 0)
+      ok('(d17) a dropped row readied from a second device is still member_offline — Ready does not put a socket in the seat');
+    else fail('(d17) readied dropped row: ' + JSON.stringify({ b, seated }));
+    // THE CONTROL: they resume, ready again, and the start seats both.
+    await S.handle(wm2, { type: 'squad', op: 'resume' });
+    await S.handle(wl, { type: 'squad', op: 'start', loadout: RACK5, id: 'u' });
+    const c = wl.rx.find((f) => f.id === 'u');
+    if (c && c.ok === true && same(seated, [2])) ok('(d17) and once they resume, the same start seats the whole squad');
+    else fail('(d17) control: ' + JSON.stringify({ c, seated }));
+  }
+
   // ---- (end of task 5) ----
 }
 
