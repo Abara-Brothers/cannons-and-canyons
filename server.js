@@ -27,7 +27,7 @@ import {
 // server/blocklist.txt is not web-reachable, and the offline page's copy of the
 // engine gains no database (ADR-001).
 import { createStore } from './server/store.js';
-import { createSocial, SOCIAL_TYPES } from './server/social.js';
+import { createSocial, SOCIAL_TYPES, codeOf } from './server/social.js';
 import { loadBlocklist, normaliseCallsign } from './server/callsign.js';
 // ONE proof of a name, shared with server/social.js rather than written twice.
 // GET /history paints an opponent's callsign on another player's home screen,
@@ -1659,6 +1659,30 @@ wss.on('connection', (ws) => {
         // one answer it was always going to get — on exactly the deploys where
         // the layer is off (no secret key, or a blocklist that would not load).
         if (!social) {
+          // THE ONE SOCIAL TYPE THAT IS ANSWERED ANYWAY: the "Enter a code"
+          // field's question. Joining a room by code has never needed the
+          // database — `join` goes straight to the engine — and answering
+          // this 'unavailable' would make the one code field refuse a room
+          // the engine is holding open, on exactly the deploys where the
+          // social layer failed to build. Plan R14 accepts losing SQUADS
+          // then, not rooms. So it is answered from `rooms`, in memory.
+          //
+          // NEVER 'squad' HERE. Squads live inside the social layer, and this
+          // branch runs because there is no social layer: no squad can exist,
+          // so that answer would always be a lie that sends the client to a
+          // squad join refused 'unavailable'.
+          //
+          // codeOf is server/social.js's, IMPORTED rather than restated — the
+          // same rule the layer's own code frame uses, and one of exactly two
+          // copies in the tree; the other is public/room-engine.js's
+          // roomCode(), which the engine's `join` looks rooms up through. See
+          // codeOf's comment for why there are two and not one.
+          if (msg.type === 'code') {
+            const frame = { type: 'code', kind: rooms.has(codeOf(msg.code)) ? 'room' : 'none' };
+            if (msg.id !== undefined) frame.id = msg.id;
+            send(ws, frame);
+            return;
+          }
           const frame = { type: msg.type, error: 'unavailable' };
           if (msg.id !== undefined) frame.id = msg.id;
           send(ws, frame);

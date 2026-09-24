@@ -252,6 +252,12 @@ else
   # Guards ISSUE-036 (b) UTF-8 across chunk boundaries in /errors, and (c) a
   # missing asset returning a real 404 instead of 200 + text/html.
   run http_contract node test/http_contract.mjs
+  # The "Enter a code" field's question asked of the REAL server.js with the
+  # social layer OFF (no Supabase env): a room code must still answer 'room' --
+  # joining a room by code never needed the database -- a squad-shaped code
+  # 'none' and never 'squad', and the engine's own join must agree with both
+  # answers. Spawns its own server on a free port; no Chrome, no Supabase.
+  run code_frame node test/code_frame.mjs
   run ledger node test/ledger.mjs
   # GET /history (Launch Bay recent sorties): the one client read path into the
   # ledger. Mocks Supabase; asserts no uuid ever leaves, W/L derivation, auth, rate limit.

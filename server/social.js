@@ -96,6 +96,30 @@ const DAY = 86400000;
 // to another client. Keep in step with public/room-engine.js's SKINS.
 const SKIN_IDS = new Set(['olive', 'desert', 'jungle', 'midnight', 'arctic', 'gold']);
 
+// A ROOM OR SQUAD CODE OFF THE WIRE, normalised THE SAME WAY
+// public/room-engine.js's roomCode() does it: coerce, upper-case, trim, and
+// bound the length. COPIED rather than imported for the reason SKIN_IDS above
+// is copied: nothing under server/ may pull in the game engine, which the
+// OFFLINE page also loads. Keep in step with public/room-engine.js's roomCode().
+//
+// TWO COPIES OF THIS RULE, AND THERE MUST NOT BE A THIRD. The engine's
+// roomCode() is the authority: its `join` looks rooms up through it and the
+// rooms Map is keyed by what it produced. This is the other, and it serves
+// BOTH places outside the engine that answer "is this a code": the code frame
+// inside createSocial below, and server.js's layer-off branch, which IMPORTS
+// it from here rather than restating it — that branch runs precisely when
+// createSocial was never built, so the rule cannot live only inside the
+// closure. test/code_frame.mjs proves this copy and the engine's agree, by
+// asking the engine's own `join` the same strings.
+//
+// Copying it is load-bearing, not tidiness. A code typed in lower case would
+// miss every live room if this did not upper-case it the way roomCode() does.
+// The coercion is what keeps `{"code": 123}` from throwing on .toUpperCase()
+// — the throw that used to reach uncaughtException. An empty string is safe to
+// look up in either container, because makeCode only ever mints four
+// characters, so it needs no guard of its own.
+export const codeOf = (v) => (typeof v === 'string' ? v : '').toUpperCase().trim().slice(0, 8);
+
 // ---- UNBLOCK KEYS (BINDING.md resolution 24, applied to the blocked list) ----
 // THE HOLE THIS CLOSES. A lobby seat carries a per-room opaque handle instead of
 // an account id precisely so a modified client cannot correlate a player across
@@ -688,20 +712,6 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
     // tested, and a branch no test can break is a branch nobody is keeping.
     await fn(ws, msg);
   }
-
-  // THE SAME NORMALISATION public/room-engine.js's roomCode() applies, COPIED
-  // rather than imported for the reason SKIN_IDS above is copied: nothing
-  // under server/ may pull in the game engine, which the OFFLINE page also
-  // loads. Keep in step with public/room-engine.js's roomCode().
-  //
-  // Copying it is load-bearing, not tidiness. The rooms Map this reaches
-  // through roomExists is keyed by whatever roomCode() produced, so a code
-  // typed in lower case would miss every live room if this did not upper-case
-  // it the same way. The coercion is what keeps `{"code": 123}` from throwing
-  // on .toUpperCase() — the throw that used to reach uncaughtException. An
-  // empty string is safe to look up in either container, because makeCode
-  // only ever mints four characters, so it needs no guard of its own.
-  const codeOf = (v) => (typeof v === 'string' ? v : '').toUpperCase().trim().slice(0, 8);
 
   // ---- one code field, two containers (design D8) --------------------------
   // "Enter a code" is one field and a code can name a squad or a room, so the
