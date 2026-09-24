@@ -396,7 +396,7 @@ export function createSocial({
   // and that account would read online for the life of the process.
   //
   // EVERY KIND OF ACCOUNT, GUESTS INCLUDED, GOES THROUGH THE SIGN-IN DOOR of
-  // D-BLOCK-2 B (blocksOnSignIn): a block can name an anonymous account too.
+  // D-BLOCK-2 B (signInDoor): a block can name an anonymous account too.
   //
   // THE DOOR OPENS WHEN THE SOCKET BECOMES AN ACCOUNT, not on every hello.
   // `squadAs` is the account this socket was last let in as, and onClose
@@ -405,12 +405,13 @@ export function createSocial({
   // rotated token for that account (the client's retry, a repeated sign-in)
   // stands on rows already checked for it — by the join that made them, or
   // by this door — so it reads nothing, and a store fault at that moment
-  // removes nobody, a leader included.
+  // removes nobody, a leader included. A door whose read failed let nobody
+  // in, and clears `squadAs` so the next hello tries again.
   function onAuth(ws) {
     if (!ws || !ws.userId) return;
     const fresh = ws.squadAs !== wireId(ws.userId);
     ws.squadAs = wireId(ws.userId);
-    if (ws.isGuest) { if (fresh) blocksOnSignIn(ws); return; }
+    if (ws.isGuest) { if (fresh) signInDoor(ws); return; }
     if (ws.socialUser && ws.socialUser !== ws.userId) dropPresence(ws.socialUser, ws);
     ws.socialUser = ws.userId;
     let set = online.get(ws.userId);
@@ -432,10 +433,10 @@ export function createSocial({
     // that lost its store read sticky, because nothing would ask again.
     presenceChanged(ws.userId);
     // A GUEST ROW THIS SOCKET HOLDS IS NOW AN ACCOUNT'S (task 5's fix pass):
-    // one account, one row, one seat. See claimOnSignIn.
-    claimOnSignIn(ws);
-    // AFTER the claim, so the row it checks is the one the claim left.
-    if (fresh) blocksOnSignIn(ws);
+    // one account, one row, one seat. See claimOnSignIn. When this hello
+    // makes the socket a new account the door reads first, and claims the
+    // row only once its answer has let the account in (D-BLOCK-3 F).
+    if (!(fresh && signInDoor(ws))) claimOnSignIn(ws);
   }
 
   // Call on close, and on a sign-out hello. Unlike the first version of this
@@ -792,26 +793,48 @@ export function createSocial({
   const SQUAD_MAX = 4;
   const squads = createSquads({ now, capacity: SQUAD_MAX, codeTaken: roomExists });
 
-  // THE BLOCK EPOCH (D-BLOCK-2 C). A block read is a snapshot, and a block
-  // row can land while one is out: the blocker's teardown then finds nothing
-  // to remove, because the joiner is not in the squad yet, and a join that
-  // trusted its snapshot would seat the pair together a moment later. The
-  // server is one process, so one counter closes that: handleBlock bumps it
-  // in the same turn its block row lands, before its teardown, and a read
-  // that sees it move across its await is read again. Three reads that each
-  // saw it move are answered null, and the caller refuses: a join as a dead
-  // code, a sign-in by removing the row. A block landing after the last read
-  // is caught by that block's own teardown, which now finds the row.
-  let blockEpoch = 0;
-  const BLOCK_READS = 3;
-  async function settledBlocks(id) {
-    for (let i = 0; i < BLOCK_READS; i++) {
-      const at = blockEpoch;
-      const b = await store.blockIdsOf(id);
-      if (blockEpoch === at) return b;
-    }
-    return null;
+  // THE RECENT-BLOCKS LOG (D-BLOCK-3 G). A block read is a snapshot, and a
+  // block row can land while one is out: the blocker's teardown then finds
+  // nothing to remove, because the joiner is not in the squad yet, and a
+  // join that trusted its snapshot would seat the pair together a moment
+  // later. So handleBlock logs every pair in the same turn its row lands,
+  // before its teardown. A reader notes the log's next seq before its read
+  // and afterwards adds every pair logged since then that NAMES ITS OWN
+  // ACCOUNT: a block between two other players changes nobody's answer.
+  // A block landing after that is caught by its own teardown, which then
+  // finds the row.
+  //
+  // KEPT BLOCK_LOG_MS, twice the store's 8 s request timeout, so a read
+  // outlives no entry it needs, and never more than BLOCK_LOG_MAX entries.
+  // A reader whose entries were dropped while it was out reads once more;
+  // a second miss is null, and its caller fails as on a failed read.
+  const BLOCK_LOG_MS = 16000;
+  const BLOCK_LOG_MAX = 4096;
+  const blockLog = [];
+  let blockSeq = 0;       // the seq the next entry gets
+  let blockFloor = 0;     // every entry below it has been dropped
+  function logBlock(blocker, blocked) {
+    const t = now();
+    blockLog.push({ seq: blockSeq++, at: t, blocker: wireId(blocker), blocked: wireId(blocked) });
+    while (blockLog.length > BLOCK_LOG_MAX || blockLog[0].at < t - BLOCK_LOG_MS) blockFloor = blockLog.shift().seq + 1;
   }
+  // `b`, the store's answer for `id`, plus every pair logged from `from` on
+  // that names `id`; null when some of those entries have been dropped.
+  function withLanded(b, id, from) {
+    if (blockFloor > from) return null;
+    const out = { blocked: [...b.blocked], blockedBy: [...b.blockedBy] };
+    for (const e of blockLog) {
+      if (e.seq < from) continue;
+      if (e.blocker === id) out.blocked.push(e.blocked);
+      if (e.blocked === id) out.blockedBy.push(e.blocker);
+    }
+    return out;
+  }
+  async function readLanded(id) {
+    const from = blockSeq;
+    return withLanded(await store.blockIdsOf(id), id, from);
+  }
+  const landedBlocks = async (id) => (await readLanded(id)) || readLanded(id);
 
   // op -> handler. A NULL PROTOTYPE, and that is not decoration: `op` comes
   // off the wire, and with a plain object literal SQUAD_OPS['constructor'] is
@@ -1146,13 +1169,13 @@ export function createSocial({
     // the code frame still says the squad is live (D-BLOCK-2 A, accepted).
     // By ws.userId: a block can name a guest's anonymous account.
     // Everything below is computed AFTER the read, from the squads as they are.
-    // The read is settledBlocks: a block landing while it is out is read
-    // again (the block epoch), and one that will not settle refuses the join.
+    // A block naming the joiner that lands while the read is out is added
+    // from the recent-blocks log; a read the log cannot complete refuses.
     const acct = wireId(ws.userId);
     let hidden = null;
     if (isUuid(acct)) {
       const gen = ws.authGen;
-      const b = await settledBlocks(acct);
+      const b = await landedBlocks(acct);
       // Another account, or a closed socket, by now: act on nothing (a
       // closed socket's row would hold a dead socket no window sweeps).
       if (ws.authGen !== gen || ws.readyState !== 1) return;
@@ -1162,9 +1185,9 @@ export function createSocial({
     const from = squadKey(ws);
     const olds = squadsOfCaller(ws, from);
     // THE ACCOUNT IS ALREADY STANDING IN THIS SQUAD AS A GUEST ROW whose
-    // socket has since signed in as it — the one state claimOnSignIn leaves
-    // alone, because the account was in another squad at the time. Joining
-    // would put it here twice. Refused BEFORE anything moves, so the squad
+    // socket has since signed in as it — left so by claimOnSignIn when the
+    // account was in another squad at the time, and by the sign-in door
+    // until its read lets the account in. Joining would put it here twice. Refused BEFORE anything moves, so the squad
     // the account is in now keeps it (task 5's fix pass).
     const me = identityKey(ws);
     const target = squads.get(codeOf(msg.code));
@@ -1393,7 +1416,11 @@ export function createSocial({
     // a dropped member is not ready (design 4.3), so the ready gate below
     // would answer every such start `not_ready` — true, but not the reason:
     // they cannot ready from a socket that is gone. This names who is missing.
-    const off = sq.members.findIndex((m) => !(m.ws && m.ws.readyState === 1 && m.dropAt == null));
+    //
+    // A ROW THE SIGN-IN DOOR IS STILL READING FOR is not there yet either
+    // (D-BLOCK-3 F): its account's blocks are unread, and seating it could
+    // seat a blocked pair together.
+    const off = sq.members.findIndex((m) => !(m.ws && m.ws.readyState === 1 && m.dropAt == null) || doorOut.has(m));
     if (off >= 0) return squadReply(ws, msg, 'start', { error: 'member_offline', at: off });
     if (!sq.members.every((m) => (m === lead && sent) || m.ready === true)) return no('not_ready');
     // THE LAST GATE ON THE RACKS. Arming a mode stands down every member
@@ -1550,9 +1577,10 @@ export function createSocial({
         // identity is the connection, and it is not the connection that is
         // leaving. This matters most when an ANONYMOUS guest signs in:
         // server.js runs this hook first (the anonymous id differs from the
-        // new one), then onAuth, whose claimOnSignIn makes the row the
-        // account's. Taking it out here would lose the player their place a
-        // moment before it was theirs by name.
+        // new one), then onAuth, whose sign-in door reads the account's
+        // blocks and then makes the row the account's (claimOnSignIn).
+        // Taking it out here would lose the player their place a moment
+        // before it was theirs by name.
         if (typeof key !== 'string') return;
         const res = squads.leave(key);
         // pushSquadAfterExit: a roster for the survivors, or `ended` for the
@@ -1577,7 +1605,9 @@ export function createSocial({
   }
 
   // ---- one account, one row (task 5's fix pass) -----------------------------
-  // Called from onAuth, on every verified hello of a SIGNED-IN account. A
+  // Called from onAuth on a verified hello of a SIGNED-IN account — at once
+  // for the account the socket already stood for, and from the sign-in door
+  // once its read has let a NEW account in (D-BLOCK-3 F). A
   // guest row is keyed by the socket that joined, and that socket may since
   // have signed in: it is then an ACCOUNT standing in the squad under a key
   // no account-keyed rule can see — and the account's other device could
@@ -1604,38 +1634,51 @@ export function createSocial({
   //     into the squad where its guest row stands, and Start refuses a
   //     duplicate outright (duplicate_member) whatever the cause.
   //
+  // `rowKey` is the door's: the row it read for, followed by its key (see
+  // the door), because a socket that closed meanwhile no longer holds it.
+  // A closed socket is never put on the account's row: it would be a row
+  // no drop window sweeps.
+  //
   // Wrapped: onAuth runs inside server.js's hello callback, and a throw here
   // must not cost the socket its callsign lookup behind it.
-  function claimOnSignIn(ws) {
+  function claimOnSignIn(ws, rowKey) {
     try {
-      const key = squads.keyOfSocket(ws);
+      const key = rowKey !== undefined ? rowKey : squads.keyOfSocket(ws);
       if (key == null || typeof key === 'string') return;     // no guest row here
       const id = identityKey(ws);
       if (typeof id !== 'string') return;                     // still a guest
+      const here = squads.memberOf(key);
+      // The door is still reading for this row: it claims it when it lands.
+      if (!here || doorOut.has(here.member)) return;
       const adopted = squads.adoptGuest(key, id);
       if (adopted) { pushSquad(adopted, null, null).catch(() => {}); return; }
-      const here = squads.memberOf(key);
       const theirs = squads.memberOf(id);
-      if (!here || !theirs || theirs.squad !== here.squad) return;   // another squad: as it was
+      if (!theirs || theirs.squad !== here.squad) return;     // another squad: as it was
       const was = theirs.member.ws;
       const held = !!(was && was.readyState === 1);
       squads.leave(key);                                      // a guest row: no hand-off, no end
-      if (!held && squads.markResumed(id, ws)) clearDropSweep(id);
+      if (!held && ws.readyState === 1 && squads.markResumed(id, ws)) clearDropSweep(id);
       else endedElsewhere(ws);
       pushSquad(here.squad, null, null).catch(() => {});
     } catch { /* the hello goes on */ }
   }
 
-  // ---- the sign-in door (D-BLOCK-2 B) ---------------------------------------
+  // ---- the sign-in door (D-BLOCK-2 B, D-BLOCK-3 F and H) --------------------
   // No two identified accounts with a block row between them, either way, are
   // ever members of one squad. Join, invite and block keep that at their
   // doors, and THIS is the fourth: a socket that holds a row BECOMES an
-  // account here — the guest row claimOnSignIn has just adopted, or one it
-  // left standing because the account is in another squad — and neither the
-  // join that made the row nor claimOnSignIn read a block. Without this, a
-  // player refused by code could join before saying hello, or as a throwaway
-  // anonymous account, and then sign in: the row would stand for them, by
-  // name, beside the player who blocked them, and Start would seat the two.
+  // account here, and the join that made the row read no block for it.
+  // Without this, a player refused by code could join before saying hello,
+  // or as a throwaway anonymous account, and then sign in: the row would
+  // stand for them, by name, beside the player who blocked them, and Start
+  // would seat the two.
+  //
+  // THE DOOR READS BEFORE THE CLAIM (D-BLOCK-3 F). Until the account's
+  // blocks are read the row stays the nameless guest row it was: no adoption,
+  // so the account's name reaches nobody, and Start answers member_offline
+  // for it (doorOut), so nobody is seated beside it. Then: a block with any
+  // member removes it, still nameless; none, and claimOnSignIn runs as it
+  // always did.
   //
   // ONE WAY IN DOES NOT PASS HERE, and it is not this file's: server.js's
   // push-subscription sink sets ws.userId from a token on a socket that
@@ -1655,47 +1698,55 @@ export function createSocial({
   // a socket that is no longer this account — signed out, or signed in as
   // another, whose onAuth runs the door for that account — is left alone.
   // A socket that CLOSED meanwhile is not a cancel either: its row still
-  // stands for the account (by key, once adopted), so it goes, dropped, told
-  // nothing — D-BLOCK 5's rule. A socket with no account stands for nobody
-  // and is not read at all.
+  // stands for the account, so it is judged, dropped, told nothing —
+  // D-BLOCK 5's rule. A socket with no account stands for nobody and is not
+  // read at all. A later door for the same row (a sign-out and back in)
+  // takes the row over, and this one does nothing.
   //
-  // THE CHECK FOLLOWS THE ROW, NOT THE KEY IT HAD. A row is one object for
-  // its life, and adoption rekeys it IN PLACE: a row adopted while the read
-  // is out (an anonymous account upgraded, or the account's other row gone
-  // and a re-hello, which opens no door of its own) is still this row. The
-  // squad is looked up AFTER the read, from the row's key as it is then, and
-  // a row that has left, or moved, is left alone: the socket has moved on,
-  // and wherever it went it went through a door of its own.
+  // THE CHECK FOLLOWS THE ROW OBJECT: the squad is looked up AFTER the read,
+  // from the row's key as it is then, and a row that has left, or moved, is
+  // left alone: the socket has moved on, through a door of its own.
   //
-  // FAILS CLOSED. A read that fails, or will not settle (the block epoch),
-  // cannot say the row is safe, so the row goes: the join door refuses in
-  // the same two cases. Called from onAuth and never awaited there, so
+  // A FAILED READ FAILS TO GUEST (D-BLOCK-3 H). A read that throws, or that
+  // the recent-blocks log cannot complete, cannot let the account in, and
+  // is no reason to kick anybody: the row stays the nameless guest row it
+  // was, and `squadAs` is cleared so the account's next hello tries again.
+  // The teardown and join still count the socket as the account (rowsOf),
+  // so a block landing later still separates them.
+  //
+  // Called from onAuth, which learns synchronously whether the door took the
+  // row (and must not claim it). The read is never awaited there, so
   // everything is caught here: nothing is left to reject unhandled.
-  async function blocksOnSignIn(ws) {
+  const doorOut = new Map();            // row -> the door reading for it now
+  function signInDoor(ws) {
     try {
       const key = squads.keyOfSocket(ws);
-      if (key == null) return;
       const id = wireId(ws.userId);
-      if (!isUuid(id)) return;
-      const held = squads.memberOf(key);
-      if (!held) return;
-      const row = held.member;
+      const held = key == null || !isUuid(id) ? null : squads.memberOf(key);
+      if (!held) return false;
+      const mark = {};
+      doorOut.set(held.member, mark);
+      doorCheck(ws, id, held.member, mark);
+      return true;
+    } catch { return false; }
+  }
+  async function doorCheck(ws, id, row, mark) {
+    try {
       let b = null;
-      try { b = await settledBlocks(id); } catch { /* unread: not safe */ }
-      if (wireId(ws.userId) !== id) return;
+      try { b = await landedBlocks(id); } catch { /* unread */ }
+      if (doorOut.get(row) !== mark || wireId(ws.userId) !== id) return;
       const found = squads.memberOf(row.key);
       if (!found || found.member !== row) return;
-      const sq = found.squad;
-      if (b) {
-        const hidden = new Set([...b.blocked, ...b.blockedBy]);
-        // Every row, the account's own included: no account can block itself.
-        if (!anyRowOf(sq, hidden)) return;
-      }
+      doorOut.delete(row);
+      if (!b) { if (ws.squadAs === id) ws.squadAs = null; return; }
+      // Every row, the account's own included: no account can block itself.
+      if (!anyRowOf(found.squad, new Set([...b.blocked, ...b.blockedBy]))) { claimOnSignIn(ws, row.key); return; }
       const was = row.ws;
-      squads.removeMember(sq.code, row.key);
+      squads.removeMember(found.squad.code, row.key);
       safeSend(was, { type: 'squad', op: 'ended', reason: 'kicked' });
-      await pushSquadAfterExit(sq);
+      await pushSquadAfterExit(found.squad);
     } catch { /* the hello goes on */ }
+    finally { if (doorOut.get(row) === mark) doorOut.delete(row); }
   }
 
   // ---- squad resume (task 5; design 4.3 and 5.4) ----------------------------
@@ -1777,7 +1828,8 @@ export function createSocial({
   // row, and any row held by a live socket signed in as that account. The
   // second half is for the rows keyed by a CONNECTION rather than an account
   // — a guest row whose socket has since signed in (the two-squads state
-  // claimOnSignIn leaves standing), and an anonymous account's guest row. A
+  // claimOnSignIn leaves standing, and a row the sign-in door has not let
+  // in yet, or whose read failed), and an anonymous account's guest row. A
   // block and an invite name an ACCOUNT, and this is how they find the seat
   // that account is in when the seat is keyed by a socket.
   //
@@ -1881,14 +1933,14 @@ export function createSocial({
     // directions for every member (D-BLOCK 4). Every read is made for every
     // invite, so a refused or dropped one costs what a delivered one does.
     //
-    // A BLOCK THAT LANDS WHILE THE LEG IS OUT is read again (the block epoch,
-    // as join and the sign-in door read it): the frame would otherwise carry
-    // this squad's code to a player a member has just blocked, whose join the
-    // same code then refuses. One that will not settle drops the invite. Only
-    // when the epoch moved, so an ordinary invite costs the one leg.
-    const at = blockEpoch;
+    // A BLOCK NAMING THE INVITEE THAT LANDS WHILE THE LEG IS OUT is added
+    // from the recent-blocks log, as join and the sign-in door add theirs:
+    // the frame would otherwise carry this squad's code to a player a member
+    // has just blocked. The invitee's blocks are read again only when the
+    // log dropped entries the leg needed, and a second miss drops the invite.
+    const from = blockSeq;
     const [friendIds, blocks, self, first] = await Promise.all([store.friendIdsOf(me), store.blockIdsOf(me), store.profileById(me), store.blockIdsOf(to)]);
-    const theirs = blockEpoch === at ? first : await settledBlocks(to);
+    const theirs = withLanded(first, to, from) || await readLanded(to);
     if (ws.authGen !== gen) return;
     if (!friendIds.includes(to)) return no('not_friend');
     if (blocks.blocked.includes(to) || blocks.blockedBy.includes(to)) return no('not_friend');
@@ -2391,11 +2443,11 @@ export function createSocial({
   // blocker leaves theirs; what the others receive is a kick or a leave
   // (D-BLOCK): no frame names the block, though probing can still infer it
   // (D-BLOCK-2 A). Three other doors keep the pair apart afterwards — join,
-  // invite and signing in (blocksOnSignIn) — and the block epoch, bumped the
-  // moment the row lands, closes the race between a block and a join, an
-  // invite or a sign-in whose block read was already out. One way in is not
-  // this file's and does not pass them: server.js's push-subscription sink
-  // (see blocksOnSignIn).
+  // invite and signing in (the sign-in door) — and the recent-blocks log,
+  // written the moment the row lands, closes the race between a block and
+  // a join, an invite or a sign-in whose block read was already out. One way
+  // in is not this file's and does not pass them: server.js's
+  // push-subscription sink (see the sign-in door).
   //
   // WHO IS BLOCKING IS CAPTURED ON ENTRY (D-BLOCK-2 D): the account, before
   // the first await. Every write, the teardown and the friends pushes act
@@ -2512,11 +2564,11 @@ export function createSocial({
         if (!who) outcome = { type: 'block', op, error: 'no_such_user' };
         else {
           await store.addBlock(blocker, id);
-          // THE BLOCK EPOCH MOVES IN THE SAME TURN THE ROW LANDS, before the
-          // teardown: a join or a sign-in whose block read is out now reads
-          // again (see blockEpoch).
-          blockEpoch++;
           wrote = true;
+          // LOGGED IN THE SAME TURN THE ROW LANDS, before the teardown: a
+          // join, sign-in or invite whose block read is out adds it (see
+          // blockLog).
+          logBlock(blocker, id);
           await store.removeFriendship(blocker, id);
           await store.deleteRequest(blocker, id);
           await store.deleteRequest(id, blocker);
