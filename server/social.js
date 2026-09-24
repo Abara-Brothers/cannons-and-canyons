@@ -1036,7 +1036,11 @@ export function createSocial({
     // Held BEFORE the removal: kick() takes the row off the squad, and a
     // player who is no longer in it is exactly the one who has to be told.
     const victim = target.ws;
-    const res = squads.kick(sq.code, identityKey(ws), target.key);
+    // sq.leader, because ledSquad has just established that this caller IS
+    // the leader, on both halves. Passing anything else would make the
+    // machine a second, partial copy of that rule, and one that could hide a
+    // broken half of ledSquad from every test of it.
+    const res = squads.kick(sq.code, sq.leader, target.key);
     if (!res.ok) return squadReply(ws, msg, 'kick', { error: res.error });
     if (victim) safeSend(victim, { type: 'squad', op: 'ended', reason: 'kicked' });
     await pushSquad(sq, ws, msg);
