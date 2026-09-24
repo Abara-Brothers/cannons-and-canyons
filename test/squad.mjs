@@ -2922,6 +2922,15 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     return { all, schedule, pending, fire, force };
   };
   const flush5 = () => new Promise((r) => setImmediate(r));
+  // true once `p` settles, false if it has not within fifty macrotask turns —
+  // so a read that is never entered fails its assertion instead of leaving
+  // the file hanging on an await that nothing will ever settle.
+  const within5 = async (p) => {
+    let done = false;
+    p.then(() => { done = true; }, () => { done = true; });
+    for (let i = 0; i < 50 && !done; i++) await flush5();
+    return done;
+  };
   const NAMES5 = { [LEAD]: 'Anvil Six', [MEM]: 'Bunker Nine', [THIRD]: 'Crater Two', [FOURTH]: 'Delta Four' };
   // profilesByIds answers the three columns server/store.js really selects,
   // and nothing else. `gate`, when set, holds the read until it resolves, and
@@ -3364,6 +3373,285 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
       && all.filter((r) => r.guest).length === 1)
       ok(`(d11b) signed out, then joined ${where} as a guest: exactly one row for that socket, a guest row, and the account is in no squad`);
     else fail(`(d11b) ${where}: answered ${JSON.stringify(got)}; rosters ${JSON.stringify([ids5(x), ids5(y)])}`);
+  }
+
+  // ---- (d12) resume ---------------------------------------------------------
+  // THE WIRE CONTRACT: a live squad answers the `state` snapshot as this
+  // socket must see it (squadFrame: `you` is its row), with the request's id;
+  // anything else answers exactly { type:'squad', op:'gone', id } and carries
+  // nothing. Not in SQUAD_LINKED: a guest is answered, never told to sign in.
+  const GONE = (id) => ({ type: 'squad', op: 'gone', id });
+  {
+    // THE ORDINARY POST-MATCH PATH (design 5.4): nobody dropped, the bay
+    // renders home and asks. Exactly one frame back, and nobody else is sent
+    // anything, because nothing changed.
+    const S = social5(store5(), { cw: mkClockwork() });
+    const { wl, wm, code } = await pair5(S);
+    await S.handle(wm, { type: 'squad', op: 'resume', code, id: 'r1' });
+    const r = wm.rx[0] || {};
+    if (wm.rx.length === 1 && r.op === 'state' && r.code === code && r.id === 'r1' && r.you === 1 && same(ids5(r), [LEAD, MEM]) && wl.rx.length === 0)
+      ok('(d12) resume on the socket holding the row answers its snapshot once, id echoed, `you` its row, and tells nobody else');
+    else fail('(d12) ordinary resume: ' + JSON.stringify({ wm: wm.rx, wl: wl.rx }));
+    // THE BARE FRAME — the Squad box sends it when it remembers no code.
+    wm.rx.length = 0;
+    await S.handle(wm, { type: 'squad', op: 'resume', id: 'r0' });
+    if (wm.rx.length === 1 && wm.rx[0].op === 'state' && wm.rx[0].code === code && wm.rx[0].id === 'r0')
+      ok('(d12) a bare resume, with no code, is answered with the squad the socket is in');
+    else fail('(d12) bare resume: ' + JSON.stringify(wm.rx));
+  }
+  {
+    // A GUEST'S POST-MATCH RESUME, ON THE SAME SOCKET: still a member, so the
+    // snapshot. Their key is the socket they are asking on.
+    const S = social5(store5(), { cw: mkClockwork() });
+    const { code } = await pair5(S);
+    const g = mkws5(null);
+    await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+    g.rx.length = 0;
+    await S.handle(g, { type: 'squad', op: 'resume', code, id: 'rg' });
+    const r = g.rx[0] || {};
+    if (g.rx.length === 1 && r.op === 'state' && r.you === 2 && r.id === 'rg' && r.members[2].guest === true)
+      ok('(d12) a guest resuming on the socket they joined on is answered their squad — no sign-in, no `gone`');
+    else fail('(d12) guest resume: ' + JSON.stringify(g.rx));
+    // deferred item 5: THE SOCKET'S OWN ROW FIRST. That guest signs in on the
+    // same socket (task 2's (h9): they keep acting on their guest row). By
+    // identity the socket is now THIRD, who is in no squad — a resume built
+    // on identity would answer `gone` to a member standing in the squad.
+    switch5(S, g, THIRD);
+    g.rx.length = 0;
+    await S.handle(g, { type: 'squad', op: 'resume', code, id: 'rh' });
+    const r2 = g.rx[0] || {};
+    if (g.rx.length === 1 && r2.op === 'state' && r2.code === code && r2.you === 2 && r2.members[2].guest === true)
+      ok('(d12) a guest who signed in mid-squad resumes the guest row their socket holds, not their new account\'s nothing');
+    else fail('(d12) signed-in guest resume: ' + JSON.stringify(g.rx));
+  }
+  {
+    // A DROPPED MEMBER COMES BACK: re-attached, the dot back for everyone,
+    // and the window that was armed for them stands down.
+    const cw = mkClockwork();
+    const S = social5(store5(), { cw });
+    const { wl, wm, code } = await pair5(S);
+    close5(S, wm);
+    await flush5();
+    wl.rx.length = 0;
+    const wm2 = up5(S, mkws5(MEM));
+    await S.handle(wm2, { type: 'squad', op: 'resume', code, id: 'r2' });
+    const mine = wm2.rx.filter((f) => f.type === 'squad'), theirs = last5(wl, 'state');
+    const row = theirs && theirs.members.find((x) => x.id === MEM);
+    if (mine.length === 1 && mine[0].op === 'state' && mine[0].id === 'r2' && mine[0].you === 1 && mine[0].members[1].dropped === false
+      && sq5(wl).length === 1 && theirs.id === undefined && row && row.dropped === false && row.online === true)
+      ok('(d12) a dropped member resuming is re-attached: ONE answer to them, id echoed, and one push to the rest with the dot back');
+    else fail('(d12) resume after a drop: ' + JSON.stringify({ mine, theirs }));
+    if (cw.pending().length === 0) ok('(d12) and the window armed for them is cancelled');
+    else fail('(d12) the window is still armed: ' + cw.pending().length);
+    CLOCK5 += 60000;
+    cw.fire();
+    await flush5();
+    wl.rx.length = 0;
+    await S.handle(wl, { type: 'squad', op: 'resume', id: 'q' });
+    if (same(ids5(wl.rx[0]), [LEAD, MEM])) ok('(d12) and the window passing does not remove them');
+    else fail('(d12) a resumed member was swept: ' + JSON.stringify(wl.rx));
+    // THEY ARE THE ROW NOW: the squad reaches them, and their new socket
+    // closing drops them again.
+    close5(S, wm2);
+    await flush5();
+    const again = last5(wl, 'state');
+    if (again && again.members[1].dropped === true) ok('(d12) the new socket holds the row: its close drops them again');
+    else fail('(d12) re-attached row: ' + JSON.stringify(again));
+  }
+  {
+    // A BARE RESUME PICKS UP A DROPPED ROW TOO — the reconnect of a device
+    // that never stored a code. Nobody else holds the row.
+    const S = social5(store5(), { cw: mkClockwork() });
+    const { wl, wm } = await pair5(S);
+    close5(S, wm);
+    await flush5();
+    const wm2 = up5(S, mkws5(MEM));
+    await S.handle(wm2, { type: 'squad', op: 'resume', id: 'rb' });
+    const r = wm2.rx.find((f) => f.id === 'rb') || {};
+    if (r.op === 'state' && r.you === 1 && r.members[1].dropped === false && last5(wl, 'state').members[1].dropped === false)
+      ok('(d12) a bare resume from the account re-attaches a row nobody is holding');
+    else fail('(d12) bare resume after a drop: ' + JSON.stringify(r));
+  }
+  {
+    // 'gone': a real code this account is not a member of, in no squad at
+    // all. Answering that squad's roster would hand strangers' callsigns to
+    // anyone who can guess four characters.
+    const S = social5(store5(), { cw: mkClockwork() });
+    const { code } = await pair5(S);
+    const wt = up5(S, mkws5(THIRD));
+    await S.handle(wt, { type: 'squad', op: 'resume', code, id: 'r3' });
+    await S.handle(wt, { type: 'squad', op: 'resume', id: 'r4' });
+    if (same(wt.rx, [GONE('r3'), GONE('r4')]))
+      ok('(d12) a real code this account is not in answers exactly gone, and so does a bare resume from nobody\'s member');
+    else fail('(d12) a non-member was answered: ' + JSON.stringify(wt.rx));
+    // A GUEST ON A NEW SOCKET: a guest's key was the socket that went.
+    const g = mkws5(null);
+    await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+    close5(S, g);
+    const g2 = mkws5(null);
+    await S.handle(g2, { type: 'squad', op: 'resume', code, id: 'r5' });
+    if (same(g2.rx, [GONE('r5')])) ok('(d12) a guest reconnecting on a new socket is answered gone — a guest can never resume');
+    else fail('(d12) a guest resumed: ' + JSON.stringify(g2.rx));
+  }
+  {
+    // A STALE CODE (task 8's C1): the device remembers X, the account has
+    // since moved to Y on another device. The answer is Y — the squad the
+    // player is really in — never X's roster, and never a false `gone`.
+    const S = social5(store5(), { cw: mkClockwork() });
+    const { code: X, wm } = await pair5(S);
+    const wt = up5(S, mkws5(THIRD));
+    await S.handle(wt, { type: 'squad', op: 'create' });
+    const Y = last5(wt, 'state').code;
+    await S.handle(wm, { type: 'squad', op: 'join', code: Y });
+    const wm2 = up5(S, mkws5(MEM));
+    await S.handle(wm2, { type: 'squad', op: 'resume', code: X, id: 'r6' });
+    const r = wm2.rx.find((f) => f.id === 'r6') || {};
+    if (r.op === 'state' && r.code === Y && same(ids5(r), [THIRD, MEM]) && !JSON.stringify(r).includes(LEAD))
+      ok('(d12) a stale code is answered with the squad the account is really in — never the named squad\'s roster');
+    else fail('(d12) stale code: ' + JSON.stringify(r));
+  }
+
+  // ---- (d12b) A SECOND DEVICE: a bare resume looks, a named one takes over -
+  // Resume is how a device takes the account's row (task 4's wrong_device
+  // waits on it). A resume that NAMES the squad takes the row even from a
+  // socket that still looks live — the engine's own rule for a seat, because
+  // a proxy can hold a dead socket open for twenty seconds. A bare resume
+  // names nothing: it is answered as a second device and moves nothing, so a
+  // device merely opening does not pull the squad off the one in use.
+  {
+    const S = social5(store5(), { cw: mkClockwork(), seatSquad: () => ({ ok: false, error: 'refused' }) });
+    const { wl, wm, code } = await pair5(S);
+    const wm2 = up5(S, mkws5(MEM));
+    await S.handle(wm2, { type: 'squad', op: 'resume', id: 'b1' });
+    const look = wm2.rx.find((f) => f.id === 'b1') || {};
+    wl.rx.length = 0; wm.rx.length = 0; wm2.rx.length = 0;
+    await S.handle(up5(S, mkws5(THIRD)), { type: 'squad', op: 'join', code: 'ZZZZ' });  // nothing
+    await S.handle(wl, { type: 'squad', op: 'mode', mode: 'duel' });                      // a change
+    if (look.op === 'state' && look.you === 1 && sq5(wm).length === 1 && sq5(wm2).length === 0)
+      ok('(d12b) a bare resume from a second device is shown the squad, and the row stays on the first device');
+    else fail('(d12b) bare second-device resume: ' + JSON.stringify({ look, first: wm.rx, second: wm2.rx }));
+    wm.rx.length = 0;
+    await S.handle(wm2, { type: 'squad', op: 'resume', code, id: 'b2' });
+    const took = wm2.rx.find((f) => f.id === 'b2') || {};
+    const told = sq5(wm);
+    await S.handle(wl, { type: 'squad', op: 'mode', mode: 'duel' });
+    if (took.op === 'state' && took.you === 1 && same(told, [{ type: 'squad', op: 'ended', reason: 'elsewhere' }])
+      && sq5(wm2).filter((f) => f.id === undefined).length === 1)
+      ok('(d12b) a resume naming the squad takes the row: the old device is told `ended: elsewhere` and nothing more, the new one is pushed from now on');
+    else fail('(d12b) take-over: ' + JSON.stringify({ took, old: sq5(wm), fresh: sq5(wm2) }));
+    // AND THE OLD DEVICE CLOSING NOW DROPS NOBODY: it holds no row.
+    wl.rx.length = 0;
+    close5(S, wm);
+    await flush5();
+    if (sq5(wl).length === 0) ok('(d12b) the old device closing afterwards drops nobody');
+    else fail('(d12b) the old device dropped the member: ' + JSON.stringify(wl.rx));
+  }
+  {
+    // A LEADER WHO RELOADED, with the old socket still looking open: task 4
+    // answers wrong_device until the new socket holds the leader's row.
+    // After a resume naming the squad it does, and Start reaches its gates.
+    const seated = [];
+    const S = social5(store5(), { cw: mkClockwork(), seatSquad: (seats) => { seated.push(seats.length); return { ok: false, error: 'refused' }; } });
+    const { wl, wm, code } = await pair5(S);
+    const wl2 = up5(S, mkws5(LEAD));
+    await S.handle(wl2, { type: 'squad', op: 'start', id: 's1' });
+    const before = (wl2.rx.find((f) => f.id === 's1') || {}).error;
+    await S.handle(wl2, { type: 'squad', op: 'resume', code, id: 'rl' });
+    await S.handle(wm, { type: 'squad', op: 'ready', ready: true, loadout: RACK5 });
+    await S.handle(wl2, { type: 'squad', op: 'start', loadout: RACK5, id: 's2' });
+    const after = wl2.rx.find((f) => f.id === 's2') || {};
+    if (before === 'wrong_device' && after.error === 'refused' && seated.length === 1 && same(sq5(wl), [{ type: 'squad', op: 'ended', reason: 'elsewhere' }]))
+      ok('(d12b) a reloaded leader is wrong_device until their resume takes the row, and then Start from the new socket goes through to the seating');
+    else fail('(d12b) reloaded leader: ' + JSON.stringify({ before, after, seated, oldDevice: sq5(wl) }));
+  }
+
+  // ---- (d13) A SIGN-OUT INSIDE THE NAME READ CANCELS THE ANSWER ------------
+  // ws.authGen is the cancel token for anything async hung on a socket
+  // (server.js's auth sink). The snapshot waits on a profile read; a sign-out
+  // landing inside it means the socket is no longer the account whose squad
+  // this is, and its client has already reset. The store is GATED so the
+  // sign-out lands inside the read, not before the resume has started: the
+  // per-socket queue would otherwise run the resume after it.
+  {
+    const st = store5();
+    const S = social5(st, { cw: mkClockwork() });
+    const { wm, code } = await pair5(S);
+    const release = st.hold();
+    const p = S.handle(wm, { type: 'squad', op: 'resume', code, id: 'r7' });
+    const inside = await within5(st.entered);  // the resume is inside its name read
+    signOut5(S, wm);                           // server.js's order: hook, generation, id
+    const before = wm.rx.length;
+    release();
+    await p;
+    await flush5();
+    if (inside && wm.rx.length === before && !wm.rx.some((f) => f.id === 'r7'))
+      ok('(d13) a sign-out inside the snapshot read cancels the answer — nothing at all reaches a socket that has left the account');
+    else fail('(d13) the answer was sent anyway: ' + JSON.stringify({ inside, sent: wm.rx.slice(before) }));
+  }
+  {
+    // A KICK INSIDE THE READ (no sign-out): the socket is in no row of this
+    // squad by the time the frame is built — squadFrame's `you` of -1 — and
+    // is answered gone rather than handed the roster it was just removed from.
+    const st = store5();
+    const S = social5(st, { cw: mkClockwork() });
+    const { wl, wm, code } = await pair5(S);
+    const release = st.hold();
+    const p = S.handle(wm, { type: 'squad', op: 'resume', code, id: 'r8' });
+    const inside = await within5(st.entered);
+    const k = S.handle(wl, { type: 'squad', op: 'kick', id: MEM });
+    release();
+    await p; await k;
+    await flush5();
+    const answer = wm.rx.find((f) => f.id === 'r8');
+    if (inside && same(answer, GONE('r8')) && !wm.rx.some((f) => f.op === 'state'))
+      ok('(d13) a member kicked while their resume was reading names is answered gone, never the roster with you: -1');
+    else fail('(d13) kicked mid-resume: ' + JSON.stringify({ inside, rx: wm.rx }));
+  }
+  {
+    // THE SQUAD ENDS INSIDE THE READ: a guest asks, and the only account
+    // leaves. The ended squad still carries the guest on its list (task 2
+    // keeps it so they can be told), so `you` is still a real index — only
+    // the squad being gone stops a dead roster going out as the answer.
+    const st = store5();
+    const S = social5(st, { cw: mkClockwork() });
+    const wl = up5(S, mkws5(LEAD));
+    await S.handle(wl, { type: 'squad', op: 'create' });
+    const code = last5(wl, 'state').code;
+    const g = mkws5(null);
+    await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+    g.rx.length = 0;
+    const release = st.hold();
+    const p = S.handle(g, { type: 'squad', op: 'resume', code, id: 'r11' });
+    const inside = await within5(st.entered);
+    await S.handle(wl, { type: 'squad', op: 'leave' });
+    release();
+    await p;
+    await flush5();
+    const answer = g.rx.find((f) => f.id === 'r11');
+    if (inside && same(answer, GONE('r11')) && same(sq5(g, 'ended'), [{ type: 'squad', op: 'ended', reason: 'no_leader' }]) && sq5(g, 'state').length === 0)
+      ok('(d13) a squad that ends while a guest\'s resume reads names answers gone — the guest is told it ended, never shown it alive');
+    else fail('(d13) ended mid-resume: ' + JSON.stringify({ inside, rx: g.rx }));
+  }
+
+  // ---- (d14) AFTER A RESTART EVERY RESUME ANSWERS GONE ---------------------
+  // A restart is a new process with new memory; in process, a SECOND layer:
+  // the same store, the same frame, nothing shared. Both arms are asserted —
+  // a resume hard-wired to 'gone' fails the first, and squad state leaking
+  // between instances (a Map hoisted to module scope) fails the second.
+  {
+    const S1 = social5(store5(), { cw: mkClockwork() });
+    const { wl, code } = await pair5(S1);
+    await S1.handle(wl, { type: 'squad', op: 'resume', code, id: 'r9' });
+    const live = wl.rx.find((f) => f.id === 'r9') || {};
+    if (live.op === 'state' && live.code === code) ok('(d14) the frame against the live layer answers the snapshot');
+    else fail('(d14) the live arm: ' + JSON.stringify(live));
+    const S2 = social5(store5(), { cw: mkClockwork() });   // the deploy
+    const w = up5(S2, mkws5(LEAD));
+    await S2.handle(w, { type: 'squad', op: 'resume', code, id: 'r9' });
+    await S2.handle(w, { type: 'squad', op: 'resume', id: 'r10' });
+    if (same(w.rx, [GONE('r9'), GONE('r10')]))
+      ok('(d14) the identical frame against a restarted layer answers gone, with no code and no roster, and so does a bare one');
+    else fail('(d14) a squad outlived the process: ' + JSON.stringify(w.rx));
   }
 
   // ---- (end of task 5) ----

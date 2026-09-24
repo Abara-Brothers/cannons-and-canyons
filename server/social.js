@@ -1390,6 +1390,87 @@ export function createSocial({
     } catch { /* the squad row waits for the next sweep; the close goes on */ }
   }
 
+  // A socket whose row has gone somewhere else — taken over by a resume, or
+  // removed by a leave, create or join from another device of the account.
+  // Its box is showing a squad it will no longer be pushed, and nothing else
+  // would ever tell it. `ended` because this device's squad has; `elsewhere`
+  // because the account's has not, necessarily.
+  const endedElsewhere = (w) => safeSend(w, { type: 'squad', op: 'ended', reason: 'elsewhere' });
+
+  // ---- squad resume (task 5; design 4.3 and 5.4) ----------------------------
+  // THE WIRE: the `state` snapshot as this socket must see it (squadFrame —
+  // `you` is its row), with the request's id, or EXACTLY
+  // { type:'squad', op:'gone', id } and nothing else. After a restart there
+  // is no squad at all — squads are memory by design — so every resume
+  // answers gone, and the box says "Your squad ended when the server
+  // restarted."
+  //
+  // NOT IN SQUAD_LINKED. A guest resuming on the socket they joined on is
+  // still a member and is answered their squad (design 5.4: the bay asks
+  // after every match). A guest on a new socket is answered gone by the
+  // lookup itself, since their key was the socket that went; refusing them
+  // 'sign_in' instead would put a sign-in sentence where the box's own
+  // answer belongs.
+  //
+  // WHICH SQUAD: the one this socket's row is in, else the one its account's
+  // row is in (squadKey's order). NEVER the squad a presented code names:
+  // answering a code the caller is not in would hand a roster of strangers'
+  // callsigns to anyone who can guess four characters, and a code the device
+  // remembers from before the account moved squads elsewhere would be
+  // answered `gone` although the player is in a squad right now. A bare
+  // frame — no code — is how the box asks when it remembers none.
+  //
+  // WHEN THE ROW MOVES TO THIS SOCKET. A socket that holds no row may take the
+  // account's: always when no live socket holds it (the reconnect this op
+  // exists for — dropped, or its socket closing), and from a socket that
+  // still looks live ONLY when the frame names this squad's code. That is the
+  // engine's own rule for a seat — the token's holder takes it over, because
+  // a proxy can hold a dead socket open for twenty seconds — and it is what
+  // task 4's wrong_device waits on. A bare resume names nothing: it is
+  // answered as a second device and moves nothing, so a device merely
+  // opening the app does not pull the squad off the one in use. The device
+  // the row leaves is told.
+  async function squadResume(ws, msg) {
+    const own = squads.keyOfSocket(ws);
+    const key = own != null ? own : identityKey(ws);
+    const sq = squads.ofUser(key);
+    if (!sq) return squadReply(ws, msg, 'gone', {});
+    let back = false;
+    if (own == null) {
+      const m = sq.members.find((x) => x.key === key);
+      const held = m && m.ws && m.ws.readyState === 1;
+      if (m && (!held || codeOf(msg.code) === sq.code)) {
+        const was = m.ws, dropped = m.dropAt !== null;
+        // markResumed is by account only and never gives a socket a second
+        // row; `own == null` has already established this socket holds none.
+        if (squads.markResumed(key, ws)) {
+          clearDropSweep(key);
+          back = dropped;
+          if (was && was !== ws) endedElsewhere(was);
+        }
+      }
+    }
+    // ws.authGen IS THE CANCEL (server.js's auth sink bumps it on a sign-out
+    // and on every hello). The snapshot waits on a profile read; a sign-out,
+    // or a hello for another account, landing inside it means this socket is
+    // no longer the account whose squad this is, and its client has reset.
+    const gen = ws.authGen;
+    const frame = await squadFrame(sq, ws);
+    const live = squads.has(sq.code);
+    // A MEMBER WHO WAS DROPPED IS BACK, and the dot beside them has to come
+    // back on every other screen — whatever becomes of this socket's own
+    // answer, because the re-attach has already happened. From the same
+    // snapshot: one name read for the whole resume. Everyone else first; the
+    // answer, the one send here that can throw, last (pushSquad's order).
+    if (back && live) for (const m of sq.members) if (m.ws && m.ws !== ws) safeSend(m.ws, { ...frame, you: youIn(sq, m.ws) });
+    if (ws.authGen !== gen) return;
+    // NO ROW OF THIS SQUAD IS THIS SOCKET'S ANY MORE — kicked, or the squad
+    // ended, while the names were read. The roster it has just been removed
+    // from is not its to see: gone.
+    if (!live || frame.you < 0) return squadReply(ws, msg, 'gone', {});
+    reply(ws, msg, frame);
+  }
+
   SQUAD_OPS.create = squadCreate;
   SQUAD_OPS.join = squadJoin;
   SQUAD_OPS.leave = squadLeave;
@@ -1397,6 +1478,8 @@ export function createSocial({
   SQUAD_OPS.ready = squadReady;
   SQUAD_OPS.mode = squadMode;
   SQUAD_OPS.start = squadStart;
+  // NOT added to SQUAD_LINKED — see squadResume.
+  SQUAD_OPS.resume = squadResume;
 
   const skinOf = (row) => (row && typeof row.skin === 'string' && SKIN_IDS.has(row.skin) ? row.skin : null);
 
