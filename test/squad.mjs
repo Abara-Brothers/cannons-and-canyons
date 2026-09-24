@@ -4170,8 +4170,11 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   const t6ws = (userId, isGuest = false) => ({ readyState: 1, userId, isGuest, rx: [] });
   // WHAT THE PUSH SEAM WAS ASKED FOR. Task 7 replaces the default inside
   // server.js; recording the call here is what lets the payload be asserted
-  // where a wrong code or a missing size is visible.
+  // where a wrong code or a missing size is visible. PUSHES holds the calls
+  // that SEND; DRY6 the dry runs (`{ dryRun: true }`, D-BLOCK-2 E revised),
+  // which send nothing and answer what a real call would.
   const PUSHES = [];
+  const DRY6 = [];
   let pushAnswer = true;
   // EVERY FRAME SENT, IN ORDER, across all sockets — what a twin world
   // compares when the order BETWEEN players matters (a kick's victim frame
@@ -4182,7 +4185,7 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   const mkSocial6 = (store, extra = {}) => createSocial({
     seats: MODE_SEATS, teeIds: TEE_IDS, validRack: validRackFor,
     schedule: () => () => {},
-    pushInvite: async (to, payload) => { PUSHES.push([to, payload]); return pushAnswer; },
+    pushInvite: async (to, payload, opts) => { (opts && opts.dryRun === true ? DRY6 : PUSHES).push([to, payload]); return pushAnswer; },
     ...extra,
     store, terms: [], now: () => CLOCK6,
     send: (ws, f) => {
@@ -4213,6 +4216,36 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     p.then(() => { done = true; }, () => { done = true; });
     for (let i = 0; i < 50 && !done; i++) await new Promise((r) => setImmediate(r));
     return done;
+  };
+  // A READ ANSWERED FROM A SNAPSHOT AND DELIVERED LATE: the NEXT call to
+  // method `m` computes its answer from the store as it is NOW, then waits
+  // until released — a read that went out before a write and lands after it.
+  // Later calls are ordinary again. restore() disarms one never called, so
+  // a read that never came cannot catch some later, unrelated one.
+  const stale6 = (st, m) => {
+    const real = st[m];
+    let release, entered;
+    const open = new Promise((r) => { release = r; });
+    const inside = new Promise((r) => { entered = r; });
+    const wrap = async function (...a) { st[m] = real; const v = await real.apply(st, a); entered(); await open; return v; };
+    st[m] = wrap;
+    return { release, inside, restore: () => { if (st[m] === wrap) st[m] = real; } };
+  };
+  // server.js's hello, in its order: the generation (bumped as verification
+  // starts), the close hook when the socket was some other account, the
+  // identity, then onAuth.
+  const hello6 = (S, w, id, isGuest = false) => {
+    w.authGen = (w.authGen || 0) + 1;
+    if (w.userId && w.userId !== id) S.onClose(w);
+    w.userId = id; w.isGuest = isGuest; S.onAuth(w);
+  };
+  // Lets the layer's detached work (the sign-in check) run to the end.
+  const settle6 = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)); };
+  // Polls real time for `pred`, up to `ms` — for a check that waits on a timer.
+  const until6 = async (pred, ms = 3000) => {
+    const t0 = Date.now();
+    while (!pred() && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 5));
+    return pred();
   };
 
   // ---- (inv-a) an online friend gets the invite down every socket ----------
@@ -4631,11 +4664,14 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     clear6(...Object.values(w));
     return { st, S, w, code, mark: TRACE6.length };
   };
+  // A frame with its squad code blanked, so two worlds can be compared. ONLY
+  // A CODE THE FRAME CARRIES is blanked: a frame without one is compared as
+  // it is, so a code that appears where it should not is a difference.
+  const blank6 = (f) => ('code' in f ? { ...f, code: '-' } : f);
   // What `socks` received from `mark` on, in the order it was sent, each
   // frame tagged with its socket's place in the list and its code blanked.
-  const seq6 = (mark, socks) => TRACE6.slice(mark).filter(([w]) => socks.includes(w)).map(([w, f]) => socks.indexOf(w) + ':' + JSON.stringify({ ...f, code: '-' }));
-  // A frame with its squad code blanked, so two worlds can be compared.
-  const bare6 = (f) => (f ? JSON.stringify({ ...f, code: '-' }) : null);
+  const seq6 = (mark, socks) => TRACE6.slice(mark).filter(([w]) => socks.includes(w)).map(([w, f]) => socks.indexOf(w) + ':' + JSON.stringify(blank6(f)));
+  const bare6 = (f) => (f ? JSON.stringify(blank6(f)) : null);
 
   // ---- (blk-a) the blocker LEADS: the blocked party leaves the squad -------
   {
@@ -4662,10 +4698,11 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     if (st.blocks.has(A + '>' + B) && st.friends.size === 0)
       ok('(blk-a) and the shipped half is untouched: the block row stands and the friendship is gone');
     else fail('(blk-a) blocks ' + JSON.stringify([...st.blocks]) + ' friends ' + JSON.stringify([...st.friends]));
-    // INDISTINGUISHABLE FROM A KICK AND AN UNFRIEND (D-BLOCK). A twin world
-    // where the leader kicks B and then unfriends them: every frame B and the
-    // rest of the squad receive, in the order sent across both, is the same
-    // frame, byte for byte but for the code.
+    // THE FRAMES OF A KICK AND AN UNFRIEND (D-BLOCK). A twin world where the
+    // leader kicks B and then unfriends them: every frame B and the rest of
+    // the squad receive, in the order sent across both, is the same frame,
+    // byte for byte but for the code. No frame names the block; that is the
+    // bar, and probing can still infer one (D-BLOCK-2 A, accepted).
     const t = await world6(A, [B, C]);
     await t.S.handle(t.w[A], { type: 'squad', op: 'kick', id: B });
     await t.S.handle(t.w[A], { type: 'friend', op: 'remove', id: B });
@@ -4889,9 +4926,10 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   }
 
   // ---- (blk-i) lifting a block moves nothing, and says nothing -------------
-  // A block row is written UNDER a shared squad here — the state a re-join
-  // by code leaves behind today, since join does not consult blocks — so the
-  // remove path is the only thing that could move a roster.
+  // A block row is written straight into the store UNDER a shared squad here
+  // — a state no handler now produces (the teardown runs on add, and join and
+  // invite refuse a blocked pair) — so the remove path is the only thing that
+  // could move a roster.
   {
     const { st, S, w, code } = await world6(A, [B, C]);
     await st.addBlock(A, B);
@@ -5092,10 +5130,14 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   // ---- (inv-l) a block with ANOTHER member drops the invite, silently ------
   // D-BLOCK 4. A invites their friend B; C, in A's squad, and B have a block
   // row between them, either way. Nothing reaches B, by socket or by push,
-  // nothing reaches C, and A is answered exactly as for a delivered invite:
-  // online if B holds a live socket, otherwise none.
+  // nothing reaches C, and A is answered exactly what a delivered invite
+  // would be: online if B holds a live socket, otherwise what the push seam
+  // answers in its DRY-RUN form — here, where the seam says yes, push
+  // (D-BLOCK-2 E, as the owner revised it). The dry run is the one seam call,
+  // and it sends nothing.
   {
     const drops = [];
+    pushAnswer = true;
     for (const dir of ['member blocked invitee', 'invitee blocked member']) {
       for (const online of [true, false]) {
         const st = t6store(ROWS6);
@@ -5106,16 +5148,17 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
         await join6(S, wc, code, 'Crater Two');
         if (dir === 'member blocked invitee') await st.addBlock(C, B); else await st.addBlock(B, C);
         const wb = online ? up6(S, B) : t6ws(B);
-        clear6(wa, wb, wc); PUSHES.length = 0;
+        clear6(wa, wb, wc); PUSHES.length = 0; DRY6.length = 0;
         await S.handle(wa, { type: 'squad', op: 'invite', to: B, id: 'q' });
-        const want = { type: 'squad', op: 'invite', ok: true, delivered: online ? 'online' : 'none', id: 'q' };
-        if (!(same6(wa.rx, [want]) && !wb.rx.length && !wc.rx.length && PUSHES.length === 0)) drops.push({ dir, online, a: wa.rx, b: wb.rx, c: wc.rx, PUSHES: [...PUSHES] });
+        const want = { type: 'squad', op: 'invite', ok: true, delivered: online ? 'online' : 'push', id: 'q' };
+        const dry = online ? [] : [[B, { code, from: 'Anvil Six', size: 2, max: 4 }]];
+        if (!(same6(wa.rx, [want]) && !wb.rx.length && !wc.rx.length && PUSHES.length === 0 && same6(DRY6, dry))) drops.push({ dir, online, a: wa.rx, b: wb.rx, c: wc.rx, PUSHES: [...PUSHES], DRY6: [...DRY6] });
       }
     }
-    if (!drops.length) ok('(inv-l) a block between the invitee and another member, either way, drops the invite: no frame, no push, and the ordinary answer');
+    if (!drops.length) ok('(inv-l) a block between the invitee and another member, either way, drops the invite: no frame, no push, and the answer a real invite gets — offline, from the seam\'s dry run');
     else fail('(inv-l) dropped invite: ' + JSON.stringify(drops));
     // THE SAME READS: a delivered, a dropped and a refused invite make the
-    // same store calls, so none of them is told apart by what it costs.
+    // same store calls, so what they cost in the store is the same.
     const reads = [];
     for (const kind of ['delivered', 'dropped', 'refused']) {
       const st = t6store(ROWS6);
@@ -5338,6 +5381,579 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     if (inside && !invited6(wb).length && PUSHES.length === 0)
       ok('(inv-k) a socket that became a squad-mate during the reads invites nobody under the old account\'s name');
     else fail('(inv-k) same-squad identity change: ' + JSON.stringify({ inside, answer: ans6(wa, 'k4'), b: wb.rx, PUSHES }));
+  }
+
+  // ===== FIX PASS, WORKFLOW ROUND 1: D-BLOCK-2 ================================
+
+  // ---- (inv-l ii) the drop is decided on the world AFTER the reads ---------
+  // Four ways the drop could be asked of the wrong world, one case each: the
+  // members as they were, the row keys only, presence as it was, and a drop
+  // decided before the second look at the squad.
+  {
+    const bad = [];
+    pushAnswer = true;
+    {
+      // (a) A member the invitee has a block with JOINS while the reads are
+      // out: the drop reads the squad as it is now.
+      const st = t6store(ROWS6);
+      await st.addFriendship(A, B); await st.addBlock(C, B);
+      const S = mkSocial6(st);
+      const wa = up6(S, A), wb = up6(S, B), wc = up6(S, C);
+      const code = await create6(S, wa);
+      clear6(wa, wb); PUSHES.length = 0; DRY6.length = 0;
+      const gate = st.hold('friendIdsOf');
+      const pending = S.handle(wa, { type: 'squad', op: 'invite', to: B, id: 'a' });
+      const inside = await within6(gate.inside);
+      if (inside) await join6(S, wc, code, 'Crater Two');
+      gate.release(); await pending;
+      if (!(inside && same6(ans6(wa, 'a'), { type: 'squad', op: 'invite', ok: true, delivered: 'online', id: 'a' }) && !invited6(wb).length && !PUSHES.length && !DRY6.length))
+        bad.push({ joinedDuringReads: { inside, a: ans6(wa, 'a'), b: wb.rx } });
+    }
+    {
+      // (b) The member is a GUEST, on the anonymous account the invitee has
+      // blocked: matched through the row's socket, not only by row keys.
+      const st = t6store(ROWS6);
+      await st.addFriendship(A, B); await st.addBlock(B, GU);
+      const S = mkSocial6(st);
+      const wa = up6(S, A), wb = up6(S, B), wg = up6(S, GU, true);
+      const code = await create6(S, wa);
+      await join6(S, wg, code, 'Ghost');
+      clear6(wa, wb, wg);
+      await S.handle(wa, { type: 'squad', op: 'invite', to: B, id: 'b' });
+      if (!(same6(ans6(wa, 'b'), { type: 'squad', op: 'invite', ok: true, delivered: 'online', id: 'b' }) && !invited6(wb).length))
+        bad.push({ guestMember: { a: ans6(wa, 'b'), b: wb.rx } });
+    }
+    {
+      // (c) The squad FILLS while the reads are out, with a blocked member in
+      // it: full, as any invite to a full squad is. The drop comes after the
+      // second look, never instead of it.
+      const st = t6store(ROWS6);
+      await st.addFriendship(A, B); await st.addBlock(C, B);
+      const S = mkSocial6(st);
+      const wa = up6(S, A), wb = up6(S, B), wc = up6(S, C);
+      const code = await create6(S, wa);
+      await join6(S, wc, code, 'Crater Two');
+      clear6(wa, wb);
+      const gate = st.hold('friendIdsOf');
+      const pending = S.handle(wa, { type: 'squad', op: 'invite', to: B, id: 'c' });
+      const inside = await within6(gate.inside);
+      if (inside) for (const id of [D, E]) await join6(S, up6(S, id), code);
+      gate.release(); await pending;
+      if (!(inside && same6(ans6(wa, 'c'), { type: 'squad', op: 'invite', error: 'full', id: 'c' }) && !invited6(wb).length))
+        bad.push({ filledDuringReads: { inside, a: ans6(wa, 'c') } });
+    }
+    {
+      // (d) The invitee comes ONLINE while the reads are out: answered as a
+      // real invite to them now would be — online — and nothing reaches them.
+      const st = t6store(ROWS6);
+      await st.addFriendship(A, B); await st.addBlock(C, B);
+      const S = mkSocial6(st);
+      const wa = up6(S, A), wc = up6(S, C);
+      const code = await create6(S, wa);
+      await join6(S, wc, code, 'Crater Two');
+      clear6(wa); PUSHES.length = 0; DRY6.length = 0;
+      const gate = st.hold('friendIdsOf');
+      const pending = S.handle(wa, { type: 'squad', op: 'invite', to: B, id: 'd' });
+      const inside = await within6(gate.inside);
+      const wb = inside ? up6(S, B) : t6ws(B);
+      gate.release(); await pending;
+      if (!(inside && same6(ans6(wa, 'd'), { type: 'squad', op: 'invite', ok: true, delivered: 'online', id: 'd' }) && !wb.rx.length && !PUSHES.length && !DRY6.length))
+        bad.push({ cameOnline: { inside, a: ans6(wa, 'd'), b: wb.rx, PUSHES, DRY6 } });
+    }
+    if (!bad.length) ok('(inv-l) the drop is decided on the squad and the presence AFTER the reads, guest rows included, and after the second look');
+    else fail('(inv-l) drop on a stale world: ' + JSON.stringify(bad));
+  }
+
+  // ---- (inv-l iii) offline, with a seam that takes time and says yes -------
+  // A real invite to an offline friend and a dropped one each ask the seam
+  // ONCE — the real one to send, the dropped one as a dry run — and neither
+  // is answered before the seam is. So the two replies are byte-identical and
+  // go out at the same point, and the dropped one sends nothing.
+  {
+    const run = async (answer) => {
+      const SEAM = [];
+      let open;
+      const seamOpen = new Promise((r) => { open = r; });
+      const worlds = [];
+      for (const kind of ['real', 'dropped']) {
+        const st = t6store(ROWS6);
+        await st.addFriendship(A, B);
+        if (kind === 'dropped') await st.addBlock(C, B);
+        const S = mkSocial6(st, { pushInvite: async (to, payload, opts) => { SEAM.push([kind, to, blank6(payload), opts]); await seamOpen; return answer; } });
+        const wa = up6(S, A), wc = up6(S, C);
+        const code = await create6(S, wa);
+        await join6(S, wc, code, 'Crater Two');
+        clear6(wa, wc); st.calls.length = 0;
+        worlds.push({ kind, st, wa, wc, pending: S.handle(wa, { type: 'squad', op: 'invite', to: B, id: 'q' }) });
+      }
+      await settle6();
+      const early = worlds.map((x) => x.wa.rx.length);
+      open();
+      for (const x of worlds) await x.pending;
+      return { SEAM, early, worlds };
+    };
+    const yes = await run(true);
+    const [r, d] = yes.worlds;
+    const reply = { type: 'squad', op: 'invite', ok: true, delivered: 'push', id: 'q' };
+    const payload = { code: '-', from: 'Anvil Six', size: 2, max: 4 };
+    if (same6(yes.early, [0, 0]) && same6(r.wa.rx, [reply]) && same6(d.wa.rx, [reply]))
+      ok('(inv-l) offline: a real invite and a dropped one are both answered only once the seam has, and byte for byte alike (push)');
+    else fail('(inv-l) offline replies: ' + JSON.stringify({ early: yes.early, real: r.wa.rx, dropped: d.wa.rx }));
+    if (same6(yes.SEAM, [['real', B, payload, { dryRun: false }], ['dropped', B, payload, { dryRun: true }]]))
+      ok('(inv-l) offline: the seam is asked once each, with the same payload — to send for the real invite, as a dry run for the dropped one');
+    else fail('(inv-l) seam calls: ' + JSON.stringify(yes.SEAM));
+    if (same6(r.st.calls.slice().sort(), d.st.calls.slice().sort()) && !d.wc.rx.length)
+      ok('(inv-l) offline: the two make the same store reads, and the member the invitee blocked is told nothing');
+    else fail('(inv-l) offline reads: ' + JSON.stringify({ real: r.st.calls, dropped: d.st.calls, c: d.wc.rx }));
+    const no = await run(false);
+    const none = { type: 'squad', op: 'invite', ok: true, delivered: 'none', id: 'q' };
+    if (same6(no.worlds[0].wa.rx, [none]) && same6(no.worlds[1].wa.rx, [none]))
+      ok('(inv-l) offline: a seam with no device to reach answers none for both');
+    else fail('(inv-l) seam false: ' + JSON.stringify(no.worlds.map((x) => x.wa.rx)));
+  }
+
+  // ---- (inv-n) a seam that never answers cannot hold the socket's queue ----
+  // The seam is awaited inside the inviter's one-frame-at-a-time social
+  // queue, and a block waits in it. Past INVITE_PUSH_MS the invite is none,
+  // real or dropped alike, and the block behind it is answered.
+  {
+    const prev = process.env.SQUAD_INVITE_PUSH_MS;
+    process.env.SQUAD_INVITE_PUSH_MS = '30';
+    const bad = [];
+    for (const kind of ['real', 'dropped']) {
+      const st = t6store(ROWS6);
+      await st.addFriendship(A, B);
+      if (kind === 'dropped') await st.addBlock(C, B);
+      const S = mkSocial6(st, { pushInvite: () => new Promise(() => {}) });
+      const wa = up6(S, A), wc = up6(S, C);
+      const code = await create6(S, wa);
+      await join6(S, wc, code, 'Crater Two');
+      clear6(wa);
+      S.handle(wa, { type: 'squad', op: 'invite', to: B, id: 'q' });
+      S.handle(wa, { type: 'block', op: 'add', id: E });
+      const done = await until6(() => ans6(wa, 'q') && ans6(wa, E));
+      if (!(done && same6(ans6(wa, 'q'), { type: 'squad', op: 'invite', ok: true, delivered: 'none', id: 'q' }) && same6(ans6(wa, E), { type: 'block', op: 'add', ok: true, id: E })))
+        bad.push({ kind, rx: wa.rx });
+    }
+    if (prev === undefined) delete process.env.SQUAD_INVITE_PUSH_MS; else process.env.SQUAD_INVITE_PUSH_MS = prev;
+    if (!bad.length) ok('(inv-n) a push seam that never answers is none after its bound, real or dropped, and the block queued behind it is answered');
+    else fail('(inv-n) a hung seam: ' + JSON.stringify(bad));
+  }
+
+  // ---- (blk-o) D-BLOCK 5: the row a block removes was DROPPED at the time ---
+  // No frame can reach a socket that is gone, and a later resume answers
+  // exactly `gone` — what a kick while dropped leaves behind. Twin worlds.
+  {
+    // (i) The blocker LEADS, and the blocked member's socket is down. B's
+    // second device, holding no row, is live throughout.
+    const run = async (act) => {
+      const { S, w, code } = await world6(A, [B, C]);
+      const wb2 = up6(S, B);
+      w[B].readyState = 3; S.onClose(w[B]);
+      await settle6();
+      clear6(w[A], w[C], wb2);
+      const m = TRACE6.length;
+      await act(S, w);
+      const seq = seq6(m, [w[B], wb2, w[C]]);
+      const wb3 = up6(S, B);
+      await S.handle(wb3, { type: 'squad', op: 'resume', code, id: 'rs' });
+      await S.handle(w[C], { type: 'squad', op: 'resume', id: 'rc' });
+      return { wb2, seq, gone: ans6(wb3, 'rs'), roster: ans6(w[C], 'rc') };
+    };
+    const blk = await run((S, w) => S.handle(w[A], { type: 'block', op: 'add', id: B }));
+    const kick = await run(async (S, w) => { await S.handle(w[A], { type: 'squad', op: 'kick', id: B }); await S.handle(w[A], { type: 'friend', op: 'remove', id: B }); });
+    if (same6(ids6(blk.roster), [A, C]) && same6(blk.gone, { type: 'squad', op: 'gone', id: 'rs' }) && !got6(blk.wb2, 'squad').length)
+      ok('(blk-o) the leader blocks a member whose socket is down: the dropped row goes, no squad frame reaches any of their sockets, and a resume answers exactly gone');
+    else fail('(blk-o) blocked while dropped: ' + JSON.stringify({ roster: blk.roster, gone: blk.gone, b2: blk.wb2.rx }));
+    if (same6(blk.seq, kick.seq) && same6(blk.gone, kick.gone))
+      ok('(blk-o) and every frame the blocked player and the squad receive, and the gone, are a kick-while-dropped\'s and an unfriend\'s');
+    else fail('(blk-o) block vs kick while dropped: ' + JSON.stringify({ block: blk.seq, kick: kick.seq }));
+  }
+  {
+    // (ii) The blocker does NOT lead, their own row is dropped, and they block
+    // from a second device holding none.
+    const run = async (act) => {
+      const { S, w, code } = await world6(B, [A, C]);
+      w[A].readyState = 3; S.onClose(w[A]);
+      await settle6();
+      const wa2 = up6(S, A);
+      clear6(w[B], w[C], wa2);
+      const m = TRACE6.length;
+      await act(S, wa2);
+      const seq = seq6(m, [w[B], w[C]]);
+      const wa3 = up6(S, A);
+      await S.handle(wa3, { type: 'squad', op: 'resume', code, id: 'rs' });
+      await S.handle(w[C], { type: 'squad', op: 'resume', id: 'rc' });
+      return { wa2, seq, gone: ans6(wa3, 'rs'), roster: ans6(w[C], 'rc') };
+    };
+    const blk = await run((S, wa2) => S.handle(wa2, { type: 'block', op: 'add', id: B }));
+    const leave = await run(async (S, wa2) => { await S.handle(wa2, { type: 'squad', op: 'leave' }); await S.handle(wa2, { type: 'friend', op: 'remove', id: B }); });
+    if (same6(ids6(blk.roster), [B, C]) && blk.roster.leader === B && same6(blk.gone, { type: 'squad', op: 'gone', id: 'rs' }) && !got6(blk.wa2, 'squad').length)
+      ok('(blk-o) a blocker whose own row is dropped, blocking from another device, loses that row; the device is told nothing on the squad channel, and a resume answers gone');
+    else fail('(blk-o) blocker dropped: ' + JSON.stringify({ roster: blk.roster, gone: blk.gone, a2: got6(blk.wa2, 'squad') }));
+    if (same6(blk.seq, leave.seq))
+      ok('(blk-o) and the blocked leader and the squad receive exactly a leave\'s and an unfriend\'s frames');
+    else fail('(blk-o) block vs leave while dropped: ' + JSON.stringify({ block: blk.seq, leave: leave.seq }));
+  }
+
+  // ---- (blk-p) the blocker is the account that ASKED (D-BLOCK-2 D) ---------
+  {
+    // (i) The blocking device signs out while the block's writes are out. The
+    // block is the account's, and so is the squad it tears down, whose row
+    // sits on the account's other device.
+    const { st, S, w } = await world6(A, [B, C]);
+    const wa2 = up6(S, A);
+    const gate = st.hold('removeFriendship');
+    const pending = S.handle(wa2, { type: 'block', op: 'add', id: B });
+    const inside = await within6(gate.inside);
+    wa2.authGen = (wa2.authGen || 0) + 1; S.onClose(wa2); wa2.userId = null; wa2.isGuest = false;
+    gate.release(); await pending;
+    await S.handle(w[C], { type: 'squad', op: 'resume', id: 'rc' });
+    if (inside && same6(ids6(ans6(w[C], 'rc')), [A, C]) && same6(got6(w[B], 'squad'), [{ type: 'squad', op: 'ended', reason: 'kicked' }]) && st.blocks.has(A + '>' + B))
+      ok('(blk-p) a block whose device signs out mid-way still takes the blocked player out of the account\'s squad');
+    else fail('(blk-p) sign-out mid-block: ' + JSON.stringify({ inside, c: ans6(w[C], 'rc'), b: got6(w[B], 'squad'), blocks: [...st.blocks] }));
+  }
+  {
+    // (ii) The blocking socket says hello as ANOTHER account, D, mid-way. D
+    // leads a squad with B in it and blocked nobody: D's squad is not
+    // touched, D's requests are not deleted, and D is pushed nothing.
+    const st = t6store(ROWS6);
+    await st.addFriendship(A, B);
+    await st.addRequest(A, B); await st.addRequest(B, D);
+    const S = mkSocial6(st);
+    const wd = up6(S, D), wb = up6(S, B);
+    const Z = await create6(S, wd);
+    await join6(S, wb, Z, 'Bunker Nine');
+    const wx = up6(S, A);
+    clear6(wd, wb, wx);
+    const gate = st.hold('removeFriendship');
+    const pending = S.handle(wx, { type: 'block', op: 'add', id: B });
+    const inside = await within6(gate.inside);
+    hello6(S, wx, D);
+    gate.release(); await pending;
+    const told = { d: got6(wd, 'friends').length, b: got6(wb, 'squad') };
+    await S.handle(wd, { type: 'squad', op: 'resume', id: 'rz' });
+    if (inside && same6(ids6(ans6(wd, 'rz')), [D, B]) && !told.b.length && !told.d
+      && same6([...st.blocks], [A + '>' + B]) && same6([...st.requests], [B + '>' + D]))
+      ok('(blk-p) a socket that becomes another account mid-block blocks for the account that asked: the other account\'s squad, requests and panels are untouched');
+    else fail('(blk-p) hello mid-block: ' + JSON.stringify({ inside, z: ans6(wd, 'rz'), told, blocks: [...st.blocks], requests: [...st.requests] }));
+  }
+
+  // ===== D-BLOCK-2 C: THE BLOCK EPOCH ==========================================
+  // ---- (jn-e v) a block that lands while the join's read is out -----------
+  {
+    // The read was answered BEFORE the block landed and arrives AFTER it. The
+    // blocker's teardown ran while B was not in the squad yet and found
+    // nothing, so the join has to notice by itself.
+    const j = await joinWorld6();
+    const h = stale6(j.st, 'blockIdsOf');
+    const pending = j.S.handle(j.wb, { type: 'squad', op: 'join', code: j.code, id: 'j' });
+    const inside = await within6(h.inside);
+    if (inside) await j.S.handle(j.wa, { type: 'block', op: 'add', id: B });
+    h.release(); await pending;
+    await j.S.handle(j.wc, { type: 'squad', op: 'resume', id: 'r' });
+    await j.S.handle(j.wb, { type: 'squad', op: 'resume', id: 'rb' });
+    if (inside && same6(ans6(j.wb, 'j'), DEAD6('j')) && same6(ids6(ans6(j.wc, 'r')), [A, C]) && same6(ids6(ans6(j.wb, 'rb')), [B, D]))
+      ok('(jn-e) a block landing while the join\'s read is out is read again: refused as a dead code, and the pair is never co-members');
+    else fail('(jn-e) block during the read: ' + JSON.stringify({ inside, b: ans6(j.wb, 'j'), c: ans6(j.wc, 'r'), home: ans6(j.wb, 'rb') }));
+  }
+  {
+    // (v, b) THE EPOCH MOVES THE MOMENT THE ROW LANDS, before the rest of the
+    // block: the join's stale read comes back while the blocker's friendship
+    // delete is still out, and is still refused — never joined and then
+    // kicked by the teardown a moment later.
+    const j = await joinWorld6();
+    const h = stale6(j.st, 'blockIdsOf');
+    const pj = j.S.handle(j.wb, { type: 'squad', op: 'join', code: j.code, id: 'j' });
+    const in1 = await within6(h.inside);
+    const g = j.st.hold('removeFriendship');
+    const pb = j.S.handle(j.wa, { type: 'block', op: 'add', id: B });
+    const in2 = await within6(g.inside);
+    h.release(); await pj;
+    const answer = ans6(j.wb, 'j');
+    g.release(); await pb;
+    if (in1 && in2 && same6(answer, DEAD6('j')) && !got6(j.wb, 'squad', 'state').some((f) => f.code === j.code))
+      ok('(jn-e) the epoch moves as the block row lands, before the teardown: the join is refused, never admitted and then kicked');
+    else fail('(jn-e) epoch placement: ' + JSON.stringify({ in1, in2, answer, b: j.wb.rx }));
+  }
+
+  // ---- (jn-e vi) three reads that each saw a block land refuse the join ----
+  // The blocks that move the epoch here are between OTHER players: the epoch
+  // is one counter, and three moves in a row mean the read cannot be trusted.
+  {
+    const run = async (moves) => {
+      const j = await joinWorld6();
+      const targets = [E, NN, GU];
+      let h = stale6(j.st, 'blockIdsOf');
+      const pending = j.S.handle(j.wb, { type: 'squad', op: 'join', code: j.code, id: 'j' });
+      let reads = 0;
+      for (let i = 0; i < moves; i++) {
+        if (!(await within6(h.inside))) break;
+        reads++;
+        await j.S.handle(j.wd, { type: 'block', op: 'add', id: targets[i] });
+        const cur = h;
+        h = i + 1 < moves ? stale6(j.st, 'blockIdsOf') : null;
+        cur.release();
+      }
+      if (h) h.restore();
+      await pending;
+      return { reads, answer: ans6(j.wb, 'j'), code: j.code };
+    };
+    const three = await run(3), two = await run(2);
+    if (three.reads === 3 && same6(three.answer, DEAD6('j')))
+      ok('(jn-e) a join whose three reads each saw a block land is refused as a dead code');
+    else fail('(jn-e) three unsettled reads: ' + JSON.stringify(three));
+    if (two.reads === 2 && two.answer && two.answer.op === 'state' && two.answer.code === two.code)
+      ok('(jn-e) and two such reads and a settled third let an unblocked player join');
+    else fail('(jn-e) two unsettled reads: ' + JSON.stringify(two));
+  }
+
+  // ===== D-BLOCK-2 B: THE SIGN-IN DOOR =========================================
+  // A leads X with C in it. B's socket stands in X on a row it took WITHOUT
+  // B's account — before saying hello, or as a throwaway anonymous account —
+  // so no join ever read B's blocks. Then it signs in as B.
+  const signWorld6 = async (row) => {
+    const st = t6store(ROWS6);
+    if (row) await st.addBlock(row[0], row[1]);
+    const S = mkSocial6(st);
+    const wa = up6(S, A), wc = up6(S, C);
+    const code = await create6(S, wa);
+    await join6(S, wc, code, 'Crater Two');
+    return { st, S, wa, wc, code };
+  };
+  const KICKED6 = { type: 'squad', op: 'ended', reason: 'kicked' };
+  const lastSquad6 = (w) => { const f = got6(w, 'squad'); return f[f.length - 1] || null; };
+
+  // ---- (sg-a) no hello, a join, then a sign-in: the row is adopted ---------
+  {
+    const bad = [];
+    for (const row of [[A, B], [B, A], [C, B], [B, C]]) {
+      const g = await signWorld6(row);
+      const wn = t6ws(null);
+      await join6(g.S, wn, g.code, 'Bunker');
+      clear6(g.wa, g.wc, wn);
+      hello6(g.S, wn, B);
+      await settle6();
+      await g.S.handle(g.wc, { type: 'squad', op: 'resume', id: 'r' });
+      const roster = ans6(g.wc, 'r');
+      if (!(same6(lastSquad6(wn), KICKED6) && same6(ids6(roster), [A, C]) && roster.leader === A)) bad.push({ row, b: wn.rx, roster });
+    }
+    if (!bad.length) ok('(sg-a) a row taken with no account and then signed in as a blocked account goes, either way, leader or member: the socket is told exactly a kick');
+    else fail('(sg-a) sign-in after a hello-less join: ' + JSON.stringify(bad));
+    // EXACTLY A KICK: a twin where B signs in with no block and A kicks them.
+    const g = await signWorld6([A, B]);
+    const wn = t6ws(null);
+    await join6(g.S, wn, g.code, 'Bunker');
+    const m = TRACE6.length;
+    hello6(g.S, wn, B);
+    await settle6();
+    const t = await signWorld6(null);
+    const tn = t6ws(null);
+    await join6(t.S, tn, t.code, 'Bunker');
+    const tm = TRACE6.length;
+    hello6(t.S, tn, B);
+    await settle6();
+    await t.S.handle(t.wa, { type: 'squad', op: 'kick', id: B });
+    const mine = seq6(m, [wn, g.wc]), twin = seq6(tm, [tn, t.wc]);
+    if (mine.length === 4 && same6(mine, twin))
+      ok('(sg-a) and what the signed-in player and the squad receive is exactly a kick after a sign-in, in the same order');
+    else fail('(sg-a) sign-in door vs kick: ' + JSON.stringify({ door: mine, kick: twin }));
+  }
+  {
+    // CONTROLS: with no block the adopted row stays, shown by its proved
+    // name, for one read; and a socket that holds no row reads nothing.
+    const g = await signWorld6(null);
+    const wn = t6ws(null);
+    await join6(g.S, wn, g.code, 'Bunker');
+    g.st.calls.length = 0;
+    hello6(g.S, wn, B);
+    await settle6();
+    const reads = g.st.calls.filter((c) => c === 'blockIdsOf').length;
+    await g.S.handle(g.wc, { type: 'squad', op: 'resume', id: 'r' });
+    const roster = ans6(g.wc, 'r');
+    const idle = await signWorld6([A, B]);
+    const wz = t6ws(null);
+    idle.st.calls.length = 0;
+    hello6(idle.S, wz, B);
+    await settle6();
+    if (reads === 1 && same6(ids6(roster), [A, C, B]) && roster.members[2].callsign === 'Bunker Nine' && !got6(wn, 'squad', 'ended').length && !idle.st.calls.includes('blockIdsOf'))
+      ok('(sg-a) with no block the signed-in row stays, by name, for one read; a socket holding no row reads nothing');
+    else fail('(sg-a) controls: ' + JSON.stringify({ reads, roster, b: wn.rx, idle: idle.st.calls }));
+  }
+
+  // ---- (sg-b) a throwaway anonymous account first, then the real one -------
+  {
+    const bad = [];
+    for (const row of [[A, B], [B, A]]) {
+      const g = await signWorld6(row);
+      const wg = up6(g.S, GU, true);
+      await join6(g.S, wg, g.code, 'Ghost');
+      clear6(g.wa, g.wc, wg);
+      hello6(g.S, wg, B);
+      await settle6();
+      await g.S.handle(g.wc, { type: 'squad', op: 'resume', id: 'r' });
+      if (!(same6(lastSquad6(wg), KICKED6) && same6(ids6(ans6(g.wc, 'r')), [A, C]))) bad.push({ row, g: wg.rx, roster: ans6(g.wc, 'r') });
+    }
+    {
+      // THE ANONYMOUS ACCOUNT IS THE ONE BLOCKED: A blocked the guest's
+      // account by seat handle, and its socket joined before saying hello.
+      const g = await signWorld6([A, GU]);
+      const wn = t6ws(null);
+      await join6(g.S, wn, g.code, 'Ghost');
+      clear6(g.wa, g.wc, wn);
+      hello6(g.S, wn, GU, true);
+      await settle6();
+      await g.S.handle(g.wc, { type: 'squad', op: 'resume', id: 'r' });
+      if (!(same6(lastSquad6(wn), KICKED6) && same6(ids6(ans6(g.wc, 'r')), [A, C]))) bad.push({ anonymous: wn.rx, roster: ans6(g.wc, 'r') });
+    }
+    {
+      // THE OTHER MEMBER IS THE GUEST: B blocked an anonymous account whose
+      // guest row stands in X. Matched through that row's socket.
+      const g = await signWorld6([B, GU]);
+      const wg = up6(g.S, GU, true);
+      await join6(g.S, wg, g.code, 'Ghost');
+      const wn = t6ws(null);
+      await join6(g.S, wn, g.code, 'Bunker');
+      clear6(g.wa, g.wc, wg, wn);
+      hello6(g.S, wn, B);
+      await settle6();
+      await g.S.handle(g.wc, { type: 'squad', op: 'resume', id: 'r' });
+      if (!(same6(lastSquad6(wn), KICKED6) && same6(ids6(ans6(g.wc, 'r')), [A, C, null]))) bad.push({ guestMember: wn.rx, roster: ans6(g.wc, 'r') });
+    }
+    if (!bad.length) ok('(sg-b) a row taken as an anonymous account and then signed in as a blocked one goes, either way; so does one whose own anonymous account is blocked, and one beside a guest it has blocked');
+    else fail('(sg-b) sign-in after an anonymous join: ' + JSON.stringify(bad));
+  }
+
+  // ---- (sg-c) the account is in ANOTHER squad: the row stays a guest row ---
+  {
+    const bad = [];
+    for (const row of [[A, B], [B, A]]) {
+      const g = await signWorld6(row);
+      const wb1 = up6(g.S, B);
+      const Y = await create6(g.S, wb1);
+      const wn = t6ws(null);
+      await join6(g.S, wn, g.code, 'Bunker');
+      clear6(g.wa, g.wc, wn, wb1);
+      hello6(g.S, wn, B);
+      await settle6();
+      await g.S.handle(g.wc, { type: 'squad', op: 'resume', id: 'r' });
+      await g.S.handle(wb1, { type: 'squad', op: 'resume', id: 'ry' });
+      const y = ans6(wb1, 'ry');
+      if (!(same6(lastSquad6(wn), KICKED6) && same6(ids6(ans6(g.wc, 'r')), [A, C]) && y && y.code === Y && same6(ids6(y), [B]))) bad.push({ row, b2: wn.rx, x: ans6(g.wc, 'r'), y });
+    }
+    if (!bad.length) ok('(sg-c) a guest row left standing because the account leads elsewhere goes too, either way; the account\'s own squad is untouched');
+    else fail('(sg-c) sign-in, account in another squad: ' + JSON.stringify(bad));
+  }
+
+  // ---- (sg-d) the cancel is the account, not the socket's state ------------
+  {
+    // (i) The socket becomes ANOTHER account while B's read is out. E leads a
+    // squad elsewhere, so the row stays a guest row — standing for E now,
+    // who blocked nobody. B's check must not remove it.
+    const g = await signWorld6([A, B]);
+    const wb1 = up6(g.S, B); await create6(g.S, wb1);
+    const we1 = up6(g.S, E); await create6(g.S, we1);
+    const wn = t6ws(null);
+    await join6(g.S, wn, g.code, 'N');
+    clear6(g.wa, g.wc, wn);
+    const gate = g.st.hold('blockIdsOf');
+    hello6(g.S, wn, B);
+    const inside = await within6(gate.inside);
+    hello6(g.S, wn, E);
+    gate.release();
+    await settle6();
+    await g.S.handle(g.wc, { type: 'squad', op: 'resume', id: 'r' });
+    if (inside && !got6(wn, 'squad', 'ended').length && same6(ids6(ans6(g.wc, 'r')), [A, C, null]))
+      ok('(sg-d) a check whose socket became another account during the read removes nothing — that account\'s own hello decides');
+    else fail('(sg-d) identity changed during the check: ' + JSON.stringify({ inside, n: wn.rx, x: ans6(g.wc, 'r') }));
+  }
+  {
+    // (ii) The socket CLOSES while the read is out. The adopted row is
+    // dropped but still stands for B, so it goes, with no frame, and a
+    // resume answers gone (D-BLOCK 5).
+    const g = await signWorld6([A, B]);
+    const wn = t6ws(null);
+    await join6(g.S, wn, g.code, 'Bunker');
+    const gate = g.st.hold('blockIdsOf');
+    hello6(g.S, wn, B);
+    const inside = await within6(gate.inside);
+    wn.readyState = 3; g.S.onClose(wn);
+    gate.release();
+    await settle6();
+    await g.S.handle(g.wc, { type: 'squad', op: 'resume', id: 'r' });
+    const wb = up6(g.S, B);
+    await g.S.handle(wb, { type: 'squad', op: 'resume', code: g.code, id: 'rb' });
+    if (inside && same6(ids6(ans6(g.wc, 'r')), [A, C]) && same6(ans6(wb, 'rb'), { type: 'squad', op: 'gone', id: 'rb' }))
+      ok('(sg-d) a socket that closes during the check is no cancel: its dropped row goes, and a resume answers gone');
+    else fail('(sg-d) closed during the check: ' + JSON.stringify({ inside, x: ans6(g.wc, 'r'), b: ans6(wb, 'rb') }));
+  }
+
+  // ---- (sg-e) the epoch, the bound and a failed read at the sign-in door ----
+  {
+    // (i) A block row the teardown never saw — written straight into the
+    // store — lands while the check's read is out, and a block between two
+    // other players moves the epoch. The read is taken again, and sees it.
+    const g = await signWorld6(null);
+    const wd = up6(g.S, D);
+    const wn = t6ws(null);
+    await join6(g.S, wn, g.code, 'Bunker');
+    const h = stale6(g.st, 'blockIdsOf');
+    hello6(g.S, wn, B);
+    const inside = await within6(h.inside);
+    if (inside) {
+      g.st.blocks.add(A + '>' + B);
+      await g.S.handle(wd, { type: 'block', op: 'add', id: E });
+    } else h.restore();
+    h.release();
+    await settle6();
+    await g.S.handle(g.wc, { type: 'squad', op: 'resume', id: 'r' });
+    if (inside && same6(lastSquad6(wn), KICKED6) && same6(ids6(ans6(g.wc, 'r')), [A, C]))
+      ok('(sg-e) a check whose read saw the epoch move reads again, and a block that landed meanwhile removes the row');
+    else fail('(sg-e) epoch at sign-in: ' + JSON.stringify({ inside, n: wn.rx, x: ans6(g.wc, 'r') }));
+  }
+  {
+    // (ii) Three reads that each saw the epoch move: the row cannot be shown
+    // safe, so it goes — though no block names B. Two, and it stays.
+    const run = async (moves) => {
+      const g = await signWorld6(null);
+      const wd = up6(g.S, D);
+      const wn = t6ws(null);
+      await join6(g.S, wn, g.code, 'Bunker');
+      const targets = [E, NN, GU];
+      let h = stale6(g.st, 'blockIdsOf');
+      hello6(g.S, wn, B);
+      let reads = 0;
+      for (let i = 0; i < moves; i++) {
+        if (!(await within6(h.inside))) break;
+        reads++;
+        await g.S.handle(wd, { type: 'block', op: 'add', id: targets[i] });
+        const cur = h;
+        h = i + 1 < moves ? stale6(g.st, 'blockIdsOf') : null;
+        cur.release();
+      }
+      if (h) h.restore();
+      await settle6();
+      await g.S.handle(g.wc, { type: 'squad', op: 'resume', id: 'r' });
+      return { reads, last: lastSquad6(wn), x: ids6(ans6(g.wc, 'r')) };
+    };
+    const three = await run(3), two = await run(2);
+    if (three.reads === 3 && same6(three.last, KICKED6) && same6(three.x, [A, C]) && two.reads === 2 && same6(two.x, [A, C, B]))
+      ok('(sg-e) three unsettled reads remove the signing-in row; two and a settled third leave it');
+    else fail('(sg-e) bound at sign-in: ' + JSON.stringify({ three, two }));
+  }
+  {
+    // (iii) FAILS CLOSED: a block read that fails cannot show the row safe.
+    const g = await signWorld6(null);
+    const wn = t6ws(null);
+    await join6(g.S, wn, g.code, 'Bunker');
+    g.st.boom.add('blockIdsOf');
+    hello6(g.S, wn, B);
+    await settle6();
+    g.st.boom.delete('blockIdsOf');
+    await g.S.handle(g.wc, { type: 'squad', op: 'resume', id: 'r' });
+    if (same6(lastSquad6(wn), KICKED6) && same6(ids6(ans6(g.wc, 'r')), [A, C]))
+      ok('(sg-e) a block read that fails at sign-in removes the row, as a join refuses: never left standing unchecked');
+    else fail('(sg-e) failed read at sign-in: ' + JSON.stringify({ n: wn.rx, x: ans6(g.wc, 'r') }));
   }
 
   // ---- (end of task 6 checks) ----
