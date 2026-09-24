@@ -19,6 +19,7 @@ import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import {
   rooms, send, handleClientMessage, handleClose, resolveSeatHandle, setCodeTaken,
+  MODE_SEATS, TEE_IDS, validRackFor,
 
   setPushNudge, setAuthSink, setPushSubSink, setFaultSink, setCapacitySink, setMatchSink,
 } from './public/room-engine.js';
@@ -127,6 +128,13 @@ try {
       // because the OFFLINE page imports it (ADR-001). server.js holds both
       // and joins them, here and nowhere else.
       roomExists: (code) => rooms.has(code),
+      // AND THE ENGINE'S OWN MODE TABLE, TEE SETS AND RACK PREDICATE, across
+      // the same seam for the same reason. A squad's `fits`, its armed mode
+      // and its members' racks must be judged by the numbers the room will
+      // really enforce, not by a copy of them. Data and one predicate: the
+      // engine still knows nothing about squads. Each defaults to failing
+      // closed in createSocial, so leaving one out refuses, never over-promises.
+      seats: MODE_SEATS, teeIds: TEE_IDS, validRack: validRackFor,
     });
     // ONE CODE NAMESPACE (plan R4). makeCode has always collided against
     // `rooms` alone, so a squad code drawn from the same 31-character

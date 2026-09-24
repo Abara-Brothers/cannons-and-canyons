@@ -24,7 +24,7 @@
 //
 // Headless: no server, no Chrome, no Supabase, no network, no real clock.
 import { readFileSync } from 'node:fs';
-import { createSquads, fitsFor, SQUAD_SEATS } from '../server/squads.js';
+import { createSquads } from '../server/squads.js';
 // THE REAL ENGINE. This is the one suite in the tree that needs both halves in
 // one process: makeCode's loop is what task 1 changes, and `rooms` is the
 // container the code frame's room arm reads through.
@@ -375,7 +375,13 @@ const sqat = (ws, op) => sqlast(ws, op) || {};
 // that is not open, and what does reach it has been through JSON — so a frame
 // that carried a socket or shared an array with another destination's frame
 // could not pass here and fail in production.
+//
+// AND THE ENGINE'S OWN SEAT TABLE, TEE SETS AND RACK PREDICATE, wired exactly
+// as server.js wires them (task 3). Nothing here is a stand-in: if the numbers
+// the room enforces change, `fits`, the mode vetting and the rack check change
+// with them. `extra` can take them away again, to see the defaults fail closed.
 const sqSocial = (store, extra = {}) => createSocial({
+  seats: MODE_SEATS, teeIds: TEE_IDS, validRack: validRackFor,
   ...extra, store, terms: [], now: sqnow,
   send: (ws, frame) => { if (ws && ws.readyState === 1) ws.rx.push(JSON.parse(JSON.stringify(frame))); },
 });
@@ -755,29 +761,6 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
   else fail('(s9) removeMember after deletion: ' + JSON.stringify(gone, noWs));
 }
 
-// ---- (s10) the seat table, and the engine it is a copy of -----------------
-// Task 3 owns the seat table (X6) and replaces this copy with one source of
-// truth; until it does, the copy is held to the engine here.
-{
-  const want = { duel: [2, 2], ffa: [2, 4], boss: [1, 2], aliens: [1, 2], golf: [1, 4] };
-  if (JSON.stringify(SQUAD_SEATS) === JSON.stringify(want)) ok('(s10) SQUAD_SEATS is the spec seat table');
-  else fail('(s10) SQUAD_SEATS is ' + JSON.stringify(SQUAD_SEATS));
-  const f = (n) => JSON.stringify(fitsFor(n));
-  if (f(1) === '{"duel":false,"ffa":false,"boss":true,"aliens":true,"golf":true}'
-    && f(2) === '{"duel":true,"ffa":true,"boss":true,"aliens":true,"golf":true}'
-    && f(3) === '{"duel":false,"ffa":true,"boss":false,"aliens":false,"golf":true}'
-    && f(4) === '{"duel":false,"ffa":true,"boss":false,"aliens":false,"golf":true}')
-    ok('(s10) fitsFor answers every squad size against every mode, minimum AND maximum');
-  else fail('(s10) fitsFor: 1=' + f(1) + ' 2=' + f(2) + ' 3=' + f(3) + ' 4=' + f(4));
-  // THE COPY IS HELD TO THE ENGINE'S OWN TABLE, by value. Both engine paths
-  // now read MODE_SEATS, so the text this once pinned is gone; the copy
-  // itself goes when the social layer is handed MODE_SEATS (task 3).
-  const drift = Object.keys(MODE_SEATS).filter((m) => JSON.stringify(SQUAD_SEATS[m]) !== JSON.stringify([MODE_SEATS[m].min, MODE_SEATS[m].max]));
-  if (!drift.length && Object.keys(SQUAD_SEATS).length === Object.keys(MODE_SEATS).length)
-    ok('(s10) SQUAD_SEATS still names the min and max of the engine\'s MODE_SEATS for every mode');
-  else fail('(s10) SQUAD_SEATS has drifted from MODE_SEATS: ' + JSON.stringify(drift));
-}
-
 // ---- (s11) the caller's row is found by SOCKET, and a move leaves it -------
 // A socket's row and its signed-in account are not always the same key: a
 // guest who signs in on the same socket still holds a GUEST row, keyed by
@@ -839,7 +822,7 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
   const seen = sqlast(wa, 'state');
   if (seen && seen.type === 'squad' && seen.op === 'state' && seen.code === code && seen.leader === SQA
     && seen.mode === 'duel' && seen.tees === null && seen.max === null && seen.you === 0
-    && JSON.stringify(seen.fits) === JSON.stringify(fitsFor(3)))
+    && same(seen.fits, { duel: false, ffa: true, boss: false, aliens: false, golf: true }))
     ok('(h1) the snapshot is the frame the plan fixes, with `you` per destination');
   else fail('(h1) frame: ' + JSON.stringify(seen));
   const rows = seen && seen.members;
@@ -1204,7 +1187,7 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
     if (wb.rx.length === 1 && mine.op === 'state' && mine.id === 'j' && mine.code === other && mine.you === 1
       && JSON.stringify(mine.members) === JSON.stringify(nulls)
       && host.code === other && host.you === 0 && JSON.stringify(host.members) === JSON.stringify(nulls)
-      && JSON.stringify(host.fits) === JSON.stringify(fitsFor(2))
+      && same(host.fits, { duel: true, ffa: true, boss: true, aliens: true, golf: true })
       && left.code === code && left.members.length === 1 && left.members[0].callsign === 'Anvil Six')
       ok('(h8) a join whose name read fails tells the joiner, every member of the new squad and the squad left behind');
     else fail('(h8) join over a failing name read: mover ' + JSON.stringify(wb.rx) + ' host ' + JSON.stringify(host) + ' left ' + JSON.stringify(left));
@@ -1854,6 +1837,48 @@ const keptOnCreate = (mode, rack) => {
   else fail('(s3h) clearReady on a missing squad did not answer null');
   if (S.setReady(SQB, true, RACK5).ok && sq.members[1].ready === true) ok('(s3h) after a clear, Ready works again');
   else fail('(s3h) Ready after a clear did not take');
+}
+
+// ---- (s3d) fits: the seat line, as the social layer reports it ------------
+// `fits[mode]` is MINIMUM AND MAXIMUM (plan X6; design 4.3's start row: "squad
+// size within the mode's seats"): a squad of one fits no duel and no
+// free-for-all, and three or four fit no co-op raid. The squad is walked from
+// one member to four through the real handlers — two accounts, a guest, and
+// a third account — reading the roster the leader is pushed each time.
+const FITS_BY_SIZE = [
+  { duel: false, ffa: false, boss: true,  aliens: true,  golf: true },
+  { duel: true,  ffa: true,  boss: true,  aliens: true,  golf: true },
+  { duel: false, ffa: true,  boss: false, aliens: false, golf: true },
+  { duel: false, ffa: true,  boss: false, aliens: false, golf: true },
+];
+{
+  const S = sqSocial(sqstore());
+  const wa = sqUp(S, sqws(SQA));
+  const crew = [wa, sqUp(S, sqws(SQB)), sqws(null), sqUp(S, sqws(SQC))];
+  await S.handle(wa, { type: 'squad', op: 'create' });
+  const code = sqat(wa, 'state').code;
+  const seen = [];
+  for (let n = 1; n <= 4; n++) {
+    if (n > 1) await S.handle(crew[n - 1], { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+    const st = sqat(wa, 'state');
+    seen.push(st.members && st.members.length === n ? st.fits : null);
+  }
+  if (same(seen, FITS_BY_SIZE)) ok('(s3d) fits for a squad of 1, 2, 3 and 4 is the seat line, minimum and maximum, in the seat line\'s order');
+  else fail('(s3d) fits by squad size: ' + JSON.stringify(seen));
+  // AND IT IS WHAT THE ENGINE DOES. (s3b) drove the real create, join and
+  // startMatch paths with each squad size; the box must promise exactly the
+  // sizes the engine then started.
+  const engine = [1, 2, 3, 4].map((n) => Object.fromEntries(Object.keys(ENGINE_STARTS).map((m) => [m, ENGINE_STARTS[m][n - 1]])));
+  if (same(seen, engine)) ok('(s3d) fits agrees with the engine: every mode it calls a fit, the engine started with that many humans, and no other');
+  else fail('(s3d) fits ' + JSON.stringify(seen) + ' but the engine started ' + JSON.stringify(engine));
+  // FAIL CLOSED. A layer handed no table knows no mode, so it claims no fit;
+  // it never says a squad fits a room it cannot see.
+  const F = sqSocial(sqstore(), { seats: undefined });
+  const wf = sqUp(F, sqws(SQA));
+  await F.handle(wf, { type: 'squad', op: 'create' });
+  const lone = sqat(wf, 'state');
+  if (lone.code && same(lone.fits, {})) ok('(s3d) with no seat table injected, fits is empty — no mode is claimed');
+  else fail('(s3d) with no seat table: ' + JSON.stringify(lone));
 }
 
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall squad checks passed');

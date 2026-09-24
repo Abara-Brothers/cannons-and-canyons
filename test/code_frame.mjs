@@ -375,6 +375,20 @@ async function layerOn() {
     w.close();
   }
 
+  // ---- (8b) THE ENGINE'S SEAT TABLE CROSSES THE SEAM ------------------------
+  // server.js hands the social layer the engine's MODE_SEATS (and, beside it,
+  // TEE_IDS and validRackFor). Each defaults to failing closed, so on a server
+  // that forgot the table a squad's snapshot claims no fit at all — `fits` is
+  // {}. Only the REAL server.js can show that line is there: test/squad.mjs
+  // wires the layer by hand.
+  {
+    const { w, r } = await squadCreate(s.port, 'sq1');
+    if (r && r.op === 'state' && same(r.fits, { duel: false, ffa: false, boss: true, aliens: true, golf: true }))
+      ok('(8b) a squad of one on the real server.js reports fits from the engine\'s own seat table — boss, aliens and golf, not duel or ffa');
+    else fail('(8b) a squad of one on the real server.js reported ' + JSON.stringify(r));
+    w.close();
+  }
+
   // ---- (9) a HELLO THAT HANGS ----------------------------------------------
   // hello, then friends, then code, on ONE socket. friends waits on the
   // pending hello — that is its job — and the code frame must not.

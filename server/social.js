@@ -34,7 +34,7 @@ import { createNameProofs } from './display-name.js';
 // presence and the block reads, and all five are trapped inside
 // createSocial's closure. Importing the factory rather than widening that
 // closure is the same move createNameProofs above is.
-import { createSquads, fitsFor } from './squads.js';
+import { createSquads } from './squads.js';
 // THE ONLY NODE API IN THIS FILE, and it is a pure computation rather than I/O:
 // the blocked list has to carry something a client can hand back to Unblock and
 // nothing a client can keep. See blockKey below. randomBytes/createHmac are
@@ -202,7 +202,25 @@ const BLOCK_KEY_RE = /^[0-9a-f]{32}$/;
 // code bytes scripted so a squad is made to try a live room's code first.
 // The default refuses nothing, which is the right direction for a host that
 // wires no rooms at all.
-export function createSocial({ store, terms, send, now, resolveHandle = () => null, roomExists = () => false }) {
+//
+// seats, teeIds, validRack — public/room-engine.js's MODE_SEATS, TEE_IDS and
+// validRackFor, injected by server.js across the same seam and for the same
+// reason: this module may not import the engine, and a squad's `fits`, its
+// armed mode and its members' racks must be judged by the numbers the room
+// will really enforce, not by a copy of them. EVERY DEFAULT FAILS CLOSED: with
+// no table no mode is known (every mode frame is bad_mode and `fits` claims
+// nothing), with no tee ids every tee set is refused, and with no predicate
+// no rack is accepted. A host that forgets to wire them gets refusals, never
+// a squad told it fits a room it does not.
+//
+// THIS LIST ACCUMULATES (plan X2). A later task adds its option after these;
+// it never restates the line.
+export function createSocial({
+  store, terms, send, now,
+  resolveHandle = () => null,
+  roomExists = () => false,
+  seats = {}, teeIds = [], validRack = () => false,
+}) {
 
   // userId -> that account's live sockets. "Online" is "the set is non-empty".
   // Presence is never persisted (design 4.1).
@@ -805,6 +823,20 @@ export function createSocial({ store, terms, send, now, resolveHandle = () => nu
     const key = squadKey(ws);
     return sq.members.findIndex((m) => m.key === key);
   }
+
+  // WHICH MODES A SQUAD OF n FITS: n within the mode's seats, MINIMUM AND
+  // MAXIMUM (plan X6; design 4.3's start row), over the injected table. A
+  // squad of one fits no duel and no free-for-all, and three or four fit no
+  // co-op raid. Computed here so the box, the boards and the start gate read
+  // one truth, and walked in the table's own key order, which is the spec's
+  // seat line. THE WHOLE ROSTER COUNTS, dropped members included: they hold
+  // their place for the drop window (task 5), and a squad must not be told it
+  // fits a mode it stops fitting the moment they come back.
+  const fitsFor = (n) => {
+    const f = {};
+    for (const id of Object.keys(seats)) f[id] = n >= seats[id].min && n <= seats[id].max;
+    return f;
+  };
 
   // THE FRAME, WITHOUT `you` — the one field that differs per destination.
   //
