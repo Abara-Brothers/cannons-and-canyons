@@ -1090,6 +1090,23 @@ export function createSocial({
     // that is not a string. No shape test beside it — a string that is not a
     // live squad's code misses the machine's Map and is answered no_such_squad
     // either way, so a regex here could never be seen to do anything.
+    //
+    // D-BLOCK 3: A BLOCK ROW, EITHER WAY, BETWEEN THE JOINER AND ANY MEMBER
+    // REFUSES THE JOIN, in a dead code's words — R16 keeps a blocked pair out
+    // of one squad, and a code must not put them back. The read runs for EVERY
+    // join from an account, live code or not, so the refusal also takes a dead
+    // code's time. By ws.userId: a block can name a guest's anonymous account.
+    // Everything below is computed AFTER the read, from the squads as they are.
+    const acct = wireId(ws.userId);
+    let hidden = null;
+    if (isUuid(acct)) {
+      const gen = ws.authGen;
+      const b = await store.blockIdsOf(acct);
+      // Another account, or a closed socket, by now: act on nothing (a
+      // closed socket's row would hold a dead socket no window sweeps).
+      if (ws.authGen !== gen || ws.readyState !== 1) return;
+      hidden = new Set([...b.blocked, ...b.blockedBy]);
+    }
     const from = squadKey(ws);
     const olds = squadsOfCaller(ws, from);
     // THE ACCOUNT IS ALREADY STANDING IN THIS SQUAD AS A GUEST ROW whose
@@ -1099,6 +1116,7 @@ export function createSocial({
     // the account is in now keeps it (task 5's fix pass).
     const me = identityKey(ws);
     const target = squads.get(codeOf(msg.code));
+    if (target && hidden && anyRowOf(target, hidden)) return squadReply(ws, msg, 'join', { error: 'no_such_squad' });
     if (typeof me === 'string' && target && target.members.some((m) => m.guest && m.ws && m.ws !== ws && identityKey(m.ws) === me))
       return squadReply(ws, msg, 'join', { error: 'already_in' });
     // create's rule: the account's row on another device is told if this
@@ -1648,7 +1666,10 @@ export function createSocial({
   // A DROPPED guest row has no socket to read and is not found. It can never
   // be resumed (markResumed is by account) and Start refuses it
   // (member_offline), and it is gone within the drop window.
-  const rowsOf = (sq, id) => (id ? sq.members.filter((m) => m.key === id || (m.ws && wireId(m.ws.userId) === id)) : []);
+  const rowAccounts = (m) => [typeof m.key === 'string' ? m.key : '', m.ws ? wireId(m.ws.userId) : ''].filter(Boolean);
+  const rowsOf = (sq, id) => (id ? sq.members.filter((m) => rowAccounts(m).includes(id)) : []);
+  // True when any row of `sq` stands for an account in `ids` (a Set).
+  const anyRowOf = (sq, ids) => sq.members.some((m) => rowAccounts(m).some((a) => ids.has(a)));
 
   // ---- invite (design 4.3, the invite row; 4.4) -----------------------------
   // LEADER OR MEMBER MAY INVITE (design 4.3). A squad of friends is not a
@@ -1715,27 +1736,41 @@ export function createSocial({
     const no = (error) => squadReply(ws, msg, 'invite', { error });
     if (!rateOk(ws, 'friend', LIMITS.friend)) return no('slow_down');
     const to = wireId(msg.to);
-    const vet = () => {
+    // `deep`: whether a row held through a socket counts as `already`. Only
+    // once the friend check has passed — asked earlier, any member could
+    // probe any uuid for "stands on a guest row in my squad".
+    const vet = (deep) => {
       const found = squadOf(ws);
       if (!found) return { error: 'no_squad' };
       if (found.squad.members.length >= SQUAD_MAX) return { error: 'full' };
       if (!isUuid(to)) return { error: 'not_friend' };
-      if (rowsOf(found.squad, to).length) return { error: 'already' };
+      if (deep ? rowsOf(found.squad, to).length : found.squad.members.some((m) => m.key === to)) return { error: 'already' };
       return { sq: found.squad };
     };
-    const before = vet();
+    const before = vet(false);
     if (before.error) return no(before.error);
     const me = wireId(ws.userId);
     const gen = ws.authGen;
-    const [friendIds, blocks, self] = await Promise.all([store.friendIdsOf(me), store.blockIdsOf(me), store.profileById(me)]);
+    // The invitee's blocks are read in the same leg: one read covers both
+    // directions for every member (D-BLOCK 4). Every read is made for every
+    // invite, so a refused or dropped one costs what a delivered one does.
+    const [friendIds, blocks, self, theirs] = await Promise.all([store.friendIdsOf(me), store.blockIdsOf(me), store.profileById(me), store.blockIdsOf(to)]);
     if (ws.authGen !== gen) return;
     if (!friendIds.includes(to)) return no('not_friend');
     if (blocks.blocked.includes(to) || blocks.blockedBy.includes(to)) return no('not_friend');
-    const after = vet();
+    const after = vet(true);
     if (after.error) return no(after.error);
+    // PINNED: an invite for one squad never goes out for another the
+    // account has moved to while the reads were out.
+    if (after.sq !== before.sq) return no('no_squad');
     const { sq } = after;
-    const frame = { type: 'squad', op: 'invited', code: sq.code, from: { callsign: displayName(self) }, size: sq.members.length, max: SQUAD_MAX };
     const live = socketsOf(to);
+    // D-BLOCK 4: A BLOCK BETWEEN THE INVITEE AND ANY MEMBER DROPS THE INVITE,
+    // SILENTLY — nothing to them, and the inviter gets the reply a delivered
+    // invite gets, so it tells nobody which member it was.
+    if (anyRowOf(sq, new Set([...theirs.blocked, ...theirs.blockedBy])))
+      return squadReply(ws, msg, 'invite', { ok: true, delivered: live.length ? 'online' : 'none' });
+    const frame = { type: 'squad', op: 'invited', code: sq.code, from: { callsign: displayName(self) }, size: sq.members.length, max: SQUAD_MAX };
     if (live.length) {
       for (const w of live) safeSend(w, frame);
       return squadReply(ws, msg, 'invite', { ok: true, delivered: 'online' });
@@ -2113,49 +2148,51 @@ export function createSocial({
   // squads searched are every one either account has a row in — by account
   // key, or through a live socket — from both sides.
   //
-  // SILENT, BOTH WAYS (R16). The squad is pushed the same fresh roster an
-  // ordinary leave produces (pushSquadAfterExit), so nobody left in it can
-  // tell a block from somebody walking out — and the player removed is sent
-  // NO FRAME AT ALL: one sent at that instant either carries a reason, which
-  // announces the block, or carries none and is still told apart from the
-  // kick that shares its shape. Their box is repaired by the resume their
-  // client sends. ONE EXCEPTION, and it tells the blocked party nothing: the
-  // blocker's OWN other device, when it held the row the blocker lost, is
-  // told `ended: elsewhere` — what any device whose row goes because of
-  // another device is told (task 5). The device that blocked has its ok:true.
+  // TO EVERYBODY BUT THE BLOCKER IT IS A KICK OR A LEAVE (D-BLOCK). When the
+  // blocker leads, each removed row's socket gets exactly squadKick's victim
+  // frame, before the roster, as a kick sends it; the blocked player's other
+  // devices get nothing, as with a kick. When the blocker does not lead, the
+  // squad sees a leave, and the blocker's own removed rows — the acting socket
+  // included — are told `ended: left`, a reason only the blocker ever sees.
   //
-  // TWO HALVES, AND handleBlock RUNS THEM EITHER SIDE OF ITS REPLY. The
-  // removal is memory and happens NOW, before the reply, so nothing about
-  // delivering the answer — a half-closed socket whose send() throws — can
-  // leave the blocked party in the squad. The telling is RETURNED, and runs
-  // after the reply beside the friends pushes, which are courtesies of the
-  // same kind. Neither throws out: the removal is wrapped, and the push
-  // swallows its own faults (a failed name read costs names, never rows).
+  // THE REMOVAL IS NOW; THE TELLING IS RETURNED, and handleBlock runs it
+  // before its reply (members first, actor last), so neither a reply that
+  // throws nor anything after it can skip either. One squad at a time: a
+  // throw costs that squad only, and a squad that lost a row is always told.
   function squadBlockTeardown(ws, blocked) {
-    const torn = [], moved = [];
+    const me = wireId(ws.userId), them = wireId(blocked);
+    const tell = [];
+    let found = [];
     try {
-      const me = wireId(ws.userId), them = wireId(blocked);
       // Every squad an account has a row in: by its own key, and through
       // every live socket of it — this one, and for a linked account every
       // socket presence holds.
       const squadsOf = (id, w) => [squads.ofUser(id), ...[w, ...socketsOf(id)].map((s) => (s ? squads.ofUser(squads.keyOfSocket(s)) : null))];
-      for (const sq of new Set([...squadsOf(me, ws), ...squadsOf(them, null)].filter(Boolean))) {
+      found = [...new Set([...squadsOf(me, ws), ...squadsOf(them, null)].filter(Boolean))];
+    } catch { /* nothing removed yet */ }
+    for (const sq of found) {
+      const t = { sq, out: [], frame: null };
+      try {
         const mine = rowsOf(sq, me), theirs = rowsOf(sq, them);
         // NO SHARED SQUAD IS THE ORDINARY CASE, and this is the whole guard:
         // each of them may lead a squad of their own, and a block is no
         // reason to touch one the other player is not in.
         if (!mine.length || !theirs.length) continue;
-        const goes = sq.leader === me ? theirs : mine;
-        for (const m of goes) {
+        const leads = sq.leader === me;
+        t.frame = { type: 'squad', op: 'ended', reason: leads ? 'kicked' : 'left' };
+        for (const m of leads ? theirs : mine) {
           const was = m.ws;
-          if (squads.removeMember(sq.code, m.key).squad && goes === mine && was && was !== ws) moved.push(was);
+          if (!squads.removeMember(sq.code, m.key).squad) continue;
+          if (!tell.includes(t)) tell.push(t);
+          if (was) t.out.push(was);
         }
-        torn.push(sq);
-      }
-    } catch { /* the block stands; one lost teardown, never a second answer */ }
+      } catch { /* this squad's teardown only */ }
+    }
     return async () => {
-      for (const w of moved) endedElsewhere(w);
-      for (const sq of torn) await pushSquadAfterExit(sq).catch(() => {});
+      for (const t of tell) {
+        for (const w of t.out) safeSend(w, t.frame);
+        await pushSquadAfterExit(t.sq).catch(() => {});
+      }
     };
   }
 
@@ -2177,13 +2214,12 @@ export function createSocial({
   // loss for a player who is not even protected. Tested both ways round.
   //
   // REMOVING THE PAIR FROM A SQUAD THEY SHARE — the other half of the 4.2 rule
-  // (R16) — is squadBlockTeardown above, tested in test/squad.mjs (blk-a to
-  // blk-l). It comes AFTER every write here: a squad is memory, so it adds a
+  // (R16) — is squadBlockTeardown above, tested in test/squad.mjs (blk-*,
+  // jn-*, inv-l). It comes AFTER every write here: a squad is memory, so it adds a
   // step at the end and moves none of the writes above. The blocked party
   // leaves the blocker's squad when the blocker leads it, otherwise the blocker
-  // leaves theirs; the squad is pushed the roster an ordinary leave produces,
-  // and the player removed is sent nothing (the blocker's own other device, if
-  // it held the row, is told ended:elsewhere, as for any move between devices).
+  // leaves theirs; to everybody but the blocker it is a kick or a leave
+  // (D-BLOCK), and a join or an invite cannot put the pair back together.
   //
   // NO PER-TYPE RATE LIMIT, and that is the spec rather than an oversight:
   // design 4.2 limits friend, callsign and report and says nothing about block,
@@ -2318,15 +2354,13 @@ export function createSocial({
     // the one flag set on BOTH paths that leave a block row behind — the clean
     // one and the catch's `wrote === true` — and a half-failed block that
     // skipped it would leave the blocked party in the squad of the player who
-    // just blocked them, to be seated beside them by the next Start. The
-    // removal runs HERE, before the reply, so it cannot depend on the reply
-    // being deliverable. What it returns tells the squad, after the reply and
-    // before the friends pushes, so every snapshot below is built from the
-    // squads as they now stand.
+    // just blocked them, to be seated beside them by the next Start. Both the
+    // removal and the telling run BEFORE the reply — members first, actor
+    // last (pushSquad's rule) — so a reply that throws cannot skip either.
     const tellSquads = alsoPush ? squadBlockTeardown(ws, alsoPush) : null;
+    if (tellSquads) await tellSquads();
     reply(ws, msg, outcome);
     if (!outcome.ok) return;
-    if (tellSquads) await tellSquads();
     await pushFriends(ws.userId);
     // ONLY ON ADD. The blocked player's own panel really did change — the
     // friendship is gone — so it has to be rebuilt. On REMOVE nothing of theirs
