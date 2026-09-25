@@ -246,6 +246,10 @@ else
   # so it never reaches production or APNs. Exercises HTTP/2, ES256 signing and
   # the dead-token contract — including the one that must NOT delete a row.
   run push_apns node test/push_apns.mjs
+  # One transport, two callers: the shared pushToUser, the seat-local half of the
+  # dead-endpoint cleanup, and the squad invite's own collapse key on all three
+  # transports. Mocks Supabase, Apple, FCM and the web push endpoint locally.
+  run push_invite node test/push_invite.mjs
   # A squad's Start, seated into one room by the REAL seatSquad in server.js --
   # the only place it can be reached, because server.js exports nothing and
   # binds a port on import, so a headless suite could only stub the thing under
