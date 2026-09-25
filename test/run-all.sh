@@ -152,6 +152,14 @@ run callsign node test/callsign.mjs
 # proofs against the REAL server/blocklist.txt -- a suite with its own term list
 # would not notice the shipped list and the rule drifting apart. No server.
 run display_name node test/display_name.mjs
+# Web push is only ever SENT to a real push service (live hotfix, 2026-09-25):
+# server/push-hosts.js, a pure module. Every legitimate endpoint shape, every
+# spoofing trick, and a fuzz that hands each accepted string to https.request,
+# as server.js's webPushSend connects, and to url.parse(), to prove the host
+# either would reach is a push service; and a pin that server.js makes every web
+# push request that one way, straight after the gate. No server. push_persist
+# and push_invite below prove the same end to end.
+run push_hosts node test/push_hosts.mjs
 run timer_safety node test/timer_safety.mjs
 # FFA vs CPUs, in-process: the 'ai' case's duel seat stays key-for-key the
 # historical literal, and a room of plain CPUs hands the turn bot to bot.

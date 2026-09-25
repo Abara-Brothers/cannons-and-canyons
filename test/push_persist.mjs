@@ -54,6 +54,24 @@ const SUB = {
   keys: { p256dh: b64u(ecdh.getPublicKey()), auth: b64u(crypto.randomBytes(16)) },
 };
 
+// Web push is only ever SENT to a real push service (live hotfix, 2026-09-25).
+// The inbox above is admitted by PUSH_EXTRA_HOSTS, the test-only escape hatch;
+// 'localhost' is not, yet it reaches the very SAME inbox — so nothing but the
+// server's host check can keep a request away from it. A player-chosen host
+// could answer 201 and stream forever, and web-push buffers the whole reply.
+const LOCAL_SUB = { endpoint: `https://localhost:${INBOX_PORT}/push-inbox/alice-laptop`, keys: SUB.keys };
+// A stored row whose KEY is an admitted host but whose sub is not. web-push
+// requests sub.endpoint, never the row's key, so the key must not be what is checked.
+const SMUGGLE_KEY = `https://127.0.0.1:${INBOX_PORT}/push-inbox/smuggle-key`;
+const SMUGGLE_SUB = { endpoint: `https://localhost:${INBOX_PORT}/push-inbox/smuggled`, keys: SUB.keys };
+// More distinct refused hosts than the server will log, to prove the log is
+// capped (100 lines) rather than a flood a stream of invented hosts could drive.
+// .invalid never resolves (RFC 6761), so even a regression sends nothing anywhere.
+const REFUSED_ROWS = Array.from({ length: 105 }, (_, i) => {
+  const endpoint = `https://refused-${i}.example.invalid/push/${i}`;
+  return { endpoint, sub: { endpoint, keys: SUB.keys }, platform: 'web' };
+});
+
 // ---- Mock Supabase + push endpoint ------------------------------------------
 const hits = { user: [], upsert: [], nudgeGet: [], pushPost: [], del: [], adminDel: [], errIns: [],
                fcmOauth: [], fcmSend: [] };
@@ -148,6 +166,8 @@ const mock = http.createServer((req, res) => {
         return res.end(JSON.stringify([
           { endpoint: SUB.endpoint, sub: SUB, platform: 'web' },
           { endpoint: FCM_TOKEN, sub: { platform: 'android', token: FCM_TOKEN }, platform: 'android' },
+          { endpoint: SMUGGLE_KEY, sub: SMUGGLE_SUB, platform: 'web' },
+          ...REFUSED_ROWS,
         ]));
       }
       if (req.method === 'DELETE') {
@@ -162,7 +182,7 @@ const mock = http.createServer((req, res) => {
 // The TLS push inbox: every delivery answers 404, so a correct server must
 // then DELETE the endpoint from its store.
 const inbox = tlsOpts ? https.createServer(tlsOpts, (req, res) => {
-  hits.pushPost.push({ path: req.url });
+  hits.pushPost.push({ path: req.url, host: req.headers.host || '' });
   res.writeHead(404); res.end();
 }) : null;
 
@@ -185,6 +205,21 @@ const until = async (test, ms, what) => {
 (async () => {
   await new Promise((r) => mock.listen(MOCK_PORT, r));
   if (inbox) await new Promise((r) => inbox.listen(INBOX_PORT, r));
+  // POSITIVE CONTROL for the zero-request proof below: on the machine running
+  // this, 'localhost' must reach this very inbox. If it did not, "no request
+  // reached localhost" would hold whether or not the server ever tried.
+  if (inbox) {
+    const probe = await new Promise((res) => {
+      const r = https.request({ host: 'localhost', port: INBOX_PORT, path: '/probe', method: 'POST', rejectUnauthorized: false },
+        (resp) => { resp.resume(); resp.on('end', () => res(resp.statusCode)); });
+      r.setTimeout(3000, () => r.destroy(new Error('timeout')));
+      r.on('error', (e) => res(e.code || e.message));
+      r.end();
+    });
+    if (hits.pushPost.some((p) => p.path === '/probe' && p.host === `localhost:${INBOX_PORT}`)) {
+      step('positive control: "localhost" reaches the push inbox on this machine');
+    } else fail(`"localhost" does not reach the push inbox here (${probe}): the zero-request proof would be vacuous`);
+  }
   child = spawn(process.execPath, ['server.js'], {
     env: {
       ...process.env,
@@ -199,12 +234,20 @@ const until = async (test, ms, what) => {
       FCM_API_BASE: `http://127.0.0.1:${MOCK_PORT}`,
       // Test-only: lets the child trust the throwaway loopback cert.
       NODE_TLS_REJECT_UNAUTHORIZED: '0',
+      // Test-only: admits this inbox as a push host, by exact host:port. The
+      // stray spaces are deliberate: the control push below arrives only if the
+      // parse trims them. The empty entry must simply be harmless. Production
+      // never sets this.
+      PUSH_EXTRA_HOSTS: ` 127.0.0.1:${INBOX_PORT} ,`,
       BOT_FIRE_MS: '150', PICK_MS: '300',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let ready = false;
   child.stdout.on('data', (d) => { if (String(d).includes('running at')) ready = true; });
+  let serverOut = '';
+  child.stdout.on('data', (d) => { serverOut += d; });
+  child.stderr.on('data', (d) => { serverOut += d; });
   if (!(await until(() => ready, 8000, 'game server boot'))) return finish();
 
   // Two humans in an invited duel; both say hello with their tokens.
@@ -227,6 +270,17 @@ const until = async (test, ms, what) => {
     && up.apikey === 'sk_test' && up.body.user_id === USER && up.body.endpoint === SUB.endpoint) {
     step('subscription upserted with the SECRET key, keyed to the verified user');
   } else fail(`upsert shape wrong: ${JSON.stringify({ q: up.query, prefer: up.prefer, body: up.body })}`);
+
+  // A second subscription, at a host that is not a push service. Registering it
+  // is deliberately unchanged: accepted and persisted like any other, because
+  // only SENDING is gated — a real service missing from the list can be added
+  // later without a single player having to subscribe again. It also becomes
+  // the seat's in-memory sub, the other route a nudge sends by.
+  send(a, { type: 'pushSub', sub: LOCAL_SUB, token: 'tok-alice' });
+  if (!(await until(() => hits.upsert.length >= 2, 5000, 'second subscription upsert'))) return finish();
+  if (hits.upsert[1].body.endpoint === LOCAL_SUB.endpoint) {
+    step('an endpoint at a non-push-service host is still registered and persisted (only sending is gated)');
+  } else fail(`second upsert wrong: ${JSON.stringify(hits.upsert[1].body)}`);
 
   // Bob joins; Alice fires ONCE and vanishes; Bob keeps playing. There is no
   // shot clock, so the choreography matters: Alice must leave with the turn
@@ -266,15 +320,64 @@ const until = async (test, ms, what) => {
   const g = hits.nudgeGet.find(isNudge);
   if (g.query.includes(`user_id=eq.${USER}`) && g.apikey === 'sk_test') step('nudge looks subscriptions up by account with the secret key');
   else fail(`nudge lookup wrong: ${JSON.stringify(g)}`);
+  // Every inbox request not addressed to the admitted host, bar the test's own probe.
+  const offList = () => hits.pushPost.filter((p) => p.host !== `127.0.0.1:${INBOX_PORT}` && p.path !== '/probe');
   if (!inbox) {
-    step('SKIPPED delivery + cleanup legs: openssl unavailable for the TLS inbox');
+    step('SKIPPED delivery, cleanup and zero-request legs: openssl unavailable for the TLS inbox');
   } else {
-    if (!(await until(() => hits.pushPost.length >= 1, 10000, 'web push delivery'))) return finish();
+    // The CONTROL: the admitted host still gets its push, so what follows is a
+    // refusal of the other host and not a web push path that simply went dead.
+    if (!(await until(() => hits.pushPost.some((p) => p.path === '/push-inbox/alice-phone'
+      && p.host === `127.0.0.1:${INBOX_PORT}`), 10000, 'web push delivery'))) return finish();
     step('an encrypted web push reached the stored endpoint');
     if (!(await until(() => hits.del.length >= 1, 10000, 'dead-endpoint cleanup'))) return finish();
     if (hits.del[0].query.includes('endpoint=eq.')) step('a 404 endpoint was deleted from the store (self-cleaning)');
     else fail(`cleanup query wrong: ${hits.del[0].query}`);
   }
+
+  // The refusal legs below need no inbox, so they run with or without openssl.
+  // One nudge refuses every endpoint in a single synchronous loop; wait for its
+  // last log line, then a margin for anything a refusal might wrongly set off.
+  // The zero-request check runs again at the very end of this file.
+  const HOST_LINE = /^\[push\] web push not sent: endpoint not allowed \(host "[^"]*"\)$/;
+  const CAP_LINE = /^\[push\] refusal log full at 100 hosts: /;
+  const pushLines = () => serverOut.split('\n').filter((l) => l.startsWith('[push]'));
+  const logWait0 = Date.now();
+  while (Date.now() - logWait0 < 10000 && !pushLines().some((l) => CAP_LINE.test(l))) {
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  await new Promise((r) => setTimeout(r, 1500));
+  if (inbox) {
+    const stray = offList();
+    if (stray.length === 0) {
+      step('ZERO requests reached a non-push-service host — neither the in-memory sub nor a stored row whose key looked admitted');
+    } else fail(`a nudge sent ${stray.length} request(s) to a host that is not a push service: ${JSON.stringify(stray.slice(0, 4))}`);
+  }
+  // Refused is not dead: nothing was asked, so nothing may be deleted.
+  const dels = hits.del.map((d) => decodeURIComponent(d.query));
+  const wrongDel = [LOCAL_SUB.endpoint, SMUGGLE_KEY, REFUSED_ROWS[0].endpoint].filter((e) => dels.some((q) => q.includes(e)));
+  if (wrongDel.length === 0) step('a refused endpoint is skipped, NOT deleted — adding its host later loses nobody');
+  else fail(`a refused endpoint was deleted from the store: ${wrongDel.join(', ')}`);
+  // One line per distinct refused host, worded so it never claims the host is
+  // not a push service (an endpoint can be refused for its port or spelling at
+  // a real service's host), capped at 100, then ONE line saying the log is full
+  // so a reader knows it is incomplete. Never the endpoint itself (a push
+  // endpoint is a capability URL).
+  const lines = pushLines();
+  const hostLines = lines.filter((l) => HOST_LINE.test(l));
+  const capLines = lines.filter((l) => CAP_LINE.test(l));
+  const otherLines = lines.filter((l) => !HOST_LINE.test(l) && !CAP_LINE.test(l));
+  if (otherLines.length === 0) step('every refusal line reads "endpoint not allowed (host ...)", or says the log is full');
+  else fail(`a [push] line is worded otherwise: ${JSON.stringify(otherLines.slice(0, 2))}`);
+  const localLines = hostLines.filter((l) => l.includes('(host "localhost")'));
+  if (localLines.length === 1) step('the refused host is logged exactly once for its two endpoints');
+  else fail(`expected one log line for the refused host "localhost", got ${localLines.length}: ${JSON.stringify(localLines)}`);
+  if (hostLines.length === 100 && capLines.length === 1 && lines.length === 101 && CAP_LINE.test(lines[100])) {
+    step(`the refusal log is capped: ${1 + REFUSED_ROWS.length} distinct refused hosts, 100 host lines, then one "log full" line`);
+  } else fail(`expected 100 host lines then one "log full" line for ${1 + REFUSED_ROWS.length} distinct hosts, got ${hostLines.length} host line(s) and ${capLines.length} "log full" line(s) of ${lines.length}`);
+  const leakedEndpoint = serverOut.split('\n').filter((l) => l.includes('/push-inbox/') || l.includes('/push/0'));
+  if (leakedEndpoint.length === 0) step('no log line carries an endpoint — hostnames only');
+  else fail(`the server logged a push endpoint: ${JSON.stringify(leakedEndpoint.slice(0, 2))}`);
 
   // ---- Health readiness (8.58) ----------------------------------------------
   // Production silently dropped every push subscription for nine batches
@@ -395,6 +498,13 @@ const until = async (test, ms, what) => {
   await new Promise((r) => setTimeout(r, 500));
   if (hits.errIns.length === before + 1) step('an oversized body is cut off and never stored');
   else fail(`oversized body produced ${hits.errIns.length - before - 1} extra insert(s)`);
+
+  // The refusal must hold for the whole run, not just the moment it was checked.
+  if (inbox) {
+    const late = offList();
+    if (late.length === 0) step('still zero requests to a non-push-service host at the end of the run');
+    else fail(`a request reached a non-push-service host after all: ${JSON.stringify(late.slice(0, 4))}`);
+  }
 
   try { b.close(); } catch {}
   mock.close();

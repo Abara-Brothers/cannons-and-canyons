@@ -37,6 +37,9 @@ import { loadBlocklist, normaliseCallsign } from './server/callsign.js';
 // and it is the last name path in this codebase that predates chosen names
 // (BINDING.md resolution 27). See server/display-name.js for what it proves.
 import { createNameProofs } from './server/display-name.js';
+// Which hosts a web push may be sent to. See server/push-hosts.js for why a
+// client-supplied endpoint must never choose where this process connects.
+import { webPushHostAllowed } from './server/push-hosts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, 'public');
@@ -78,28 +81,71 @@ try {
   webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:jordan@bluepixel.com.au', pub, priv);
   vapidPublicKey = pub;
 } catch { webpush = null; }
+// Web push is only ever SENT to a real push service's host (server/push-hosts.js).
+// PUSH_EXTRA_HOSTS exists for ONE reason: test/push_persist.mjs and
+// test/push_invite.mjs run their own https inbox on 127.0.0.1, which no browser
+// ever hands out. Production never sets it, and render.yaml does not and must
+// not list it. Comma-separated; each entry an exact host, or host:port for any
+// port but 443. Read once, here. Lowercasing and dropping empties only keep the
+// list tidy: webPushHostAllowed() lowercases each entry itself, and an empty
+// entry can never match a host.
+const PUSH_EXTRA_HOSTS = (process.env.PUSH_EXTRA_HOSTS || '')
+  .split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
+// A web push refused by webPushHostAllowed() is logged once per distinct host per
+// process, by HOSTNAME only: the endpoint itself is a capability URL. Worded so
+// it never claims the host is not a push service: an endpoint at a real one can
+// still be refused for its port or spelling. Capped, so a stream of invented
+// hosts cannot turn the log into a flood, and the cap says once that it was
+// reached, so a reader knows the log is incomplete from then on.
+const refusedPushHosts = new Set();
+let refusedPushLogFull = false;
+function noteRefusedPushHost(endpoint) {
+  let host = '(unparseable)';
+  try { host = new URL(endpoint).hostname.slice(0, 253); } catch {}
+  if (refusedPushHosts.has(host)) return;
+  if (refusedPushHosts.size >= 100) {
+    if (!refusedPushLogFull) console.warn('[push] refusal log full at 100 hosts: no further refused host is logged until restart');
+    refusedPushLogFull = true;
+    return;
+  }
+  refusedPushHosts.add(host);
+  console.warn(`[push] web push not sent: endpoint not allowed (host ${JSON.stringify(host)})`);
+}
+// THE GATE, and its log: may a web push be sent to this URL? Asked twice for
+// every web device, with the URL webPushSend requests: by pushToUser when it
+// counts devices, so a refused one is never counted, sent to or deleted; and by
+// webPushSend itself, on the very string it hands to https.request, so nothing
+// else — wherever a sub came from — can reach a host this did not approve.
+function webPushGate(endpoint) {
+  if (webPushHostAllowed(endpoint, PUSH_EXTRA_HOSTS)) return true;
+  noteRefusedPushHost(endpoint);
+  return false;
+}
 
-// ONE web push, SENT BY HAND. web-push still builds it — the VAPID signature,
-// the aes128gcm body, every header — but its sendNotification is not trusted
-// with the connection, because the endpoint is the PLAYER'S CHOICE: the engine
-// takes any https:// URL. Measured on Node 26 against a local TLS endpoint:
+// ONE web push, SENT BY HAND, and only to a push service. web-push still builds
+// it — the VAPID signature, the aes128gcm body, every header — and the URL it
+// hands back is gated (webPushGate) on the line before the request is made from
+// it. A refusal carries no `statusCode`, so its row is skipped, not deleted.
+// web-push's own sendNotification is not trusted with the connection. Measured
+// on Node 26 against a local TLS endpoint:
 //   * with no `timeout` a push service that never answers holds the socket for
 //     ever, and `timeout` is an IDLE timer — one that sends a header line every
 //     few seconds holds it for ever all the same;
-//   * it buffers the whole response body into one string, so an endpoint that
-//     answers 201 and streams without end throws `RangeError: Invalid string
-//     length` inside a socket handler: an uncaughtException, which is shutdown,
-//     every live match dropped by one nudge or one squad invite.
-// So there is ONE ABSOLUTE DEADLINE, armed before the connect, and the status
-// line is all that is read: the connection is closed the moment it arrives.
-// Rejects like sendNotification did, with `statusCode` for an HTTP refusal —
-// that is all its callers read.
+//   * it buffers the whole response body into one string, so a reply that
+//     streams without end throws `RangeError: Invalid string length` inside a
+//     socket handler: an uncaughtException, which is shutdown.
+// The gate keeps a player's own host out; this keeps a push service that stalls
+// or misbehaves from holding a socket or the process. So there is ONE ABSOLUTE
+// DEADLINE, armed before the connect, and the status line is all that is read:
+// the connection is closed the moment it arrives. Rejects like sendNotification
+// did, with `statusCode` for an HTTP refusal — that is all its callers read.
 const WEB_PUSH_MS = 10000;
 function webPushSend(sub, payload) {
   return new Promise((resolve, reject) => {
     let req, sent;
     try {
       sent = webpush.generateRequestDetails(sub, payload);
+      if (!webPushGate(sent.endpoint)) return reject(new Error('web push host not allowed'));
       req = https.request(sent.endpoint, { method: sent.method, headers: sent.headers });
     } catch (e) { return reject(e); }
     const deadline = setTimeout(() => req.destroy(new Error('web push timeout')), WEB_PUSH_MS);
@@ -747,9 +793,12 @@ async function pushToUser(uid, { title, body, url, tag }, { seed = null, onDrop 
     } catch { /* the in-memory sub still gets its chance */ }
   }
   // A device counts only on a transport this host has: a web row needs the
-  // VAPID keys, an iOS token APNs, an Android token FCM.
+  // VAPID keys, an iOS token APNs, an Android token FCM. A web device counts
+  // only at a push service's host, judged on sub.endpoint, the URL webPushSend
+  // requests — not the map key, which for a stored row need not match it. A
+  // refused one is not counted, not sent to and not deleted (webPushGate).
   const ready = [...targets].filter(([, t]) =>
-    (t.platform === 'web' ? webpush && t.sub : t.platform === 'ios' ? apns : fcm));
+    (t.platform === 'web' ? webpush && t.sub && webPushGate(t.sub.endpoint) : t.platform === 'ios' ? apns : fcm));
   // AFTER the read, before any send, and read rather than listened for: an
   // 'abort' listener that throws is an uncaughtException, which is shutdown.
   if (!ready.length || (signal && signal.aborted)) return false;

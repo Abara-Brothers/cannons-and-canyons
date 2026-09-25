@@ -25,10 +25,11 @@
 // same one read, gets the same answer and sends nothing; and a read that
 // outlives the seam's bound sends nothing once it lands.
 //
-// And the sender's own bounds, because an invite needs no match and a web
-// endpoint is any https:// URL a player names: the read takes the ten newest
-// devices, a web send gives up after one absolute deadline and never reads a
-// response body, and nothing is sent before the caller has its answer.
+// And the sender's own bounds, because an invite needs no match: a web push
+// goes only to a push service's host, judged on the URL it requests; the read
+// takes the ten newest devices; a web send gives up after one absolute deadline
+// and never reads a response body; and nothing is sent before the caller has
+// its answer.
 //
 // Self-hosted: spawns its OWN game servers with Supabase, both Apple hosts and
 // FCM pointed at local mocks. Nothing here can reach production, Apple or Google.
@@ -73,6 +74,7 @@ const ERIN  = '55555555-5555-4555-8555-555555555555';   // Bob's friend, a brows
 const FRANK = '66666666-6666-4666-8666-666666666666';   // Bob's friend, an Android phone only
 const GREG  = '77777777-7777-4777-8777-777777777777';   // Bob's friend, fifteen devices, three hostile browsers
 const HANK  = '88888888-8888-4888-8888-888888888888';   // Bob's friend, two iPhones Apple answers awkwardly
+const IVY   = '99999999-9999-4999-8999-999999999999';   // Bob's friend, two browsers at a host that is no push service
 const TOKENS = { 'tok-alice': ALICE, 'tok-bob': BOB, 'tok-carol': CAROL };
 // displayName() proves a name by re-deriving callsign_key from callsign, so
 // these pairs are what the server is entitled to believe. `state.bobKey` is
@@ -87,8 +89,9 @@ const PROFILES = {
   [FRANK]: profile(FRANK, 'Ember Lynx', 'FFFF77'),
   [GREG]: profile(GREG, 'Flint Osprey', 'GGGG88'),
   [HANK]: profile(HANK, 'Cinder Heron', 'HHHH99'),
+  [IVY]: profile(IVY, 'Ivory Wren', 'JJJJ22'),
 };
-const FRIENDS = [[ALICE, BOB], [BOB, DAVE], [BOB, ERIN], [BOB, FRANK], [BOB, GREG], [BOB, HANK]];
+const FRIENDS = [[ALICE, BOB], [BOB, DAVE], [BOB, ERIN], [BOB, FRANK], [BOB, GREG], [BOB, HANK], [BOB, IVY]];
 // `holdSubs` parks Alice's next subscription read until the test releases it.
 // `gone` is every endpoint the server has DELETEd: the store stops returning it.
 // `expired` is whether Apple has already told the server its token expired.
@@ -137,6 +140,8 @@ try {
 // one skips the payload-content leg loudly rather than pretending.
 let ece = null;
 try { ece = (await import('http_ece')).default; } catch { /* payload leg skipped */ }
+// VAPID keys for Part 7b's host, which has web push and nothing else.
+const VAPID = (await import('web-push')).default.generateVAPIDKeys();
 
 const b64u = (b) => Buffer.from(b).toString('base64url');
 // PHONE is the seat's in-memory subscription and is deliberately NEVER returned
@@ -152,6 +157,11 @@ let PHONE = null, LAPTOP = null, TABLET = null, ERIN_WEB = null;   // filled onc
 // Greg's three browsers, named by what their push service does (see the inbox).
 const GREG_WEB = ['greg-hang', 'greg-drip', 'greg-flood'];
 let gregWeb = null;
+// Ivy's two browsers are at 'localhost' — the inbox itself, by a name the
+// servers do not admit (see Part 7b). IVY_KEY is the second one's store key,
+// which IS admitted; its sub is not.
+const ivyEc = crypto.createECDH('prime256v1'); ivyEc.generateKeys();
+let IVY_LOCAL = null, IVY_SMUGGLED = null, IVY_KEY = null;
 
 const hits = { user: [], subGet: [], subPost: [], del: [], inbox: [], fcm: [], apns: [], apnsFallback: [] };
 const webTo = (name) => hits.inbox.filter((h) => h.path.includes(name));
@@ -265,6 +275,12 @@ const mock = http.createServer((req, res) => {
           row(HANK_EXP, { platform: 'ios', token: HANK_EXP }, 'ios', 23),
         ]));
       }
+      if (uid === IVY) {
+        return json(pg([
+          row(IVY_LOCAL.endpoint, IVY_LOCAL, 'web', 24),
+          row(IVY_KEY, IVY_SMUGGLED, 'web', 23),
+        ]));
+      }
       return json([]);
     }
     return json([]);
@@ -275,18 +291,19 @@ const mock = http.createServer((req, res) => {
 // (404), so the drop path runs on it and both halves of the cleanup are
 // exercised; the TABLET is Gone (410), the other answer that means dead.
 //
-// Greg's three browsers are what a player can point an endpoint at, since the
-// engine takes any https:// URL: one push service never answers; one sends a
-// status line and then a header line a second, never the blank line that ends
-// them, so the connection is never idle; one answers 201 and streams a body
-// without end (capped HERE at 16 MB, so a regression cannot take this machine
-// down with it — a sender that reads bodies reaches the cap and then waits).
+// Greg's three browsers are push services that misbehave, at a host the
+// servers admit (PUSH_EXTRA_HOSTS names this inbox): one never answers; one
+// sends a status line and then a header line a second, never the blank line
+// that ends them, so the connection is never idle; one answers 201 and streams
+// a body without end (capped HERE at 16 MB, so a regression cannot take this
+// machine down with it — a sender that reads bodies reaches the cap and then
+// waits).
 const FLOOD_CAP = 16 * 1024 * 1024;
 const inbox = tlsOpts ? https.createServer(tlsOpts, (req, res) => {
   const chunks = [];
   req.on('data', (c) => chunks.push(c));
   req.on('end', () => {
-    hits.inbox.push({ path: req.url, body: Buffer.concat(chunks) });
+    hits.inbox.push({ path: req.url, body: Buffer.concat(chunks), host: req.headers.host || '' });
     const name = req.url.split('/').pop();
     if (GREG_WEB.includes(name)) {
       const c = conns[name] = { arrived: Date.now(), closed: 0 };
@@ -379,7 +396,8 @@ function squadDriver(ws) {
 const sameReply = (x, y) => x.raw.replace(`"id":"${x.m.id}"`, '') === y.raw.replace(`"id":"${y.m.id}"`, '');
 
 // One game server against the mocks. `env` adds to or overrides the transport
-// settings; the log of every server is kept for the failure dump.
+// settings; the log of every server is kept for the failure dump, and this
+// server's own output is handed back as out().
 async function boot(port, env) {
   const child = spawn(process.execPath, ['server.js'], {
     env: { ...process.env, PORT: String(port), BOT_FIRE_MS: '150', PICK_MS: '300', SOCIAL_PUSH_MS: '0', ...env },
@@ -395,7 +413,7 @@ async function boot(port, env) {
   // leaving every squad frame answered 'unavailable' — which would make every
   // invite assertion below fail for a reason that has nothing to do with push.
   if (/social off/.test(own)) { fail(`the social layer did not build: ${own.match(/\[boot\] social off.*/)?.[0]}`); return false; }
-  return true;
+  return { out: () => own };
 }
 
 (async () => {
@@ -411,6 +429,11 @@ async function boot(port, env) {
     keys: { p256dh: b64u(erinEc.getPublicKey()), auth: b64u(crypto.randomBytes(16)) } };
   gregWeb = GREG_WEB.map((name) => ({ endpoint: `https://127.0.0.1:${INBOX}/push-inbox/${name}`,
     keys: { p256dh: b64u(gregEc.getPublicKey()), auth: b64u(crypto.randomBytes(16)) } }));
+  IVY_LOCAL = { endpoint: `https://localhost:${INBOX}/push-inbox/ivy-local`,
+    keys: { p256dh: b64u(ivyEc.getPublicKey()), auth: b64u(crypto.randomBytes(16)) } };
+  IVY_SMUGGLED = { endpoint: `https://localhost:${INBOX}/push-inbox/ivy-smuggled`,
+    keys: { p256dh: b64u(ivyEc.getPublicKey()), auth: b64u(crypto.randomBytes(16)) } };
+  IVY_KEY = `https://127.0.0.1:${INBOX}/push-inbox/ivy-key`;
   await new Promise((r) => mock.listen(MOCK, '127.0.0.1', r));
   if (inbox) await new Promise((r) => inbox.listen(INBOX, '127.0.0.1', r));
   await new Promise((r) => apnsMock.listen(APNS, '127.0.0.1', r));
@@ -423,6 +446,9 @@ async function boot(port, env) {
     SUPABASE_URL: `http://127.0.0.1:${MOCK}`,
     SUPABASE_PUBLISHABLE_KEY: 'pk_test', SUPABASE_SECRET_KEY: 'sk_test',
     NODE_TLS_REJECT_UNAUTHORIZED: '0',
+    // Test-only: admits this suite's inbox as a push service, by exact
+    // host:port, on every server this file boots. Production never sets it.
+    PUSH_EXTRA_HOSTS: `127.0.0.1:${INBOX}`,
   };
   const ALL_TRANSPORTS = {
     ...SUPA,
@@ -765,7 +791,8 @@ async function boot(port, env) {
   const NO_WEB = { VAPID_PUBLIC_KEY: 'x', VAPID_PRIVATE_KEY: 'x' };
   const world = async (env, want, what) => {
     const port = await freePort();
-    if (!(await boot(port, { ...SUPA, FIREBASE_SERVICE_ACCOUNT: '', APNS_KEY: '', ...NO_WEB, ...env }))) return null;
+    const booted = await boot(port, { ...SUPA, FIREBASE_SERVICE_ACCOUNT: '', APNS_KEY: '', ...NO_WEB, ...env });
+    if (!booted) return null;
     const h = await fetch(`http://127.0.0.1:${port}/health`).then((r) => r.json()).catch(() => ({}));
     if (h.webpush !== want.webpush || h.fcm !== want.fcm || h.apns !== want.apns) {
       fail(`${what} is not the world intended: ${JSON.stringify({ webpush: h.webpush, fcm: h.fcm, apns: h.apns })}`);
@@ -776,7 +803,7 @@ async function boot(port, env) {
     send(ws, { type: 'hello', token: 'tok-bob' });
     const sq = await d.ask({ type: 'squad', op: 'create', id: 'w1' }, `a squad on ${what}`);
     if (!sq || !sq.m.code) { fail(`no squad on ${what}: ${sq && sq.raw}`); return null; }
-    return d;
+    return Object.assign(d, { port, code: sq.m.code, out: booted.out });
   };
 
   // One invite on a host with a single native sender: `want` is the answer, and
@@ -831,14 +858,82 @@ async function boot(port, env) {
   if (none.m.ok === true && none.m.delivered === 'none' && noSends(q)) step("a host with no push transport answers 'none' and sends nothing");
   else fail(`the bare host's invite was wrong: reply=${none.raw} ${moved(q)}`);
 
+  // ---- Part 7b: a web push goes only to a push service's host -----------------
+  // The engine stores any https:// endpoint a player names and the store hands
+  // back whatever was stored, so the gate is at the send (server/push-hosts.js).
+  // Ivy's two browsers are at 'localhost': this very inbox, under a name no
+  // server here admits, so nothing but that gate keeps a request from arriving.
+  // The second is stored under a key that IS admitted, with a sub that is not,
+  // because what is requested is sub.endpoint. A refused browser is no device
+  // this host will reach, so the answer is 'none', real or dropped: 'push' would
+  // tell the inviter a notification went out when none did. It is skipped, not
+  // deleted, and its host is logged once, by name only.
+  if (!inbox) {
+    step('SKIPPED Part 7b: openssl unavailable for the TLS inbox');
+  } else {
+    // POSITIVE CONTROL: from this machine 'localhost' does reach the inbox, or
+    // "nothing arrived" below would hold whatever the servers did.
+    const probe = await new Promise((res) => {
+      const r = https.request(`https://localhost:${INBOX}/push-inbox/ivy-probe`, { method: 'POST', rejectUnauthorized: false },
+        (resp) => { resp.resume(); resp.on('end', () => res(resp.statusCode)); });
+      r.setTimeout(3000, () => r.destroy(new Error('timeout')));
+      r.on('error', (e) => res(e.code || e.message));
+      r.end();
+    });
+    if (!webTo('ivy-probe').some((h) => h.host === `localhost:${INBOX}`)) {
+      fail(`"localhost" does not reach the inbox here (${probe}): Part 7b would prove nothing`);
+      return finish();
+    }
+    step('positive control: "localhost" reaches the push inbox on this machine');
+    const webOnly = await world({ VAPID_PUBLIC_KEY: VAPID.publicKey, VAPID_PRIVATE_KEY: VAPID.privateKey },
+      { webpush: true, fcm: false, apns: false }, 'a web-only host');
+    if (!webOnly) return finish();
+    // THE CONTROL: this host's web path is live, so a 'none' below is the gate.
+    q = traffic();
+    const erin7 = await webOnly.ask({ type: 'squad', op: 'invite', to: ERIN, id: 'w7' }, "the web-only host's invite to Erin");
+    if (!erin7) return finish();
+    const erinHit = () => hits.inbox.slice(q.web).some((h) => h.path.endsWith('/erin-laptop') && h.host === `127.0.0.1:${INBOX}`);
+    if (erin7.m.delivered === 'push' && (await waitFor(erinHit, 10000))) {
+      step("control: the same host answers 'push' for Erin's browser at the admitted host, and reaches it");
+    } else fail(`the web-only host's web path is not live: reply=${erin7.raw} ${moved(q)}`);
+    const del0 = hits.del.length;
+    const ivy1 = await webOnly.ask({ type: 'squad', op: 'invite', to: IVY, id: 'w8' }, "the web-only host's invite to Ivy");
+    if (!ivy1) return finish();
+    // Carol joins, and Ivy has a block with her that Bob knows nothing of: the
+    // same invite is now DROPPED, and asks the seam's dry run instead.
+    const c7 = await openWs(webOnly.port);
+    const carol7 = squadDriver(c7);
+    send(c7, { type: 'hello', token: 'tok-carol' });
+    const j7 = await carol7.ask({ type: 'squad', op: 'join', code: webOnly.code, id: 'j7' }, "Carol's join on the web-only host");
+    if (!j7 || !Array.isArray(j7.m.members) || j7.m.members.length !== 2) { fail(`Carol did not join the web-only host's squad: ${j7 && j7.raw}`); return finish(); }
+    state.blocks = [{ blocker: IVY, blocked: CAROL }];
+    const ivy2 = await webOnly.ask({ type: 'squad', op: 'invite', to: IVY, id: 'w9' }, "the web-only host's dropped invite to Ivy");
+    state.blocks = [];
+    if (!ivy2) return finish();
+    await settle(1500);   // room for a send to have gone out anyway
+    if (ivy1.m.ok === true && ivy1.m.delivered === 'none' && sameReply(ivy1, ivy2)) {
+      step("a friend whose browsers are all at a host that is no push service is answered 'none', real or dropped");
+    } else fail(`a refused browser was counted: real=${ivy1.raw} dropped=${ivy2.raw}`);
+    const ivyWeb = hits.inbox.filter((h) => /\/ivy-(local|smuggled|key)$/.test(h.path));
+    if (!ivyWeb.length) step('ZERO requests reached that host: neither the plain endpoint nor the one stored under an admitted key');
+    else fail(`a web push reached a host that is no push service: ${JSON.stringify(ivyWeb.map((h) => `${h.host}${h.path}`))}`);
+    const ivyDel = hits.del.slice(del0).filter((d) => /ivy-/.test(decodeURIComponent(d)));
+    if (!ivyDel.length) step('a refused browser is skipped, not DELETEd');
+    else fail(`a refused browser was DELETEd: ${JSON.stringify(ivyDel)}`);
+    const refusals = webOnly.out().split('\n').filter((l) => l.startsWith('[push]'));
+    if (JSON.stringify(refusals) === JSON.stringify(['[push] web push not sent: endpoint not allowed (host "localhost")'])
+      && !webOnly.out().includes('/push-inbox/')) {
+      step('the refused host is logged once for both browsers and both invites, by name, and no endpoint reaches the log');
+    } else fail(`the refusal log is wrong: ${JSON.stringify(refusals)}${webOnly.out().includes('/push-inbox/') ? ', and an endpoint was logged' : ''}`);
+  }
+
   // ---- Part 6b, concluded: every web send ends, by one absolute deadline ------
   // An endpoint that never answers held its socket for ever, and so did one
   // that keeps the connection busy — an IDLE timer never fires on it. Each send
   // now has ten seconds from the moment it starts, whatever arrives meanwhile:
   // not much less, or a slow real push service loses its notification; not
-  // more, or a player can make the server hold sockets for as long as they
-  // like, twenty invites a minute per socket. Neither send is a dead endpoint,
-  // so neither may be DELETEd.
+  // more, or a push service that stalls holds a socket per device for as long
+  // as it stalls. Neither send is a dead endpoint, so neither may be DELETEd.
   if (inbox) {
     for (const name of ['greg-hang', 'greg-drip']) {
       const c = conns[name];
