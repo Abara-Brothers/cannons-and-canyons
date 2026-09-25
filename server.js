@@ -34,6 +34,9 @@ import { loadBlocklist, normaliseCallsign } from './server/callsign.js';
 // and it is the last name path in this codebase that predates chosen names
 // (BINDING.md resolution 27). See server/display-name.js for what it proves.
 import { createNameProofs } from './server/display-name.js';
+// Which hosts a web push may be sent to. See server/push-hosts.js for why a
+// client-supplied endpoint could otherwise take this whole process down.
+import { webPushHostAllowed } from './server/push-hosts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, 'public');
@@ -75,6 +78,13 @@ try {
   webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:jordan@bluepixel.com.au', pub, priv);
   vapidPublicKey = pub;
 } catch { webpush = null; }
+// Web push is only ever SENT to a real push service's host (server/push-hosts.js).
+// PUSH_EXTRA_HOSTS exists for ONE reason: test/push_persist.mjs runs its own
+// https inbox on 127.0.0.1, which no browser ever hands out. Production never
+// sets it, and render.yaml does not and must not list it. Comma-separated; each
+// entry an exact host, or host:port for any port but 443. Read once, here.
+const PUSH_EXTRA_HOSTS = (process.env.PUSH_EXTRA_HOSTS || '')
+  .split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
 
 // ---- Supabase (ADR-005) -------------------------------------------------------
 // Two keys, two jobs, deliberately separated:
@@ -607,6 +617,17 @@ async function apnsSend(token, title, body, url) {
 // the account. A push endpoint answering 404/410 is dead — drop it from both
 // stores so the lists self-clean (ISSUE-002's cleanup requirement).
 function pushNudge(room, seat) { pushNudgeAsync(room, seat).catch(() => {}); }
+// A web push refused by webPushHostAllowed() is logged once per distinct host per
+// process, by HOSTNAME only: the endpoint itself is a capability URL. Capped, so
+// a stream of invented hosts cannot turn the log into a flood.
+const refusedPushHosts = new Set();
+function noteRefusedPushHost(endpoint) {
+  let host = '(unparseable)';
+  try { host = new URL(endpoint).hostname.slice(0, 253); } catch {}
+  if (refusedPushHosts.has(host) || refusedPushHosts.size >= 100) return;
+  refusedPushHosts.add(host);
+  console.warn(`[push] web push not sent to ${JSON.stringify(host)}: not a push service endpoint`);
+}
 async function pushNudgeAsync(room, seat) {
   const pl = room.players[seat];
   // Either transport is enough to be worth trying: a web-only server (no FCM
@@ -643,6 +664,10 @@ async function pushNudgeAsync(room, seat) {
   for (const [endpoint, { sub, platform }] of targets) {
     if (platform === 'web') {
       if (!webpush || !sub) continue;
+      // Check the URL web-push will actually request: sub.endpoint. NOT the map
+      // key, which for a stored row is r.endpoint and need not match r.sub. A
+      // refused row is skipped, never deleted (see server/push-hosts.js).
+      if (!webPushHostAllowed(sub.endpoint, PUSH_EXTRA_HOSTS)) { noteRefusedPushHost(sub.endpoint); continue; }
       webpush.sendNotification(sub, payload).catch((err) => {
         if (err && (err.statusCode === 404 || err.statusCode === 410)) drop(endpoint);
       });
