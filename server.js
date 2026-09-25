@@ -9,6 +9,7 @@
 // VAPID keys and a Node push library are host concerns the browser copy has no
 // business carrying.
 import http from 'http';
+import https from 'https';     // web push is sent by hand: see webPushSend
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';   // FCM JWT signing — node:crypto, NOT the WebCrypto global
@@ -77,6 +78,43 @@ try {
   webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:jordan@bluepixel.com.au', pub, priv);
   vapidPublicKey = pub;
 } catch { webpush = null; }
+
+// ONE web push, SENT BY HAND. web-push still builds it — the VAPID signature,
+// the aes128gcm body, every header — but its sendNotification is not trusted
+// with the connection, because the endpoint is the PLAYER'S CHOICE: the engine
+// takes any https:// URL. Measured on Node 26 against a local TLS endpoint:
+//   * with no `timeout` a push service that never answers holds the socket for
+//     ever, and `timeout` is an IDLE timer — one that sends a header line every
+//     few seconds holds it for ever all the same;
+//   * it buffers the whole response body into one string, so an endpoint that
+//     answers 201 and streams without end throws `RangeError: Invalid string
+//     length` inside a socket handler: an uncaughtException, which is shutdown,
+//     every live match dropped by one nudge or one squad invite.
+// So there is ONE ABSOLUTE DEADLINE, armed before the connect, and the status
+// line is all that is read: the connection is closed the moment it arrives.
+// Rejects like sendNotification did, with `statusCode` for an HTTP refusal —
+// that is all its callers read.
+const WEB_PUSH_MS = 10000;
+function webPushSend(sub, payload) {
+  return new Promise((resolve, reject) => {
+    let req, sent;
+    try {
+      sent = webpush.generateRequestDetails(sub, payload);
+      req = https.request(sent.endpoint, { method: sent.method, headers: sent.headers });
+    } catch (e) { return reject(e); }
+    const deadline = setTimeout(() => req.destroy(new Error('web push timeout')), WEB_PUSH_MS);
+    req.on('error', (e) => { clearTimeout(deadline); reject(e); });
+    req.on('response', (res) => {
+      clearTimeout(deadline);
+      const { statusCode } = res;
+      res.on('error', () => {});   // abandoned unread: nothing it says matters now
+      req.destroy();
+      if (statusCode >= 200 && statusCode < 300) resolve(statusCode);
+      else reject(Object.assign(new Error(`web push ${statusCode}`), { statusCode }));
+    });
+    req.end(sent.body);
+  });
+}
 
 // ---- Supabase (ADR-005) -------------------------------------------------------
 // Two keys, two jobs, deliberately separated:
@@ -685,6 +723,7 @@ async function apnsSend(token, title, body, url, tag) {
 // found, which is the whole of a squad invite's answer (pushSquadInvite):
 // `dryRun` stops there with that answer and sends nothing, and so does an
 // aborted `signal` — its caller has stopped waiting and answered without it.
+const PUSH_DEVICES_MAX = 10;
 async function pushToUser(uid, { title, body, url, tag }, { seed = null, onDrop = null, dryRun = false, signal = null } = {}) {
   // Either transport is enough to be worth trying: a web-only server (no FCM
   // key) still nudges browsers, and an FCM-only one still nudges phones.
@@ -693,8 +732,15 @@ async function pushToUser(uid, { title, body, url, tag }, { seed = null, onDrop 
   if (seed && seed.endpoint) targets.set(seed.endpoint, { sub: seed, platform: 'web' });
   if (uid && SB_SECRET) {
     try {
+      // THE TEN MOST RECENTLY SEEN DEVICES, not every row. The table has no
+      // per-account cap, the engine takes five subscriptions per socket and
+      // any number of sockets, and an invite needs no match: uncapped, one
+      // account could collect a thousand rows and make every nudge or invite
+      // to it a thousand sends. last_seen_at is refreshed by every upsert, so
+      // the devices still in use come first.
       const rows = await sbAdmin('GET',
-        `/push_subscriptions?user_id=eq.${encodeURIComponent(uid)}&select=endpoint,sub,platform`);
+        `/push_subscriptions?user_id=eq.${encodeURIComponent(uid)}&select=endpoint,sub,platform`
+        + `&order=last_seen_at.desc&limit=${PUSH_DEVICES_MAX}`);
       for (const r of rows || []) {
         if (r.endpoint) targets.set(r.endpoint, { sub: r.sub, platform: r.platform || 'web' });
       }
@@ -721,7 +767,9 @@ async function pushToUser(uid, { title, body, url, tag }, { seed = null, onDrop 
   const sendAll = () => {
     for (const [endpoint, { sub, platform }] of ready) {
       if (platform === 'web') {
-        webpush.sendNotification(sub, payload).catch((err) => {
+        // A deadline or a lost connection has no statusCode: not a dead
+        // endpoint, so nothing is deleted.
+        webPushSend(sub, payload).catch((err) => {
           if (err && (err.statusCode === 404 || err.statusCode === 410)) drop(endpoint);
         });
       } else if (platform === 'ios') {

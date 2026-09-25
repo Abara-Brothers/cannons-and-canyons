@@ -25,6 +25,11 @@
 // same one read, gets the same answer and sends nothing; and a read that
 // outlives the seam's bound sends nothing once it lands.
 //
+// And the sender's own bounds, because an invite needs no match and a web
+// endpoint is any https:// URL a player names: the read takes the ten newest
+// devices, a web send gives up after one absolute deadline and never reads a
+// response body, and nothing is sent before the caller has its answer.
+//
 // Self-hosted: spawns its OWN game servers with Supabase, both Apple hosts and
 // FCM pointed at local mocks. Nothing here can reach production, Apple or Google.
 import http from 'http';
@@ -66,6 +71,8 @@ const CAROL = '33333333-3333-4333-8333-333333333333';   // joins Bob's squad, is
 const DAVE  = '44444444-4444-4444-8444-444444444444';   // Bob's friend, never enabled notifications
 const ERIN  = '55555555-5555-4555-8555-555555555555';   // Bob's friend, a browser and an iPhone only
 const FRANK = '66666666-6666-4666-8666-666666666666';   // Bob's friend, an Android phone only
+const GREG  = '77777777-7777-4777-8777-777777777777';   // Bob's friend, fifteen devices, three hostile browsers
+const HANK  = '88888888-8888-4888-8888-888888888888';   // Bob's friend, two iPhones Apple answers awkwardly
 const TOKENS = { 'tok-alice': ALICE, 'tok-bob': BOB, 'tok-carol': CAROL };
 // displayName() proves a name by re-deriving callsign_key from callsign, so
 // these pairs are what the server is entitled to believe. `state.bobKey` is
@@ -78,10 +85,14 @@ const PROFILES = {
   [DAVE]: profile(DAVE, 'Iron Kestrel', 'DDDD55'),
   [ERIN]: profile(ERIN, 'Slate Viper', 'EEEE66'),
   [FRANK]: profile(FRANK, 'Ember Lynx', 'FFFF77'),
+  [GREG]: profile(GREG, 'Flint Osprey', 'GGGG88'),
+  [HANK]: profile(HANK, 'Cinder Heron', 'HHHH99'),
 };
-const FRIENDS = [[ALICE, BOB], [BOB, DAVE], [BOB, ERIN], [BOB, FRANK]];
+const FRIENDS = [[ALICE, BOB], [BOB, DAVE], [BOB, ERIN], [BOB, FRANK], [BOB, GREG], [BOB, HANK]];
 // `holdSubs` parks Alice's next subscription read until the test releases it.
-const state = { blocks: [], bobKey: 'stone falcon', holdSubs: false, parked: null };
+// `gone` is every endpoint the server has DELETEd: the store stops returning it.
+// `expired` is whether Apple has already told the server its token expired.
+const state = { blocks: [], bobKey: 'stone falcon', holdSubs: false, parked: null, gone: new Set(), expired: false };
 const releaseSubs = () => { state.holdSubs = false; if (state.parked) state.parked(); state.parked = null; };
 
 const TEAM = 'ABCDE12345', KID = 'KEY1234567';
@@ -98,18 +109,28 @@ const SERVICE_ACCOUNT = JSON.stringify({
 });
 const FCM_TOKEN = 'fcm-token-alice-pixel-0001';
 const IOS_TOKEN = 'apns-token-alice-iphone-0001';
+// Greg's twelve Android phones, OLDEST FIRST — the order a table with no ORDER
+// BY tends to hand rows back in. Only the seven newest fit under the cap beside
+// his three browsers, which are newer still.
+const GREG_FCM = Array.from({ length: 12 }, (_, i) => `fcm-token-greg-${String(i).padStart(2, '0')}`);
+const HANK_DEV = 'apns-token-hank-devbuild-0001';   // a development build: production answers BadDeviceToken
+const HANK_EXP = 'apns-token-hank-expiring-0001';   // sent just as Apple expires the provider token
 
 // The TLS inbox, because the engine only accepts https:// web endpoints. Without
 // openssl the web legs are SKIPPED LOUDLY, never faked (push_persist's rule).
-let tlsOpts = null;
+// The throwaway key and cert live only as long as it takes to read them: the
+// directory goes in the same breath, so no run leaves a private key behind.
+let tlsOpts = null, tlsDir = null;
 try {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-inv-'));
-  const key = path.join(dir, 'k.pem'), crt = path.join(dir, 'c.pem');
+  tlsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-inv-'));
+  const key = path.join(tlsDir, 'k.pem'), crt = path.join(tlsDir, 'c.pem');
   execFileSync('openssl', ['req', '-x509', '-newkey', 'ec', '-pkeyopt',
     'ec_paramgen_curve:prime256v1', '-keyout', key, '-out', crt,
     '-days', '1', '-nodes', '-subj', '/CN=127.0.0.1'], { stdio: 'ignore' });
   tlsOpts = { key: fs.readFileSync(key), cert: fs.readFileSync(crt) };
-} catch { /* the web legs are skipped */ }
+} catch { /* the web legs are skipped */ } finally {
+  if (tlsDir) { try { fs.rmSync(tlsDir, { recursive: true, force: true }); } catch { /* judged in the first step */ } }
+}
 
 // http_ece is web-push's own encryption module, so decrypting with it is not a
 // second implementation to drift. It is a TRANSITIVE dependency, so a missing
@@ -124,10 +145,18 @@ const phoneEc = crypto.createECDH('prime256v1'); phoneEc.generateKeys();
 const laptopEc = crypto.createECDH('prime256v1'); laptopEc.generateKeys();
 const phoneAuth = crypto.randomBytes(16), laptopAuth = crypto.randomBytes(16);
 const erinEc = crypto.createECDH('prime256v1'); erinEc.generateKeys();
-let PHONE = null, LAPTOP = null, ERIN_WEB = null;   // filled once the inbox port is known
+// TABLET is store-only too, and its push service answers 410 Gone.
+const tabletEc = crypto.createECDH('prime256v1'); tabletEc.generateKeys();
+const gregEc = crypto.createECDH('prime256v1'); gregEc.generateKeys();
+let PHONE = null, LAPTOP = null, TABLET = null, ERIN_WEB = null;   // filled once the inbox port is known
+// Greg's three browsers, named by what their push service does (see the inbox).
+const GREG_WEB = ['greg-hang', 'greg-drip', 'greg-flood'];
+let gregWeb = null;
 
-const hits = { user: [], subGet: [], subPost: [], del: [], inbox: [], fcm: [], apns: [] };
+const hits = { user: [], subGet: [], subPost: [], del: [], inbox: [], fcm: [], apns: [], apnsFallback: [] };
 const webTo = (name) => hits.inbox.filter((h) => h.path.includes(name));
+// When each of Greg's browsers was reached, and when its connection closed.
+const conns = {};
 
 // ---- mock Supabase -----------------------------------------------------------
 // Only the paths this suite's servers actually reach. Anything else answers []
@@ -178,29 +207,63 @@ const mock = http.createServer((req, res) => {
     }
     if (u.pathname === '/rest/v1/push_subscriptions') {
       if (req.method === 'POST') { hits.subPost.push(JSON.parse(body || '{}')); res.writeHead(201); return res.end(); }
-      if (req.method === 'DELETE') { hits.del.push(u.search); res.writeHead(204); return res.end(); }
+      if (req.method === 'DELETE') {
+        hits.del.push(u.search);
+        state.gone.add((u.searchParams.get('endpoint') || '').slice(3));
+        res.writeHead(204); return res.end();
+      }
       const uid = (u.searchParams.get('user_id') || '').slice(3);
       hits.subGet.push(uid);
-      // ALICE'S LAPTOP, PIXEL AND IPHONE — and the phone browser is NOT here.
-      // It is only ever the seat's in-memory sub, which is what makes the seed
-      // and the seat cleanup observable at all.
+      // PostgREST's own order= and limit=, applied the way it applies them —
+      // after the filter, order first — because a mock that ignored them would
+      // hand back every row and hide the cap under test.
+      const pg = (rows) => {
+        let out = rows.filter((r) => !state.gone.has(r.endpoint));
+        const order = u.searchParams.get('order');
+        if (order) {
+          const [col, dir] = order.split('.');
+          const sign = dir === 'desc' ? -1 : 1;
+          out.sort((x, y) => sign * String(x[col]).localeCompare(String(y[col])));
+        }
+        if (u.searchParams.has('limit')) out = out.slice(0, Number(u.searchParams.get('limit')));
+        return out;
+      };
+      const row = (endpoint, sub, platform, day) => ({ endpoint, sub, platform, last_seen_at: `2026-09-${day}T00:00:00.000Z` });
+      // ALICE'S LAPTOP, TABLET, PIXEL AND IPHONE — and the phone browser is NOT
+      // here. It is only ever the seat's in-memory sub, which is what makes the
+      // seed and the seat cleanup observable at all. The laptop is the newest.
       if (uid === ALICE) {
-        const rows = [
-          { endpoint: LAPTOP.endpoint, sub: LAPTOP, platform: 'web' },
-          { endpoint: FCM_TOKEN, sub: { platform: 'android', token: FCM_TOKEN }, platform: 'android' },
-          { endpoint: IOS_TOKEN, sub: { platform: 'ios', token: IOS_TOKEN }, platform: 'ios' },
-        ];
+        const rows = pg([
+          row(LAPTOP.endpoint, LAPTOP, 'web', 24),
+          row(TABLET.endpoint, TABLET, 'web', 23),
+          row(FCM_TOKEN, { platform: 'android', token: FCM_TOKEN }, 'android', 22),
+          row(IOS_TOKEN, { platform: 'ios', token: IOS_TOKEN }, 'ios', 21),
+        ]);
         if (state.holdSubs) { state.parked = () => json(rows); return; }
         return json(rows);
       }
       if (uid === ERIN) {
-        return json([
-          { endpoint: ERIN_WEB.endpoint, sub: ERIN_WEB, platform: 'web' },
-          { endpoint: 'apns-token-erin-iphone-0001', sub: { platform: 'ios', token: 'apns-token-erin-iphone-0001' }, platform: 'ios' },
-        ]);
+        return json(pg([
+          row(ERIN_WEB.endpoint, ERIN_WEB, 'web', 24),
+          row('apns-token-erin-iphone-0001', { platform: 'ios', token: 'apns-token-erin-iphone-0001' }, 'ios', 23),
+        ]));
       }
       if (uid === FRANK) {
-        return json([{ endpoint: 'fcm-token-frank-pixel-0001', sub: { platform: 'android', token: 'fcm-token-frank-pixel-0001' }, platform: 'android' }]);
+        return json(pg([row('fcm-token-frank-pixel-0001', { platform: 'android', token: 'fcm-token-frank-pixel-0001' }, 'android', 24)]));
+      }
+      // Oldest first, as stored: twelve phones seen 1-12 September, then the
+      // three browsers seen 20-22 September.
+      if (uid === GREG) {
+        return json(pg([
+          ...GREG_FCM.map((t, i) => row(t, { platform: 'android', token: t }, 'android', String(i + 1).padStart(2, '0'))),
+          ...gregWeb.map((s, i) => row(s.endpoint, s, 'web', 20 + i)),
+        ]));
+      }
+      if (uid === HANK) {
+        return json(pg([
+          row(HANK_DEV, { platform: 'ios', token: HANK_DEV }, 'ios', 24),
+          row(HANK_EXP, { platform: 'ios', token: HANK_EXP }, 'ios', 23),
+        ]));
       }
       return json([]);
     }
@@ -208,31 +271,71 @@ const mock = http.createServer((req, res) => {
   });
 });
 
-// The web inbox. The LAPTOP endpoint stays alive; the PHONE endpoint is dead, so
-// the drop path runs on it and both halves of the cleanup are exercised.
+// The web inbox. The LAPTOP endpoint stays alive; the PHONE endpoint is dead
+// (404), so the drop path runs on it and both halves of the cleanup are
+// exercised; the TABLET is Gone (410), the other answer that means dead.
+//
+// Greg's three browsers are what a player can point an endpoint at, since the
+// engine takes any https:// URL: one push service never answers; one sends a
+// status line and then a header line a second, never the blank line that ends
+// them, so the connection is never idle; one answers 201 and streams a body
+// without end (capped HERE at 16 MB, so a regression cannot take this machine
+// down with it — a sender that reads bodies reaches the cap and then waits).
+const FLOOD_CAP = 16 * 1024 * 1024;
 const inbox = tlsOpts ? https.createServer(tlsOpts, (req, res) => {
   const chunks = [];
   req.on('data', (c) => chunks.push(c));
   req.on('end', () => {
     hits.inbox.push({ path: req.url, body: Buffer.concat(chunks) });
-    const dead = req.url.includes('alice-phone');
-    res.writeHead(dead ? 404 : 201); res.end();
+    const name = req.url.split('/').pop();
+    if (GREG_WEB.includes(name)) {
+      const c = conns[name] = { arrived: Date.now(), closed: 0 };
+      const s = req.socket;
+      s.on('close', () => { c.closed = Date.now(); });
+      if (name === 'greg-hang') return;
+      if (name === 'greg-drip') {
+        s.write('HTTP/1.1 201 Created\r\n');
+        const t = setInterval(() => { if (!s.destroyed) s.write('X-Drip: 1\r\n'); }, 1000);
+        s.on('close', () => clearInterval(t));
+        return;
+      }
+      res.writeHead(201);
+      const chunk = Buffer.alloc(64 * 1024, 120);
+      let sent = 0;
+      const pump = () => { while (!res.destroyed && sent < FLOOD_CAP) { sent += chunk.length; if (!res.write(chunk)) return; } };
+      res.on('drain', pump);
+      pump();
+      return;
+    }
+    const dead = req.url.includes('alice-phone') ? 404 : req.url.includes('alice-tablet') ? 410 : 0;
+    res.writeHead(dead || 201); res.end();
   });
 }) : null;
 
-// mock APNs (HTTP/2, plaintext h2c), always accepting: this suite is about the
-// PAYLOAD and the COLLAPSE KEY. push_apns.mjs owns the dead-token contract.
-const apnsMock = http2.createServer((req, res) => {
+// mock APNs (HTTP/2, plaintext h2c). Accepting, bar two of Hank's tokens: this
+// suite is about the PAYLOAD and the COLLAPSE KEY, and those two make apnsSend
+// take its retry and its sandbox resend, the two requests besides the first.
+// push_apns.mjs owns the dead-token contract.
+const apnsServer = (record, answer) => http2.createServer((req, res) => {
   let body = '';
   req.setEncoding('utf8');
   req.on('data', (c) => { body += c; });
   req.on('end', () => {
     let parsed = null; try { parsed = JSON.parse(body); } catch {}
-    hits.apns.push({ token: (req.headers[':path'] || '').replace('/3/device/', ''), headers: req.headers, payload: parsed });
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end('');
+    const token = (req.headers[':path'] || '').replace('/3/device/', '');
+    record.push({ token, headers: req.headers, payload: parsed });
+    const [status, reason] = answer(token);
+    res.writeHead(status, { 'content-type': 'application/json' });
+    res.end(reason ? JSON.stringify({ reason }) : '');
   });
 });
+const apnsMock = apnsServer(hits.apns, (token) => {
+  if (token === HANK_DEV) return [400, 'BadDeviceToken'];
+  if (token === HANK_EXP && !state.expired) { state.expired = true; return [403, 'ExpiredProviderToken']; }
+  return [200];
+});
+// The sandbox host, where a development build's token is valid.
+const apnsSandbox = apnsServer(hits.apnsFallback, () => [200]);
 
 const openWs = (port) => new Promise((res, rej) => {
   const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
@@ -246,6 +349,12 @@ const until = async (test, ms, what) => {
   return false;
 };
 const settle = (ms) => new Promise((r) => setTimeout(r, ms));
+// until() without its own FAIL line, for a wait whose caller names the failure.
+const waitFor = async (test, ms) => {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) { if (test()) return true; await settle(100); }
+  return !!test();
+};
 
 // Every transport's traffic, and the subscription reads, as they stand; then
 // what moved since.
@@ -291,15 +400,24 @@ async function boot(port, env) {
 
 (async () => {
   const MOCK = await freePort(), INBOX = await freePort(), APNS = await freePort(), GAME = await freePort();
+  const APNS_SANDBOX = await freePort();
   PHONE = { endpoint: `https://127.0.0.1:${INBOX}/push-inbox/alice-phone`,
     keys: { p256dh: b64u(phoneEc.getPublicKey()), auth: b64u(phoneAuth) } };
   LAPTOP = { endpoint: `https://127.0.0.1:${INBOX}/push-inbox/alice-laptop`,
     keys: { p256dh: b64u(laptopEc.getPublicKey()), auth: b64u(laptopAuth) } };
+  TABLET = { endpoint: `https://127.0.0.1:${INBOX}/push-inbox/alice-tablet`,
+    keys: { p256dh: b64u(tabletEc.getPublicKey()), auth: b64u(crypto.randomBytes(16)) } };
   ERIN_WEB = { endpoint: `https://127.0.0.1:${INBOX}/push-inbox/erin-laptop`,
     keys: { p256dh: b64u(erinEc.getPublicKey()), auth: b64u(crypto.randomBytes(16)) } };
+  gregWeb = GREG_WEB.map((name) => ({ endpoint: `https://127.0.0.1:${INBOX}/push-inbox/${name}`,
+    keys: { p256dh: b64u(gregEc.getPublicKey()), auth: b64u(crypto.randomBytes(16)) } }));
   await new Promise((r) => mock.listen(MOCK, '127.0.0.1', r));
   if (inbox) await new Promise((r) => inbox.listen(INBOX, '127.0.0.1', r));
   await new Promise((r) => apnsMock.listen(APNS, '127.0.0.1', r));
+  await new Promise((r) => apnsSandbox.listen(APNS_SANDBOX, '127.0.0.1', r));
+
+  if (tlsDir && fs.existsSync(tlsDir)) fail(`the throwaway TLS key and cert were left on disk in ${tlsDir}`);
+  else step('the throwaway TLS key and cert were removed as soon as they were read');
 
   const SUPA = {
     SUPABASE_URL: `http://127.0.0.1:${MOCK}`,
@@ -312,7 +430,7 @@ async function boot(port, env) {
     FCM_OAUTH_URL: `http://127.0.0.1:${MOCK}/fcm-oauth`,
     FCM_API_BASE: `http://127.0.0.1:${MOCK}`,
     APNS_KEY: APNS_P8, APNS_KEY_ID: KID, APPLE_TEAM_ID: TEAM,
-    APNS_HOST: `http://127.0.0.1:${APNS}`, APNS_FALLBACK_HOST: '',
+    APNS_HOST: `http://127.0.0.1:${APNS}`, APNS_FALLBACK_HOST: `http://127.0.0.1:${APNS_SANDBOX}`,
   };
   if (!(await boot(GAME, ALL_TRANSPORTS))) return finish();
   step('server up with all three push transports and the social layer built');
@@ -372,6 +490,8 @@ async function boot(port, env) {
     step("the nudge reached the SEAT's in-memory subscription, which no store row carries");
     if (!(await until(() => hits.del.some((q) => q.includes(encodeURIComponent(PHONE.endpoint))), 10000, 'the dead phone endpoint DELETE'))) return finish();
     step('the 404 web endpoint was DELETEd from Supabase (the generic half of drop)');
+    if (!(await until(() => hits.del.some((q) => q.includes(encodeURIComponent(TABLET.endpoint))), 10000, 'the Gone tablet endpoint DELETE'))) return finish();
+    step('a 410 Gone web endpoint was DELETEd too: Gone is as dead as Not Found');
 
     // THE SEAT HALF OF drop(). Alice takes her seat back, fires, and vanishes
     // again, so beginTurn nudges the SAME seat a second time. pl.pushSub must
@@ -402,6 +522,12 @@ async function boot(port, env) {
     if (phoneHits === 1) step('the dead endpoint was cleared from the SEAT too — a second nudge never re-sent to it');
     else fail(`the seat's pushSub was not cleared: alice-phone was contacted ${phoneHits} times across two nudges`);
   }
+  // Bob has had turns throughout, every one of them CONNECTED. A seat that is
+  // playing is never nudged, so his devices are never even looked up — or
+  // every subscribed player would be told "your move" on every turn they are
+  // sitting in front of.
+  if (bShots >= 1 && !hits.subGet.includes(BOB)) step("a connected seat's turn looks up no device at all");
+  else fail(`a connected seat was treated as nudgeable: Bob fired ${bShots} shots, subscription reads ${JSON.stringify(hits.subGet)}`);
   step('Part 1 complete');
 
   // ---- Part 2: an invite to a friend with no live socket ---------------------
@@ -573,6 +699,65 @@ async function boot(port, env) {
     step('a read that outlives the seam sends nothing once it lands: the inviter was told none');
   } else fail(`the seam's lapse was not honoured: reply=${late.raw} read-held=${heldOpen} ${moved(q)}`);
 
+  // ---- Part 6b: one account, fifteen devices, three hostile browsers ---------
+  // The subscription table has no per-account cap and an invite needs no match,
+  // so every invite would fan out to every row an account ever registered. The
+  // read takes the TEN most recently seen devices: Greg's three browsers and
+  // his seven newest phones, never the five oldest. Carol is still in the
+  // squad, so the copy reads "2 of 4" — the only size above one this file
+  // sends. The browsers' connections are judged after Part 7, which runs
+  // meanwhile, so the deadline's ten seconds cost the suite nothing.
+  q = traffic();
+  const gregInv = await bob.ask({ type: 'squad', op: 'invite', to: GREG, id: 'inv9' }, 'the invite to a friend with fifteen devices');
+  if (!gregInv) return finish();
+  const toGreg = () => hits.fcm.slice(q.fcm).filter((m) => GREG_FCM.includes(m.token));
+  if (!(await until(() => toGreg().length >= 7, 10000, "Greg's seven newest phones"))) return finish();
+  await settle(1000);   // room for an eighth to arrive
+  const phones = toGreg().map((m) => m.token).sort();
+  if (gregInv.m.delivered === 'push' && JSON.stringify(phones) === JSON.stringify(GREG_FCM.slice(5))) {
+    step('the invite read took the ten newest devices: three browsers and seven phones, not the five oldest');
+  } else fail(`the device read was not the ten newest: reply=${gregInv.raw} phones sent to ${JSON.stringify(phones)}`);
+  const bodies = [...new Set(toGreg().map((m) => (m.notification || {}).body))];
+  if (bodies.length === 1 && bodies[0] === 'Stone Falcon invites you to their squad (2 of 4).') {
+    step('the copy carries the squad\'s real size: "(2 of 4)" with Carol in it');
+  } else fail(`the invite copy's size is wrong: ${JSON.stringify(bodies)}`);
+  if (!inbox) {
+    step('SKIPPED the hostile-browser legs: no TLS inbox (openssl)');
+  } else {
+    if (!(await until(() => GREG_WEB.every((n) => conns[n]), 10000, "Greg's three browsers"))) return finish();
+    // A body is never read: the sender hangs up at the status line. A sender
+    // that read it would buffer every byte of an endless stream, and a string
+    // that outgrows V8's limit throws inside a socket handler — the process's
+    // uncaughtException, which is shutdown.
+    const flood = conns['greg-flood'];
+    await waitFor(() => flood.closed, 3000);
+    if (flood.closed && flood.closed - flood.arrived < 2000) step('a push service that streams a body without end is hung up on at the status line');
+    else fail(`the endless body was read, not hung up on: connection ${flood.closed ? `closed after ${flood.closed - flood.arrived} ms` : 'still open'}`);
+  }
+
+  // ---- Part 6c: Apple's second chances carry the invite's own key -------------
+  // apnsSend makes up to three requests for one device: the first; a retry
+  // after Apple expires the provider token; a resend to the sandbox host for a
+  // development build's token. Each request carries its own apns-collapse-id,
+  // so each one must be handed the invite's key, or the retry and the resend
+  // go out as cc-turn and replace an unread turn alert (R13).
+  q = traffic();
+  const sb0 = hits.apnsFallback.length;
+  const hankInv = await bob.ask({ type: 'squad', op: 'invite', to: HANK, id: 'inv10' }, 'the invite to a friend with two awkward iPhones');
+  if (!hankInv) return finish();
+  const primaryTo = (t) => hits.apns.slice(q.apns).filter((h) => h.token === t);
+  const sandboxTo = (t) => hits.apnsFallback.slice(sb0).filter((h) => h.token === t);
+  if (!(await until(() => primaryTo(HANK_EXP).length >= 2 && sandboxTo(HANK_DEV).length >= 1, 10000, "Apple's retry and the sandbox resend"))) return finish();
+  const keys = (h) => `collapse-id=${JSON.stringify(h.headers['apns-collapse-id'])} thread-id=${JSON.stringify(h.payload && h.payload.aps && h.payload.aps['thread-id'])}`;
+  const retried = primaryTo(HANK_EXP)[1];
+  if (hankInv.m.delivered === 'push' && retried.headers['apns-collapse-id'] === KEY && retried.payload?.aps?.['thread-id'] === KEY) {
+    step(`the request retried after ExpiredProviderToken still collapses under ${KEY}`);
+  } else fail(`the ExpiredProviderToken retry lost the invite's key: reply=${hankInv.raw} ${keys(retried)}`);
+  const resent = sandboxTo(HANK_DEV)[0];
+  if (resent.headers['apns-collapse-id'] === KEY && resent.payload?.aps?.['thread-id'] === KEY) {
+    step(`the development build's resend to the sandbox host still collapses under ${KEY}`);
+  } else fail(`the sandbox resend lost the invite's key: ${keys(resent)}`);
+
   // ---- Part 7: hosts without every transport ----------------------------------
   // 'push' promises a device on a transport THIS host can reach. The worlds
   // below turn web push off (VAPID keys web-push refuses) and choose which
@@ -646,6 +831,27 @@ async function boot(port, env) {
   if (none.m.ok === true && none.m.delivered === 'none' && noSends(q)) step("a host with no push transport answers 'none' and sends nothing");
   else fail(`the bare host's invite was wrong: reply=${none.raw} ${moved(q)}`);
 
+  // ---- Part 6b, concluded: every web send ends, by one absolute deadline ------
+  // An endpoint that never answers held its socket for ever, and so did one
+  // that keeps the connection busy — an IDLE timer never fires on it. Each send
+  // now has ten seconds from the moment it starts, whatever arrives meanwhile:
+  // not much less, or a slow real push service loses its notification; not
+  // more, or a player can make the server hold sockets for as long as they
+  // like, twenty invites a minute per socket. Neither send is a dead endpoint,
+  // so neither may be DELETEd.
+  if (inbox) {
+    for (const name of ['greg-hang', 'greg-drip']) {
+      const c = conns[name];
+      await waitFor(() => c.closed, c.arrived + 15000 - Date.now());
+      const took = c.closed ? c.closed - c.arrived : -1;
+      if (took >= 9000 && took <= 14000) step(`${name === 'greg-hang' ? 'a push service that never answers' : 'a push service that never finishes its headers'} is given up on at the deadline (${took} ms)`);
+      else fail(`${name}: the send did not end at the ten-second deadline: ${took < 0 ? 'still open' : `closed after ${took} ms`}`);
+    }
+    const greg = hits.del.filter((d) => /greg-/.test(decodeURIComponent(d)));
+    if (!greg.length) step('a push service that times out or floods is not taken for a dead one: nothing was DELETEd');
+    else fail(`a live endpoint was DELETEd for being slow: ${JSON.stringify(greg)}`);
+  }
+
   // ---- Part 8: the web path consumes the tag --------------------------------
   // APNs and FCM take the collapse key as a wire field; the browser does not.
   // On web the key is chosen by the SERVICE WORKER when it shows the
@@ -675,6 +881,45 @@ async function boot(port, env) {
     const legacy = fire({ title: 'Cannons & Canyons — your move', body: 'Your turn is up.', url: '/?room=ABCD' });
     if (legacy && legacy.opts.tag === 'cc-turn') step('a payload with no tag still collapses under cc-turn');
     else fail(`sw.js lost the cc-turn default: ${JSON.stringify(legacy && legacy.opts.tag)}`);
+  }
+
+  // ---- Part 9: nothing is sent before the caller has its answer ---------------
+  // pushToUser defers its sends one turn of the event loop, so the invite's
+  // reply leaves before any send's encryption, signing or request setup has
+  // run. That keeps a real invite and a DROPPED one (a dry run) answering at the
+  // same moment: a synchronous send would make a real invite answer a little
+  // later, every time, and let an inviter find a block between two OTHER
+  // players by timing it (D-BLOCK-2 E REVISED). Arrival order across processes is a race, so
+  // this reads the ORDER in the source: the dry run returns before any send;
+  // every send is inside sendAll; and sendAll is only ever handed to
+  // setImmediate's promise, never called.
+  {
+    const src = fs.readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+    const at = src.indexOf('async function pushToUser(');
+    const end = at < 0 ? -1 : src.indexOf('\n}\n', at);
+    // Comments out, so a send or a call that is only mentioned cannot count.
+    const code = (at < 0 || end < 0 ? '' : src.slice(at, end))
+      .split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
+    const dry = code.indexOf('if (dryRun) return true;');
+    const open = code.indexOf('const sendAll = () => {');
+    let close = -1;
+    if (open >= 0) {
+      for (let i = code.indexOf('{', open), depth = 0; i < code.length; i++) {
+        if (code[i] === '{') depth++;
+        else if (code[i] === '}' && --depth === 0) { close = i; break; }
+      }
+    }
+    const sends = [...code.matchAll(/\b(webPushSend|sendNotification|apnsSend|fcmSend)\s*\(/g)].map((m) => m.index);
+    const stray = sends.filter((i) => !(i > dry && i > open && i < close));
+    const named = [...code.matchAll(/\bsendAll\b/g)].length;
+    const deferred = /\n\s*new Promise\(\(go\) => setImmediate\(go\)\)\.then\(sendAll\)\.catch\(\(\) => \{\}\);/.test(code);
+    if (!code) fail('server.js has no pushToUser to read');
+    else if (dry < 0 || open < 0 || close < 0) fail(`pushToUser lost its shape: dryRun return at ${dry}, sendAll at ${open}..${close}`);
+    else if (dry > open) fail('pushToUser builds its sends before the dry run has returned');
+    else if (sends.length < 3 || stray.length) fail(`a send runs outside sendAll (or before the dry run returns): ${sends.length} sends, ${stray.length} outside`);
+    else if (named !== 2 || !deferred || /\bsendAll\s*\(/.test(code)) {
+      fail(`sendAll is not dispatched only through setImmediate: ${named} mentions, deferred line ${deferred ? 'present' : 'MISSING'}`);
+    } else step('every send waits a turn of the event loop, after the answer: a real invite answers when a dropped one does');
   }
 
   finish();
