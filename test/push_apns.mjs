@@ -18,7 +18,7 @@
 //      database on the first nudge after a misconfiguration — silently, and
 //      with no way back. That is the assertion that matters most here.
 //
-// One nudge fans out to FOUR tokens, each scripted to a different Apple
+// One nudge fans out to SEVEN tokens, each scripted to a different Apple
 // response, so every outcome is attributable to its own token with no timing
 // correlation to get wrong.
 import http from 'http';
@@ -63,6 +63,16 @@ const TOKENS = {
   badtopic: 'tok-alice-ipad-configfault',
   devbuild: 'tok-alice-xcode-devbuild',
   unreg: 'tok-alice-old-uninstalled',
+  // THE THIRD ALTERNATIVE of APNS_DEAD, which nothing exercised: 400
+  // DeviceTokenNotForTopic IS a dead token and MUST be deleted. Drop it from the
+  // regex and this device is pushed at forever.
+  notfortopic: 'tok-alice-other-app-build',
+  // Two more non-fatal 4xx answers. Widen 'dead' to any 4xx — the refactor's
+  // most tempting simplification — and these two, plus badtopic, are deleted:
+  // every iOS subscription in the database, gone on the first push after a
+  // misconfiguration.
+  throttled: 'tok-alice-throttled',
+  badprovider: 'tok-alice-bad-provider-jwt',
 };
 
 const hits = { user: [], nudgeGet: [], del: [], apns: [], apnsFallback: [] };
@@ -127,6 +137,11 @@ const primary = apnsMock(hits.apns, (t) => {
   if (t === TOKENS.badtopic) return [400, 'BadTopic'];
   if (t === TOKENS.devbuild) return [400, 'BadDeviceToken'];
   if (t === TOKENS.unreg) return [410, 'Unregistered'];
+  if (t === TOKENS.notfortopic) return [400, 'DeviceTokenNotForTopic'];
+  if (t === TOKENS.throttled) return [429, 'TooManyRequests'];
+  // NOT ExpiredProviderToken: that one is retried once by design, and the retry
+  // is a different behaviour with its own meaning.
+  if (t === TOKENS.badprovider) return [403, 'InvalidProviderToken'];
   return [200, null];
 });
 // The sandbox host accepts the development-build token the production host
@@ -229,6 +244,9 @@ const until = async (test, ms, what) => {
   if (pl.aps && pl.aps.alert && /your move/i.test(pl.aps.alert.title || '') && pl.aps.alert.body) {
     step('the alert carries a title and a body');
   } else fail(`alert shape wrong: ${JSON.stringify(pl.aps)}`);
+  if (pl.aps && pl.aps['thread-id'] === 'cc-turn' && h['apns-collapse-id'] === 'cc-turn') {
+    step('a turn nudge collapses under cc-turn on BOTH Apple surfaces');
+  } else fail(`turn nudge collapse keys wrong: thread-id=${JSON.stringify(pl.aps && pl.aps['thread-id'])} collapse-id=${JSON.stringify(h['apns-collapse-id'])}`);
   // Capacitor surfaces only keys OUTSIDE `aps` as notification.data, and the
   // client reads `url` from there to deep-link into the room. Nested inside
   // `aps` it is simply never delivered, and the notification opens the home
@@ -240,6 +258,9 @@ const until = async (test, ms, what) => {
   if (!(await until(() => hits.del.some((q) => q.includes(encodeURIComponent(TOKENS.unreg))),
     10000, 'the uninstalled device to be cleaned up'))) return finish();
   step('a 410 Unregistered device is deleted from the store');
+  if (!(await until(() => hits.del.some((q) => q.includes(encodeURIComponent(TOKENS.notfortopic))),
+    10000, 'the wrong-topic device to be cleaned up'))) return finish();
+  step('a 400 DeviceTokenNotForTopic is deleted — the third arm of APNS_DEAD is live, not decoration');
 
   if (!(await until(() => hits.apnsFallback.some((r) => r.token === TOKENS.devbuild),
     10000, 'the sandbox retry'))) return finish();
@@ -248,10 +269,10 @@ const until = async (test, ms, what) => {
   // THE ONE THAT MATTERS. Give the loop room to have done the wrong thing.
   await new Promise((r) => setTimeout(r, 1500));
   const wronglyDeleted = Object.entries(TOKENS)
-    .filter(([k]) => k !== 'unreg')
+    .filter(([k]) => k !== 'unreg' && k !== 'notfortopic')
     .filter(([, t]) => hits.del.some((q) => q.includes(encodeURIComponent(t))));
   if (wronglyDeleted.length === 0) {
-    step('a 400 BadTopic does NOT delete the device — a misconfiguration cannot wipe the table');
+    step('no non-fatal 4xx deletes a device — BadTopic, TooManyRequests and InvalidProviderToken all survive');
   } else {
     fail(`these live subscriptions were DELETED over a non-fatal Apple response: ${wronglyDeleted.map(([k]) => k).join(', ')}`);
   }
