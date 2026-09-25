@@ -117,6 +117,23 @@ const enc = (v) => encodeURIComponent(v);
 const one = (rows) => (Array.isArray(rows) && rows[0] ? rows[0] : null);
 const isConflict = (e) => !!e && CONFLICT_RE.test(String((e && e.message) || ''));
 
+// A REFUSAL: a write that failed and can never commit. sbAdmin's message for a
+// 4xx is the request being refused — by PostgREST (a constraint, whose
+// transaction rolled back, or the request itself) or by the gateway in front of
+// it (the credentials, a rate limit) — so nothing it asked for was written or
+// ever will be. 408 is not one, and nor is anything else a write can throw — a
+// 5xx, sbAdmin's timeout, a network error: each may have committed, or may
+// commit yet. Anchored at both ends, as CONFLICT_RE is, so a status inside
+// some other error's text is not a refusal. server/social.js asks it of a failed
+// addBlock: a refusal needs no guard against a row that lands late, and a client
+// can repeat one at will (a block from a socket whose account was deleted after
+// its hello fails on the foreign key every time).
+const STATUS_RE = /^sb [A-Z]+ (\d{3})$/;
+export function isRefusal(e) {
+  const m = e && typeof e.message === 'string' ? STATUS_RE.exec(e.message) : null;
+  return !!m && m[1][0] === '4' && m[1] !== '408';
+}
+
 // randomInt, not Math.random: Math.random is a seeded xorshift shared with every
 // other caller in the process and its stream is recoverable from a handful of
 // samples. A friend code is a capability — whoever holds it becomes your friend on

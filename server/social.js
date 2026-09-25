@@ -19,7 +19,7 @@ import { validateCallsign, normaliseCallsign, CALLSIGN_MIN, CALLSIGN_MAX } from 
 // name_reports row ACTUALLY holds — the clamp to the column and the sentinel
 // for a player with no name — and handleReport has to log the string the store
 // stored, not the one it was handed.
-import { isUuid, reportCallsign } from './store.js';
+import { isUuid, isRefusal, reportCallsign } from './store.js';
 // THE NAME PROOFS. Written here, MOVED to server/display-name.js and imported
 // back, because they now have TWO callers: this layer's panels and search
 // results, and server.js's GET /history, which paints an opponent's name in
@@ -833,22 +833,59 @@ export function createSocial({
   // with a failure may still commit AFTER its answer, when the log serves no
   // read that starts then. So for BLOCK_LOG_MS after that answer every
   // reader the pair names counts it as blocked, whenever its read began.
-  // Expired entries go as each one is written. A failure that finds
-  // BLOCK_LOG_MAX entries kept is not kept: until it would have expired
-  // (never sooner, if the clock steps back), every reader is answered null
-  // instead, and fails safe as the log's are.
-  const blockThrown = [];
-  let thrownFloor = 0;    // readers are answered null up to this time
+  //
+  // ONLY A FAILURE THAT MAY STILL COMMIT IS KEPT (T6-R1-1): a timeout, a
+  // network error, a 5xx, a 408. A REFUSAL (isRefusal: PostgREST's 4xx) rolled
+  // back and never lands, and a client can repeat one at will: a socket whose
+  // account was deleted after its hello is refused on the foreign key for
+  // every block it asks for.
+  //
+  // AND IT IS KEPT SO THAT NOBODY'S FAILURES MOVE ANYONE ELSE. One entry per
+  // pair: a repeat renews its BLOCK_LOG_MS (never shortens it, if the clock
+  // steps back). One account keeps at most THROWN_EACH pairs, and the set at
+  // most BLOCK_LOG_MAX. A failure with no room keeps its ACCOUNT instead, in
+  // thrownAll, for BLOCK_LOG_MS: that account may have blocked anybody, so
+  // its own reads fail safe (null), and it counts as blocking every other
+  // reader: nobody joins a squad it stands in, a row there whose socket
+  // signs in is removed as the door removes a blocked one, and an invite
+  // out of that squad is dropped. Nothing moves elsewhere. Only an account
+  // that finds thrownAll full too (BLOCK_LOG_MAX accounts failing inside
+  // 16 s: a store outage, not one client) makes every reader fail safe,
+  // until its failure would have expired. Expired entries go as each
+  // failure is written.
+  const THROWN_EACH = 64;
+  const blockThrown = new Map();  // 'blocker>blocked' -> { blocker, blocked, until }
+  const thrownBy = new Map();     // blocker -> how many pairs of blockThrown are its
+  const thrownAll = new Map();    // blocker -> until: an account kept whole
+  let thrownFloor = 0;            // every reader is answered null up to this time
+  // A Map iterates in insertion order and a renewed entry is re-inserted, so
+  // the expired ones are at the front (a clock that steps back can leave one
+  // behind a later one: it goes when that one does, and never early).
   function noteThrown(blocker, blocked) {
-    const t = now();
-    while (blockThrown.length && blockThrown[0].until < t) blockThrown.shift();
-    if (blockThrown.length >= BLOCK_LOG_MAX) thrownFloor = Math.max(thrownFloor, t + BLOCK_LOG_MS);
-    else blockThrown.push({ blocker: wireId(blocker), blocked: wireId(blocked), until: t + BLOCK_LOG_MS });
+    const t = now(), until = t + BLOCK_LOG_MS;
+    const who = wireId(blocker), pair = who + '>' + wireId(blocked);
+    for (const [k, e] of blockThrown) {
+      if (e.until >= t) break;
+      blockThrown.delete(k);
+      const n = thrownBy.get(e.blocker) - 1;
+      if (n > 0) thrownBy.set(e.blocker, n); else thrownBy.delete(e.blocker);
+    }
+    for (const [k, u] of thrownAll) { if (u >= t) break; thrownAll.delete(k); }
+    const kept = blockThrown.get(pair);
+    if (kept) { blockThrown.delete(pair); kept.until = Math.max(kept.until, until); blockThrown.set(pair, kept); return; }
+    if (thrownAll.has(who)) { const u = Math.max(thrownAll.get(who), until); thrownAll.delete(who); thrownAll.set(who, u); return; }
+    const mine = thrownBy.get(who) || 0;
+    if (mine < THROWN_EACH && blockThrown.size < BLOCK_LOG_MAX) {
+      blockThrown.set(pair, { blocker: who, blocked: wireId(blocked), until });
+      thrownBy.set(who, mine + 1);
+    } else if (thrownAll.size < BLOCK_LOG_MAX) thrownAll.set(who, until);
+    else thrownFloor = Math.max(thrownFloor, until);
   }
   // `b`, the store's answer for `id`, plus every pair logged from `from` on,
   // every pair being written and every unexpired thrown pair that names
-  // `id`; null when some of the logged entries have been dropped, or a
-  // thrown pair could not be kept.
+  // `id`, and every other account kept whole as blocking `id`; null when
+  // some of the logged entries have been dropped, when `id` is an account
+  // kept whole, or while every reader fails safe.
   function withLanded(b, id, from) {
     if (blockFloor > from) return null;
     const out = { blocked: [...b.blocked], blockedBy: [...b.blockedBy] };
@@ -861,10 +898,15 @@ export function createSocial({
       if (e.blocker === id) out.blocked.push(e.blocked);
       if (e.blocked === id) out.blockedBy.push(e.blocker);
     }
-    if (blockThrown.length) {
+    if (blockThrown.size || thrownAll.size) {
       const t = now();
       if (thrownFloor >= t) return null;
-      for (const e of blockThrown) {
+      for (const [who, u] of thrownAll) {
+        if (u < t) continue;
+        if (who === id) return null;
+        out.blockedBy.push(who);
+      }
+      for (const e of blockThrown.values()) {
         if (e.until < t) continue;
         if (e.blocker === id) out.blocked.push(e.blocked);
         if (e.blocked === id) out.blockedBy.push(e.blocker);
@@ -2580,8 +2622,9 @@ export function createSocial({
   // to the answer, and the recent-blocks log, written as the answer
   // arrives, close the race between a block and a join, an invite or a
   // sign-in whose block read was already out; a pair whose addBlock threw
-  // is kept 16 s past its answer, for a row that commits late (D-BLOCK-5
-  // K). One way in is not this
+  // and may still commit is kept 16 s past its answer, for a row that
+  // commits late (D-BLOCK-5 K; a refusal cannot, and is not kept, T6-R1-1).
+  // One way in is not this
   // file's and does not pass them: server.js's push-subscription sink (see
   // the sign-in door); the second teardown catches a row it moved meanwhile.
   //
@@ -2745,18 +2788,20 @@ export function createSocial({
           // What the blocked player's panel showed of the blocker, read
           // beside the write and before the deletes that change it.
           const rows = panelRows(blocker, id);
-          let failed = true;
+          let failed = true, refused = false;
           try { await store.addBlock(blocker, id); failed = false; }
+          catch (e) { refused = isRefusal(e); throw e; }
           finally {
-            // THE ANSWER IS IN, WHATEVER IT IS. A failure is noted as thrown
-            // (see blockThrown), for a row that commits late. The pair is
+            // THE ANSWER IS IN, WHATEVER IT IS. A failure that may still
+            // commit is noted as thrown (see blockThrown), for a row that
+            // commits late; a refusal never lands and is not. The pair is
             // logged for every read still out, and only then stops being
             // pending. A note or a log that throws leaves it pending, and so
             // apart. The teardown then runs AGAIN, for anything that reached
             // a shared squad while the row was out by a way no door stands on
             // (server.js's push-subscription sink, see the sign-in door).
             // Usually it finds nothing, and then it removes and sends nothing.
-            try { if (failed) noteThrown(blocker, id); logBlock(blocker, id); blockPending.delete(pend); } catch { /* still pending */ }
+            try { if (failed && !refused) noteThrown(blocker, id); logBlock(blocker, id); blockPending.delete(pend); } catch { /* still pending */ }
             again = squadBlockTeardown(blocker, id)().catch(() => {});
           }
           wrote = true;
@@ -2780,15 +2825,18 @@ export function createSocial({
       // a half-finished operation; the pushes go out for the same reason.
       //
       // AN addBlock THAT THREW MAY STILL HAVE LANDED (T6-R2-4), or may land
-      // later. Nothing here can tell, so it is treated as landed, which is
+      // later, and nothing here can tell which, so it is treated as landed,
       // the safe way round: the pair was parted as the row was asked for,
       // logged as the answer came, and is kept apart for BLOCK_LOG_MS after
       // it (D-BLOCK-5 K). If the row never lands, the parting is a kick or a
       // leave that the blocker asked for, and it names nothing; the cost is
-      // 16 s in which the pair cannot meet again. The player is still
-      // answered unavailable, because the block may not stand, and a retry
-      // is idempotent. A block that failed BEFORE it was asked (its profile
-      // read) wrote nothing, and is neither parted, logged nor noted.
+      // 16 s in which the pair cannot meet again. The one failure that can
+      // be told is a REFUSAL (isRefusal, T6-R1-1): the row was refused and
+      // never lands, so it is parted and logged like any other answer and
+      // not kept after it. The player is answered unavailable either way,
+      // because the block may not stand, and a retry is idempotent. A block
+      // that failed BEFORE it was asked (its profile read) wrote nothing, and
+      // is neither parted, logged nor noted.
       outcome = wrote ? { type: 'block', op, ok: true } : { type: 'block', op, error: 'unavailable' };
     }
     // R16, THE SQUAD HALF OF A BLOCK. It ran above, as the row was asked for,

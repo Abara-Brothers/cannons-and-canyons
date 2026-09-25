@@ -10,8 +10,9 @@
 // and refuses a raw space, quote, & = , ( ) or . in any value — the PostgREST filter
 // grammar, not just the characters that look alarming — so a method added later that
 // forgets encodeURIComponent cannot ship quietly.
+import { readFileSync } from 'node:fs';
 import {
-  createStore, isUuid, FRIEND_CODE_ALPHABET, FRIEND_CODE_LEN, FRIEND_CODE_TRIES,
+  createStore, isUuid, isRefusal, FRIEND_CODE_ALPHABET, FRIEND_CODE_LEN, FRIEND_CODE_TRIES,
   CALLSIGN_COL_MAX, NO_CALLSIGN,
 } from '../server/store.js';
 
@@ -465,6 +466,54 @@ function mkSb(routes = []) {
   }
   if (!swallowed.length) ok(`(k) all ${tries.length} answering methods propagate an sbAdmin failure, so Task 4 can answer error:'unavailable'`);
   else fail('(k) these swallowed the failure: ' + swallowed.join(', '));
+}
+
+// ---- (m) isRefusal: a failed write that can never commit (T6-R1-1) ----------
+{
+  // server/social.js keeps a block pair apart for 16 s after addBlock fails,
+  // because the row may still land. A REFUSAL cannot: sbAdmin's message for a
+  // 4xx is PostgREST refusing the statement, whose transaction rolled back. A
+  // deleted account's block (the foreign key, 409) is one, and a client can
+  // repeat it at will, so counting it filled the set. 408, every 5xx, a timeout
+  // and a network error may have committed, or may commit yet. Anchored at both
+  // ends, like the 409 test in setChosenCallsign: a status inside some other
+  // error's text is not a refusal.
+  const yes = [400, 401, 403, 404, 405, 409, 413, 422, 429, 499].map((n) => new Error('sb POST ' + n));
+  yes.push(new Error('sb PATCH 409'), new Error('sb DELETE 400'));
+  const no = [408, 500, 502, 503, 504, 520].map((n) => new Error('sb POST ' + n));
+  no.push(
+    new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
+    new TypeError('fetch failed'),
+    new Error('sb timeout'), new Error('sb 500'), new Error('pair self'), new Error('bad uuid'),
+    new Error('xsb POST 409'), new Error('sb POST 409 '), new Error('sb POST 4090'), new Error('sb post 409'), new Error('sb POST 40'),
+    null, undefined, 'sb POST 409', 409, {}, { message: 409 }, { message: Symbol('sb POST 409') },
+  );
+  // Asked of whatever a store threw, so it must answer for anything, never throw.
+  const ask = (e) => { try { return isRefusal(e); } catch { return 'threw'; } };
+  const wrongYes = yes.filter((e) => ask(e) !== true).map((e) => e.message);
+  const wrongNo = no.filter((e) => ask(e) !== false).map((e) => String(e && e.message !== undefined ? e.message : e));
+  if (!wrongYes.length && !wrongNo.length) ok(`(m) isRefusal is true for every 4xx but 408 (${yes.length} cases) and false for ${no.length} other failures`);
+  else fail('(m) isRefusal: should be true for ' + JSON.stringify(wrongYes) + ', false for ' + JSON.stringify(wrongNo));
+  // What addBlock throws is sbAdmin's own error, so the answer is read off it.
+  const seen = [];
+  for (const [status, want] of [[409, true], [503, false]]) {
+    const err = new Error('sb POST ' + status);
+    const h = mkSb([[/^POST \/blocks$/, err]]);
+    let threw = null;
+    try { await h.store.addBlock(A, B); } catch (e) { threw = e; }
+    seen.push(threw === err && isRefusal(threw) === want);
+  }
+  if (same(seen, [true, true])) ok('(m) addBlock throws sbAdmin\'s error unchanged, so a refused block reads as a refusal and a 503 does not');
+  else fail('(m) addBlock refusal: ' + JSON.stringify(seen));
+  // THE MESSAGE IS server.js's, and this file and store.js only read it. If
+  // sbAdmin ever words a failure differently, every refusal reads as a failure
+  // that may commit (safe, but a client's refused blocks fill the thrown set
+  // again) and every unique violation as 'unavailable' (CONFLICT_RE): change
+  // STATUS_RE and CONFLICT_RE with it.
+  const sbSrc = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  const throws = sbSrc.match(/throw new Error\(`sb [^`]*`\)/g) || [];
+  if (same(throws, ['throw new Error(`sb ${method} ${res.status}`)'])) ok('(m) sbAdmin still words a failed request `sb ${method} ${res.status}`, the shape isRefusal reads');
+  else fail('(m) sbAdmin message: ' + JSON.stringify(throws));
 }
 
 // ---- (l) the standing guard: nothing raw ever lands in a query value ---------

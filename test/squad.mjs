@@ -5201,8 +5201,8 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   const DEAD6 = (id) => ({ type: 'squad', op: 'join', error: 'no_such_squad', id });
   // B leads a squad of their own with D in it, so a refused join can be seen
   // to leave it where it is; A leads the target, with C in it.
-  const joinWorld6 = async () => {
-    const st = t6store(ROWS6);
+  const joinWorld6 = async (rows = ROWS6) => {
+    const st = t6store(rows);
     const S = mkSocial6(st);
     const wa = up6(S, A), wc = up6(S, C), wb = up6(S, B), wd = up6(S, D);
     const code = await create6(S, wa);
@@ -8387,69 +8387,304 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     else fail('(blk-u) thrown addBlock, second teardown: ' + JSON.stringify(bad));
   }
 
-  // ---- (blk-u vii) what the thrown set keeps: 16 s, and 4096 entries -------
-  // D-BLOCK-5 K. E's block on NN fails again and again; none of it names B.
-  // 4096 kept failures move no reader: B joins on one read. The 4097th finds
-  // the set full and is not kept, so until it would have expired every
-  // reader fails safe: B's join reads twice and is refused as a dead code,
-  // to the last millisecond, and joins from the next. A failure stamped
-  // earlier (the clock stepped back) does not shorten that. A failure
-  // written after 4096 others have expired drops them and is kept: B joins
-  // on one read. Written at their 16th second it finds them still kept, is
-  // not kept itself, and B is refused.
+  // ---- (blk-u vii) what the thrown set keeps (D-BLOCK-5 K; T6-R1-1) --------
+  // A failed addBlock is kept 16 s only when it may yet commit, and it is
+  // kept so that one account's failures move no unrelated reader. Before
+  // this, every failure took a slot of one list, and the 4097th inside 16 s
+  // made EVERY reader on the server fail safe (every join refused, every
+  // sign-in door failed to guest, every invite dropped). A client could do
+  // that alone: a socket whose account was deleted after its hello gets a
+  // foreign-key refusal for every block it asks for.
+  //   (a) A REFUSAL IS NOT KEPT. sbAdmin's `sb POST <4xx>` (408 aside) is
+  //       PostgREST refusing the row, and a refused row never lands. A
+  //       timeout, a network error, a 5xx or a 408 may have landed, or may
+  //       land yet, and is kept: the pair is apart to the 16th second and
+  //       meets from the next millisecond.
+  //   (b) A flood of refusals keeps nothing: an unrelated join, the flooding
+  //       account's own join and a join into its squad are let in on one read.
+  //   (c) A REPEATED PAIR TAKES ONE SLOT. 4097 failures of one pair move no
+  //       other reader, and the repeat renews the pair's 16 s; a repeat
+  //       stamped earlier (the clock stepped back) shortens nothing.
+  //   (d) ONE ACCOUNT KEEPS AT MOST 64 PAIRS. Its 65th distinct failure
+  //       keeps the ACCOUNT instead, for 16 s: it may have blocked anybody,
+  //       so its own reads fail safe (its join reads twice and is refused)
+  //       and nobody joins a squad it stands in; a join elsewhere is let in
+  //       on one read. Its next failure renews that, never shortens it, and
+  //       it holds after the account's pairs have expired.
+  //   (e) THE SET HOLDS 4096 PAIRS AND 4096 ACCOUNTS. With 4096 pairs kept an
+  //       account whose failure finds no room is kept whole, as in (d), and
+  //       nobody else moves. Only when 4096 accounts are kept too does every
+  //       reader fail safe, until that failure would have expired (never
+  //       sooner, if the clock steps back): that is thousands of accounts
+  //       failing inside 16 s, a store outage rather than one client.
+  //   (f) ROOM IS MADE ON WRITE: a failure written after the others have
+  //       expired drops them and is kept as a pair; written at their 16th
+  //       second it finds them still kept. The same for one account's 64,
+  //       and for the accounts kept whole. One renewed meanwhile has moved
+  //       to the back, so it holds none of the expired ones in place.
+  const TGT6 = Array.from({ length: 65 }, (_, i) => uid6(100 + i));
+  const ROWS_T6 = [...ROWS6, ...TGT6.map((id) => ({ id, callsign: null, friend_code: null, callsign_key: null, callsign_set_at: null }))];
+  // Every addBlock throws what `mk` makes, until restored.
+  const failAs6 = (st, mk) => {
+    const real = st.addBlock;
+    st.addBlock = async function () { st.calls.push('addBlock'); throw mk(); };
+    return () => { st.addBlock = real; };
+  };
+  // A join by `w` into `code`: the block reads it made, whether it was let
+  // in, and whether it was refused as a dead code. Let in, it leaves again.
+  let tj6 = 0;
+  const tryJoin6 = async (j, w, code) => {
+    const id = 'tj' + (++tj6);
+    j.st.calls.length = 0;
+    await j.S.handle(w, { type: 'squad', op: 'join', code, name: 'Somebody', skin: 'olive', id });
+    const a = ans6(w, id);
+    const r = { reads: reads6(j.st), joined: !!(a && a.op === 'state' && a.code === code), dead: same6(a, DEAD6(id)) };
+    if (r.joined) await j.S.handle(w, { type: 'squad', op: 'leave', id: id + 'l' });
+    return r;
+  };
+  const IN6 = { reads: 1, joined: true, dead: false };
+  const APART6 = { reads: 1, joined: false, dead: true };
+  const OUT6 = { reads: 2, joined: false, dead: true };
+  const E503 = () => new Error('sb POST 503');
   {
-    const flood = async (S, w, count) => { for (let i = 0; i < count; i++) await blk6(S, w, NN); };
-    const joinB = async (j, id) => {
-      j.st.calls.length = 0;
-      await j.S.handle(j.wb, { type: 'squad', op: 'join', code: j.code, id });
-      const a = ans6(j.wb, id);
-      const r = { reads: reads6(j.st), joined: !!(a && a.op === 'state' && a.code === j.code), dead: same6(a, DEAD6(id)) };
-      if (r.joined) await j.S.handle(j.wb, { type: 'squad', op: 'leave', id: id + 'l' });
-      return r;
-    };
-    const j = await joinWorld6();
+    // (a) A blocks B, and addBlock fails as each of these. B's join into
+    // A's squad after the answer, at the answer's time, at +16000 and at
+    // +16001.
+    const cases = [
+      ...[400, 401, 403, 404, 409, 429].map((s) => ['sb POST ' + s, () => new Error('sb POST ' + s), true]),
+      ...[408, 500, 502, 503, 504].map((s) => ['sb POST ' + s, () => new Error('sb POST ' + s), false]),
+      ['timeout', () => new DOMException('The operation was aborted due to timeout', 'TimeoutError'), false],
+      ['network', () => new TypeError('fetch failed'), false],
+    ];
+    const bad = [];
+    for (const [name, mk, refused] of cases) {
+      const j = await joinWorld6();
+      const restore = failAs6(j.st, mk);
+      await j.S.handle(j.wa, { type: 'block', op: 'add', id: B });
+      restore();
+      const t0 = CLOCK6;
+      const at = await tryJoin6(j, j.wb, j.code);
+      CLOCK6 = t0 + 16000;
+      const edge = await tryJoin6(j, j.wb, j.code);
+      CLOCK6 = t0 + 16001;
+      const past = await tryJoin6(j, j.wb, j.code);
+      const want = refused ? [IN6, IN6, IN6] : [APART6, APART6, IN6];
+      if (!(same6(got6(j.wa, 'block'), [LOST6]) && same6([at, edge, past], want))) bad.push({ name, a: got6(j.wa, 'block'), at, edge, past });
+    }
+    if (!bad.length) ok('(blk-u) a refused addBlock (a 4xx but 408) is not kept, and B joins at once; a timeout, a network error, a 5xx or a 408 keeps the pair apart 16 s');
+    else fail('(blk-u) which failures are kept: ' + JSON.stringify(bad));
+  }
+  {
+    // (b) E floods refusals: 4097 on NN, then one on each of 65 others.
+    const j = await joinWorld6(ROWS_T6);
     const o = outs6(j.S);
-    j.st.boom.add('addBlock');
-    await flood(j.S, o.e, 4096);
-    const full = await joinB(j, 'j1');
+    const restore = failAs6(j.st, () => new Error('sb POST 409'));
+    for (let i = 0; i < 4097; i++) await blk6(j.S, o.e, NN);
+    for (const t of TGT6) await blk6(j.S, o.e, t);
+    restore();
+    const b = await tryJoin6(j, j.wb, j.code);
+    const e = await tryJoin6(j, o.e, j.code);
+    const ec = await create6(j.S, o.e);
+    const n = await tryJoin6(j, o.n, ec);
+    const x = await tryJoin6(j, j.wb, ec);
+    if (same6([b, e, n, x], [IN6, IN6, IN6, IN6])) ok('(blk-u) a flood of refused addBlocks keeps nothing: an unrelated join, the flooding account\'s own join, and joins into its squad are let in on one read');
+    else fail('(blk-u) refusal flood: ' + JSON.stringify({ b, e, n, x }));
+  }
+  {
+    // (c) E's block on NN fails (a 5xx) 4097 times.
+    const j = await joinWorld6(ROWS_T6);
+    const o = outs6(j.S);
+    const restore = failAs6(j.st, E503);
     const t0 = CLOCK6;
-    await blk6(j.S, o.e, NN);
-    const over = await joinB(j, 'j2');
-    CLOCK6 = t0 - 10000;
-    await blk6(j.S, o.e, NN);
+    for (let i = 0; i < 4097; i++) await blk6(j.S, o.e, NN);
+    const b = await tryJoin6(j, j.wb, j.code);
+    const e = await tryJoin6(j, o.e, j.code);
+    const ec = await create6(j.S, o.e);
+    const n0 = await tryJoin6(j, o.n, ec);
     CLOCK6 = t0 + 10000;
-    const back = await joinB(j, 'j3');
-    CLOCK6 = t0 + 16000;
-    const edge = await joinB(j, 'j4');
-    CLOCK6 = t0 + 16001;
-    const past = await joinB(j, 'j5');
-    j.st.boom.delete('addBlock');
-    const aged = async (ms) => {
-      const k = await joinWorld6();
-      const p = outs6(k.S);
-      k.st.boom.add('addBlock');
+    await blk6(j.S, o.e, NN);
+    CLOCK6 = t0 - 5000;
+    await blk6(j.S, o.e, NN);
+    restore();
+    CLOCK6 = t0 + 26000;
+    const n1 = await tryJoin6(j, o.n, ec);
+    CLOCK6 = t0 + 26001;
+    const n2 = await tryJoin6(j, o.n, ec);
+    if (same6([b, e, n0, n1, n2], [IN6, IN6, APART6, APART6, IN6]))
+      ok('(blk-u) a repeated failing pair takes one slot: 4097 of them move no other reader, and a repeat renews the pair\'s 16 s (one stamped earlier shortens nothing)');
+    else fail('(blk-u) repeated pair: ' + JSON.stringify({ b, e, n0, n1, n2 }));
+  }
+  {
+    // (d) E's blocks on 64 distinct players fail, then a 65th.
+    const j = await joinWorld6(ROWS_T6);
+    const o = outs6(j.S);
+    const restore = failAs6(j.st, E503);
+    for (const t of TGT6.slice(0, 64)) await blk6(j.S, o.e, t);
+    const e0 = await tryJoin6(j, o.e, j.code);
+    const t0 = CLOCK6;
+    await blk6(j.S, o.e, TGT6[64]);
+    restore();
+    const r = [];
+    for (const ms of [0, 16000, 16001]) {
+      CLOCK6 = t0 + ms;
+      const ec = await create6(j.S, o.e);
+      r.push({ ms, b: await tryJoin6(j, j.wb, j.code), be: await tryJoin6(j, j.wb, ec), e: await tryJoin6(j, o.e, j.code) });
+    }
+    const want = [{ ms: 0, b: IN6, be: APART6, e: OUT6 }, { ms: 16000, b: IN6, be: APART6, e: OUT6 }, { ms: 16001, b: IN6, be: IN6, e: IN6 }];
+    // The account kept whole at t1+10000, while its 64 pairs (t1) stand. At
+    // t1+16001 they have gone, and its next failure renews it; one stamped
+    // at t1 (the clock stepped back) shortens nothing.
+    const k = await joinWorld6(ROWS_T6);
+    const p = outs6(k.S);
+    const again = failAs6(k.st, E503);
+    const t1 = CLOCK6;
+    for (const t of TGT6.slice(0, 64)) await blk6(k.S, p.e, t);
+    CLOCK6 = t1 + 10000;
+    await blk6(k.S, p.e, TGT6[64]);
+    CLOCK6 = t1 + 16001;
+    await blk6(k.S, p.e, TGT6[64]);
+    const r1 = await tryJoin6(k, p.e, k.code);
+    CLOCK6 = t1;
+    await blk6(k.S, p.e, TGT6[64]);
+    again();
+    CLOCK6 = t1 + 32001;
+    const r2 = await tryJoin6(k, p.e, k.code);
+    CLOCK6 = t1 + 32002;
+    const r3 = await tryJoin6(k, p.e, k.code);
+    // The other doors count the account kept whole as blocking too: a guest
+    // in its squad who signs in is removed as a kick, and an invite out of
+    // its squad goes nowhere, its inviter told what a real one is told. From
+    // the next millisecond after its 16 s the invite goes out.
+    const q = await joinWorld6(ROWS_T6);
+    const qo = outs6(q.S);
+    q.st.friends.add(PAIR6(E, C));
+    const qa = failAs6(q.st, E503);
+    const tq = CLOCK6;
+    for (const t of TGT6) await blk6(q.S, qo.e, t);
+    qa();
+    const qc = await create6(q.S, qo.e);
+    const wq = t6ws(null);
+    await join6(q.S, wq, qc, 'Guest');
+    hello6(q.S, wq, D); await settle6();
+    await q.S.handle(qo.e, { type: 'squad', op: 'invite', to: C, id: 'i1' });
+    const i1 = ans6(qo.e, 'i1'), c1 = invited6(q.wc).length;
+    CLOCK6 = tq + 16000;
+    await q.S.handle(qo.e, { type: 'squad', op: 'invite', to: C, id: 'i2' });
+    const i2 = ans6(qo.e, 'i2'), c2 = invited6(q.wc).length;
+    CLOCK6 = tq + 16001;
+    await q.S.handle(qo.e, { type: 'squad', op: 'invite', to: C, id: 'i3' });
+    const i3 = ans6(qo.e, 'i3'), c3 = invited6(q.wc).length;
+    const sent = (a) => !!(a && a.ok === true && a.delivered === 'online');
+    const doors = { door: got6(wq, 'squad', 'ended'), i1: sent(i1), c1, i2: sent(i2), c2, i3: sent(i3), c3 };
+    if (same6(e0, IN6) && same6(r, want) && same6([r1, r2, r3], [OUT6, OUT6, IN6])
+      && same6(doors, { door: [KICKED6], i1: true, c1: 0, i2: true, c2: 0, i3: true, c3: 1 }))
+      ok('(blk-u) one account keeps at most 64 failing pairs: its 65th keeps the account 16 s, so its own join fails safe and nobody joins, signs in or is invited into its squad, while a join elsewhere is let in on one read; its next failure renews that, never shortens it');
+    else fail('(blk-u) one account\'s share: ' + JSON.stringify({ e0, r, renewed: [r1, r2, r3], doors, i1, i2, i3 }));
+  }
+  // 64 accounts, each failing on the same 64 players: 4096 pairs kept.
+  const fill6 = async (j, base) => {
+    const ws = [];
+    for (let k = 0; k < 64; k++) {
+      const w = up6(j.S, uid6(base + k));
+      ws.push(w);
+      for (const t of TGT6.slice(0, 64)) await blk6(j.S, w, t);
+    }
+    return ws;
+  };
+  {
+    // (e) 4096 pairs, then accounts with no room, then one account too many.
+    const j = await joinWorld6(ROWS_T6);
+    const restore = failAs6(j.st, E503);
+    const t1 = CLOCK6;
+    await fill6(j, 20000);
+    const b0 = await tryJoin6(j, j.wb, j.code);
+    const f = up6(j.S, uid6(30000));
+    await blk6(j.S, f, TGT6[0]);
+    const f1 = await tryJoin6(j, f, j.code);
+    const b1 = await tryJoin6(j, j.wb, j.code);
+    for (let k = 1; k < 4096; k++) await blk6(j.S, up6(j.S, uid6(30000 + k)), TGT6[0]);
+    const b2 = await tryJoin6(j, j.wb, j.code);
+    CLOCK6 = t1 + 10000;
+    await blk6(j.S, up6(j.S, uid6(40000)), TGT6[0]);
+    const b3 = await tryJoin6(j, j.wb, j.code);
+    CLOCK6 = t1;
+    await blk6(j.S, up6(j.S, uid6(40001)), TGT6[0]);
+    restore();
+    CLOCK6 = t1 + 26000;
+    const b4 = await tryJoin6(j, j.wb, j.code);
+    CLOCK6 = t1 + 26001;
+    const b5 = await tryJoin6(j, j.wb, j.code);
+    if (same6([b0, f1, b1, b2, b3, b4, b5], [IN6, OUT6, IN6, IN6, OUT6, OUT6, IN6]))
+      ok('(blk-u) the thrown set holds 4096 pairs and 4096 accounts: an account with no room is kept whole and moves nobody else; one account more fails every reader safe until it would have expired');
+    else fail('(blk-u) thrown set full: ' + JSON.stringify({ b0, f1, b1, b2, b3, b4, b5 }));
+  }
+  {
+    // (f) Room is made on write, for the set and for one account's share.
+    // 4096 pairs at t1, the first of them renewed at t1+10000.
+    const set = async (ms) => {
+      const j = await joinWorld6(ROWS_T6);
+      const restore = failAs6(j.st, E503);
       const t1 = CLOCK6;
-      await flood(k.S, p.e, 4096);
+      const ws = await fill6(j, 20000);
+      CLOCK6 = t1 + 10000;
+      await blk6(j.S, ws[0], TGT6[0]);
       CLOCK6 = t1 + ms;
-      await blk6(k.S, p.e, NN);
-      k.st.boom.delete('addBlock');
-      return joinB(k, 'k');
+      const g = up6(j.S, uid6(50000));
+      await blk6(j.S, g, TGT6[0]);
+      restore();
+      return tryJoin6(j, g, j.code);
     };
-    const kept = await aged(16000), room = await aged(16001);
-    const IN = { reads: 1, joined: true, dead: false }, OUT = { reads: 2, joined: false, dead: true };
-    if (same6(full, IN) && same6(over, OUT) && same6(back, OUT) && same6(edge, OUT) && same6(past, IN) && same6(kept, OUT) && same6(room, IN))
-      ok('(blk-u) the thrown set keeps 4096 entries 16 s: one past that fails every reader safe until it would have expired, and expired entries make room');
-    else fail('(blk-u) thrown set retention: ' + JSON.stringify({ full, over, back, edge, past, kept, room }));
+    // 4096 pairs and 4096 accounts kept whole at t1, the first account
+    // renewed at t1+10000. At t1+ms 4096 fresh pairs, then one more account.
+    const accounts = async (ms) => {
+      const j = await joinWorld6(ROWS_T6);
+      const restore = failAs6(j.st, E503);
+      const t1 = CLOCK6;
+      await fill6(j, 20000);
+      const whole = [];
+      for (let k = 0; k < 4096; k++) { const w = up6(j.S, uid6(30000 + k)); whole.push(w); await blk6(j.S, w, TGT6[0]); }
+      CLOCK6 = t1 + 10000;
+      await blk6(j.S, whole[0], TGT6[1]);
+      CLOCK6 = t1 + ms;
+      await fill6(j, 60000);
+      await blk6(j.S, up6(j.S, uid6(70000)), TGT6[0]);
+      restore();
+      return tryJoin6(j, j.wb, j.code);
+    };
+    const share = async (ms) => {
+      const j = await joinWorld6(ROWS_T6);
+      const o = outs6(j.S);
+      const restore = failAs6(j.st, E503);
+      const t1 = CLOCK6;
+      for (const t of TGT6.slice(0, 64)) await blk6(j.S, o.e, t);
+      CLOCK6 = t1 + ms;
+      await blk6(j.S, o.e, TGT6[64]);
+      restore();
+      return tryJoin6(j, o.e, j.code);
+    };
+    const r = {
+      set16000: await set(16000), set16001: await set(16001), share16000: await share(16000), share16001: await share(16001),
+      accounts16000: await accounts(16000), accounts16001: await accounts(16001),
+    };
+    if (same6(r, { set16000: OUT6, set16001: IN6, share16000: OUT6, share16001: IN6, accounts16000: OUT6, accounts16001: IN6 }))
+      ok('(blk-u) expired failures make room as the next is written, for the set, for one account\'s 64 and for the accounts kept whole, and not before their 16 s are up; a renewed one holds no expired one in place');
+    else fail('(blk-u) thrown set eviction: ' + JSON.stringify(r));
   }
 
   // ---- (sg-k ii) a REFUSED join lets nobody in -----------------------------
   // D-BLOCK-5 L. After a failed door, a join that reads the account's
-  // blocks and is then refused (a dead code, a full squad) made no row and
-  // vetted none, so it must not mark the socket let in: the next
+  // blocks and is then refused (a dead code, a full squad, a block with a
+  // member, the account already standing there on another device) made no
+  // row and vetted none, so it must not mark the socket let in: the next
   // same-account hello reads once and lets the row in, and Start seats it.
+  // The first three are an anonymous account's guest socket (GU). already_in
+  // needs an account with an identity of its own (B), whose other device
+  // stands in the squad on a guest row its own failed door left there
+  // (T6-R1-2: the block and already_in refusals come before squads.join).
   {
     const bad = [];
-    for (const how of ['dead code', 'full squad']) {
+    for (const how of ['dead code', 'full squad', 'blocked', 'already in']) {
+      const [acct, guest] = how === 'already in' ? [B, false] : [GU, true];
       const seated = [];
       const st = t6store(ROWS6);
       const S = mkSocial6(st, { seatSquad: (seats) => { seated.push(seats.length); return { ok: true, code: 'RM6G' }; } });
@@ -8459,23 +8694,34 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
       const wg = t6ws(null);
       await join6(S, wg, T, 'Ghost');
       await S.handle(wg, { type: 'squad', op: 'ready', ready: true, loadout: RACK5 });
-      st.boom.add('blockIdsOf'); hello6(S, wg, GU, true); await settle6(); st.boom.delete('blockIdsOf');
+      st.boom.add('blockIdsOf'); hello6(S, wg, acct, guest); await settle6(); st.boom.delete('blockIdsOf');
       let into = '1111', refusal = DEAD6('no');
       if (how === 'full squad') {
         into = await create6(S, up6(S, D));
         for (const id of [A, B, E]) await join6(S, up6(S, id), into, 'Member');
         refusal = { type: 'squad', op: 'join', error: 'full', id: 'no' };
       }
+      if (how === 'blocked') {
+        into = await create6(S, up6(S, D));
+        await st.addBlock(D, GU);
+      }
+      if (how === 'already in') {
+        into = await create6(S, up6(S, D));
+        const wy = t6ws(null);
+        await join6(S, wy, into, 'Ghost Two');
+        st.boom.add('blockIdsOf'); hello6(S, wy, acct, guest); await settle6(); st.boom.delete('blockIdsOf');
+        refusal = { type: 'squad', op: 'join', error: 'already_in', id: 'no' };
+      }
       await S.handle(wg, { type: 'squad', op: 'join', code: into, name: 'Ghost', skin: 'olive', id: 'no' });
       const no = ans6(wg, 'no');
       st.calls.length = 0;
-      hello6(S, wg, GU, true); await settle6();
+      hello6(S, wg, acct, guest); await settle6();
       const reads = reads6(st);
       await S.handle(wc, { type: 'squad', op: 'start', loadout: RACK5, id: 's' });
       if (!(same6(no, refusal) && reads === 1 && same6(ans6(wc, 's'), { type: 'squad', op: 'start', ok: true, code: 'RM6G', id: 's' }) && same6(seated, [2])))
         bad.push({ how, no, reads, s: ans6(wc, 's'), seated });
     }
-    if (!bad.length) ok('(sg-k) after a failed door, a refused join (a dead code, a full squad) leaves the door open: the next same-account hello reads once, and Start seats the row');
+    if (!bad.length) ok('(sg-k) after a failed door, a refused join (a dead code, a full squad, a block, already_in) leaves the door open: the next same-account hello reads once, and Start seats the row');
     else fail('(sg-k) refused join after a failed door: ' + JSON.stringify(bad));
   }
 
