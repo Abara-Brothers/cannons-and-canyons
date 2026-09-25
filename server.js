@@ -789,6 +789,12 @@ async function pushToUser(uid, { title, body, url, tag }, { seed = null, onDrop 
   // SENT ON THE NEXT TURN OF THE EVENT LOOP, after the caller has used this
   // answer: a real invite is then answered where a dropped one is — the same
   // read, the same path — and not after the encryption and signing above.
+  // Only the ANSWER is matched. What follows it happens for a real invite
+  // alone: that encryption and signing, and the DELETE of a dead endpoint,
+  // which can turn the next answer for the same friend from 'push' to 'none'.
+  // An inviter who times the frames after an invite, or invites again, could
+  // tell the two apart over many tries: inference by probing, accepted under
+  // D-BLOCK-2 A.
   new Promise((go) => setImmediate(go)).then(sendAll).catch(() => {});
   return true;
 }
