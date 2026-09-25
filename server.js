@@ -156,6 +156,12 @@ try {
       // social layer, but only this file holds the engine that can seat it.
       // See seatSquad above.
       seatSquad,
+      // AND THE INVITE'S PUSH TRANSPORT, for the same reason: web push, FCM
+      // and APNs all live in this file. A FUNCTION DECLARATION on purpose —
+      // this call runs at module load, hundreds of lines above it, and a
+      // `const` would still be in its temporal dead zone here: the throw would
+      // land in the catch below as '[boot] social off'.
+      pushInvite: pushSquadInvite,
     });
     // ONE CODE NAMESPACE (plan R4). makeCode has always collided against
     // `rooms` alone, so a squad code drawn from the same 31-character
@@ -675,11 +681,14 @@ async function apnsSend(token, title, body, url, tag) {
 //     nothing else, and dropping it would silently re-send to a dead endpoint
 //     on every later nudge in that room.
 // Never throws, and never awaits a send: a push must never delay or fail a
-// game action.
-async function pushToUser(uid, { title, body, url, tag }, { seed = null, onDrop = null } = {}) {
+// game action. Resolves whether a device on a transport this host has was
+// found, which is the whole of a squad invite's answer (pushSquadInvite):
+// `dryRun` stops there with that answer and sends nothing, and so does an
+// aborted `signal` — its caller has stopped waiting and answered without it.
+async function pushToUser(uid, { title, body, url, tag }, { seed = null, onDrop = null, dryRun = false, signal = null } = {}) {
   // Either transport is enough to be worth trying: a web-only server (no FCM
   // key) still nudges browsers, and an FCM-only one still nudges phones.
-  if (!webpush && !fcm && !apns) return;
+  if (!webpush && !fcm && !apns) return false;
   const targets = new Map();   // endpoint -> { sub, platform }
   if (seed && seed.endpoint) targets.set(seed.endpoint, { sub: seed, platform: 'web' });
   if (uid && SB_SECRET) {
@@ -691,7 +700,14 @@ async function pushToUser(uid, { title, body, url, tag }, { seed = null, onDrop 
       }
     } catch { /* the in-memory sub still gets its chance */ }
   }
-  if (!targets.size) return;
+  // A device counts only on a transport this host has: a web row needs the
+  // VAPID keys, an iOS token APNs, an Android token FCM.
+  const ready = [...targets].filter(([, t]) =>
+    (t.platform === 'web' ? webpush && t.sub : t.platform === 'ios' ? apns : fcm));
+  // AFTER the read, before any send, and read rather than listened for: an
+  // 'abort' listener that throws is an uncaughtException, which is shutdown.
+  if (!ready.length || (signal && signal.aborted)) return false;
+  if (dryRun) return true;
   const payload = JSON.stringify({ title, body, url, tag });
 
   const drop = (endpoint) => {
@@ -702,27 +718,31 @@ async function pushToUser(uid, { title, body, url, tag }, { seed = null, onDrop 
     }
   };
 
-  for (const [endpoint, { sub, platform }] of targets) {
-    if (platform === 'web') {
-      if (!webpush || !sub) continue;
-      webpush.sendNotification(sub, payload).catch((err) => {
-        if (err && (err.statusCode === 404 || err.statusCode === 410)) drop(endpoint);
-      });
-    } else if (platform === 'ios') {
-      // The endpoint IS the raw APNs device token, and it goes straight to
-      // Apple. It is NOT an FCM registration token and FCM would reject it.
-      if (!apns) continue;
-      apnsSend(endpoint, title, body, url, tag)
-        .then((r) => { if (r === 'gone') drop(endpoint); })
-        .catch(() => { /* transient: the next send tries again */ });
-    } else {
-      // android: the endpoint IS the FCM registration token.
-      if (!fcm) continue;
-      fcmSend(endpoint, title, body, url, tag)
-        .then((r) => { if (r === 'gone') drop(endpoint); })
-        .catch(() => { /* transient: the next send tries again */ });
+  const sendAll = () => {
+    for (const [endpoint, { sub, platform }] of ready) {
+      if (platform === 'web') {
+        webpush.sendNotification(sub, payload).catch((err) => {
+          if (err && (err.statusCode === 404 || err.statusCode === 410)) drop(endpoint);
+        });
+      } else if (platform === 'ios') {
+        // The endpoint IS the raw APNs device token, and it goes straight to
+        // Apple. It is NOT an FCM registration token and FCM would reject it.
+        apnsSend(endpoint, title, body, url, tag)
+          .then((r) => { if (r === 'gone') drop(endpoint); })
+          .catch(() => { /* transient: the next send tries again */ });
+      } else {
+        // android: the endpoint IS the FCM registration token.
+        fcmSend(endpoint, title, body, url, tag)
+          .then((r) => { if (r === 'gone') drop(endpoint); })
+          .catch(() => { /* transient: the next send tries again */ });
+      }
     }
-  }
+  };
+  // SENT ON THE NEXT TURN OF THE EVENT LOOP, after the caller has used this
+  // answer: a real invite is then answered where a dropped one is — the same
+  // read, the same path — and not after the encryption and signing above.
+  new Promise((go) => setImmediate(go)).then(sendAll).catch(() => {});
+  return true;
 }
 
 // Nudge every device the player has, not just the one that subscribed in this
@@ -746,6 +766,31 @@ async function pushNudgeAsync(room, seat) {
     seed: pl.pushSub,
     onDrop: (endpoint) => { if (pl.pushSub && pl.pushSub.endpoint === endpoint) pl.pushSub = null; },
   });
+}
+
+// A squad invite to a friend with no live socket: server/social.js's pushInvite
+// seam (design 4.4). Same transport as the nudge, its own copy, and
+// DELIBERATELY its own collapse key (R13) — per squad, so invites from two
+// squads sit side by side while a second invite from the SAME squad replaces
+// the first rather than stacking.
+//
+// The contract is the seam's (see the comment above createSocial): true when
+// one of the invitee's devices is on a transport this host has — the one
+// subscription read, the sends NOT awaited, because the inviter is waiting on
+// the answer. `dryRun` is a dropped invite (D-BLOCK 4): the same read and the
+// same answer, nothing sent. `signal` is aborted once the inviter has been
+// answered 'none', and nothing may be sent after that.
+async function pushSquadInvite(toUserId, { code, from, size, max }, { dryRun = false, signal = null } = {}) {
+  // `from` is displayName()'s, and null is legitimate — an unprovable name
+  // keeps its invite everywhere else, so it keeps it here. 'A player' is
+  // app.js's own in-sentence fallback for a missing name.
+  const who = (typeof from === 'string' && from) ? from : 'A player';
+  return pushToUser(toUserId, {
+    title: 'Cannons & Canyons — squad invite',
+    body: `${who} invites you to their squad (${size} of ${max}).`,
+    url: `/?squad=${code}`,
+    tag: `cc-squad-${code}`,
+  }, { dryRun, signal });
 }
 
 // The one capability the engine cannot have: sending a push needs the VAPID keys
