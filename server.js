@@ -485,7 +485,7 @@ async function mintFcmToken() {
 // Deliver one nudge to one native device. Resolves to 'gone' when FCM says the
 // token is dead, so the caller can clean the row out — the same self-cleaning
 // contract the web push path has.
-async function fcmSend(token, title, body, url) {
+async function fcmSend(token, title, body, url, tag) {
   const access = await fcmAccessToken();
   if (!access) return 'skip';
   const res = await fetch(`${FCM_API_BASE}/v1/projects/${fcm.project}/messages:send`, {
@@ -496,7 +496,9 @@ async function fcmSend(token, title, body, url) {
         token,
         notification: { title, body },
         data: { url: String(url || '/') },
-        android: { priority: 'high', notification: { tag: 'cc-turn' } },
+        // PASSED IN since squads. A squad invite reusing 'cc-turn' would replace
+        // an unread turn alert in the shade rather than sit beside it (R13).
+        android: { priority: 'high', notification: { tag: String(tag || 'cc-turn') } },
       },
     }),
   });
@@ -581,7 +583,7 @@ function apnsSession(host) {
   return s;
 }
 
-function apnsRequest(host, token, payload, jwt) {
+function apnsRequest(host, token, payload, jwt, tag) {
   return new Promise((resolve, reject) => {
     let req;
     try {
@@ -596,9 +598,10 @@ function apnsRequest(host, token, payload, jwt) {
         // late is worse than none: the turn has moved on and the notification
         // is a lie about the state of the match.
         'apns-expiration': String(Math.floor(Date.now() / 1000) + 600),
-        // Same intent as the Android notification tag — one pending nudge per
-        // player, replaced rather than stacked into a column of them.
-        'apns-collapse-id': 'cc-turn',
+        // Same intent as the Android notification tag, and the same key — one
+        // pending nudge per player, replaced rather than stacked into a column
+        // of them, and an invite beside it rather than over it (R13).
+        'apns-collapse-id': String(tag || 'cc-turn'),
         'content-type': 'application/json',
       });
     } catch (e) { return reject(e); }
@@ -626,10 +629,10 @@ function apnsRequest(host, token, payload, jwt) {
 const APNS_DEAD = /(BadDeviceToken|Unregistered|DeviceTokenNotForTopic)/;
 
 // Same contract as fcmSend: 'ok' | 'gone' | 'skip', throws on transient.
-async function apnsSend(token, title, body, url) {
+async function apnsSend(token, title, body, url, tag) {
   if (!apns) return 'skip';
   const payload = JSON.stringify({
-    aps: { alert: { title, body }, sound: 'default', 'thread-id': 'cc-turn' },
+    aps: { alert: { title, body }, sound: 'default', 'thread-id': String(tag || 'cc-turn') },
     // TOP LEVEL, beside `aps` and not inside it. Capacitor surfaces every key
     // outside `aps` as notification.data, which is where the client's
     // pushNotificationActionPerformed listener reads `url` to deep-link into
@@ -637,16 +640,16 @@ async function apnsSend(token, title, body, url) {
     url: String(url || '/'),
   });
 
-  let r = await apnsRequest(APNS_HOST, token, payload, apnsJwt());
+  let r = await apnsRequest(APNS_HOST, token, payload, apnsJwt(), tag);
   // The cached provider token aged out mid-flight. Mint once and retry rather
   // than dropping a nudge every time one expires.
   if (r.status === 403 && /ExpiredProviderToken/.test(r.body)) {
     apns.jwt = null;
-    r = await apnsRequest(APNS_HOST, token, payload, apnsJwt());
+    r = await apnsRequest(APNS_HOST, token, payload, apnsJwt(), tag);
   }
   if (r.status === 200) return 'ok';
   if (r.status === 400 && /BadDeviceToken/.test(r.body) && APNS_FALLBACK_HOST) {
-    const alt = await apnsRequest(APNS_FALLBACK_HOST, token, payload, apnsJwt());
+    const alt = await apnsRequest(APNS_FALLBACK_HOST, token, payload, apnsJwt(), tag);
     if (alt.status === 200) return 'ok';
     if (alt.status === 410 || APNS_DEAD.test(alt.body)) return 'gone';
     throw new Error(`apns send ${alt.status} ${alt.body.slice(0, 120)}`);
@@ -703,13 +706,13 @@ async function pushNudgeAsync(room, seat) {
       // The endpoint IS the raw APNs device token, and it goes straight to
       // Apple. It is NOT an FCM registration token and FCM would reject it.
       if (!apns) continue;
-      apnsSend(endpoint, title, body, url)
+      apnsSend(endpoint, title, body, url, 'cc-turn')
         .then((r) => { if (r === 'gone') drop(endpoint); })
         .catch(() => { /* transient: the next turn tries again */ });
     } else {
       // android: the endpoint IS the FCM registration token.
       if (!fcm) continue;
-      fcmSend(endpoint, title, body, url)
+      fcmSend(endpoint, title, body, url, 'cc-turn')
         .then((r) => { if (r === 'gone') drop(endpoint); })
         .catch(() => { /* transient: the next turn tries again */ });
     }
