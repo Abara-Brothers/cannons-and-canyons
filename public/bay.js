@@ -454,6 +454,313 @@ function sortiesPanel() {
   return '<div class="pnl' + (rows ? '' : ' hidden') + '" style="left:' + u(18) + ';top:' + u(174) + ';width:' + u(196) + ';height:' + u(192) + '"><div class="ph">Recent sorties<s></s></div>' + rows + '</div>';
 }
 
+/* ---- the Squad box -------------------------------------------------------
+   The LEFT home panel, 196 x 192u, in the slot Recent sorties held. Two tabs,
+   Squad and Friends (D10), and every state a player can be in before the
+   squad itself is drawn.
+
+   IT CARRIES NO .ph. Every other side panel is `.pnl` + `.ph` + rows; mockup
+   v3 makes the TAB BAR this box's header (names at 11u, one step under a
+   station name's 13.5u, where .ph is 10u on home), and a second header above
+   it would spend 14u of a 173u content budget saying nothing.
+
+   THE MORPH CONTRACT, and it is the reason for every `.hidden` below.
+   morphChildren() is POSITIONAL, not keyed: it walks childNodes by index,
+   morphs the overlap, drops the tail and appends the remainder. So every node
+   in this box exists in EVERY state and is hidden with `.hidden` rather than
+   dropped -- both panes, both count pills, the request lamp, the error line.
+   A tab switch then moves no node at all; it flips two class attributes. That
+   also protects the code field: morphNode returns early for INPUT/TEXTAREA
+   ("the value is the player's"), so what was typed survives a repaint. THE
+   MORPH PATH ONLY -- render() does `host.innerHTML = html` whenever
+   base(next) !== base(current), so leaving home for any other screen and
+   coming back DOES clear the field. Tab taps, snapshots, presence pushes and
+   account changes all repaint home in place, and all keep it.
+
+   null IS NOT EMPTY. sq.known is false until the server has answered, and the
+   box says "Not loaded yet." for exactly that long. Rendering "No squad yet"
+   for an answer that never arrived is the bug this project has shipped twice
+   (app.js's socialCallsign comment names both). */
+const SQ_KEY = 'cc_squad';
+const SQ_MAX = 4;
+const SQ_NONE = 'No squad or game with that code.';
+// THE BOX'S OWN READ STATE. `snap` is NOT a copy: it reads app.js's one slot
+// (plan X7), so a roster the server pushes when somebody else acts reaches the
+// box through the same field as the answer to its own question. It is a
+// getter with no setter, so in this strict file `sq.snap = x` THROWS: a copy
+// kept here would stop seeing those pushes.
+//   known  -- an answer is in hand (it outlives a reconnect, so the box keeps
+//             what it knows on screen while it asks again)
+//   gone   -- that answer was `gone` and this tab HAD a squad to lose
+//   via    -- the socket introduction (app.js's socialIntro) last asked under
+//   again  -- the last answer was `gone`, which may be premature: the tab's
+//             next return asks once more (see sqBack)
+//   bare   -- this tab gave its squad up to another device: resume without
+//             the code, so it never pulls the squad back from the one in use
+const sqFresh = (tab) => ({
+  tab, known: false, gone: false, err: '', asking: false, cerr: '', via: 0, again: false, bare: false,
+  get snap() { return window.CC_SQUAD || null; },
+});
+let sq = sqFresh('squad');
+
+// sqNote takes SAFE HTML -- entities, never player text. Anything a player
+// typed goes through esc() before it gets here.
+const sqNote = (html) => '<p class="sqn">' + html + '</p>';
+// The error line is always in the tree and empty-and-hidden when there is
+// nothing to say, so its absence never shifts the nodes beneath it. .cs does
+// the same thing in the settings column, for the same reason.
+const sqErr = (s) => '<p class="sqe' + (s ? '' : ' hidden') + '">' + esc(s || '') + '</p>';
+
+function sqTab(id, name, txt, known, dot, lamp) {
+  const on = sq.tab === id;
+  return '<button class="sqtb' + (on ? ' on' : '') + '" data-sq="tab:' + id + '" role="tab"'
+    + ' aria-selected="' + (on ? 'true' : 'false') + '" title="' + name + '">'
+    + '<span class="sqtn">' + name + '</span>'
+    + '<span class="sqc' + (lamp ? ' lit' : '') + (known ? '' : ' hidden') + '">' + (lamp ? IC.dot : '') + esc(txt) + '</span>'
+    + '<i class="sqd' + (dot ? '' : ' hidden') + '" aria-hidden="true"></i></button>';
+}
+function sqTabs() {
+  // D10 says a count, never a dash -- and a count this client has not been
+  // told is not a count. An unknown one renders the pill EMPTY and hidden,
+  // which keeps the node without inventing a zero.
+  const count = sq.snap ? (sq.snap.members || []).length : sq.known && !sq.err ? 0 : -1;
+  const sn = snap();
+  const inN = sn && sn.requests && Array.isArray(sn.requests.in) ? sn.requests.in.length : 0;
+  const onN = sn && Array.isArray(sn.friends) ? sn.friends.filter((x) => x && x.online).length : 0;
+  return '<div class="sqt" role="tablist">'
+    + sqTab('squad', 'Squad', count < 0 ? '' : count + ' / ' + SQ_MAX, count >= 0, false, false)
+    + sqTab('friends', 'Friends', sn ? String(onN) : '', !!sn, inN > 0, true)
+    + '</div>';
+}
+function sqPanel() {
+  return '<div class="pnl sqx" style="left:' + u(18) + ';top:' + u(174) + ';width:' + u(196) + ';height:' + u(192) + '">'
+    + sqTabs()
+    + '<div class="sqb">'
+    +   '<div class="sqp' + (sq.tab === 'squad' ? '' : ' hidden') + '">' + sqPane() + '</div>'
+    +   '<div class="sqp' + (sq.tab === 'friends' ? '' : ' hidden') + '">' + sqFriends() + '</div>'
+    + '</div></div>';
+}
+const SQ_SIGN_IN = 'Sign in to add friends and keep your progress across devices. Your guest progress on this device comes with you when you do.';
+function sqPane() {
+  // OFFLINE FIRST, AND FOR EVERYONE. wsReady() -- not S.connected -- because
+  // during an offline match S.ws is an in-page stand-in feeding room-engine.js,
+  // which has no social code: a squad frame sent there vanishes and the box
+  // waits for an answer that cannot come.
+  if (!wsReady()) return sqNote('Needs a connection.') + sqCodeRow(false)
+    + sqNote('Your squad and the code field come back when the connection does.');
+  // A SQUAD IN HAND IS SHOWN, to a guest as much as to anyone: a guest who
+  // joins by code is "in, as a guest" (D11), and must see the squad they are in.
+  // A REFUSED RE-ASK IS SAID BENEATH IT: after a blip only a resume puts this
+  // socket back on its row, and a squad shown as if nothing were wrong would
+  // be swept from under the player a minute later (task 5).
+  if (sq.snap) return sqMine(sq.snap) + sqErr(sq.err) + (sq.err ? sqRetry() : '');
+  if (acctState() !== 'in') return sqLead() + sqGuest();
+  // NOT KNOWN YET, AND WHY, AND WHAT WILL BE DONE ABOUT IT -- frWait()'s three
+  // parts, in a panel a third the size.
+  if (!sq.known || sq.err) return sqNote('Not loaded yet.') + sqErr(sq.err) + sqRetry();
+  const lead = sqLead();
+  if (lead) return lead + sqInvite() + sqCodeRow(true);
+  return sqNote('No squad yet. Squad up, then pick a mode on the boards and start together.')
+    + sqInvite() + sqCodeRow(true) + sqSeats();
+}
+// WHAT BECAME OF THE LAST SQUAD, said above whatever the box offers next.
+// CAUSE-NEUTRAL (C3): a kick, the drop window, a block, a leaderless squad and
+// a server restart all end in the same `gone`, and a sentence naming one of
+// them would tell a player a block removed which thing happened to them.
+// "has ended" is only said to a tab that HAD a squad (sq.gone); a player who
+// never had one is told "No squad yet". An `ended` push says a little more,
+// and only what the player can see for themselves: a kick -- which is also
+// EXACTLY how a block that removes a player reads (D-BLOCK) -- their own
+// leave, or another device of theirs acting on the squad.
+const SQ_ENDED = 'Your squad has ended. Squad up again.';
+function sqLead() {
+  const end = window.CC_SQUAD_END;
+  if (end) return sqNote(end === 'kicked' ? 'You were removed from the squad.'
+    : end === 'left' ? 'You left the squad.'
+    : end === 'elsewhere' ? 'Your squad was changed on another device.'
+    : SQ_ENDED);
+  return sq.gone ? sqNote(SQ_ENDED) : '';
+}
+// TASK 9 OWNS WHAT A SQUAD LOOKS LIKE: the member rows, the dashed "+ Invite a
+// friend" row with the code link, the Seats line lit by sn.fits, and the two
+// footers (design 5.1 states 3 and 4). Its signature and its single call site
+// above do not change. What this minimal body exists to make impossible is the
+// fall-through -- a squad this client has been TOLD about rendering "No squad
+// yet" -- so the check that guards it is written before the rows are. Names go
+// through nameOf(), which is null-safe: a null name keeps its row.
+function sqMine(sn) {
+  const ms = Array.isArray(sn.members) ? sn.members : [];
+  return sqNote('Squad ' + esc(sn.code) + ' &middot; ' + ms.length + ' of ' + SQ_MAX + '.')
+    + sqNote(esc(ms.map(nameOf).join(', ')));
+}
+function sqFriends() {
+  if (!wsReady()) return sqNote('Needs a connection.') + sqAdd(false);
+  if (acctState() !== 'in') return sqNote(SQ_SIGN_IN) + sqAdd(false);
+  const sn = snap();
+  // null IS NOT EMPTY here either. The Friends screen says this in full; the
+  // box has room for the short form, and re-entering home asks again.
+  if (!sn) return sqNote('Not loaded yet.') + sqErr(socWait().err) + sqAdd(true);
+  const fs = sn.friends || [], onN = fs.filter((x) => x && x.online).length;
+  const rin = (sn.requests && sn.requests.in) || [];
+  // The request line keeps its node when there is nothing to say, so the
+  // footer beneath it never shifts position under morphChildren.
+  return sqNote('Your friends &middot; ' + fs.length)
+    + sqNote(onN + ' online now.')
+    + '<p class="sqn' + (rin.length ? '' : ' hidden') + '">'
+    +   (rin.length ? rin.length + ' request' + (rin.length === 1 ? '' : 's') + ' waiting for an answer.' : '')
+    + '</p>'
+    + sqAdd(true);
+}
+// The footer of the Friends tab (design 5.1): the box shows the counts and the
+// full screen does the work. data-go is already in the delegated listener's list.
+const sqAdd = (on) => '<div class="sqf"><button class="sbtn" data-go="friends"' + (on ? '' : ' disabled') + '>+ Add friend</button></div>';
+// THE ONE DISPATCHER for every data-sq control. `v` is `op` or `op:arg`, split
+// on the FIRST colon, so an arg may carry colons of its own.
+function sqAct(v) {
+  const i = v.indexOf(':'), op = i < 0 ? v : v.slice(0, i), arg = i < 0 ? '' : v.slice(i + 1);
+  if (op === 'tab') { sq.tab = arg === 'friends' ? 'friends' : 'squad'; render(current); return; }
+  // Retry clears the refusal AND the answer, so the box asks again rather
+  // than standing on a stale `known`.
+  if (op === 'retry') { sq.err = ''; sq.known = false; sqAsk(); render(current); return; }
+  if (op === 'code') { sqEnter(); return; }
+}
+const sqRetry = () => '<div class="sqf"><button class="sbtn" data-sq="retry"' + (sq.asking ? ' disabled' : '') + '>'
+  + (sq.asking ? 'Loading' : 'Retry') + '</button></div>';
+// Invite friends opens the Friends TAB, not the Friends screen: the tab is
+// where a squad is built from, and the screen is a whole-page detour out of
+// the box (design 5.1 state 2).
+const sqInvite = () => '<div class="sqf"><button class="go sqg" data-sq="tab:friends">Invite friends</button></div>';
+const sqSeats = () => sqNote('Duel 2 &middot; FFA 2&ndash;4 &middot; Boss 1&ndash;2 &middot; Aliens 1&ndash;2 &middot; Golf 1&ndash;4');
+
+// THE CODE OF THE SQUAD THIS DEVICE IS IN. It is what makes "your squad has
+// ended" honest -- squads are memory on the server and this is memory on the
+// device, so after a deploy the device still holds a code the server has
+// forgotten -- and it rides a reconnect's resume, which is how a socket takes
+// its row back from a dead one a proxy is still holding open (task 5). Written
+// from every roster the slot receives; spent when the server says `gone` to it.
+const sqStored = () => { try { return (localStorage.getItem(SQ_KEY) || '').toUpperCase().slice(0, 8); } catch { return ''; } };
+const sqStore = (c) => { try { if (c) localStorage.setItem(SQ_KEY, c); else localStorage.removeItem(SQ_KEY); } catch {} };
+function sqReset() { sq = sqFresh(sq.tab); }
+function sqPaint() {
+  const host = $('bay');
+  if (host && host.classList.contains('active') && current === 'home') render('home');
+}
+// ASKED ONCE PER INTRODUCTION, THEN LEFT ALONE. sqNeed() is idempotent: it asks
+// only if nothing has been asked under this socket's introduction (app.js's
+// socialIntro) -- answered, refused or in flight. A refusal is Retry's to
+// clear, exactly as frNeed() leaves the friends frame alone: without that,
+// every presence push would re-ask a server that is already saying no, which
+// is how loadSorties() came to pour one error row per player per home visit
+// into the live database. A NEW introduction -- a reconnect, or a sign-in's
+// hello -- asks again, whatever the screen: a member whose socket blipped
+// mid-match is dropped, and removed a minute later unless this socket resumes
+// (task 5).
+const sqIntro = () => (fn('socialIntro') ? socialIntro() : 0);
+function sqNeed() {
+  const n = sqIntro();
+  if (n && sq.via !== n) sqAsk();
+}
+function sqAsk(bare, back) {
+  // NOTHING IS ASKED BEFORE THE HELLO, by any path: a resume that overtakes it
+  // is answered for nobody (see socialIntro). And gated BEFORE socialTx, not
+  // after: socialTx calls its callback SYNCHRONOUSLY when the socket is down,
+  // and a busy flag set after the call would latch on for ever. A guest's squad
+  // is keyed to the socket it joined on, so a guest asks only about a squad
+  // this tab is holding.
+  const n = sqIntro();
+  if (!n || !wsReady() || sq.asking || (acctState() !== 'in' && !sq.snap)) return;
+  // `had`: a squad this answer can take away -- a presented code, a squad on
+  // screen, or, for a return's second question, the "has ended" line itself.
+  const mine = sq, code = bare || sq.bare ? '' : sqStored(), had = !!code || !!sq.snap || (!!back && sq.gone);
+  mine.asking = true; mine.again = false; mine.via = n;
+  // Every write below goes to `mine`, the state that asked: an account switch
+  // replaces `sq` (sqReset), and an answer to the old account's question must
+  // not settle the new account's.
+  socialTx(code ? { type: 'squad', op: 'resume', code } : { type: 'squad', op: 'resume' },
+    'squad', null, 'squad.resume', (m, msg) => {
+      mine.asking = false;
+      if (m.error) mine.err = msg;
+      else if (m.op === 'state') { mine.known = true; mine.gone = false; mine.err = ''; }
+      else if (m.op === 'gone') {
+        // Once per introduction: a return's own `gone` arms no further return.
+        mine.known = true; mine.err = ''; mine.gone = had; mine.again = !back;
+        if (code) sqStore('');
+      }
+      // fits() proves the TYPE; the op is ours to prove, and an op from a
+      // newer server is not an empty squad.
+      else mine.err = socErr('squad.resume', 'unavailable');
+      sqPaint();
+      sqNeed();                                // a hello that landed while this was out
+    });
+}
+// THE ONE CODE FIELD (D8). It asks the server which namespace the code is in
+// -- squad codes and room codes share one alphabet -- and then does the one
+// thing that matches. The room branch calls the join that ALREADY EXISTS:
+// #codeInput and #joinBtn are the legacy rack's real path, app.js's handler
+// parks the intent when the socket is not up, and index.html says removing a
+// legacy node means removing every reference in app.js first. The code frame
+// is answered from memory even when the social layer is off, so a room code
+// still joins during a database outage, as it always has.
+function sqEnter() {
+  const el = $('sqCode');
+  const code = ((el && el.value) || '').trim().toUpperCase();
+  const mine = sq;                             // as in sqAsk: answers settle the state that asked
+  mine.cerr = '';
+  if (code.length !== 4) { mine.cerr = 'Enter the 4-letter code.'; sqPaint(); return; }
+  sqPaint();
+  socialTx({ type: 'code', code }, 'code', null, 'code', (m, msg) => {
+    if (m.error) { mine.cerr = msg; sqPaint(); return; }
+    if (m.kind === 'room') {
+      if ($('codeInput')) $('codeInput').value = code;
+      if ($('joinBtn')) $('joinBtn').onclick();
+      return;
+    }
+    if (m.kind === 'squad') {
+      // The CURRENT callsign rides the join: a squad seat's name is whatever
+      // this frame carried, and Start hands it to the engine (task 4).
+      socialTx({ type: 'squad', op: 'join', code, name: has('myName') ? myName() : '', skin: has('mySkin') ? mySkin() : '' },
+        'squad', null, 'squad.join', (r, rmsg) => {
+          if (r.error) mine.cerr = rmsg;
+          // The roster itself has already reached the slot (app.js answers
+          // the roster first); this settles the box's own state. A squad this
+          // tab joined is its own again, so its reconnects carry the code.
+          else if (r.op === 'state') { mine.known = true; mine.gone = false; mine.err = ''; mine.bare = false; }
+          sqPaint();
+        });
+      return;
+    }
+    mine.cerr = SQ_NONE;
+    sqPaint();
+  });
+}
+// The one code field (D8). It is a bare INPUT with no `value` attribute on
+// purpose: morphNode syncs attributes and then returns for INPUT, so `disabled`
+// tracks the state while the typed value stays the player's.
+function sqCodeRow(on) {
+  return '<div class="sqcr">'
+    + '<input id="sqCode" class="sqin" maxlength="4" placeholder="CODE" autocomplete="off"'
+    +   ' autocapitalize="characters" spellcheck="false" enterkeyhint="go"'
+    +   ' aria-label="Squad or game code"' + (on ? '' : ' disabled') + '>'
+    + '<button class="sbtn" data-sq="code"' + (on ? '' : ' disabled') + '>Enter</button></div>'
+    + sqErr(on ? sq.cerr : '');
+}
+// D11, in D11's order: what a guest can do NOW, then the door to an account.
+// The Sign in button drives #accountBtn, which is the one path every account
+// action already goes through (index.html's rack owns it, bay.js taps it) --
+// and it is offered only when that button is really there, because
+// accountChip() drops the header chip on the same condition.
+function sqGuest() {
+  const b = $('accountBtn');
+  const door = !!(b && !b.classList.contains('hidden'));
+  return sqNote('You can play right now. Got a code from a friend? Enter it and you are in, as a guest.')
+    + sqCodeRow(true)
+    + (door
+        ? '<p class="sqor">&mdash; or &mdash;</p>'
+          + '<div class="sqf"><button class="ghost sqg" data-old="accountBtn">Sign in</button></div>'
+          + sqNote(SQ_SIGN_IN)
+        : '');
+}
+
 /* ---- screens ---------------------------------------------------------------- */
 const SCREENS = {};
 
@@ -889,6 +1196,26 @@ const SOC_ERR = {
   'report.sign_in':              'Sign in to report or block a player.',
   'report.offline':              'Not connected. Try again in a moment.',
   'report._':                    'Reporting is not available right now. Try again later.',
+  // SQUADS. A group per OP, because `block` and `block.remove` sharing one
+  // group produced a real bug (Unblock said "Blocking is not available right
+  // now"). 'offline' means THIS client's socket is down and nothing else; a
+  // timeout with a live socket comes back as 'unavailable', which is the
+  // server's fault and must not be blamed on the player's connection.
+  'squad.resume.slow_down':      'Too many tries. Wait a moment.',
+  'squad.resume.offline':        'Not connected. Try again in a moment.',
+  'squad.resume._':              'Squads are not available right now. Try again later.',
+  // A refused join reads EXACTLY as an unknown code does (D-BLOCK-2 A): the
+  // server refuses a join a block forbids as `no_such_squad`, and no key here
+  // may name a block. `already_in` is always true: another device of this
+  // account stands in that squad.
+  'squad.join.no_such_squad':    SQ_NONE,
+  'squad.join.full':             'That squad is full.',
+  'squad.join.already_in':       'You are already in that squad on another device.',
+  'squad.join.slow_down':        'Too many tries. Wait a moment.',
+  'squad.join.offline':          'Not connected. Try again in a moment.',
+  'squad.join._':                'That squad could not be joined right now. Try again later.',
+  'code.offline':                'Not connected. Try again in a moment.',
+  'code._':                      'That code could not be checked right now. Try again later.',
   _:                             'That did not work. Try again.',
 };
 function socErr(kind, code) {
@@ -1647,7 +1974,7 @@ SCREENS.home = function () {
     +   '<button class="chip sq" data-go="settings" title="Settings">' + IC.gear + '</button>'
     + '</div>'
     + '<div class="boards">' + boards + '</div>'
-    + sortiesPanel()
+    + sqPanel()
     + '<div class="pnl" style="right:' + u(18) + ';top:' + u(174) + ';width:' + u(196) + ';height:' + u(192) + '"><div class="ph">Bay stations<s></s></div>' + stations + '</div>'
     + '<div class="lbar">'
     +   '<span class="lic">' + MODE_IC[m.id] + '</span>'
@@ -1777,6 +2104,9 @@ function render(name) {
   // where the markup can still see it.
   if (enterFriends) frNeed();
   if (current === 'home') loadSorties();
+  // ASKED ON ENTRY, NOT PER RENDER -- a tab tap re-renders home and must not
+  // re-ask. sqNeed() is idempotent anyway, and waits for the socket's hello.
+  if (entering && current === 'home') sqNeed();
 }
 
 function go(name) {
@@ -1801,7 +2131,7 @@ function setField(k, v) {
 
 document.addEventListener('click', (e) => {
   const host = $('bay'); if (!host || !host.classList.contains('active')) return;
-  const t = e.target.closest('[data-go],[data-back],[data-set],[data-roll],[data-toggle],[data-launch],[data-join],[data-pick],[data-old],[data-skin],[data-rematch],[data-solo],[data-cs],[data-fr]');
+  const t = e.target.closest('[data-go],[data-back],[data-set],[data-roll],[data-toggle],[data-launch],[data-join],[data-pick],[data-old],[data-skin],[data-rematch],[data-solo],[data-cs],[data-fr],[data-sq]');
   if (!t || !host.contains(t)) return;
   if (has('Audio')) Audio.ensure();
   // The lobby's Back IS Cancel. Leaving any other way strands a queued create
@@ -1854,6 +2184,9 @@ document.addEventListener('click', (e) => {
     if (t.dataset.cs === 'save') { submitCallsign(); return; }
     return;
   }
+  // Every Squad box control, on one attribute, exactly like data-fr: the value
+  // is the op, and an op that acts on somebody carries their id after a colon.
+  if (t.dataset.sq) { sqAct(t.dataset.sq); return; }
   // Every Friends-screen control, on one attribute. The value is the op, and an
   // op that acts on somebody carries their id after a colon — a uuid holds no
   // colon, so the split is unambiguous.
@@ -1889,11 +2222,52 @@ window.Bay = { show: render, go, back, state, tankURL, MODES, haptic, rankFor, a
 // over. (Task 8 widens this to its Friends screen.)
 document.addEventListener('cc:social', () => {
   const host = $('bay');
-  if (host && host.classList.contains('active') && (current === 'settings' || current === 'friends')) render(current);
+  // 'home' JOINS THE LIST because the Squad box lives there and its Friends
+  // tab counts come straight out of CC_SOCIAL. app.js dispatches this on
+  // ws.onopen too, so a socket that comes back repaints a box that greyed
+  // itself out -- the same bug test/social_ui.mjs's I9 found on the Friends
+  // screen, where leaving and returning was the only thing that worked.
+  if (host && host.classList.contains('active') && (current === 'home' || current === 'settings' || current === 'friends')) render(current);
   // The open menu reads the snapshot too — Remove friend appears on a card the
   // moment the friendship lands, and goes when it is torn down.
   pmPaint();
 });
+// THE SQUAD SLOT MOVED (app.js writes window.CC_SQUAD and fires this), or the
+// socket it is read on has just been introduced. Keep the device's code in step
+// with the squad it is in, forget it when the squad is over for the account,
+// repaint, and ask if this introduction has not been asked.
+// AN END IS ACTED ON ONCE, when it arrives: storage is shared by every tab on
+// the device, and this event fires again on every introduction, so acting on
+// an end still standing would delete a code another tab has stored since.
+let sqEndSeen = '';
+document.addEventListener('cc:squad', () => {
+  const sn = sq.snap, end = window.CC_SQUAD_END;
+  if (sn && typeof sn.code === 'string' && sn.code) sqStore(sn.code);
+  if (end !== sqEndSeen) {
+    sqEndSeen = end;
+    // ELSEWHERE: another device of this account took the row or acted on the
+    // squad. The squad is not over for the ACCOUNT, so the code stays -- but
+    // this tab resumes bare from now on (see sqBack). Every other end is final.
+    if (end === 'elsewhere') sq.bare = true;
+    else if (end) sqStore('');
+  }
+  sqPaint();
+  sqNeed();
+});
+// BACK TO THIS TAB. An `ended: elsewhere`, or any `gone`, may not be the last
+// word: another tab of this account may have closed, or the server may still
+// be checking this account's blocks at sign-in (it answers the account's other
+// devices `gone` until it has). So a return to the tab asks once more -- BARE,
+// which the server answers by showing the squad and moving the row here only
+// when no live socket holds it, so a glance at a background tab never pulls
+// the squad off the device in use. A kick or a leave is final, and a refusal
+// is Retry's to clear.
+function sqBack() {
+  if (document.hidden || sq.err) return;
+  if (window.CC_SQUAD_END === 'elsewhere' || sq.again) sqAsk(true, true);
+}
+window.addEventListener('focus', sqBack);
+window.addEventListener('visibilitychange', sqBack);
 // THE PLAYER MENU'S FOUR DOORS: a friends-list card, a search result, a LOBBY
 // SEAT and an IN-MATCH CARD. The first three are inside #bay; the fourth is the
 // HUD, which is why this listener is not gated on the bay being on stage the
@@ -1938,7 +2312,12 @@ document.addEventListener('focusout', (e) => {
 });
 // Enter commits, the way it does in the callsign editor and the join panel.
 document.addEventListener('keydown', (e) => {
-  if (e.key !== 'Enter' || current !== 'friends') return;
+  if (e.key !== 'Enter') return;
+  // The Squad box's code field, on home. The join panel never had an Enter key
+  // despite the comment above claiming it did -- this one does, because a
+  // 4-letter code on a phone keyboard ends with the Go key and nothing else.
+  if (e.target && e.target.id === 'sqCode') { e.preventDefault(); sqEnter(); return; }
+  if (current !== 'friends') return;
   const id = e.target && e.target.id;
   if (id === 'frQ') { e.preventDefault(); frSearch(); }
   else if (id === 'frCode') { e.preventDefault(); frAddCode(); }
@@ -1956,8 +2335,17 @@ document.addEventListener('cc:account', () => {
   // tells one guest from the next.
   const key = bayAccountKey();
   const flipped = key !== bayAccount;
+  // WHO WE ARE LEAVING, captured before the assignment: the first cc:account
+  // of a boot flips from '' and is not a switch away from anybody.
+  const leaving = flipped ? bayAccount : '';
   bayAccount = key;
   if (flipped) {
+    // AND THE SQUAD, WHICH BELONGS TO THE ACCOUNT THAT JOINED IT (app.js drops
+    // the slot itself). The stored code goes only when we are leaving a KNOWN
+    // account -- never on the boot's first cc:account, which would delete the
+    // very code a reload's resume and "your squad has ended" are told from.
+    if (leaving) sqStore('');
+    sqReset();
     // A GUEST'S BLOCKED LIST BELONGS TO THAT GUEST. app.js drops CC_SOCIAL when
     // the account changes, for the same reason; this is the other half of it,
     // and without it a signed-out session would keep drawing the last account's
@@ -1984,6 +2372,10 @@ document.addEventListener('cc:account', () => {
   // re-enters it, so render()'s entry hook would never fire and the screen
   // would go on offering the sign-in card to somebody who just did.
   if (current === 'friends') frNeed();
+  // And the Squad box asks for the account it now belongs to, from any screen.
+  // A sign-in's own hello marks the socket again when it lands (app.js), and
+  // the box asks once more then, in case this ask overtook it.
+  sqNeed();
 });
 applyMotion();
 

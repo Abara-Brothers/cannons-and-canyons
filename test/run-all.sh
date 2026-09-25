@@ -313,6 +313,12 @@ else
   # the socket, what a guest is told, and the landscape keyboard lift. The socket
   # is stubbed and Supabase is never touched. Skips without Chrome.
   run social_ui node test/social_ui.mjs
+  # EIGHTH client-side suite: the Squad box in the left home slot -- the bay's
+  # first tab bar, the one client squad read model (window.CC_SQUAD, pushes
+  # included), and every state before a squad is drawn (guest, offline, not
+  # answered yet, ended, no squad). The socket is stubbed and Supabase is never
+  # touched. Every CDP call carries a deadline. Skips without Chrome.
+  run squad_ui node test/squad_ui.mjs
   # SECOND client-side suite, and the only one that looks at LAYOUT. Drives the
   # real bundle in headless Chrome at 14 exact viewports and diffs the measured
   # geometry against test/fixtures/layout-baseline.json. It is a change

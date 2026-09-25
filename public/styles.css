@@ -1984,6 +1984,49 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .st .std{display:block;font-family:"JetBrains Mono",monospace;font-size:calc(8 * var(--u));font-weight:500;letter-spacing:.09em;
      color:#7f8fb5;margin-top:calc(4 * var(--u));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
+  /* ------------------------------------------------------- the Squad box -- */
+  /* The left home panel. It has no .ph -- the tab bar is its header (see
+     bay.js). The panel is a flex column with overflow:hidden so nothing can
+     escape its 192u box: test/layout.mjs reads #bay's own scrollWidth and
+     scrollHeight, and a pane that grew the frame would move the baseline on all
+     fourteen viewports for a reason nobody intended. The pane under the tab bar
+     scrolls; test/squad_ui.mjs pins that the code field is never below its fold. */
+  #bay .sqx{display:flex;flex-direction:column;overflow:hidden}
+  #bay .sqt{display:flex;flex:none;height:calc(22 * var(--u));border-bottom:1px solid rgba(140,168,214,.24)}
+  #bay .sqtb{flex:1;position:relative;display:flex;align-items:center;justify-content:center;gap:calc(5 * var(--u));
+     font-family:Rajdhani,system-ui,sans-serif;font-weight:600;font-size:calc(11 * var(--u));letter-spacing:.06em;
+     text-transform:uppercase;color:#8d9cc0;transition:.15s}
+  #bay .sqtb:hover{color:#eef3ff}
+  #bay .sqtb.on{color:#ffb46b;box-shadow:inset 0 calc(-2 * var(--u)) 0 #ffb46b}
+  #bay .sqc{display:inline-flex;align-items:center;gap:calc(3 * var(--u));font-family:"JetBrains Mono",monospace;
+     font-size:calc(8.5 * var(--u));font-weight:700;letter-spacing:.06em;color:#7f8fb5;
+     background:rgba(10,14,23,.7);border-radius:calc(99 * var(--u));padding:1px calc(5 * var(--u))}
+  #bay .sqc.lit{color:#3ce88f}
+  #bay .sqc svg{width:calc(8 * var(--u));height:calc(8 * var(--u));fill:currentColor;stroke:currentColor}
+  /* The waiting-request lamp, drawn with a border-radius rather than typed: the
+     obvious character is in the Geometric Shapes block, which
+     test/house-rules.mjs rejects whole. Same reason IC.dot exists. */
+  #bay .sqd{position:absolute;top:calc(2 * var(--u));right:calc(4 * var(--u));width:calc(5 * var(--u));
+     height:calc(5 * var(--u));border-radius:50%;background:#ffb46b}
+  #bay .sqb{flex:1;min-height:0;display:flex}
+  #bay .sqp{flex:1;min-width:0;min-height:0;overflow-y:auto;padding-top:calc(6 * var(--u))}
+  #bay .sqn{font-family:Rajdhani,system-ui,sans-serif;font-size:calc(10 * var(--u));line-height:1.25;
+     font-weight:500;color:#9dadd0;margin-top:calc(6 * var(--u))}
+  #bay .sqe{min-height:calc(12 * var(--u));margin-top:calc(5 * var(--u));font-size:calc(10 * var(--u));
+     line-height:1.25;font-weight:500;color:#ff8b8b}
+  #bay .sqor{font-family:"JetBrains Mono",monospace;font-size:calc(8.5 * var(--u));letter-spacing:.16em;
+     color:#5d6c92;text-align:center;margin-top:calc(8 * var(--u))}
+  #bay .sqcr{display:flex;align-items:center;gap:calc(6 * var(--u));margin-top:calc(7 * var(--u))}
+  #bay .sqin{flex:1;min-width:0;height:calc(32 * var(--u));border-radius:calc(5 * var(--u));
+     border:1px solid rgba(255,180,107,.5);background:rgba(10,14,23,.8);color:#ffb46b;text-align:center;
+     font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:calc(19 * var(--u));
+     letter-spacing:.24em;text-transform:uppercase;outline:none}
+  #bay .sqin:focus{border-color:#ffb46b;box-shadow:0 0 0 calc(2 * var(--u)) rgba(255,180,107,.25)}
+  #bay .sqin[disabled]{opacity:.45;border-color:rgba(140,168,214,.3);color:#7f8fb5}
+  #bay .sqf{display:flex;margin-top:calc(8 * var(--u))}
+  #bay .sqf .sbtn,#bay .sqf .go,#bay .sqf .ghost{flex:1;justify-content:center}
+  #bay .sqg{height:calc(32 * var(--u));font-size:calc(12.5 * var(--u))}
+
   /* ------------------------------------------------------------ launch bar -- */
   #bay .lbar{position:absolute;left:calc(18 * var(--u));right:calc(18 * var(--u));bottom:calc(12 * var(--u));height:calc(56 * var(--u));z-index:16;display:flex;
      align-items:center;gap:calc(14 * var(--u));padding:0 calc(12 * var(--u)) 0 calc(11 * var(--u));border-radius:calc(8 * var(--u));

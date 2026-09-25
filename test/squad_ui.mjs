@@ -1,0 +1,734 @@
+// The Squad box, in a real page: the slot it took over from Recent sorties,
+// the bay's first tab bar, the ONE client squad read model (plan X7) and every
+// state the box has before a squad is drawn -- guest, offline, not answered
+// yet, a squad that has ended, a squad this tab was told about, and no squad.
+// Headless Chrome over CDP; skips without Chrome like the other client suites.
+// The socket is a STUB: nothing here reaches a real squad server.
+//
+// WHY THIS EXISTS. Most of these states are invisible in ordinary play and
+// each is one line of code:
+//   * `sq.known === false` means NOT ANSWERED YET. Rendering "No squad yet"
+//     for an answer that never arrived is the bug this project has already
+//     shipped twice (public/app.js's socialCallsign comment names both).
+//   * a REFUSED resume is not an empty squad either, and its Retry must work.
+//   * "your squad has ended" is only true if this device actually held one.
+//   * the server PUSHES a roster with no request id whenever somebody else
+//     acts; a client that only reads replies never sees a friend join.
+//   * a resume sent before the socket's hello is answered for nobody.
+// And two that a browser alone can show: a new data-* attribute is dead until
+// it is in the one delegated closest() list, and morphChildren is POSITIONAL,
+// so a tab switch that changes the node count reuses nodes across tabs.
+//
+// EVERY CDP CALL HAS A DEADLINE, and so does the whole run: a Chrome that
+// stops answering must fail this suite loudly, never hang the pre-push hook.
+import { spawn } from 'node:child_process';
+import net from 'node:net';
+import { existsSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+if (!existsSync(CHROME)) { console.log(`SKIP  squad_ui tests -- no Chrome at ${CHROME}`); process.exit(3); }
+const ROOT = fileURLToPath(new URL('..', import.meta.url));   // decoded: the path has spaces
+const CDP_MS = 15000;                                           // one call
+const RUN_MS = 240000;                                          // the whole suite
+const errors = [];
+const ok = (m) => console.log('  ok -- ' + m);
+const fail = (m) => { errors.push(m); console.error('FAIL ' + m); };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const freePort = () => new Promise((res, rej) => { const s = net.createServer(); s.on('error', rej); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => res(port)); }); });
+const get = (url) => fetch(url, { signal: AbortSignal.timeout(2000) });
+
+let srv = null, chrome = null, prof = null;
+const cleanup = () => {
+  try { chrome && chrome.kill(); } catch {} try { srv && srv.kill(); } catch {}
+  try { prof && rmSync(prof, { recursive: true, force: true, maxRetries: 5, retryDelay: 120 }); } catch {}
+};
+process.on('exit', cleanup);
+const watchdog = setTimeout(() => { console.error(`FAIL squad_ui overran ${RUN_MS} ms -- a CDP peer stopped answering`); process.exit(1); }, RUN_MS);
+
+const appPort = await freePort();
+srv = spawn(process.execPath, ['server.js'], { cwd: ROOT, env: { ...process.env, PORT: String(appPort) }, stdio: 'ignore' });
+for (let i = 0; i < 80; i++) { try { await get(`http://127.0.0.1:${appPort}/health`); break; } catch {} await sleep(150); }
+const dbg = await freePort(); prof = join(tmpdir(), `cc-sq-${dbg}`); rmSync(prof, { recursive: true, force: true });
+chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${dbg}`, `--user-data-dir=${prof}`, '--no-first-run', '--mute-audio', '--hide-scrollbars', 'about:blank'], { stdio: 'ignore' });
+let wsUrl = null;
+for (let i = 0; i < 60; i++) { try { const l = await (await get(`http://127.0.0.1:${dbg}/json/list`)).json(); const p = l.find((t) => t.type === 'page'); if (p?.webSocketDebuggerUrl) { wsUrl = p.webSocketDebuggerUrl; break; } } catch {} await sleep(200); }
+if (!wsUrl) { console.error('FAIL squad_ui: Chrome never offered a page to drive'); process.exit(1); }
+let id = 0; const pend = new Map(); const ws = new WebSocket(wsUrl);
+await Promise.race([new Promise((r) => (ws.onopen = r)), sleep(CDP_MS).then(() => { throw new Error('CDP socket never opened'); })]);
+ws.onmessage = (e) => { const m = JSON.parse(e.data); const p = pend.get(m.id); if (!p) return; pend.delete(m.id); m.error ? p.reject(new Error(m.error.message)) : p.resolve(m.result); };
+const send = (method, params = {}) => new Promise((res, rej) => {
+  const i = ++id;
+  const t = setTimeout(() => { pend.delete(i); rej(new Error(`CDP ${method} gave no answer in ${CDP_MS} ms`)); }, CDP_MS);
+  pend.set(i, { resolve: (v) => { clearTimeout(t); res(v); }, reject: (e) => { clearTimeout(t); rej(e); } });
+  ws.send(JSON.stringify({ id: i, method, params }));
+});
+const ev = async (expr) => { const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error(r.exceptionDetails.text + ' ' + JSON.stringify(r.exceptionDetails.exception && r.exceptionDetails.exception.description)); return r.result.value; };
+
+const ME = '00000000-0000-4000-8000-0000000000aa';
+const LINKED = `{ id: '${ME}', anonymous: false, google: true, apple: false, email: 'me@example.com', accounts: [{ provider: 'google', email: 'me@example.com' }] }`;
+const GUEST  = `{ id: '00000000-0000-4000-8000-0000000000bb', anonymous: true, google: false, apple: false, email: null, accounts: [] }`;
+const ACC = { in: LINKED, guest: GUEST, out: 'null' };
+
+// The socket becomes a recorder. The real one is closed with its handlers
+// detached and connect() is stubbed out, so neither its onclose nor the
+// 1500 ms retry can swap a live socket back in under a check that has
+// deliberately put the stub into readyState 3. The real connect() is kept,
+// because one check drives the real ws.onopen on a stand-in socket.
+const stubSocket = () => ev(`(() => {
+  const real = S.ws;
+  if (real) { try { real.onclose = null; real.onmessage = null; real.onerror = null; real.close(); } catch {} }
+  window.__connect = window.__connect || connect;
+  window.connect = () => {};
+  window.__tx = [];
+  S.ws = { readyState: 1, send(s) { window.__tx.push(JSON.parse(s)); } };
+  S.connected = true; S.local = false;
+  window.CC_SOCIAL = null; window.CC_SOCIAL_ERR = ''; window.CC_SOCIAL_ASKING = false;
+  return true;
+})()`);
+const tx = () => ev('window.__tx.slice()');
+const clearTx = () => ev('(window.__tx.length = 0, true)');
+const squads = async () => (await tx()).filter((f) => f.type === 'squad');
+const up = (on) => ev(`(S.ws.readyState = ${on ? 1 : 3}, true)`);
+// Answer the LAST squad frame this page sent, the way the server would.
+const reply = async (patch) => {
+  const r = await ev(`(() => {
+    const q = window.__tx.filter((f) => f.type === 'squad');
+    const i = q.length ? q[q.length - 1].id : null;
+    handle(Object.assign({ type: 'squad', id: i }, ${JSON.stringify(patch)}));
+    return i;
+  })()`);
+  await sleep(120); return r;
+};
+// A SIGN-IN STARTS A FRIENDS READ (app.js asks once per sign-in), and left
+// unanswered it holds socialAsking for twelve seconds and then writes a refusal
+// into the Friends tab mid-check. Settled here the way the server would, and
+// the refusal wiped, so the page is left exactly as it was: no snapshot.
+const setWho = (who, hidden = false) => ev(`(() => {
+  const b = $('accountBtn'); b.classList.toggle('hidden', ${hidden}); b.dataset.state = ${JSON.stringify(who)};
+  window.CC_ACCOUNT = ${ACC[who]}; document.dispatchEvent(new CustomEvent('cc:account'));
+  for (const f of window.__tx.filter((x) => x.type === 'friends')) handle({ type: 'friends', error: 'unavailable', id: f.id });
+  window.CC_SOCIAL_ERR = '';
+  return true; })()`);
+// ONE READER FOR THE WHOLE BOX, so no check can quietly measure something
+// else. Geometry is normalised by the STAGE's own width, never by the box's,
+// or a box of the wrong size would measure as the right one.
+const box = () => ev(`(() => {
+  Bay.show('home');
+  const p = document.querySelector('#bay .pnl.sqx');
+  if (!p) return null;
+  const stg = document.querySelector('#bay .stage').getBoundingClientRect();
+  const u = stg.width / 932, r = p.getBoundingClientRect();
+  const panes = [...p.querySelectorAll('.sqp')];
+  const live = panes.find((x) => !x.classList.contains('hidden')) || null;
+  const i = p.querySelector('#sqCode');
+  const e = live && live.querySelector('.sqe');
+  return {
+    geom: [Math.round((r.x - stg.x) / u), Math.round((r.y - stg.y) / u), Math.round(r.width / u), Math.round(r.height / u)],
+    shape: [...p.children].map((c) => c.tagName + '.' + c.className),
+    panes: panes.length, live: panes.indexOf(live),
+    tabs: [...p.querySelectorAll('.sqtb')].map((t) => ({
+      name: t.querySelector('.sqtn').textContent, on: t.classList.contains('on'), kids: t.children.length,
+      pill: t.querySelector('.sqc').classList.contains('hidden') ? null : t.querySelector('.sqc').textContent.trim(),
+      dot: !t.querySelector('.sqd').classList.contains('hidden'),
+    })),
+    text: live ? live.innerText.replace(/\\s+/g, ' ').trim() : '',
+    err: e && !e.classList.contains('hidden') ? e.textContent : '',
+    field: i ? { on: !i.disabled, val: i.value } : null,
+    btns: live ? [...live.querySelectorAll('button')].map((b) => ({ t: b.textContent.trim(), sq: b.getAttribute('data-sq'), go: b.getAttribute('data-go'), old: b.getAttribute('data-old'), dis: b.disabled })) : [],
+    fold: i && live ? i.getBoundingClientRect().bottom <= live.getBoundingClientRect().bottom + 0.5 : null,
+    over: [p.scrollWidth > p.clientWidth, p.scrollHeight > p.clientHeight],
+    bayOver: (() => { const b = document.getElementById('bay'); return [b.scrollWidth > b.clientWidth, b.scrollHeight > b.clientHeight]; })(),
+  };
+})()`);
+const click = (sel) => ev(`(() => { const b = document.querySelector(${JSON.stringify(sel)}); if (!b) return false; b.click(); return true; })()`);
+
+try {
+  for (const [w, h] of [[932, 430], [667, 375]]) {
+    const V = `${w}x${h}`;
+    await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: w < 900 });
+    const load = async () => {
+      await send('Page.navigate', { url: `http://127.0.0.1:${appPort}/` });
+      await send('Page.bringToFront').catch(() => {});
+      for (let i = 0; i < 80; i++) {
+        if (await ev('!!window.Bay && typeof handle === "function" && !!document.querySelector("#bay .top")').catch(() => false)) {
+          // THE ENTRANCE MUST BE OVER before anything is measured: #bay.enter
+          // slides every .pnl up from below for about half a second.
+          for (let k = 0; k < 40 && (await ev(`document.getElementById('bay').classList.contains('enter')`)); k++) await sleep(100);
+          return true;
+        }
+        await sleep(200);
+      }
+      return false;
+    };
+    // A DEVICE THAT HELD A SQUAD, RELOADED: its code is in storage before boot.
+    if (!(await load())) { fail(`${V}: page never became ready`); continue; }
+    await ev(`(localStorage.setItem('cc_squad', 'QRST'), true)`);
+    if (!(await load())) { fail(`${V}: page never became ready after a reload`); continue; }
+    await stubSocket(); await setWho('in'); await clearTx();
+
+    // ---- 0. THE BOOT'S FIRST ACCOUNT IS NOT A SWITCH AWAY FROM ANYBODY. The
+    //      first cc:account that names a signed-in player must keep the code
+    //      this device holds, or "your squad has ended" can never be told and
+    //      a reload's resume can never take its row back from a dead socket.
+    if ((await ev(`localStorage.getItem('cc_squad')`)) === 'QRST') ok(`${V}: the boot's first sign-in keeps the device's squad code`);
+    else fail(`${V}: the boot's first cc:account dropped the stored code (${JSON.stringify(await ev(`localStorage.getItem('cc_squad')`))})`);
+
+    // ---- 1. THE SLOT. The box takes over Recent sorties' geometry exactly, and
+    //      it is the FIRST .pnl on home -- which is what moves test/layout.mjs's
+    //      baseline (R7), so it is asserted here rather than left to that diff.
+    const b1 = await box();
+    if (b1 && JSON.stringify(b1.geom) === '[18,174,196,192]'
+        && JSON.stringify(b1.bayOver) === '[false,false]' && JSON.stringify(b1.over) === '[false,false]'
+        && (await ev(`document.querySelector('#bay .pnl').classList.contains('sqx')`)))
+      ok(`${V}: the Squad box holds the left slot at 18,174 196x192u and nothing overflows`);
+    else fail(`${V}: slot ${JSON.stringify(b1 && { geom: b1.geom, over: b1.over, bayOver: b1.bayOver })}`);
+
+    // ---- 2. THE BAY'S FIRST TAB BAR. Clicked through the REAL delegated
+    //      listener, never by calling sqAct(): a data-* attribute that is not in
+    //      the one closest() list produces a completely dead button with no
+    //      error, and a check that calls the handler directly cannot see that.
+    //      Driven as a GUEST, whose pane carries the code field before any
+    //      answer; a signed-in pane says "Not loaded yet." until it is answered.
+    await setWho('guest');
+    await ev(`(() => { const i = document.getElementById('sqCode'); if (i) i.value = 'WXYZ'; return true; })()`);
+    const before = await box();
+    await click('#bay [data-sq="tab:friends"]');
+    const after = await box();
+    if (after && after.tabs[1] && after.tabs[1].on && !after.tabs[0].on && after.live === 1)
+      ok(`${V}: tapping Friends switches the tab through the delegated listener`);
+    else fail(`${V}: tab tap did nothing -- is data-sq in bay.js's closest() list? ${JSON.stringify(after && after.tabs)}`);
+    // morphChildren is positional: the panel's own children, and each tab's,
+    // must be identical across a switch or nodes are reused across identities.
+    if (before && after && JSON.stringify(before.shape) === JSON.stringify(after.shape)
+        && before.panes === 2 && after.panes === 2
+        && JSON.stringify(before.tabs.map((t) => t.kids)) === JSON.stringify(after.tabs.map((t) => t.kids)))
+      ok(`${V}: the box keeps the same node shape across a tab switch`);
+    else fail(`${V}: node shape moved ${JSON.stringify(before && [before.shape, before.panes])} -> ${JSON.stringify(after && [after.shape, after.panes])}`);
+    // And the code field is an INPUT, which morphNode never touches.
+    const kept = await ev(`(() => { const i = document.getElementById('sqCode'); return i ? i.value : null; })()`);
+    if (kept === 'WXYZ') ok(`${V}: a tab switch repaints in place and keeps what the player typed`);
+    else fail(`${V}: the code field lost its value across a tab switch (${JSON.stringify(kept)})`);
+    await click('#bay [data-sq="tab:squad"]');
+    await ev(`(() => { const i = document.getElementById('sqCode'); if (i) i.value = ''; return true; })()`);
+    await setWho('in');
+
+    // ---- 3. GUEST (D11). The lead sentence, then the code field, then "or",
+    //      then Sign in, then what signing in is for. The order is the decision:
+    //      a guest is told they can play NOW, before they are sold an account.
+    const G1 = 'You can play right now. Got a code from a friend? Enter it and you are in, as a guest.';
+    const G2 = 'Sign in to add friends and keep your progress across devices. Your guest progress on this device comes with you when you do.';
+    for (const who of ['guest', 'out']) {
+      await setWho(who);
+      const g = await box();
+      // innerText is what a player sees, so the two buttons read in capitals:
+      // .sbtn and .ghost both set text-transform:uppercase.
+      const gWant = G1 + ' ENTER \u2014 or \u2014 SIGN IN ' + G2;
+      if (g && g.text === gWant) ok(`${V}: ${who} -- D11's copy, in D11's order`);
+      else fail(`${V}: ${who} copy ${JSON.stringify(g && g.text)}`);
+      if (g && g.field && g.field.on && g.btns.some((b) => b.old === 'accountBtn' && !b.dis) && g.btns.some((b) => b.sq === 'code' && !b.dis))
+        ok(`${V}: ${who} -- the code field works and Sign in taps the account button`);
+      else fail(`${V}: ${who} controls ${JSON.stringify(g && { field: g.field, btns: g.btns })}`);
+      // THE FIELD IS ABOVE THE FOLD. The pane scrolls (the closing sentence runs
+      // past it) and that is fine, but a code field a guest has to find by
+      // scrolling is the one thing D11 asks for first.
+      if (g && g.fold === true && JSON.stringify(g.bayOver) === '[false,false]')
+        ok(`${V}: ${who} -- the code field is inside the visible pane and #bay never scrolls`);
+      else fail(`${V}: ${who} fold ${JSON.stringify(g && { fold: g.fold, bayOver: g.bayOver })}`);
+    }
+    // NO ACCOUNT BUTTON, NO SIGN-IN OFFER. accountChip() already drops the chip
+    // when #accountBtn is hidden ("no session and no way to start one"); the box
+    // must not offer a door that is not there.
+    await setWho('guest', true);
+    const gh = await box();
+    if (gh && !gh.btns.some((b) => b.old === 'accountBtn') && gh.text.startsWith(G1) && !/sign in/i.test(gh.text))
+      ok(`${V}: guest -- no Sign in offered while #accountBtn is hidden`);
+    else fail(`${V}: hidden-account guest ${JSON.stringify(gh && gh.text)}`);
+    await setWho('in');
+
+    // ---- 4. OFFLINE (design 5.1 state 6). Every control in this box needs the
+    //      socket -- the code field asks the server which KIND of code it is,
+    //      Invite needs the friend graph, and signing in needs the network too.
+    //      So the refusal is said once, at the top, for every kind of account:
+    //      a guest offered a dead field and a dead Sign in button is the exact
+    //      lie this box exists to avoid.
+    for (const who of ['in', 'guest', 'out']) {
+      await setWho(who); await up(false);
+      const o = await box();
+      if (o && o.text.startsWith('Needs a connection.') && o.field && o.field.on === false
+          && o.btns.length > 0 && o.btns.every((b) => b.dis))
+        ok(`${V}: offline (${who}) -- "Needs a connection", the field and every control dead`);
+      else fail(`${V}: offline (${who}) ${JSON.stringify(o && { text: o.text, field: o.field, btns: o.btns })}`);
+      await up(true);
+    }
+    // The Friends tab says the same thing, first, for the same reason.
+    await up(false); await click('#bay [data-sq="tab:friends"]');
+    const of = await box();
+    if (of && of.text.startsWith('Needs a connection.') && of.btns.every((b) => b.dis))
+      ok(`${V}: offline -- the Friends tab says "Needs a connection" too`);
+    else fail(`${V}: offline friends ${JSON.stringify(of && { text: of.text, btns: of.btns })}`);
+    await up(true); await click('#bay [data-sq="tab:squad"]');
+    await setWho('in');
+
+    // ---- 5. THE THIRD STATE. This is the assertion the whole task turns on:
+    //      before the server has answered, the box knows NOTHING, and the only
+    //      honest thing it can say is so. Two criticals have shipped on this
+    //      project from exactly this confusion.
+    //      AND NOTHING IS ASKED BEFORE THE HELLO. The stub socket has never been
+    //      introduced, and a resume sent on it now would be answered for nobody.
+    const NOSQ = 'No squad yet.';
+    const w0 = await box(), q0 = await squads();
+    if (w0 && w0.text.startsWith('Not loaded yet.') && !w0.text.includes(NOSQ) && q0.length === 0
+        && w0.btns.some((b) => b.sq === 'retry' && !b.dis) && w0.tabs[0].pill === null)
+      ok(`${V}: before any answer the box says "Not loaded yet." with a live Retry, and asks nothing before the hello`);
+    else fail(`${V}: third state ${JSON.stringify(w0 && { text: w0.text, btns: w0.btns, pill: w0.tabs[0].pill, sent: q0 })}`);
+    // The introduction: the real sendHello, which finds no session to send
+    // here and marks the socket anyway. The ask follows it, once.
+    const ask = async (stored) => {
+      await ev(`(() => { try { ${stored ? `localStorage.setItem('cc_squad', ${JSON.stringify(stored)})` : `localStorage.removeItem('cc_squad')`}; } catch {} return true; })()`);
+      await clearTx();
+      await ev('sendHello(S.ws).then(() => true)');
+      await sleep(60);
+      return squads();
+    };
+    const f0 = await ask('');
+    const w1 = await box();
+    if (f0.length === 1 && f0[0].op === 'resume' && !('code' in f0[0]) && typeof f0[0].id === 'number'
+        && w1 && w1.text.startsWith('Not loaded yet.') && w1.btns.some((b) => b.sq === 'retry' && b.dis) && w1.tabs[0].pill === null)
+      ok(`${V}: once introduced the box sends one bare {type:'squad',op:'resume'} and waits, still not claiming anything`);
+    else fail(`${V}: bare resume frame ${JSON.stringify(f0)} box ${JSON.stringify(w1 && { text: w1.text, btns: w1.btns, pill: w1.tabs[0].pill })}`);
+
+    // ---- 6. THE TWO ANSWERS TO `gone`. The mock answers the SAME frame the
+    //      same way whatever this device remembered, so the suite cannot be
+    //      green both with and without the bug.
+    await reply({ op: 'gone' });
+    const n = await box();
+    if (n && n.text.startsWith(NOSQ) && !n.text.includes('ended') && n.tabs[0].pill === '0 / 4')
+      ok(`${V}: gone with nothing remembered is "No squad yet", and the pill is 0 / 4 (D10)`);
+    else fail(`${V}: no-squad ${JSON.stringify(n && { text: n.text, pill: n.tabs[0].pill })}`);
+    const f1 = await ask('QRST');
+    if (f1.length === 1 && f1[0].op === 'resume' && f1[0].code === 'QRST')
+      ok(`${V}: a remembered code rides the resume frame`);
+    else fail(`${V}: coded resume frame ${JSON.stringify(f1)}`);
+    await reply({ op: 'gone' });
+    const r = await box();
+    const held = await ev(`(() => { try { return localStorage.getItem('cc_squad'); } catch { return 'ERR'; } })()`);
+    // C3: the line is CAUSE-NEUTRAL. A kick, the drop window, a block and a
+    // restart all answer the same `gone`, and naming one of them would tell a
+    // player removed by a block what happened to them.
+    if (r && r.text.startsWith('Your squad has ended. Squad up again.')
+        && r.btns.some((b) => b.sq === 'tab:friends' && /invite friends/i.test(b.t)) && held === null)
+      ok(`${V}: gone with a remembered code is the neutral "has ended" line, and the code is spent`);
+    else fail(`${V}: squad-gone ${JSON.stringify(r && { text: r.text, btns: r.btns })} held=${JSON.stringify(held)}`);
+    // AND IT IS SPENT. The next introduction has nothing to remember and says so.
+    await ask(''); await reply({ op: 'gone' });
+    const r2 = await box();
+    const answered = await squads();           // since ask() cleared: the one resume, and nothing its answer set off
+    if (r2 && r2.text.startsWith(NOSQ)) ok(`${V}: the "has ended" line is not repeated on the next answer`);
+    else fail(`${V}: ended line stuck ${JSON.stringify(r2 && r2.text)}`);
+    // IDEMPOTENCE. An answer, a presence push or any other repaint must not
+    // re-ask a question this socket has already had answered.
+    await clearTx();
+    await ev(`(() => { for (const t of ['cc:social', 'cc:social', 'cc:squad', 'cc:squad']) document.dispatchEvent(new Event(t)); return true; })()`);
+    await sleep(60);
+    const quiet = await squads();
+    if (answered.length === 1 && quiet.length === 0) ok(`${V}: neither the answer nor a repaint re-asks a question this socket has had answered`);
+    else fail(`${V}: sqNeed re-asked: one question sent ${answered.length} resume frame(s), want 1; a repaint sent ${quiet.length}`);
+
+    // ---- 7. A REFUSAL. On the live build every linked player meets this path
+    //      until the phase 6 migration is applied, so it is the shipped state,
+    //      not an edge case.
+    await ask(''); await reply({ error: 'unavailable' });
+    const x = await box();
+    if (x && x.text.startsWith('Not loaded yet.') && !x.text.includes(NOSQ)
+        && x.err === 'Squads are not available right now. Try again later.'
+        && x.btns.some((b) => b.sq === 'retry' && !b.dis) && x.tabs[0].pill === null)
+      ok(`${V}: a refused resume says so, keeps the pill empty, and offers a live Retry`);
+    else fail(`${V}: refusal ${JSON.stringify(x && { text: x.text, err: x.err, pill: x.tabs[0].pill, btns: x.btns })}`);
+    // A refusal is Retry's to clear: a repaint does not re-ask a server saying no.
+    await clearTx();
+    await ev(`(() => { document.dispatchEvent(new Event('cc:social')); return true; })()`);
+    await sleep(60);
+    const still = await squads();
+    // AND RETRY REALLY RE-ASKS. Clicked through the real listener.
+    await click('#bay [data-sq="retry"]');
+    await sleep(60);
+    const again = await squads();
+    if (still.length === 0 && again.length === 1 && again[0].op === 'resume') ok(`${V}: Retry clears the refusal and asks again; a repaint does not`);
+    else fail(`${V}: Retry sent ${JSON.stringify(again)} (a repaint sent ${still.length})`);
+    await reply({ op: 'gone' });
+
+    // ---- 8. A SQUAD THIS CLIENT HAS BEEN TOLD ABOUT must never read "No squad
+    //      yet", and it lives in ONE slot (plan X7): window.CC_SQUAD.
+    const M = (over) => Object.assign({ id: null, callsign: null, guest: false, online: true, ready: false, dropped: false }, over);
+    const SNAP = { op: 'state', code: 'BKPQ', leader: ME, mode: 'duel', tees: null, max: null, you: 0,
+      members: [M({ id: ME, callsign: 'Dusty Crag' }), M({ guest: true })],
+      fits: { duel: true, ffa: false, boss: true, aliens: true, golf: true } };
+    const stored = () => ev(`(() => { try { return localStorage.getItem('cc_squad'); } catch { return 'ERR'; } })()`);
+    const slot = () => ev('window.CC_SQUAD && { code: window.CC_SQUAD.code, n: window.CC_SQUAD.members.length }');
+    await ask(''); await reply(SNAP);
+    const s = await box();
+    if (s && !s.text.includes(NOSQ) && !s.text.includes('ended') && !s.text.includes('Not loaded yet')
+        && s.text.includes('BKPQ') && s.tabs[0].pill === '2 / 4' && (await stored()) === 'BKPQ'
+        && JSON.stringify(await slot()) === '{"code":"BKPQ","n":2}')
+      ok(`${V}: a snapshot renders as a squad, pills 2 / 4, lands in window.CC_SQUAD and is remembered`);
+    else fail(`${V}: snapshot ${JSON.stringify(s && { text: s.text, pill: s.tabs[0].pill })} held=${JSON.stringify(await stored())} slot=${JSON.stringify(await slot())}`);
+
+    // ---- 9. PUSHES (plan X7). The server sends the roster with NO request id
+    //      when somebody else acts, and app.js's socialReply used to drop every
+    //      id-less frame. A box that only reads its own answers never sees a
+    //      friend join.
+    const push = async (patch) => { await ev(`(handle(Object.assign({ type: 'squad' }, ${JSON.stringify(patch)})), true)`); await sleep(80); };
+    const THIRD = M({ id: '00000000-0000-4000-8000-0000000000cc', callsign: 'Steel Mule' });
+    await push({ ...SNAP, members: [...SNAP.members, THIRD] });
+    const p1 = await box();
+    if (p1 && p1.tabs[0].pill === '3 / 4' && p1.text.includes('Steel Mule') && JSON.stringify(await slot()) === '{"code":"BKPQ","n":3}')
+      ok(`${V}: an id-less roster push reaches the slot and repaints the box (3 / 4)`);
+    else fail(`${V}: roster push ${JSON.stringify(p1 && { text: p1.text, pill: p1.tabs[0].pill })} slot=${JSON.stringify(await slot())}`);
+    // NOT OURS: `you` -1 (a join answered after its player was kicked) and a
+    // roster whose own row names another account are never written.
+    await push({ ...SNAP, code: 'ZZZZ', you: -1 });
+    await push({ ...SNAP, code: 'YYYY', members: [THIRD, M({ guest: true })] });
+    if (JSON.stringify(await slot()) === '{"code":"BKPQ","n":3}' && (await stored()) === 'BKPQ')
+      ok(`${V}: a roster this socket is not in, or that names another account as us, is ignored`);
+    else fail(`${V}: a foreign roster was written: slot=${JSON.stringify(await slot())} held=${JSON.stringify(await stored())}`);
+
+    // ---- 10. A RECONNECT, through the REAL ws.onopen. A member whose socket
+    //      blips is dropped and removed a minute later unless the new socket
+    //      resumes (task 5) -- from whatever screen the player is on -- and
+    //      that resume must go out AFTER the socket's hello, or the server
+    //      answers it for nobody. onopen dispatches cc:social first and reads
+    //      the hello's token asynchronously, so the token is held back here
+    //      until the check has looked.
+    const reconnect = () => ev(`(() => {
+      window.__tx.length = 0;
+      S.ws.readyState = 3;
+      const Real = window.WebSocket;
+      window.WebSocket = function () { this.readyState = 0; this.send = (s) => window.__tx.push(JSON.parse(s)); this.close = () => {}; };
+      try { window.__connect(); } finally { window.WebSocket = Real; }
+      window.__realToken = window.__realToken || Cloud.token;
+      Cloud.token = () => new Promise((r) => { window.__tok = r; });
+      S.ws.readyState = 1; S.ws.onopen();
+      return true; })()`);
+    const token = async () => { await ev(`(window.__tok('tok-1'), Cloud.token = window.__realToken, true)`); await sleep(80); };
+    const settleFriends = () => ev(`(() => { for (const f of window.__tx.filter((x) => x.type === 'friends')) handle({ type: 'friends', error: 'unavailable', id: f.id }); window.CC_SOCIAL_ERR = ''; return true; })()`);
+    // Back to this tab: what the browser fires when a tab or app returns.
+    const focus = async () => { await ev(`(window.dispatchEvent(new Event('focus')), window.dispatchEvent(new Event('visibilitychange')), true)`); await sleep(60); };
+    await push(SNAP);
+    await ev(`(Bay.go('career'), true)`);
+    await reconnect(); await sleep(60);
+    const early = await tx();
+    await token();
+    const seq = await tx();
+    const hi = seq.findIndex((f) => f.type === 'hello'), rs = seq.filter((f) => f.type === 'squad');
+    const ri = seq.findIndex((f) => f.type === 'squad');
+    if (!early.some((f) => f.type === 'squad') && hi >= 0 && ri > hi && rs.length === 1 && rs[0].op === 'resume' && rs[0].code === 'BKPQ')
+      ok(`${V}: a reconnect resumes with the remembered code, from any screen, and only after the hello`);
+    else fail(`${V}: reconnect sent ${JSON.stringify(early.map((f) => f.type))} then ${JSON.stringify(seq.map((f) => f.type + (f.op ? ':' + f.op : '') + (f.code ? ':' + f.code : '')))}`);
+    // The squad stays on screen while the new socket asks: known outlives it.
+    const kb = await box();
+    if (kb && kb.text.includes('BKPQ')) ok(`${V}: the box keeps the squad on screen while a reconnect asks again`);
+    else fail(`${V}: reconnect blanked the box ${JSON.stringify(kb && kb.text)}`);
+    await reply(SNAP); await settleFriends();
+    // A RECONNECT'S RESUME REFUSED. The row the blip dropped comes back only
+    // through a resume, so the refusal is said under the squad with a live
+    // Retry: a squad shown as if nothing were wrong is swept from under the
+    // player a minute later (task 5).
+    await reconnect(); await token();
+    await reply({ error: 'unavailable' }); await settleFriends();
+    const kr = await box();
+    await clearTx(); await click('#bay [data-sq="retry"]'); await sleep(60);
+    const kq = await squads();
+    await reply(SNAP);
+    const kk = await box();
+    if (kr && kr.text.includes('BKPQ') && kr.err === 'Squads are not available right now. Try again later.'
+        && kr.btns.some((b) => b.sq === 'retry' && !b.dis) && kr.tabs[0].pill === '2 / 4'
+        && kq.length === 1 && kq[0].op === 'resume' && kq[0].code === 'BKPQ'
+        && kk && kk.text.includes('BKPQ') && kk.err === '' && !kk.btns.some((b) => b.sq === 'retry'))
+      ok(`${V}: a refused reconnect resume is said under the squad, and its Retry asks again by code`);
+    else fail(`${V}: refused reconnect ${JSON.stringify({ kr: kr && { text: kr.text, err: kr.err, btns: kr.btns, pill: kr.tabs[0].pill }, kq, kk: kk && { text: kk.text, err: kk.err, btns: kk.btns } })}`);
+
+    // ---- 11. THE SQUAD WAS LOST WHILE THE SOCKET WAS DOWN: `gone` to a tab
+    //      that held one is the neutral "has ended" line. It is NOT FINAL: the
+    //      sign-in door answers an account's other devices `gone` until it has
+    //      read the account's blocks (task 6), so the tab's next return asks
+    //      once more, bare -- and a `gone` to THAT keeps the line and asks
+    //      nothing further until the socket is introduced again.
+    //      Storage is cleared first (blocked, or wiped): the squad this TAB was
+    //      showing is evidence enough on its own.
+    await ev(`(localStorage.removeItem('cc_squad'), true)`);
+    await reconnect(); await token();
+    await reply({ op: 'gone' });
+    const lost = await box();
+    // Another tab of this account, on this device, joins a squad meanwhile and
+    // stores its code. The return here must still ask BARE: with that code it
+    // would pull the row off the tab in use.
+    await ev(`(localStorage.setItem('cc_squad', 'BKPQ'), true)`);
+    await clearTx(); await focus();
+    const retryBack = await squads();
+    await reply({ op: 'gone' });
+    const after2 = await box();
+    await clearTx(); await focus();
+    const none2 = await squads();
+    if (lost && lost.text.startsWith('Your squad has ended.')
+        && retryBack.length === 1 && !('code' in retryBack[0]) && after2 && after2.text.startsWith('Your squad has ended.') && none2.length === 0)
+      ok(`${V}: a squad lost across a reconnect "has ended"; a return asks once, bare, and the line stands`);
+    else fail(`${V}: lost across reconnect ${JSON.stringify({ lost: lost && lost.text, retryBack, after2: after2 && after2.text, none2 })}`);
+    await settleFriends();
+    // A TAB THAT HELD NOTHING is told "No squad yet" -- and its `gone` is not
+    // final either: this may be the account's other device, which the door
+    // answers `gone` while it reads. The first return asks once more.
+    await ask(''); await reply({ op: 'gone' });
+    const nb = await box();
+    await clearTx(); await focus();
+    const nq = await squads();
+    await reply(SNAP);
+    const ns = await box();
+    if (nb && nb.text.startsWith(NOSQ) && nq.length === 1 && nq[0].op === 'resume' && !('code' in nq[0]) && ns && ns.text.includes('BKPQ'))
+      ok(`${V}: \`gone\` to a tab that held nothing is "No squad yet", and its next return asks once more`);
+    else fail(`${V}: held-nothing return ${JSON.stringify({ nb: nb && nb.text, nq, ns: ns && ns.text })}`);
+
+    // ---- 12. HOW A SQUAD ENDS FOR THIS TAB. Every way a connected member's
+    //       membership ends sends them a frame (D-BLOCK), and the box says what
+    //       it says -- never why. A block that removes a player sends EXACTLY
+    //       the kick frame, so it reads exactly as a kick.
+    const ENDS = [
+      [{ op: 'ended', reason: 'kicked' }, 'You were removed from the squad.', null],
+      [{ op: 'ended', reason: 'left' }, 'You left the squad.', null],
+      [{ op: 'left', ok: true, id: 987654 }, 'You left the squad.', null],
+      [{ op: 'ended', reason: 'no_leader' }, 'Your squad has ended. Squad up again.', null],
+      [{ op: 'ended', reason: 'constructor' }, 'Your squad has ended. Squad up again.', null],
+      // Another device of this account took the squad, or changed it. The
+      // squad is not over for the ACCOUNT, so its code stays.
+      [{ op: 'ended', reason: 'elsewhere' }, 'Your squad was changed on another device.', 'BKPQ'],
+    ];
+    // window.CC_SQUAD_END is a CLOSED vocabulary: a reason this build does not
+    // know is 'ended', never the server's own word.
+    const endWord = { kicked: 'kicked', left: 'left', no_leader: 'no_leader', constructor: 'ended', elsewhere: 'elsewhere' };
+    for (const [frame, line, keep] of ENDS) {
+      await push(SNAP);
+      await push(frame);
+      const e = await box();
+      const word = await ev('window.CC_SQUAD_END');
+      if (e && e.text.startsWith(line) && e.field && e.field.on && e.btns.some((b) => b.sq === 'tab:friends')
+          && (await slot()) === null && (await stored()) === keep && e.tabs[0].pill === '0 / 4'
+          && word === (frame.op === 'left' ? 'left' : endWord[frame.reason]))
+        ok(`${V}: ${frame.op}${frame.reason ? ':' + frame.reason : ''} -- "${line}", the slot is empty and the code is ${keep ? 'kept' : 'forgotten'}`);
+      else fail(`${V}: ${JSON.stringify(frame)} ${JSON.stringify(e && { text: e.text, field: e.field, btns: e.btns, pill: e.tabs[0].pill })} slot=${JSON.stringify(await slot())} held=${JSON.stringify(await stored())} end=${JSON.stringify(word)}`);
+    }
+    // ELSEWHERE IS NOT FINAL FOR THIS TAB: coming back to it asks once more --
+    // WITHOUT the code, so a glance at a background tab never pulls the squad
+    // off the device in use (the server moves the row to a bare resume only
+    // when no live socket holds it).
+    await clearTx(); await focus();
+    const back = await squads();
+    // A REFUSAL IS RETRY'S TO CLEAR: the next return asks nothing, and Retry
+    // asks -- still bare, because this tab gave the squad up.
+    await reply({ error: 'unavailable' });
+    await clearTx(); await focus();
+    const quietBack = await squads();
+    await clearTx(); await click('#bay [data-sq="retry"]'); await sleep(60);
+    const viaRetry = await squads();
+    await reply({ ...SNAP, members: [M({ id: ME, callsign: 'Dusty Crag', online: true })] });
+    const b2 = await box();
+    await clearTx(); await focus();
+    const settled = await squads();
+    if (back.length === 1 && back[0].op === 'resume' && !('code' in back[0]) && quietBack.length === 0
+        && viaRetry.length === 1 && viaRetry[0].op === 'resume' && !('code' in viaRetry[0])
+        && b2 && b2.text.includes('BKPQ') && settled.length === 0)
+      ok(`${V}: after "elsewhere" a return asks once, bare; a refusal waits for Retry; what it is told is shown, then nothing more is asked`);
+    else fail(`${V}: return after elsewhere sent ${JSON.stringify(back)}, after a refusal ${JSON.stringify(quietBack)}, Retry ${JSON.stringify(viaRetry)}, box ${JSON.stringify(b2 && b2.text)} then ${JSON.stringify(settled)}`);
+    // A KICK IS FINAL: a return to the tab asks nothing.
+    await push({ op: 'ended', reason: 'kicked' });
+    await clearTx(); await focus();
+    if ((await squads()).length === 0) ok(`${V}: after a kick a return to the tab asks nothing`);
+    else fail(`${V}: a kicked tab re-asked on return ${JSON.stringify(await squads())}`);
+    // AN END IS ACTED ON ONCE. Storage is shared by every tab on the device, so
+    // a kick this tab has already acted on must not delete the code another tab
+    // has stored since, the next time this tab's slot event fires.
+    await ev(`(localStorage.setItem('cc_squad', 'WXYZ'), document.dispatchEvent(new Event('cc:squad')), true)`);
+    if ((await stored()) === 'WXYZ') ok(`${V}: an end already acted on leaves another tab's code alone`);
+    else fail(`${V}: a repaint after a kick deleted another tab's code (${JSON.stringify(await stored())})`);
+
+    // ---- 13. A TAB THAT GAVE ITS SQUAD UP ("elsewhere") keeps the code for the
+    //      account but never uses it again: its reconnect resumes bare, so a
+    //      background tab waking up cannot pull the squad off the device in use.
+    //      And a return to the tab while the new socket's hello is still out
+    //      asks nothing early: no path may send a resume ahead of the hello.
+    await push(SNAP); await push({ op: 'ended', reason: 'elsewhere' });
+    await reconnect(); await focus(); await token();
+    const reSeq = await tx(), bareRe = reSeq.filter((f) => f.type === 'squad');
+    const hello13 = reSeq.findIndex((f) => f.type === 'hello'), first13 = reSeq.findIndex((f) => f.type === 'squad');
+    if (bareRe.length === 1 && bareRe[0].op === 'resume' && !('code' in bareRe[0]) && hello13 >= 0 && first13 > hello13 && (await stored()) === 'BKPQ')
+      ok(`${V}: after "elsewhere" a reconnect resumes bare, after the hello, and the device keeps the code`);
+    else fail(`${V}: reconnect after elsewhere sent ${JSON.stringify(reSeq.map((f) => f.type + (f.op ? ':' + f.op : '') + (f.code ? ':' + f.code : '')))} held=${JSON.stringify(await stored())}`);
+    await reply({ op: 'gone' }); await settleFriends();
+    const g13 = await box();
+    if (g13 && g13.text.startsWith(NOSQ) && (await stored()) === 'BKPQ')
+      ok(`${V}: \`gone\` to a bare question is "No squad yet" and spends no code the tab did not present`);
+    else fail(`${V}: bare gone ${JSON.stringify(g13 && g13.text)} held=${JSON.stringify(await stored())}`);
+
+    // ---- 14. ONE CODE FIELD (D8/5.3). It asks the server which kind of code it
+    //      is and then does the one thing that matches. Each branch is driven
+    //      separately: a mock that answered all three the same way would be
+    //      green with and without the bug.
+    const SQ_NONE = 'No squad or game with that code.';
+    const typeCode = (v) => ev(`(() => { const i = document.getElementById('sqCode'); if (!i) return false; i.value = ${JSON.stringify(v)}; return true; })()`);
+    const codeReply = async (patch) => { const r = await ev(`(() => {
+      const q = window.__tx.filter((f) => f.type === 'code'); const i = q.length ? q[q.length - 1].id : null;
+      handle(Object.assign({ type: 'code', id: i }, ${JSON.stringify(patch)})); return i; })()`); await sleep(120); return r; };
+    const enterCode = async (v) => { await typeCode(v); await clearTx(); await click('#bay [data-sq="code"]'); await sleep(40); };
+    // (a) too short -- refused on this side, no frame at all
+    await enterCode('AB');
+    const short = await box();
+    if ((await tx()).length === 0 && short && short.err === 'Enter the 4-letter code.')
+      ok(`${V}: a short code is refused here and never reaches the socket`);
+    else fail(`${V}: short code ${JSON.stringify({ tx: await tx(), err: short && short.err })}`);
+    // (b) a ROOM code goes down the join path that already exists
+    await ev(`(() => { window.__joined = null; const b = $('joinBtn'); window.__joinFn = b.onclick; b.onclick = () => { window.__joined = $('codeInput').value; }; return true; })()`);
+    await enterCode('mnpq');
+    const asked = (await tx()).filter((f) => f.type === 'code');
+    await codeReply({ kind: 'room' });
+    const joined = await ev('window.__joined');
+    await ev(`($('joinBtn').onclick = window.__joinFn, true)`);
+    if (asked.length === 1 && asked[0].code === 'MNPQ' && joined === 'MNPQ')
+      ok(`${V}: a room code is upper-cased, asked about, then joined through #codeInput/#joinBtn`);
+    else fail(`${V}: room branch asked=${JSON.stringify(asked)} joined=${JSON.stringify(joined)}`);
+    // (c) a SQUAD code sends squad op:'join' with this player's CURRENT callsign
+    //     and paint (task 4: a seat's name is whatever the join frame carried).
+    const who = await ev('({ name: myName(), skin: mySkin() })');
+    const joinWith = async (answer) => {
+      await enterCode('BKPQ'); await codeReply({ kind: 'squad' });
+      const j = (await squads()).filter((f) => f.op === 'join');
+      await reply(answer);
+      return j;
+    };
+    const j = await joinWith({ op: 'join', error: 'no_such_squad' });
+    const jn = await box();
+    if (j.length === 1 && j[0].code === 'BKPQ' && j[0].name === who.name && j[0].skin === who.skin)
+      ok(`${V}: a squad code sends squad op:'join' with this player's callsign and paint`);
+    else fail(`${V}: squad branch ${JSON.stringify(j)} want ${JSON.stringify(who)}`);
+    // D-BLOCK-2 A: a refused join reads EXACTLY as an unknown code does, so a
+    // join a block refuses shows the ordinary view.
+    if (jn && jn.err === SQ_NONE) ok(`${V}: a join refused no_such_squad says what an unknown code says`);
+    else fail(`${V}: join no_such_squad ${JSON.stringify(jn && jn.err)}`);
+    for (const [code, line] of [['already_in', 'You are already in that squad on another device.'], ['full', 'That squad is full.']]) {
+      await joinWith({ op: 'join', error: code });
+      const jx = await box();
+      if (jx && jx.err === line) ok(`${V}: a join refused ${code} says "${line}"`);
+      else fail(`${V}: join ${code} ${JSON.stringify(jx && jx.err)}`);
+    }
+    // And a join that lands: the roster is the answer, the box shows it, and
+    // this tab's next reconnect takes its row back WITH the code again.
+    await joinWith(SNAP);
+    const jok = await box();
+    await reconnect(); await token();
+    const coded = await squads();
+    await reply(SNAP); await settleFriends();
+    if (jok && jok.text.includes('BKPQ') && !jok.err && (await stored()) === 'BKPQ' && coded.length === 1 && coded[0].code === 'BKPQ')
+      ok(`${V}: a join that lands shows the squad, and a reconnect resumes it by code`);
+    else fail(`${V}: join landed ${JSON.stringify(jok && { text: jok.text, err: jok.err })} reconnect=${JSON.stringify(coded)}`);
+    // (d) NONE
+    await push({ op: 'ended', reason: 'left' });
+    await enterCode('ZZZZ'); await codeReply({ kind: 'none' });
+    const none = await box();
+    if (none && none.err === SQ_NONE) ok(`${V}: an unknown code is told the truth (5.3)`);
+    else fail(`${V}: none branch ${JSON.stringify(none && none.err)}`);
+    await up(false); const noneOff = await box(); await up(true);
+    if (noneOff && noneOff.err === '' && noneOff.field && !noneOff.field.on) ok(`${V}: offline, the field's last answer is not left under a dead field`);
+    else fail(`${V}: offline code error ${JSON.stringify(noneOff && { err: noneOff.err, field: noneOff.field })}`);
+    // (e) ENTER. The join panel never had one despite a comment saying it did;
+    //     a 4-letter code on a phone keyboard ends with the Go key.
+    await typeCode('MNPQ'); await clearTx();
+    await ev(`(() => { const i = document.getElementById('sqCode'); if (!i) return false; i.focus();
+      i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return true; })()`);
+    await sleep(40);
+    if ((await tx()).filter((f) => f.type === 'code').length === 1) ok(`${V}: Enter in the code field commits it`);
+    else fail(`${V}: Enter sent ${JSON.stringify(await tx())}`);
+    await codeReply({ kind: 'none' });
+    // (f) A PLAYER WITH NO ACCOUNT WHO ENTERS A SQUAD CODE IS IN IT (D11), and
+    //     sees it. With no squad in hand such a player asks nothing: their
+    //     squad is keyed to the socket they joined on.
+    const GSNAP = { ...SNAP, you: 1, members: [M({ id: '00000000-0000-4000-8000-0000000000cc', callsign: 'Steel Mule' }), M({ guest: true })] };
+    await clearTx(); await setWho('out');
+    const outAsk = await squads();
+    await enterCode('BKPQ'); await codeReply({ kind: 'squad' });
+    const gj = (await squads()).filter((f) => f.op === 'join');
+    await reply(GSNAP);
+    const gin = await box();
+    if (outAsk.length === 0 && gj.length === 1 && gin && gin.text.includes('BKPQ') && !gin.text.includes('You can play right now'))
+      ok(`${V}: a player with no account asks nothing, enters a squad code, and sees the squad they are in`);
+    else fail(`${V}: no-account join asked=${JSON.stringify(outAsk)} join=${JSON.stringify(gj)} ${JSON.stringify(gin && gin.text)}`);
+    // A FIRST SAVE MINTS AN ANONYMOUS ACCOUNT, maybe mid-squad. Nobody is being
+    // left: the row is the socket's, and the squad stays on screen. The slot is
+    // read BEFORE anything is answered, so no reply can put back what the
+    // account event took away.
+    await setWho('guest');
+    const minted = await slot();
+    await reply(GSNAP);
+    const gmint = await box();
+    if (JSON.stringify(minted) === '{"code":"BKPQ","n":2}' && gmint && gmint.text.includes('BKPQ'))
+      ok(`${V}: an anonymous account minted mid-squad keeps the squad`);
+    else fail(`${V}: minted account dropped the squad ${JSON.stringify(gmint && gmint.text)} slot=${JSON.stringify(minted)}`);
+    // And a guest who is kicked is told so, above everything a guest can do.
+    await push({ op: 'ended', reason: 'kicked' });
+    const gk = await box();
+    if (gk && gk.text.startsWith('You were removed from the squad. ' + G1)) ok(`${V}: a kicked guest is told, and offered the code field again`);
+    else fail(`${V}: kicked guest ${JSON.stringify(gk && gk.text)}`);
+    await setWho('in');
+    await ask(''); await reply(SNAP);
+
+    // ---- 15. TWO EVENTS. cc:social is what a fresh friends snapshot rides, and
+    //      'home' was not in bay.js's repaint list. cc:account is where a squad
+    //      that belonged to somebody else must be dropped.
+    const FRIENDS = `{ friends: [{ id: 'a', callsign: 'Dusty Crag', online: true }, { id: 'b', callsign: null, online: false }],
+      requests: { in: [{ id: 'c', callsign: 'Steel Mule' }], out: [] }, blocked: [], friendCode: 'AB12CD', callsign: null }`;
+    await ev(`(window.CC_SOCIAL = ${FRIENDS}, document.dispatchEvent(new Event('cc:social')), true)`);
+    await sleep(60);
+    const fr1 = await ev(`(() => { const t = document.querySelectorAll('#bay .sqtb')[1]; if (!t) return null; const c = t.querySelector('.sqc');
+      return { pill: c.classList.contains('hidden') ? null : c.textContent.trim(), dot: !t.querySelector('.sqd').classList.contains('hidden') }; })()`);
+    if (fr1 && fr1.pill === '1' && fr1.dot === true)
+      ok(`${V}: cc:social repaints home -- Friends reads 1 online with the waiting-request lamp`);
+    else fail(`${V}: friends tab ${JSON.stringify(fr1)}`);
+    // A DIFFERENT ACCOUNT IS NOT YOUR SQUAD.
+    await clearTx();
+    await ev(`(() => { const b = $('accountBtn'); b.dataset.state = 'in';
+      window.CC_ACCOUNT = { id: '00000000-0000-4000-8000-0000000000cc', anonymous: false, google: true, apple: false, email: 'other@example.com', accounts: [{ provider: 'google', email: 'other@example.com' }] };
+      document.dispatchEvent(new CustomEvent('cc:account')); return true; })()`);
+    await sleep(60);
+    const flip = await box();
+    const flipAsk = await squads();
+    if (flip && flip.text.startsWith('Not loaded yet.') && !flip.text.includes('BKPQ') && (await stored()) === null && (await slot()) === null
+        && flipAsk.some((f) => f.op === 'resume' && !('code' in f)))
+      ok(`${V}: a different account drops the squad, the code and the answer, and asks for its own`);
+    else fail(`${V}: account flip ${JSON.stringify(flip && flip.text)} held=${JSON.stringify(await stored())} slot=${JSON.stringify(await slot())} asked=${JSON.stringify(flipAsk)}`);
+    await reply({ op: 'gone' }); await setWho('in'); await reply({ op: 'gone' }); await settleFriends();
+
+    // ---- 16. THE FRIENDS TAB, v1 (design 5.1): the counts D13 asks for and the
+    //      door to the full screen. Task 9 adds the rows and Invite under them.
+    //      The pill must be ABSENT, not zero, while CC_SOCIAL is null.
+    await ev(`(window.CC_SOCIAL = null, window.CC_SOCIAL_ERR = '', window.CC_SOCIAL_ASKING = false, document.dispatchEvent(new Event('cc:social')), true)`);
+    await click('#bay [data-sq="tab:friends"]');
+    const fu = await box();
+    if (fu && fu.tabs[1].pill === null && fu.text.startsWith('Not loaded yet.') && !fu.text.includes('No friends'))
+      ok(`${V}: Friends with no snapshot says "Not loaded yet.", and the pill is absent rather than 0`);
+    else fail(`${V}: friends unknown ${JSON.stringify(fu && { pill: fu.tabs[1].pill, text: fu.text })}`);
+    await ev(`(window.CC_SOCIAL = ${FRIENDS}, document.dispatchEvent(new Event('cc:social')), true)`);
+    await sleep(60);
+    const fk = await box();
+    if (fk && fk.text === 'Your friends \u00b7 2 1 online now. 1 request waiting for an answer. + ADD FRIEND'
+        && fk.btns.some((b) => b.go === 'friends' && !b.dis))
+      ok(`${V}: Friends reads 2 friends, 1 online, 1 request, and offers the door to the screen`);
+    else fail(`${V}: friends known ${JSON.stringify(fk && { text: fk.text, btns: fk.btns })}`);
+    await click('#bay [data-sq="tab:squad"]');
+  }
+} catch (e) {
+  fail('squad_ui stopped: ' + (e && e.message));
+}
+
+clearTimeout(watchdog);
+cleanup();
+console.log(errors.length ? `\n${errors.length} FAILED` : '\nall squad_ui checks passed');
+process.exit(errors.length ? 1 : 0);

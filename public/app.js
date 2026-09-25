@@ -1532,6 +1532,22 @@ window.CC_SOCIAL_ASKING = false;         // a friends read is in flight right no
 // op:'list'`) and is the one writer of this slot; it is declared here so the
 // export has a stable place to look. null still means NOT LOADED.
 window.CC_SOCIAL_BLOCKED = null;         // how many that read found, or null
+// THE SQUAD THIS SOCKET IS IN (plan X7): the last `{type:'squad', op:'state'}`
+// frame, or null. ONE SLOT, written only by socialSquad() below (and emptied
+// when its account leaves), and every client squad view reads it -- the Squad
+// box through bay.js's `sq.snap` -- because the server PUSHES the roster with
+// no request id whenever somebody else acts (a friend joins, the leader
+// changes mode, a member drops), and a copy kept anywhere else would never see
+// those. `cc:squad` follows every write, and every new introduction of the
+// socket (socialIntro, below). null alone does not mean "no squad": bay.js's
+// `sq.known` says whether this socket has been answered yet.
+window.CC_SQUAD = null;
+// WHY THE LAST SQUAD ENDED FOR THIS TAB, '' when nothing has since the last
+// roster: 'kicked', 'left', 'elsewhere' or 'no_leader' from the server's
+// `{op:'ended'}` push, 'left' from this client's own leave, and 'ended' for a
+// reason this build does not know. Closed, so the server's word is never
+// looked up unchecked.
+window.CC_SQUAD_END = '';
 let socialId = 0;
 let socialSeq = 0;                       // the waiter key, minted here and never sent
 // token -> { match, cb, t }. KEYED ON THE TOKEN, NOT ON THE FRAME'S id. BINDING
@@ -1603,6 +1619,11 @@ function socialReply(m) {
   // worse than one that says it could not load. Read as a snapshot it would
   // also tell a player who HAS a chosen callsign that they hold none.
   if (m.type === 'friends' && !m.error) socialSnapshot(m);
+  // AND EVERY SQUAD FRAME THAT SAYS WHICH SQUAD THIS SOCKET IS IN, reply or
+  // push alike, BEFORE the id match below drops the pushes. The caller of a
+  // squad op gets its roster first and its answer last, so a callback always
+  // finds the slot already current.
+  if (m.type === 'squad' && !m.error) socialSquad(m);
   // PRESENCE IS ALWAYS A PUSH, NEVER A REPLY, and it must not be matched like
   // one: `id` on this frame is the FRIEND's uuid (server/social.js's presence
   // fan-out), which is the very value BINDING resolution 3 puts in `id` on
@@ -1621,6 +1642,30 @@ function socialReply(m) {
     w.cb(m);
     return;
   }
+}
+// The one writer of window.CC_SQUAD and CC_SQUAD_END (plan X7).
+const SQUAD_ENDS = ['kicked', 'left', 'elsewhere', 'no_leader'];
+function socialSquad(m) {
+  if (m.op === 'state') {
+    // NOT OUR ROW, NOT OUR SQUAD. `you` is -1 on a roster this socket is not
+    // in -- a join answered after its player was kicked sends `ended` and THEN
+    // such a frame -- and a row naming another account belongs to whoever this
+    // client was signed in as before. Neither is written. A guest's row, and a
+    // signed-in player's row while the server checks their blocks, carry id
+    // null and are ours by `you` alone.
+    const me = Array.isArray(m.members) && Number.isInteger(m.you) ? m.members[m.you] : null;
+    const acct = window.CC_ACCOUNT && window.CC_ACCOUNT.id;
+    if (!me || (me.id && me.id !== acct)) return;
+    window.CC_SQUAD = m;
+    window.CC_SQUAD_END = '';
+  } else if (m.op === 'ended' || m.op === 'left') {
+    window.CC_SQUAD = null;
+    window.CC_SQUAD_END = m.op === 'left' ? 'left' : SQUAD_ENDS.includes(m.reason) ? m.reason : 'ended';
+  } else if (m.op === 'gone') {
+    window.CC_SQUAD = null;
+    window.CC_SQUAD_END = '';
+  } else return;
+  document.dispatchEvent(new Event('cc:squad'));
 }
 // A friend came online or went. The server sends this INSTEAD of a whole
 // snapshot (one frame per friend per change rather than eight round trips), so
@@ -1814,6 +1859,23 @@ document.addEventListener('cc:account', () => {
   // does not spend a refusal -- ws.onopen asks for it a moment later.
   if (S.ws && S.ws.readyState === 1) socialBoot();
 });
+// A SQUAD BELONGS TO THE ACCOUNT THAT JOINED IT, and goes when that account
+// does. Keyed on the account ID, not on accountKey() above: a guest can hold a
+// squad too, and accountKey() is '' for every guest alike. Only LEAVING an
+// account drops it: a socket with no account joined as itself, and the
+// anonymous account a first save mints mid-squad takes nothing from it (the
+// server keys that row to the socket). The boot's first event leaves nobody.
+let squadAccount = '';                   // the account CC_SQUAD belongs to, '' for none
+document.addEventListener('cc:account', () => {
+  const a = window.CC_ACCOUNT, id = (a && a.id) || '';
+  if (id === squadAccount) return;
+  const leaving = squadAccount;
+  squadAccount = id;
+  if (!leaving || (!window.CC_SQUAD && !window.CC_SQUAD_END)) return;
+  window.CC_SQUAD = null;
+  window.CC_SQUAD_END = '';
+  document.dispatchEvent(new Event('cc:squad'));
+});
 // SET (design 5.6). The client validates nothing about the NAME:
 // server/callsign.js is the single source (design 4.5), so the typed string goes
 // up as typed and the code that comes back is what the player is shown.
@@ -1904,6 +1966,17 @@ function socialRolled() {
   });
 }
 
+// THE SOCKET'S INTRODUCTION. A social frame is answered for whoever the server
+// thinks the socket is when the frame arrives, and that is settled only once
+// the socket's hello has gone out AHEAD of it (the server holds later frames
+// on that hello's verification). socialBoot() already waits for it. A squad
+// resume sent any earlier -- ws.onopen dispatches `cc:social` before the
+// hello's token has even been read -- is answered for NOBODY, and its `gone`
+// then reads "no squad" to a player the server is holding a place for. So
+// every hello marks its socket, and bay.js asks only on a marked socket, once
+// per mark: a new socket, or a new hello on this one (a sign-in), is a new one.
+let helloWs = null, helloN = 0;
+function socialIntro() { return helloWs && helloWs === S.ws && S.ws.readyState === 1 ? helloN : 0; }
 // Introduce this socket's account to the server (8.48): with an identity on
 // the socket, turn nudges reach every device the player ever subscribed, not
 // just one browser's in-memory copy. create:false — merely CONNECTING must
@@ -1911,10 +1984,17 @@ function socialRolled() {
 // async, so re-check that THIS socket is still the live transport before
 // sending; a swap to offline play or a reconnect may have happened meanwhile.
 async function sendHello(ws) {
-  if (!window.Cloud || !Cloud.enabled()) return;
-  const token = await Cloud.token(false);
-  if (token && S.ws === ws && ws.readyState === 1 && !S.local) {
-    sendMsg({ type: 'hello', token });
+  try {
+    if (!window.Cloud || !Cloud.enabled()) return;
+    const token = await Cloud.token(false);
+    if (token && S.ws === ws && ws.readyState === 1 && !S.local) {
+      sendMsg({ type: 'hello', token });
+    }
+  } finally {
+    // The mark goes on whether or not a hello was sent: a socket with no
+    // session to introduce, or whose token read failed, gets no better hello
+    // by waiting.
+    if (S.ws === ws && ws.readyState === 1) { helloWs = ws; helloN++; document.dispatchEvent(new Event('cc:squad')); }
   }
 }
 
