@@ -2616,6 +2616,60 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
       else fail(`(db4) ${op} both: ` + JSON.stringify(both));
     }
   }
+
+  // ---- (db4 ii) the block lines come before `already` and the acceptance ----
+  // T6-R1-6. (db4)'s worlds hold no friendship, and no request from B for
+  // `request`, so nothing pinned where the two direction lines sit against
+  // `already`, or against friendRequest's acceptance of an incoming request.
+  // A block can leave either row behind: a half-failed block (a delete that
+  // threw is still answered ok) keeps a request, and a friendship can outlive
+  // a block the same way. Behind either row the answer is still the block's:
+  // your own is `blocked`, theirs the op's own miss, byte for byte a genuine
+  // one. Never `already`, never a friendship, and nothing is written.
+  {
+    const WRITES = new Set(['addFriendship', 'removeFriendship', 'addRequest', 'deleteRequest', 'addBlock', 'removeBlock']);
+    const world = async (frame, blocks, rows) => {
+      const st = memStore(ROWS);
+      if (rows.request) await st.addRequest(B, A);
+      if (rows.friends) await st.addFriendship(A, B);
+      for (const [x, y] of blocks) await st.addBlock(x, y);
+      const S = mkSocial(st);
+      const wa = mkws(A), wb = mkws(B);
+      S.onAuth(wa); S.onAuth(wb);
+      wa.rx.length = 0; wb.rx.length = 0; st.calls.length = 0;
+      await S.handle(wa, { ...frame, id: 'q' });
+      return { a: JSON.stringify(wa.rx), b: wb.rx.length, writes: st.calls.filter((c) => WRITES.has(c)), friends: [...st.friends], requests: [...st.requests] };
+    };
+    const only = (op, error) => JSON.stringify([{ type: 'friend', op, error, id: 'q' }]);
+    const OPS = {
+      add: { frame: { type: 'friend', op: 'add', code: 'BDF345' }, miss: 'no_such_code', genuine: { type: 'friend', op: 'add', code: 'ZZZ999' } },
+      request: { frame: { type: 'friend', op: 'request', to: B }, miss: 'no_such_user', genuine: { type: 'friend', op: 'request', to: uid(99) } },
+    };
+    const bad = [];
+    // (a) B's request to A outlived the block, and A sends a request to B.
+    // Unguarded, that request is the acceptance and writes a friendship.
+    {
+      const rows = { request: true };
+      const keep = (w) => !w.b && !w.writes.length && !w.friends.length && JSON.stringify(w.requests) === JSON.stringify([B + '>' + A]);
+      const mine = await world(OPS.request.frame, [[A, B]], rows);
+      const theirs = await world(OPS.request.frame, [[B, A]], rows);
+      const real = await world(OPS.request.genuine, [], rows);
+      if (!(mine.a === only('request', 'blocked') && keep(mine))) bad.push({ rows: 'request B>A', who: 'mine', ...mine });
+      if (!(theirs.a === only('request', 'no_such_user') && theirs.a === real.a && keep(theirs))) bad.push({ rows: 'request B>A', who: 'theirs', ...theirs, genuine: real.a });
+    }
+    // (b) A friendship outlived the block, and A adds B by code or asks.
+    for (const op of ['add', 'request']) {
+      const rows = { friends: true };
+      const keep = (w) => !w.b && !w.writes.length && JSON.stringify(w.friends) === JSON.stringify([pair(A, B)]) && !w.requests.length;
+      const mine = await world(OPS[op].frame, [[A, B]], rows);
+      const theirs = await world(OPS[op].frame, [[B, A]], rows);
+      const real = await world(OPS[op].genuine, [], rows);
+      if (!(mine.a === only(op, 'blocked') && keep(mine))) bad.push({ rows: 'friendship', op, who: 'mine', ...mine });
+      if (!(theirs.a === only(op, OPS[op].miss) && theirs.a === real.a && keep(theirs))) bad.push({ rows: 'friendship', op, who: 'theirs', ...theirs, genuine: real.a });
+    }
+    if (!bad.length) ok('(db4 ii) behind a request or a friendship that outlived the block, add and request still answer the block\'s way: your own is blocked, theirs a genuine miss, never already, never a friendship, and nothing is written');
+    else fail('(db4 ii) block lines against already and the acceptance: ' + JSON.stringify(bad));
+  }
 }
 
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall social checks passed');
