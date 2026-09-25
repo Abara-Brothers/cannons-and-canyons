@@ -2574,9 +2574,10 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
   // ---- (db4) ONLY YOUR OWN BLOCK IS NAMED (D-BLOCK-4) -----------------------
   // Add, request and accept refuse across a block both ways. The caller's own
   // block answers `blocked`: it tells them what they did. A block naming the
-  // caller answers the op's own not-found, byte for byte a genuine miss, so
-  // no answer tells a player they were blocked. Blocked both ways is the
-  // caller's own block, or `blocked` would say whether they were blocked back.
+  // caller answers the op's own not-found, byte for byte a genuine miss and
+  // at its cost (D-BLOCK-5 I), so no answer tells a player they were
+  // blocked. Blocked both ways is the caller's own block, or `blocked` would
+  // say whether they were blocked back.
   {
     const OPS = {
       add: { frame: { type: 'friend', op: 'add', code: 'BDF345' }, miss: 'no_such_code', genuine: { type: 'friend', op: 'add', code: 'ZZZ999' } },
@@ -2584,9 +2585,22 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
       accept: { frame: { type: 'friend', op: 'accept', from: B }, miss: 'no_such_request', genuine: { type: 'friend', op: 'accept', from: B } },
     };
     const WRITES = new Set(['addFriendship', 'removeFriendship', 'addRequest', 'deleteRequest', 'addBlock', 'removeBlock']);
+    // WHAT AN ANSWER COSTS (D-BLOCK-5 I), as (jn-d) pins it for join: the
+    // store calls the op made, and the round trip each read went out in
+    // (how many reads had come back before it was asked).
+    const READS = ['profileByFriendCode', 'profileById', 'friendIdsOf', 'requestsOf', 'blockIdsOf'];
+    const costed = (st) => {
+      const trips = [];
+      let back = 0;
+      for (const m of READS) {
+        const real = st[m];
+        st[m] = async function (...a) { trips.push(back); try { return await real.apply(st, a); } finally { back++; } };
+      }
+      return trips;
+    };
     // A asks about B. For accept, B's request predates the block. `genuine`
     // sends the op's real miss in a world with no block and no request.
-    const world = async (op, blocks, genuine = false) => {
+    const world = async (op, blocks, genuine = false, boom = null) => {
       const st = memStore(ROWS);
       if (op === 'accept' && !genuine) await st.addRequest(B, A);
       for (const [x, y] of blocks) await st.addBlock(x, y);
@@ -2594,9 +2608,13 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
       const wa = mkws(A), wb = mkws(B);
       S.onAuth(wa); S.onAuth(wb);
       wa.rx.length = 0; wb.rx.length = 0; st.calls.length = 0;
+      if (boom) st.boom.add(boom);
+      const trips = costed(st);
       await S.handle(wa, { ...(genuine ? OPS[op].genuine : OPS[op].frame), id: 'q' });
-      return { a: JSON.stringify(wa.rx), b: JSON.stringify(wb.rx), writes: st.calls.filter((c) => WRITES.has(c)), friends: st.friends.size, requests: [...st.requests] };
+      return { a: JSON.stringify(wa.rx), b: JSON.stringify(wb.rx), writes: st.calls.filter((c) => WRITES.has(c)), friends: st.friends.size, requests: [...st.requests], calls: st.calls.slice(), trips };
     };
+    const cost = (w) => JSON.stringify([w.calls, w.trips]);
+    const oneTrip = (w) => w.trips.length > 0 && w.trips.every((t) => t === 0);
     const only = (op, error) => JSON.stringify([{ type: 'friend', op, error, id: 'q' }]);
     const untouched = (op, w) => w.b === '[]' && !w.writes.length && w.friends === 0
       && JSON.stringify(w.requests) === JSON.stringify(op === 'accept' ? [B + '>' + A] : []);
@@ -2609,8 +2627,17 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
       if (theirs.a === only(op, miss) && untouched(op, theirs)) ok(`(db4) ${op}: blocked BY them answers ${miss}, nothing written, and they are sent nothing`);
       else fail(`(db4) ${op} theirs: ` + JSON.stringify(theirs));
       const real = await world(op, [], true);
-      if (real.a === theirs.a && real.b === theirs.b && real.a === only(op, miss)) ok(`(db4) ${op}: that answer is byte for byte a genuine ${miss}`);
-      else fail(`(db4) ${op} twin: ` + JSON.stringify({ blockedBy: theirs.a, genuine: real.a, b: [theirs.b, real.b] }));
+      if (real.a === theirs.a && real.b === theirs.b && real.a === only(op, miss) && cost(real) === cost(theirs) && oneTrip(theirs))
+        ok(`(db4) ${op}: that answer is byte for byte a genuine ${miss}, and costs the same reads in one round trip`);
+      else fail(`(db4) ${op} twin: ` + JSON.stringify({ blockedBy: theirs.a, genuine: real.a, b: [theirs.b, real.b], calls: [theirs.calls, real.calls], trips: [theirs.trips, real.trips] }));
+      // And when one of the caller's own reads fails, the two fail alike.
+      const fails = [];
+      for (const m of ['friendIdsOf', 'requestsOf', 'blockIdsOf']) {
+        const x = await world(op, [[B, A]], false, m), y = await world(op, [], true, m);
+        if (!(x.a === y.a && x.a === only(op, 'unavailable'))) fails.push({ m, blockedBy: x.a, genuine: y.a });
+      }
+      if (!fails.length) ok(`(db4) ${op}: when one of the caller's reads fails, the blocked-by answer and a genuine ${miss} fail alike`);
+      else fail(`(db4) ${op} failed read: ` + JSON.stringify(fails));
       const both = await world(op, [[A, B], [B, A]]);
       if (both.a === only(op, 'blocked') && untouched(op, both)) ok(`(db4) ${op}: blocked both ways is your own block — blocked, whether or not they blocked you back`);
       else fail(`(db4) ${op} both: ` + JSON.stringify(both));

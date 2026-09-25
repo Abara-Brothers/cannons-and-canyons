@@ -825,13 +825,30 @@ export function createSocial({
   // that starts while the row is being written can come back without it.
   // So each asked pair stands here from the ask until its answer is in and
   // the pair is logged, and every reader adds the pairs here that name its
-  // account, at the moment its read returns. A pair whose log threw stays
-  // here: apart for the life of the process is the safe way round, and the
-  // injected clock is the only thing in the log that can throw.
+  // account, at the moment its read returns. A pair whose log (or note,
+  // below) threw stays here: apart for the life of the process is the safe
+  // way round, and the injected clock is the only thing there that can throw.
   const blockPending = new Set();
-  // `b`, the store's answer for `id`, plus every pair logged from `from` on
-  // and every pair being written that names `id`; null when some of the
-  // logged entries have been dropped.
+  // AND THE PAIRS WHOSE addBlock THREW (D-BLOCK-5 K). A write that answered
+  // with a failure may still commit AFTER its answer, when the log serves no
+  // read that starts then. So for BLOCK_LOG_MS after that answer every
+  // reader the pair names counts it as blocked, whenever its read began.
+  // Expired entries go as each one is written. A failure that finds
+  // BLOCK_LOG_MAX entries kept is not kept: until it would have expired
+  // (never sooner, if the clock steps back), every reader is answered null
+  // instead, and fails safe as the log's are.
+  const blockThrown = [];
+  let thrownFloor = 0;    // readers are answered null up to this time
+  function noteThrown(blocker, blocked) {
+    const t = now();
+    while (blockThrown.length && blockThrown[0].until < t) blockThrown.shift();
+    if (blockThrown.length >= BLOCK_LOG_MAX) thrownFloor = Math.max(thrownFloor, t + BLOCK_LOG_MS);
+    else blockThrown.push({ blocker: wireId(blocker), blocked: wireId(blocked), until: t + BLOCK_LOG_MS });
+  }
+  // `b`, the store's answer for `id`, plus every pair logged from `from` on,
+  // every pair being written and every unexpired thrown pair that names
+  // `id`; null when some of the logged entries have been dropped, or a
+  // thrown pair could not be kept.
   function withLanded(b, id, from) {
     if (blockFloor > from) return null;
     const out = { blocked: [...b.blocked], blockedBy: [...b.blockedBy] };
@@ -843,6 +860,15 @@ export function createSocial({
     for (const e of blockPending) {
       if (e.blocker === id) out.blocked.push(e.blocked);
       if (e.blocked === id) out.blockedBy.push(e.blocker);
+    }
+    if (blockThrown.length) {
+      const t = now();
+      if (thrownFloor >= t) return null;
+      for (const e of blockThrown) {
+        if (e.until < t) continue;
+        if (e.blocker === id) out.blocked.push(e.blocked);
+        if (e.blocked === id) out.blockedBy.push(e.blocker);
+      }
     }
     return out;
   }
@@ -2220,11 +2246,14 @@ export function createSocial({
   const friendReply = (ws, msg, op, rest) => reply(ws, msg, { type: 'friend', op, ...rest });
 
   // Every op needs the same three facts about the other player, so read them
-  // once, concurrently, instead of three times down three branches.
-  async function relationTo(me, other) {
-    const [ids, reqs, blocks] = await Promise.all([
-      store.friendIdsOf(me), store.requestsOf(me), store.blockIdsOf(me),
-    ]);
+  // once, concurrently, instead of three times down three branches. They are
+  // the CALLER's rows, so add and request read them BESIDE the lookup of the
+  // other player, on a miss too (D-BLOCK-5 I): a code or an id whose owner
+  // blocked the caller then costs what one nobody holds costs, the same
+  // reads in one round trip, and a failure of any read fails both alike.
+  const callerRows = (me) => Promise.all([store.friendIdsOf(me), store.requestsOf(me), store.blockIdsOf(me)]);
+  const relationTo = async (me, other) => relationOf(await callerRows(me), other);
+  function relationOf([ids, reqs, blocks], other) {
     return {
       friend: ids.includes(other),
       incoming: reqs.incoming.includes(other),
@@ -2287,10 +2316,10 @@ export function createSocial({
   async function friendAdd(ws, msg) {
     const code = String(msg.code == null ? '' : msg.code).trim().toUpperCase().replace(/^FR-/, '');
     if (!/^[A-Z0-9]{6}$/.test(code)) return friendReply(ws, msg, 'add', { error: 'no_such_code' });
-    const them = await store.profileByFriendCode(code);
+    const [them, rows] = await Promise.all([store.profileByFriendCode(code), callerRows(ws.userId)]);
     if (!them) return friendReply(ws, msg, 'add', { error: 'no_such_code' });
     if (them.id === ws.userId) return friendReply(ws, msg, 'add', { error: 'self' });
-    const rel = await relationTo(ws.userId, them.id);
+    const rel = relationOf(rows, them.id);
     if (rel.blocked) return friendReply(ws, msg, 'add', { error: 'blocked' });
     if (rel.blockedBy) return friendReply(ws, msg, 'add', { error: 'no_such_code' });
     if (rel.friend) return friendReply(ws, msg, 'add', { error: 'already' });
@@ -2329,9 +2358,9 @@ export function createSocial({
     const to = wireId(msg.to);
     if (!isUuid(to)) return friendReply(ws, msg, 'request', { error: 'no_such_user' });
     if (to === wireId(ws.userId)) return friendReply(ws, msg, 'request', { error: 'self' });
-    const them = await store.profileById(to);
+    const [them, rows] = await Promise.all([store.profileById(to), callerRows(ws.userId)]);
     if (!them) return friendReply(ws, msg, 'request', { error: 'no_such_user' });
-    const rel = await relationTo(ws.userId, to);
+    const rel = relationOf(rows, to);
     if (rel.blocked) return friendReply(ws, msg, 'request', { error: 'blocked' });
     if (rel.blockedBy) return friendReply(ws, msg, 'request', { error: 'no_such_user' });
     if (rel.friend) return friendReply(ws, msg, 'request', { error: 'already' });
@@ -2542,7 +2571,7 @@ export function createSocial({
   // co-members for three round trips (T6-R1-1), and run at the answer for
   // one (T6-R1-2), when a Start could seat them together. It runs again as
   // the answer arrives. An addBlock that throws is treated as landed for
-  // this half, because it may have been (T6-R2-4). The blocked
+  // this half, because it may have been (T6-R2-4) or may be later. The blocked
   // party leaves the blocker's squad when the blocker leads it, otherwise the
   // blocker leaves theirs; what the others receive is a kick or a leave
   // (D-BLOCK): no frame names the block, though probing can still infer it
@@ -2550,7 +2579,9 @@ export function createSocial({
   // invite and signing in (the sign-in door). The pending set, from the ask
   // to the answer, and the recent-blocks log, written as the answer
   // arrives, close the race between a block and a join, an invite or a
-  // sign-in whose block read was already out. One way in is not this
+  // sign-in whose block read was already out; a pair whose addBlock threw
+  // is kept 16 s past its answer, for a row that commits late (D-BLOCK-5
+  // K). One way in is not this
   // file's and does not pass them: server.js's push-subscription sink (see
   // the sign-in door); the second teardown catches a row it moved meanwhile.
   //
@@ -2714,16 +2745,18 @@ export function createSocial({
           // What the blocked player's panel showed of the blocker, read
           // beside the write and before the deletes that change it.
           const rows = panelRows(blocker, id);
-          try { await store.addBlock(blocker, id); }
+          let failed = true;
+          try { await store.addBlock(blocker, id); failed = false; }
           finally {
-            // THE ANSWER IS IN, WHATEVER IT IS. The pair is logged for every
-            // read still out, and only then stops being pending. A log that
-            // throws leaves it pending, and so apart. The teardown then runs
-            // AGAIN, for anything that reached a shared squad while the row
-            // was out by a way no door stands on (server.js's
-            // push-subscription sink, see the sign-in door). Usually it
-            // finds nothing, and then it removes and sends nothing.
-            try { logBlock(blocker, id); blockPending.delete(pend); } catch { /* still pending */ }
+            // THE ANSWER IS IN, WHATEVER IT IS. A failure is noted as thrown
+            // (see blockThrown), for a row that commits late. The pair is
+            // logged for every read still out, and only then stops being
+            // pending. A note or a log that throws leaves it pending, and so
+            // apart. The teardown then runs AGAIN, for anything that reached
+            // a shared squad while the row was out by a way no door stands on
+            // (server.js's push-subscription sink, see the sign-in door).
+            // Usually it finds nothing, and then it removes and sends nothing.
+            try { if (failed) noteThrown(blocker, id); logBlock(blocker, id); blockPending.delete(pend); } catch { /* still pending */ }
             again = squadBlockTeardown(blocker, id)().catch(() => {});
           }
           wrote = true;
@@ -2746,14 +2779,16 @@ export function createSocial({
       // it, the block is in force and saying otherwise is the misleading half of
       // a half-finished operation; the pushes go out for the same reason.
       //
-      // AN addBlock THAT THREW MAY STILL HAVE LANDED (T6-R2-4). Nothing here
-      // can tell, so it is treated as landed, which is the safe way round:
-      // the pair was parted as the row was asked for and logged as the
-      // answer came. If the row did not land, the parting is a kick or a
-      // leave that the blocker asked for, and it names nothing. The player
-      // is still answered unavailable, because the block may not stand, and
-      // a retry is idempotent. A block that failed BEFORE it was asked (its
-      // profile read) wrote nothing, and is neither parted nor logged.
+      // AN addBlock THAT THREW MAY STILL HAVE LANDED (T6-R2-4), or may land
+      // later. Nothing here can tell, so it is treated as landed, which is
+      // the safe way round: the pair was parted as the row was asked for,
+      // logged as the answer came, and is kept apart for BLOCK_LOG_MS after
+      // it (D-BLOCK-5 K). If the row never lands, the parting is a kick or a
+      // leave that the blocker asked for, and it names nothing; the cost is
+      // 16 s in which the pair cannot meet again. The player is still
+      // answered unavailable, because the block may not stand, and a retry
+      // is idempotent. A block that failed BEFORE it was asked (its profile
+      // read) wrote nothing, and is neither parted, logged nor noted.
       outcome = wrote ? { type: 'block', op, ok: true } : { type: 'block', op, error: 'unavailable' };
     }
     // R16, THE SQUAD HALF OF A BLOCK. It ran above, as the row was asked for,

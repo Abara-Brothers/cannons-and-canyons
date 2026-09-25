@@ -7600,9 +7600,9 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     else fail('(blk-u) failed profile read: ' + JSON.stringify({ a: got6(g.w[A], 'block'), blocks: [...g.st.blocks], b: told, seats }));
   }
   {
-    // (iv) addBlock commits and then throws, and the clock also throws inside
-    // the log that follows. The answer still carries its op, and the pair is
-    // still parted.
+    // (iv) addBlock commits and then throws, and the clock also throws as
+    // that answer is noted and logged. The answer still carries its op, and
+    // the pair is still parted.
     let clockThrows = false;
     const st = t6store(ROWS6);
     await st.addFriendship(A, B);
@@ -7811,9 +7811,10 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   }
   {
     // (iii) EACH ROW THE PANEL SHOWED STILL PUSHES IT. B had asked A: B
-    // receives exactly what a kick and a decline send. A had asked B: no hand
-    // act withdraws a request (left to the owner, T6-R1-1), and B's panel is
-    // still told the request has gone.
+    // receives exactly what a kick and a decline send. A had asked B: B's
+    // panel is told the request has gone. No hand act withdraws a request,
+    // so this one has no twin; it names nothing, and D-BLOCK-5 J DECIDED it
+    // as an accepted residual. The second check pins that decision.
     const bad = [];
     {
       const g = await world6(A, [B, C], []);
@@ -7838,7 +7839,7 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
       if (!(same6(got6(g.w[B], 'squad'), [KICKED6]) && fb.length === 1 && fb2.length === 1 && same6(fb[0].requests, { in: [], out: [] }) && same6(fb2[0].requests, { in: [], out: [] })))
         bad.push({ rows: 'A asked B', b: g.w[B].rx, b2: g2.rx });
     }
-    if (!bad.length) ok('(blk-v) a request either way still pushes the blocked player\'s panel: B\'s own request goes exactly as a kick and a decline send it, and A\'s request to B leaves B\'s panel too');
+    if (!bad.length) ok('(blk-v) a request either way still pushes the blocked player\'s panel: B\'s own request goes exactly as a kick and a decline send it, and A\'s request to B leaves B\'s panel too (the decided residual D-BLOCK-5 J)');
     else fail('(blk-v) requests: ' + JSON.stringify(bad));
   }
   {
@@ -8236,6 +8237,246 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     if (inside && same6(got6(j.wa, 'block'), [LOST6]) && !j.st.blocks.size && same6(raced, { j: 'state', x: [A, C, B] }) && same6(later, { j: 'state', x: [A, C, B] }))
       ok('(blk-u) a block that failed before addBlock was asked logs nothing: a join whose read was out, and one made after, are both let in');
     else fail('(blk-u) failed profile read, log left alone: ' + JSON.stringify({ inside, a: got6(j.wa, 'block'), raced, later }));
+  }
+
+  // ===== CONTROLLER FIX PASS: D-BLOCK-5 =======================================
+
+  // ---- (blk-u vi) an addBlock that throws and commits AFTER its answer -----
+  // D-BLOCK-5 K. The write answers with a failure (sbAdmin's timeout) and its
+  // row lands later. The log serves only reads that were out at the answer,
+  // so a join made after it read no row, and Start seated the pair once the
+  // row had landed. Now a thrown pair counts as blocked for 16 s by every
+  // reader it names: either way round the join is refused as a dead code,
+  // and after the row lands each leader's Start seats only its own squad.
+  const lateCommit6 = (st) => {
+    const real = st.addBlock;
+    let args = null;
+    st.addBlock = async function (...a) { st.addBlock = real; st.calls.push('addBlock'); args = a; throw new Error('sb timeout'); };
+    return () => real.apply(st, args);
+  };
+  {
+    const bad = [];
+    for (const dir of ['blocked joins', 'blocker joins']) {
+      const seated = [];
+      const st = t6store(ROWS6);
+      const S = mkSocial6(st, { seatSquad: (seats) => { seated.push(seats.map((s) => s.ws)); return { ok: true, code: 'RM6S' }; } });
+      const wa = up6(S, A), wc = up6(S, C), wb = up6(S, B), wd = up6(S, D);
+      const code = await create6(S, wa);
+      await join6(S, wc, code, 'Crater Two');
+      const home = await create6(S, wb);
+      await join6(S, wd, home, 'Dune Four');
+      for (const [lead, mate] of [[wa, wc], [wb, wd]]) {
+        await S.handle(lead, { type: 'squad', op: 'mode', mode: 'ffa' });
+        await S.handle(mate, { type: 'squad', op: 'ready', ready: true, loadout: RACK5 });
+      }
+      const commit = lateCommit6(st);
+      await S.handle(wa, { type: 'block', op: 'add', id: B });
+      const [w, into, lead, order] = dir === 'blocked joins' ? [wb, code, wa, [wa, wc, wb]] : [up6(S, A), home, wb, [wb, wd]];
+      if (dir === 'blocker joins') order.push(w);
+      await S.handle(w, { type: 'squad', op: 'join', code: into, name: 'Somebody', skin: 'olive', id: 'j' });
+      const j = ans6(w, 'j');
+      if (j && j.op === 'state') await S.handle(w, { type: 'squad', op: 'ready', ready: true, loadout: RACK5 });
+      await commit();
+      await S.handle(lead, { type: 'squad', op: 'start', loadout: RACK5, id: 's' });
+      const seats = seated.map((l) => l.map((x) => order.indexOf(x)));
+      if (!(same6(got6(wa, 'block'), [LOST6]) && same6(j, DEAD6('j')) && st.blocks.has(A + '>' + B) && same6(ans6(lead, 's'), SEATED6('s')) && same6(seats, [[0, 1]])))
+        bad.push({ dir, a: got6(wa, 'block'), j, blocks: [...st.blocks], s: ans6(lead, 's'), seats });
+    }
+    if (!bad.length) ok('(blk-u) an addBlock that throws and commits after its answer: a join after the answer is refused as a dead code either way round, and once the row lands Start seats the pair apart');
+    else fail('(blk-u) late commit after a thrown addBlock: ' + JSON.stringify(bad));
+  }
+  {
+    // The thrown pair is the account that ASKED (D-BLOCK-2 D): A's second tab
+    // blocks B and says hello as D during the profile read. B's join into
+    // A's squad after the answer is still refused.
+    const j = await joinWorld6();
+    const wx = up6(j.S, A);
+    const p = holdAt6(j.st, 'profileById', 1);
+    const commit = lateCommit6(j.st);
+    const pb = j.S.handle(wx, { type: 'block', op: 'add', id: B });
+    const inside = await within6(p.inside);
+    if (inside) hello6(j.S, wx, D); else p.restore();
+    p.release(); await pb;
+    await j.S.handle(j.wb, { type: 'squad', op: 'join', code: j.code, id: 'j' });
+    await commit();
+    await j.S.handle(j.wc, { type: 'squad', op: 'resume', id: 'x' });
+    if (inside && same6(ans6(wx, B), LOST6) && same6(ans6(j.wb, 'j'), DEAD6('j')) && same6(ids6(ans6(j.wc, 'x')), [A, C]) && j.st.blocks.has(A + '>' + B))
+      ok('(blk-u) the thrown pair is the account that asked, though its tab became another account before the write: the blocked player\'s join is refused');
+    else fail('(blk-u) thrown pair names the asker: ' + JSON.stringify({ inside, a: ans6(wx, B), j: ans6(j.wb, 'j'), x: ans6(j.wc, 'x'), blocks: [...j.st.blocks] }));
+  }
+
+  // ---- (blk-u v) an addBlock that throws WITHOUT committing ----------------
+  // D-BLOCK-5 K and L. The blocker is answered unavailable and no row
+  // exists. It might yet land, so for 16 s after the answer the pair still
+  // counts as blocked: (a) B's join by code is refused as a dead code up to
+  // and including the 16th second, and C's roster is A and C. From the next
+  // millisecond it lets B in, and C's roster shows B.
+  {
+    const j = await joinWorld6();
+    failOnce6(j.st, 'addBlock');
+    await j.S.handle(j.wa, { type: 'block', op: 'add', id: B });
+    const t0 = CLOCK6;
+    CLOCK6 = t0 + 16000;
+    await j.S.handle(j.wb, { type: 'squad', op: 'join', code: j.code, id: 'in' });
+    await j.S.handle(j.wc, { type: 'squad', op: 'resume', id: 'r1' });
+    CLOCK6 = t0 + 16001;
+    await j.S.handle(j.wb, { type: 'squad', op: 'join', code: j.code, id: 'out' });
+    await j.S.handle(j.wc, { type: 'squad', op: 'resume', id: 'r2' });
+    const late = ans6(j.wb, 'out');
+    if (same6(got6(j.wa, 'block'), [LOST6]) && !j.st.blocks.size && same6(ans6(j.wb, 'in'), DEAD6('in')) && same6(ids6(ans6(j.wc, 'r1')), [A, C])
+      && late && late.op === 'state' && late.code === j.code && same6(ids6(ans6(j.wc, 'r2')), [A, C, B]))
+      ok('(blk-u) an addBlock that throws without committing keeps the pair apart for 16 s: a join is refused to the last millisecond of it, and lets B in after');
+    else fail('(blk-u) thrown addBlock, no row: ' + JSON.stringify({ a: got6(j.wa, 'block'), blocks: [...j.st.blocks], in: ans6(j.wb, 'in'), r1: ids6(ans6(j.wc, 'r1')), out: late, r2: ids6(ans6(j.wc, 'r2')) }));
+  }
+  {
+    // (b) (blk-w vi) with that write: a tab with no account in A's squad
+    // becomes B by no door (the push-subscription sink) while the write is
+    // out, and the write then fails without committing. The second teardown
+    // still removes the row as a kick, and the blocker's answer, unavailable,
+    // comes only after that roster, whose name read is held. The same when
+    // the clock throws as the failure is noted: the pair stays pending, and
+    // the teardown still runs.
+    const holdFail6 = (st) => {
+      const real = st.addBlock;
+      let release, entered;
+      const open = new Promise((r) => { release = r; });
+      const inside = new Promise((r) => { entered = r; });
+      const wrap = async function () { st.addBlock = real; st.calls.push('addBlock'); entered(); await open; throw new Error('sb 500'); };
+      st.addBlock = wrap;
+      return { release, inside, restore: () => { if (st.addBlock === wrap) st.addBlock = real; } };
+    };
+    const bad = [];
+    for (const clock of ['steady', 'throwing']) {
+      let clockThrows = false;
+      const st = t6store(ROWS6);
+      const S = createSocial({
+        seats: MODE_SEATS, teeIds: TEE_IDS, validRack: validRackFor, schedule: () => () => {},
+        store: st, terms: [],
+        now: () => { if (clockThrows) { clockThrows = false; throw new Error('clock'); } return CLOCK6; },
+        send: (ws, f) => { if (ws && ws.readyState === 1) ws.rx.push(JSON.parse(JSON.stringify(f))); },
+      });
+      const wa = up6(S, A), wc = up6(S, C);
+      const code = await create6(S, wa);
+      await join6(S, wc, code, 'Crater Two');
+      const wn = t6ws(null);
+      await join6(S, wn, code, 'Bunker');
+      clear6(wa, wc, wn);
+      const h = holdFail6(st);
+      const pb = S.handle(wa, { type: 'block', op: 'add', id: B });
+      const inside = await within6(h.inside);
+      let early = null;
+      if (inside) {
+        wn.userId = B;
+        const n = st.hold('profilesByIds');
+        clockThrows = clock === 'throwing';
+        h.release();
+        const held = await within6(n.inside);
+        await settle6();
+        early = { held, threw: clock === 'steady' || !clockThrows, answered: got6(wa, 'block').length, n: got6(wn, 'squad').slice() };
+        clockThrows = false;
+        n.release();
+      } else { h.restore(); h.release(); }
+      await pb;
+      const kinds = wa.rx.map((f) => f.type + (f.op ? ':' + f.op : ''));
+      await S.handle(wc, { type: 'squad', op: 'resume', id: 'x' });
+      if (!(inside && early.held && early.threw && early.answered === 0 && same6(early.n, [KICKED6]) && same6(got6(wn, 'squad'), [KICKED6]) && !st.blocks.size
+        && same6(got6(wa, 'block'), [LOST6]) && same6(ids6(ans6(wc, 'x')), [A, C]) && same6(kinds, ['squad:state', 'block:add'])))
+        bad.push({ clock, inside, early, n: wn.rx, x: ans6(wc, 'x'), kinds });
+    }
+    if (!bad.length) ok('(blk-u) with an addBlock that fails without committing, a row that became the blocked player by no door is still removed as a kick before the blocker is answered, and so when the clock throws at the note');
+    else fail('(blk-u) thrown addBlock, second teardown: ' + JSON.stringify(bad));
+  }
+
+  // ---- (blk-u vii) what the thrown set keeps: 16 s, and 4096 entries -------
+  // D-BLOCK-5 K. E's block on NN fails again and again; none of it names B.
+  // 4096 kept failures move no reader: B joins on one read. The 4097th finds
+  // the set full and is not kept, so until it would have expired every
+  // reader fails safe: B's join reads twice and is refused as a dead code,
+  // to the last millisecond, and joins from the next. A failure stamped
+  // earlier (the clock stepped back) does not shorten that. A failure
+  // written after 4096 others have expired drops them and is kept: B joins
+  // on one read. Written at their 16th second it finds them still kept, is
+  // not kept itself, and B is refused.
+  {
+    const flood = async (S, w, count) => { for (let i = 0; i < count; i++) await blk6(S, w, NN); };
+    const joinB = async (j, id) => {
+      j.st.calls.length = 0;
+      await j.S.handle(j.wb, { type: 'squad', op: 'join', code: j.code, id });
+      const a = ans6(j.wb, id);
+      const r = { reads: reads6(j.st), joined: !!(a && a.op === 'state' && a.code === j.code), dead: same6(a, DEAD6(id)) };
+      if (r.joined) await j.S.handle(j.wb, { type: 'squad', op: 'leave', id: id + 'l' });
+      return r;
+    };
+    const j = await joinWorld6();
+    const o = outs6(j.S);
+    j.st.boom.add('addBlock');
+    await flood(j.S, o.e, 4096);
+    const full = await joinB(j, 'j1');
+    const t0 = CLOCK6;
+    await blk6(j.S, o.e, NN);
+    const over = await joinB(j, 'j2');
+    CLOCK6 = t0 - 10000;
+    await blk6(j.S, o.e, NN);
+    CLOCK6 = t0 + 10000;
+    const back = await joinB(j, 'j3');
+    CLOCK6 = t0 + 16000;
+    const edge = await joinB(j, 'j4');
+    CLOCK6 = t0 + 16001;
+    const past = await joinB(j, 'j5');
+    j.st.boom.delete('addBlock');
+    const aged = async (ms) => {
+      const k = await joinWorld6();
+      const p = outs6(k.S);
+      k.st.boom.add('addBlock');
+      const t1 = CLOCK6;
+      await flood(k.S, p.e, 4096);
+      CLOCK6 = t1 + ms;
+      await blk6(k.S, p.e, NN);
+      k.st.boom.delete('addBlock');
+      return joinB(k, 'k');
+    };
+    const kept = await aged(16000), room = await aged(16001);
+    const IN = { reads: 1, joined: true, dead: false }, OUT = { reads: 2, joined: false, dead: true };
+    if (same6(full, IN) && same6(over, OUT) && same6(back, OUT) && same6(edge, OUT) && same6(past, IN) && same6(kept, OUT) && same6(room, IN))
+      ok('(blk-u) the thrown set keeps 4096 entries 16 s: one past that fails every reader safe until it would have expired, and expired entries make room');
+    else fail('(blk-u) thrown set retention: ' + JSON.stringify({ full, over, back, edge, past, kept, room }));
+  }
+
+  // ---- (sg-k ii) a REFUSED join lets nobody in -----------------------------
+  // D-BLOCK-5 L. After a failed door, a join that reads the account's
+  // blocks and is then refused (a dead code, a full squad) made no row and
+  // vetted none, so it must not mark the socket let in: the next
+  // same-account hello reads once and lets the row in, and Start seats it.
+  {
+    const bad = [];
+    for (const how of ['dead code', 'full squad']) {
+      const seated = [];
+      const st = t6store(ROWS6);
+      const S = mkSocial6(st, { seatSquad: (seats) => { seated.push(seats.length); return { ok: true, code: 'RM6G' }; } });
+      const wc = up6(S, C);
+      const T = await create6(S, wc);
+      await S.handle(wc, { type: 'squad', op: 'mode', mode: 'ffa' });
+      const wg = t6ws(null);
+      await join6(S, wg, T, 'Ghost');
+      await S.handle(wg, { type: 'squad', op: 'ready', ready: true, loadout: RACK5 });
+      st.boom.add('blockIdsOf'); hello6(S, wg, GU, true); await settle6(); st.boom.delete('blockIdsOf');
+      let into = '1111', refusal = DEAD6('no');
+      if (how === 'full squad') {
+        into = await create6(S, up6(S, D));
+        for (const id of [A, B, E]) await join6(S, up6(S, id), into, 'Member');
+        refusal = { type: 'squad', op: 'join', error: 'full', id: 'no' };
+      }
+      await S.handle(wg, { type: 'squad', op: 'join', code: into, name: 'Ghost', skin: 'olive', id: 'no' });
+      const no = ans6(wg, 'no');
+      st.calls.length = 0;
+      hello6(S, wg, GU, true); await settle6();
+      const reads = reads6(st);
+      await S.handle(wc, { type: 'squad', op: 'start', loadout: RACK5, id: 's' });
+      if (!(same6(no, refusal) && reads === 1 && same6(ans6(wc, 's'), { type: 'squad', op: 'start', ok: true, code: 'RM6G', id: 's' }) && same6(seated, [2])))
+        bad.push({ how, no, reads, s: ans6(wc, 's'), seated });
+    }
+    if (!bad.length) ok('(sg-k) after a failed door, a refused join (a dead code, a full squad) leaves the door open: the next same-account hello reads once, and Start seats the row');
+    else fail('(sg-k) refused join after a failed door: ' + JSON.stringify(bad));
   }
 
   // ---- (end of task 6 checks) ----
