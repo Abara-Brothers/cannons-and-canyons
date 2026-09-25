@@ -83,6 +83,8 @@ try {
 // https inbox on 127.0.0.1, which no browser ever hands out. Production never
 // sets it, and render.yaml does not and must not list it. Comma-separated; each
 // entry an exact host, or host:port for any port but 443. Read once, here.
+// Lowercasing and dropping empties only keep the list tidy: webPushHostAllowed()
+// lowercases each entry itself, and an empty entry can never match a host.
 const PUSH_EXTRA_HOSTS = (process.env.PUSH_EXTRA_HOSTS || '')
   .split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
 
@@ -618,15 +620,24 @@ async function apnsSend(token, title, body, url) {
 // stores so the lists self-clean (ISSUE-002's cleanup requirement).
 function pushNudge(room, seat) { pushNudgeAsync(room, seat).catch(() => {}); }
 // A web push refused by webPushHostAllowed() is logged once per distinct host per
-// process, by HOSTNAME only: the endpoint itself is a capability URL. Capped, so
-// a stream of invented hosts cannot turn the log into a flood.
+// process, by HOSTNAME only: the endpoint itself is a capability URL. Worded so
+// it never claims the host is not a push service: an endpoint at a real one can
+// still be refused for its port or spelling. Capped, so a stream of invented
+// hosts cannot turn the log into a flood, and the cap says once that it was
+// reached, so a reader knows the log is incomplete from then on.
 const refusedPushHosts = new Set();
+let refusedPushLogFull = false;
 function noteRefusedPushHost(endpoint) {
   let host = '(unparseable)';
   try { host = new URL(endpoint).hostname.slice(0, 253); } catch {}
-  if (refusedPushHosts.has(host) || refusedPushHosts.size >= 100) return;
+  if (refusedPushHosts.has(host)) return;
+  if (refusedPushHosts.size >= 100) {
+    if (!refusedPushLogFull) console.warn('[push] refusal log full at 100 hosts: no further refused host is logged until restart');
+    refusedPushLogFull = true;
+    return;
+  }
   refusedPushHosts.add(host);
-  console.warn(`[push] web push not sent to ${JSON.stringify(host)}: not a push service endpoint`);
+  console.warn(`[push] web push not sent: endpoint not allowed (host ${JSON.stringify(host)})`);
 }
 async function pushNudgeAsync(room, seat) {
   const pl = room.players[seat];

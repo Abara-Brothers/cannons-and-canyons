@@ -14,7 +14,8 @@
 // not trust the module's own reading at all: every string it accepts, from the
 // cases below and from a fuzz around every legitimate shape, is handed to
 // url.parse() exactly as web-push hands it, and the host THAT yields must be a
-// push service. Section 7 pins that web-push still parses that way.
+// push service. Section 7 pins that web-push still parses that way, and that
+// server.js still sends web push through it, and only after the gate.
 import url from 'node:url';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -46,6 +47,10 @@ const LEGIT = [
   `https://updates.push.services.mozilla.com/wpush/v2/${MOZ_TOKEN}`,   // Firefox
   `https://updates.push.services.mozilla.com/wpush/v1/${MOZ_TOKEN}`,
   `https://web.push.apple.com/${APPLE_TOKEN}`,                         // Safari, iOS home-screen apps
+  // Apple tells servers that restrict push endpoints to allow ANY subdomain of
+  // push.apple.com, not only today's host (WebKit, "Meet Web Push").
+  `https://web2.push.apple.com/${APPLE_TOKEN}`,
+  `https://a.b.push.apple.com/${APPLE_TOKEN}`,
   `https://wns2-by3p.notify.windows.com/w/?token=${WNS_TOKEN}`,        // Edge on Windows (WNS)
   `https://wns2-bl2p.notify.windows.com/w/?token=${WNS_TOKEN}`,
   `https://db5.notify.windows.com/w/?token=${WNS_TOKEN}`,
@@ -89,17 +94,24 @@ const TRICKS = [
   ['userinfo: user before an allowed host', 'https://user@fcm.googleapis.com/fcm/send/x'],
   ['userinfo: password only', 'https://:pass@fcm.googleapis.com/fcm/send/x'],
   ['userinfo: empty, bare @', 'https://@fcm.googleapis.com/fcm/send/x'],
-  // subdomain / suffix tricks: exact hosts only, WNS the one suffix
+  // subdomain / suffix tricks: exact hosts only, WNS and Apple the two suffixes
   ['subdomain trick: allowed host + attacker domain', 'https://fcm.googleapis.com.evil.com/fcm/send/x'],
   ['subdomain trick: apple', 'https://web.push.apple.com.evil.com/x'],
   ['subdomain trick: WNS suffix + attacker domain', 'https://wns2-by3p.notify.windows.com.evil.com/w/'],
   ['a subdomain of an exact host is not that host', 'https://x.fcm.googleapis.com/fcm/send/x'],
-  ['a subdomain of an exact host is not that host (apple)', 'https://x.web.push.apple.com/x'],
   ['a name that merely ENDS in an exact host', 'https://evil-fcm.googleapis.com/fcm/send/x'],
   ['a name that merely ends in the WNS suffix, no dot', 'https://evilnotify.windows.com/w/'],
   ['the bare WNS domain, no label before it', 'https://notify.windows.com/w/'],
   ['an empty label before the WNS suffix', 'https://.notify.windows.com/w/'],
   ['an empty label inside the WNS prefix', 'https://a..notify.windows.com/w/'],
+  ['a name that merely ends in the Apple suffix, no dot', 'https://evilpush.apple.com/x'],
+  ['the bare Apple push domain, no label before it', 'https://push.apple.com/x'],
+  ['an empty label before the Apple suffix', 'https://.push.apple.com/x'],
+  ['an empty label inside the Apple prefix', 'https://web..push.apple.com/x'],
+  ['a port on an Apple host', 'https://web.push.apple.com:444/x'],
+  ['trailing dot on Apple', 'https://web.push.apple.com./x'],
+  ['IDN homograph in the Apple suffix (Cyrillic a)', 'https://web.push.\u0430pple.com/x'],
+  ['differential: ; ends the host for url.parse() (Apple)', 'https://evil.com;.push.apple.com/x'],
   ['a parent domain of an exact host', 'https://googleapis.com/fcm/send/x'],
   // the allowed host only in the path, query or fragment
   ['fragment trick', 'https://evil.com/#fcm.googleapis.com'],
@@ -125,13 +137,13 @@ const TRICKS = [
   ['trailing dot', 'https://fcm.googleapis.com./fcm/send/x'],
   ['trailing dot on WNS', 'https://wns2-by3p.notify.windows.com./w/?token=x'],
   // IDN and every other spelling the WHATWG parser maps onto an allowed name
-  ['IDN homograph (Cyrillic a)', 'https://fcm.googleаpis.com/fcm/send/x'],
-  ['IDN homograph in the WNS suffix (Cyrillic o)', 'https://wns2-by3p.notify.windows.cоm/w/'],
-  ['fullwidth letter mapped to ASCII', 'https://ｆcm.googleapis.com/fcm/send/x'],
-  ['Kelvin sign mapped to k', 'https://K.notify.windows.com/w/'],
-  ['ideographic full stops mapped to dots', 'https://fcm。googleapis。com/fcm/send/x'],
-  ['a soft hyphen the parser deletes', 'https://fcm.google­apis.com/fcm/send/x'],
-  ['an accented label (punycoded by the parser)', 'https://évil.notify.windows.com/w/'],
+  ['IDN homograph (Cyrillic a)', 'https://fcm.google\u0430pis.com/fcm/send/x'],
+  ['IDN homograph in the WNS suffix (Cyrillic o)', 'https://wns2-by3p.notify.windows.c\u043Em/w/'],
+  ['fullwidth letter mapped to ASCII', 'https://\uFF46cm.googleapis.com/fcm/send/x'],
+  ['Kelvin sign mapped to k', 'https://\u212A.notify.windows.com/w/'],
+  ['ideographic full stops mapped to dots', 'https://fcm\u3002googleapis\u3002com/fcm/send/x'],
+  ['a soft hyphen the parser deletes', 'https://fcm.google\u00ADapis.com/fcm/send/x'],
+  ['an accented label (punycoded by the parser)', 'https://\u00E9vil.notify.windows.com/w/'],
   ['a percent-encoded dot', 'https://fcm%2Egoogleapis.com/fcm/send/x'],
   // IP literals
   ['IPv4 literal', 'https://127.0.0.1/fcm/send/x'],
@@ -211,13 +223,15 @@ const NON_STRINGS = [
   if (!bad) ok(`(3) extraHosts is exact-match only across ${cases.length} cases, and bypasses none of the other checks`);
 }
 
-// ---- 4. the built-in list is exactly five hosts and the WNS suffix -----------
+// ---- 4. the built-in list is exactly four hosts and two suffixes -------------
 // Any other Google, Apple, Mozilla or Microsoft name is refused: a push service
-// is a HOST, not a company.
+// is a HOST, not a company. The two suffixes are the zones Microsoft and Apple
+// themselves say a server must allow; their parents are refused.
 {
-  const near = ['https://www.googleapis.com/x', 'https://push.apple.com/x', 'https://api.push.apple.com/3/device/x',
-    'https://push.services.mozilla.com/x', 'https://services.mozilla.com/x', 'https://google.com/x',
-    'https://windows.com/x', 'https://notify.windows.net/x', 'https://wns.windows.com/x', 'https://jmt18.google.com/x'];
+  const near = ['https://www.googleapis.com/x', 'https://push.apple.com/x', 'https://apple.com/x',
+    'https://www.apple.com/x', 'https://push.services.mozilla.com/x', 'https://services.mozilla.com/x',
+    'https://google.com/x', 'https://windows.com/x', 'https://notify.windows.net/x', 'https://wns.windows.com/x',
+    'https://jmt18.google.com/x'];
   const leaked = near.filter((e) => webPushHostAllowed(e));
   if (leaked.length) fail(`(4) names outside the list were accepted: ${leaked.join(', ')}`);
   else ok(`(4) ${near.length} neighbouring Google/Apple/Mozilla/Microsoft names are refused — hosts, not companies`);
@@ -240,7 +254,8 @@ const NON_STRINGS = [
 // no credentials, and a host:port that is a push service (or the named extra).
 // A url.parse() that throws is safe (web-push rejects before any request).
 const SERVICE = new Set(['fcm.googleapis.com', 'android.googleapis.com', 'jmt17.google.com',
-  'updates.push.services.mozilla.com', 'web.push.apple.com']);
+  'updates.push.services.mozilla.com']);
+const SUFFIXES = ['.notify.windows.com', '.push.apple.com'];
 const legacyTargetOk = (s, extra) => {
   let p;
   try { p = url.parse(s); } catch { return true; }
@@ -251,7 +266,8 @@ const legacyTargetOk = (s, extra) => {
   if (extra.includes(hostPort)) return true;
   if (p.port && p.port !== '443') return false;
   if (SERVICE.has(h)) return true;
-  const pre = h.endsWith('.notify.windows.com') ? h.slice(0, -'.notify.windows.com'.length) : '';
+  const suffix = SUFFIXES.find((x) => h.endsWith(x));
+  const pre = suffix ? h.slice(0, -suffix.length) : '';
   return !!pre && pre.split('.').every((l) => /^[a-z0-9-]{1,63}$/.test(l)) && h.length <= 253;
 };
 {
@@ -259,7 +275,7 @@ const legacyTargetOk = (s, extra) => {
   // Every ASCII code point, plus the non-ASCII ones WHATWG folds onto ASCII.
   const chars = [];
   for (let c = 0; c < 128; c++) chars.push(String.fromCharCode(c));
-  chars.push('。', '．', 'ｆ', 'K', 'İ', '­', '​', ' ', 'а', 'é');
+  chars.push('\u3002', '\uFF0E', '\uFF46', '\u212A', '\u0130', '\u00AD', '\u200B', '\u2028', '\u0430', '\u00E9');
   const bases = [
     `https://fcm.googleapis.com/fcm/send/${FCM_TOKEN.slice(0, 12)}`,
     `https://web.push.apple.com/${APPLE_TOKEN.slice(0, 12)}`,
@@ -317,6 +333,48 @@ const legacyTargetOk = (s, extra) => {
     .test(src) && /requestDetails\.endpoint = subscription\.endpoint;/.test(src);
   if (pinned) ok('(7) web-push still connects to url.parse(subscription.endpoint) — section 6 models the real request');
   else fail(`(7) ${lib} no longer picks its host with url.parse(subscription.endpoint) — re-derive section 6 before trusting it`);
+  // And the model only matters while server.js sends web push THROUGH web-push:
+  // one call, straight after the gate. A rewritten or second sender would skip
+  // the gate and connect in a way section 6 never modelled, so it fails here
+  // until it is gated and section 6 is re-derived for what it connects with.
+  const server = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  const sends = server.split('webpush.sendNotification(').length - 1;
+  const gated = /if \(!webPushHostAllowed\(sub\.endpoint, PUSH_EXTRA_HOSTS\)\) \{ noteRefusedPushHost\(sub\.endpoint\); continue; \}\n[ \t]*webpush\.sendNotification\(sub, /
+    .test(server);
+  if (sends === 1 && gated) ok('(7) server.js sends web push through exactly one webpush.sendNotification(sub, ...), straight after the gate on sub.endpoint');
+  else fail(`(7) server.js has ${sends} webpush.sendNotification call(s)${gated ? '' : ', and none straight after webPushHostAllowed(sub.endpoint, ...)'} — every web push send must be gated, and section 6 re-derived for a new sender`);
+}
+
+// ---- 8. production never sets PUSH_EXTRA_HOSTS ---------------------------------
+// The escape hatch exists for push_persist's local inbox alone. A deploy config
+// that named it would widen the list on the live server.
+{
+  const named = [];
+  for (const f of ['render.yaml', 'Dockerfile']) {
+    let src = null;
+    try { src = readFileSync(new URL(`../${f}`, import.meta.url), 'utf8'); } catch {}
+    if (src === null && f === 'render.yaml') fail('(8) render.yaml not found — the deploy config this check guards has moved');
+    if (src && src.includes('PUSH_EXTRA_HOSTS')) named.push(f);
+  }
+  if (named.length) fail(`(8) ${named.join(' and ')} ${named.length > 1 ? 'name' : 'names'} PUSH_EXTRA_HOSTS — it is for the test suite's local inbox only`);
+  else ok('(8) no deploy config (render.yaml, Dockerfile) names PUSH_EXTRA_HOSTS');
+}
+
+// ---- 9. every test input in this file is written as an escape ------------------
+// The tricks and the fuzz alphabet rely on invisible and look-alike code points
+// (a soft hyphen, a zero-width space, a line separator, the Kelvin sign). Written
+// raw, an editor or formatter that normalises or strips them would change what
+// is tested, silently. So nothing outside printable ASCII may appear in this
+// file but the em dash of its prose.
+{
+  const raw = [];
+  readFileSync(new URL(import.meta.url), 'utf8').split('\n').forEach((line, i) => {
+    for (const ch of line) {
+      if (!/^[\t\x20-\x7e\u2014]$/u.test(ch)) raw.push(`line ${i + 1} U+${ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}`);
+    }
+  });
+  if (raw.length) fail(`(9) raw non-ASCII code points in this file, write them as \\u escapes: ${raw.slice(0, 8).join(', ')}`);
+  else ok('(9) every non-ASCII test input in this file is a \\u escape');
 }
 
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall push host checks passed');

@@ -31,17 +31,21 @@
 // Pure and synchronous, and it imports NOTHING: server/ never imports
 // public/room-engine.js or public/game-core.js.
 
-// Exact hostnames. No suffix matching: a push service is a HOST, not a company.
+// Exact hostnames: a push service is a HOST, not a company.
 const PUSH_SERVICE_HOSTS = new Set([
   'fcm.googleapis.com',                  // Chrome and most Chromium browsers (FCM)
   'android.googleapis.com',              // FCM's legacy GCM host
   'jmt17.google.com',                    // Google
   'updates.push.services.mozilla.com',   // Firefox
-  'web.push.apple.com',                  // Safari, and home-screen web apps on iOS
 ]);
-// Microsoft WNS (Edge on Windows) spreads across many hosts, such as
-// wns2-by3p.notify.windows.com — the one suffix, and it needs a label before it.
-const WNS_SUFFIX = '.notify.windows.com';
+// The two vendors whose push service is a whole zone of their own, not one host.
+// Each needs at least one label before it; no other suffix matching.
+//   Microsoft WNS (Edge on Windows) spreads across many hosts, such as
+//   wns2-by3p.notify.windows.com.
+//   Apple (Safari, and home-screen web apps on iOS) hands out web.push.apple.com
+//   today, and tells any server that restricts push endpoints to allow every
+//   subdomain of push.apple.com (WebKit, "Meet Web Push").
+const PUSH_SERVICE_SUFFIXES = ['.notify.windows.com', '.push.apple.com'];
 // The literal start of the endpoint: a scheme, '//', an authority of ASCII
 // letters, digits, dots and hyphens with an optional numeric port, then '/'.
 // No '@', '%', '\', ';', whitespace or anything non-ASCII can sit in it.
@@ -56,6 +60,9 @@ export function webPushHostAllowed(endpoint, extraHosts = []) {
   let u;
   try { u = new URL(endpoint); } catch { return false; }
   if (u.protocol !== 'https:') return false;
+  // Unreachable today: the literal-authority check below admits no '@'. Kept so
+  // that loosening that check can never let credentials through; give it test
+  // cases of its own if that check is ever relaxed.
   if (u.username !== '' || u.password !== '') return false;
   // The authority as written must BE the host as parsed (see the header).
   const lit = LITERAL_AUTHORITY.exec(endpoint);
@@ -66,5 +73,7 @@ export function webPushHostAllowed(endpoint, extraHosts = []) {
     && extraHosts.some((h) => typeof h === 'string' && h.toLowerCase() === u.host)) return true;
   if (u.port !== '') return false;
   if (PUSH_SERVICE_HOSTS.has(host)) return true;
-  return host.endsWith(WNS_SUFFIX) && host.length > WNS_SUFFIX.length;
+  // `host.length > s.length` is belt and braces: the empty-label rule above
+  // already refuses a bare '.notify.windows.com' or '.push.apple.com'.
+  return PUSH_SERVICE_SUFFIXES.some((s) => host.endsWith(s) && host.length > s.length);
 }

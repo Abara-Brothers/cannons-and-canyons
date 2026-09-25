@@ -205,6 +205,21 @@ const until = async (test, ms, what) => {
 (async () => {
   await new Promise((r) => mock.listen(MOCK_PORT, r));
   if (inbox) await new Promise((r) => inbox.listen(INBOX_PORT, r));
+  // POSITIVE CONTROL for the zero-request proof below: on the machine running
+  // this, 'localhost' must reach this very inbox. If it did not, "no request
+  // reached localhost" would hold whether or not the server ever tried.
+  if (inbox) {
+    const probe = await new Promise((res) => {
+      const r = https.request({ host: 'localhost', port: INBOX_PORT, path: '/probe', method: 'POST', rejectUnauthorized: false },
+        (resp) => { resp.resume(); resp.on('end', () => res(resp.statusCode)); });
+      r.setTimeout(3000, () => r.destroy(new Error('timeout')));
+      r.on('error', (e) => res(e.code || e.message));
+      r.end();
+    });
+    if (hits.pushPost.some((p) => p.path === '/probe' && p.host === `localhost:${INBOX_PORT}`)) {
+      step('positive control: "localhost" reaches the push inbox on this machine');
+    } else fail(`"localhost" does not reach the push inbox here (${probe}): the zero-request proof would be vacuous`);
+  }
   child = spawn(process.execPath, ['server.js'], {
     env: {
       ...process.env,
@@ -305,9 +320,10 @@ const until = async (test, ms, what) => {
   const g = hits.nudgeGet.find(isNudge);
   if (g.query.includes(`user_id=eq.${USER}`) && g.apikey === 'sk_test') step('nudge looks subscriptions up by account with the secret key');
   else fail(`nudge lookup wrong: ${JSON.stringify(g)}`);
-  const offList = () => hits.pushPost.filter((p) => p.host !== `127.0.0.1:${INBOX_PORT}`);
+  // Every inbox request not addressed to the admitted host, bar the test's own probe.
+  const offList = () => hits.pushPost.filter((p) => p.host !== `127.0.0.1:${INBOX_PORT}` && p.path !== '/probe');
   if (!inbox) {
-    step('SKIPPED delivery + cleanup legs: openssl unavailable for the TLS inbox');
+    step('SKIPPED delivery, cleanup and zero-request legs: openssl unavailable for the TLS inbox');
   } else {
     // The CONTROL: the admitted host still gets its push, so what follows is a
     // refusal of the other host and not a web push path that simply went dead.
@@ -317,32 +333,51 @@ const until = async (test, ms, what) => {
     if (!(await until(() => hits.del.length >= 1, 10000, 'dead-endpoint cleanup'))) return finish();
     if (hits.del[0].query.includes('endpoint=eq.')) step('a 404 endpoint was deleted from the store (self-cleaning)');
     else fail(`cleanup query wrong: ${hits.del[0].query}`);
+  }
 
-    // One nudge starts every send in a single loop, so any request to the other
-    // host is on the wire by now; the pause is margin, not the proof, and the
-    // same check runs again at the very end of this file.
-    await new Promise((r) => setTimeout(r, 1500));
+  // The refusal legs below need no inbox, so they run with or without openssl.
+  // One nudge refuses every endpoint in a single synchronous loop; wait for its
+  // last log line, then a margin for anything a refusal might wrongly set off.
+  // The zero-request check runs again at the very end of this file.
+  const HOST_LINE = /^\[push\] web push not sent: endpoint not allowed \(host "[^"]*"\)$/;
+  const CAP_LINE = /^\[push\] refusal log full at 100 hosts: /;
+  const pushLines = () => serverOut.split('\n').filter((l) => l.startsWith('[push]'));
+  const logWait0 = Date.now();
+  while (Date.now() - logWait0 < 10000 && !pushLines().some((l) => CAP_LINE.test(l))) {
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  await new Promise((r) => setTimeout(r, 1500));
+  if (inbox) {
     const stray = offList();
     if (stray.length === 0) {
       step('ZERO requests reached a non-push-service host — neither the in-memory sub nor a stored row whose key looked admitted');
     } else fail(`a nudge sent ${stray.length} request(s) to a host that is not a push service: ${JSON.stringify(stray.slice(0, 4))}`);
-    // Refused is not dead: nothing was asked, so nothing may be deleted.
-    const dels = hits.del.map((d) => decodeURIComponent(d.query));
-    const wrongDel = [LOCAL_SUB.endpoint, SMUGGLE_KEY, REFUSED_ROWS[0].endpoint].filter((e) => dels.some((q) => q.includes(e)));
-    if (wrongDel.length === 0) step('a refused endpoint is skipped, NOT deleted — adding its host later loses nobody');
-    else fail(`a refused endpoint was deleted from the store: ${wrongDel.join(', ')}`);
-    // One line per distinct refused host, capped, and never the endpoint itself
-    // (a push endpoint is a capability URL).
-    const pushLines = serverOut.split('\n').filter((l) => l.startsWith('[push]'));
-    const localLines = pushLines.filter((l) => l.includes('"localhost"'));
-    if (localLines.length === 1) step('the refused host is logged exactly once for its two endpoints');
-    else fail(`expected one log line for the refused host "localhost", got ${localLines.length}: ${JSON.stringify(localLines)}`);
-    if (pushLines.length === 100) step(`the refusal log is capped: ${1 + REFUSED_ROWS.length} distinct refused hosts, 100 lines`);
-    else fail(`expected the refusal log to stop at 100 lines for ${1 + REFUSED_ROWS.length} distinct hosts, got ${pushLines.length}`);
-    const leakedEndpoint = serverOut.split('\n').filter((l) => l.includes('/push-inbox/') || l.includes('/push/0'));
-    if (leakedEndpoint.length === 0) step('no log line carries an endpoint — hostnames only');
-    else fail(`the server logged a push endpoint: ${JSON.stringify(leakedEndpoint.slice(0, 2))}`);
   }
+  // Refused is not dead: nothing was asked, so nothing may be deleted.
+  const dels = hits.del.map((d) => decodeURIComponent(d.query));
+  const wrongDel = [LOCAL_SUB.endpoint, SMUGGLE_KEY, REFUSED_ROWS[0].endpoint].filter((e) => dels.some((q) => q.includes(e)));
+  if (wrongDel.length === 0) step('a refused endpoint is skipped, NOT deleted — adding its host later loses nobody');
+  else fail(`a refused endpoint was deleted from the store: ${wrongDel.join(', ')}`);
+  // One line per distinct refused host, worded so it never claims the host is
+  // not a push service (an endpoint can be refused for its port or spelling at
+  // a real service's host), capped at 100, then ONE line saying the log is full
+  // so a reader knows it is incomplete. Never the endpoint itself (a push
+  // endpoint is a capability URL).
+  const lines = pushLines();
+  const hostLines = lines.filter((l) => HOST_LINE.test(l));
+  const capLines = lines.filter((l) => CAP_LINE.test(l));
+  const otherLines = lines.filter((l) => !HOST_LINE.test(l) && !CAP_LINE.test(l));
+  if (otherLines.length === 0) step('every refusal line reads "endpoint not allowed (host ...)", or says the log is full');
+  else fail(`a [push] line is worded otherwise: ${JSON.stringify(otherLines.slice(0, 2))}`);
+  const localLines = hostLines.filter((l) => l.includes('(host "localhost")'));
+  if (localLines.length === 1) step('the refused host is logged exactly once for its two endpoints');
+  else fail(`expected one log line for the refused host "localhost", got ${localLines.length}: ${JSON.stringify(localLines)}`);
+  if (hostLines.length === 100 && capLines.length === 1 && lines.length === 101 && CAP_LINE.test(lines[100])) {
+    step(`the refusal log is capped: ${1 + REFUSED_ROWS.length} distinct refused hosts, 100 host lines, then one "log full" line`);
+  } else fail(`expected 100 host lines then one "log full" line for ${1 + REFUSED_ROWS.length} distinct hosts, got ${hostLines.length} host line(s) and ${capLines.length} "log full" line(s) of ${lines.length}`);
+  const leakedEndpoint = serverOut.split('\n').filter((l) => l.includes('/push-inbox/') || l.includes('/push/0'));
+  if (leakedEndpoint.length === 0) step('no log line carries an endpoint — hostnames only');
+  else fail(`the server logged a push endpoint: ${JSON.stringify(leakedEndpoint.slice(0, 2))}`);
 
   // ---- Health readiness (8.58) ----------------------------------------------
   // Production silently dropped every push subscription for nine batches
