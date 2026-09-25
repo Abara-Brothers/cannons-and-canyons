@@ -35,6 +35,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import net from 'net';
+import vm from 'node:vm';
 import { spawn, execFileSync } from 'child_process';
 import WebSocket from 'ws';
 
@@ -644,6 +645,37 @@ async function boot(port, env) {
   await settle(1000);
   if (none.m.ok === true && none.m.delivered === 'none' && noSends(q)) step("a host with no push transport answers 'none' and sends nothing");
   else fail(`the bare host's invite was wrong: reply=${none.raw} ${moved(q)}`);
+
+  // ---- Part 8: the web path consumes the tag --------------------------------
+  // APNs and FCM take the collapse key as a wire field; the browser does not.
+  // On web the key is chosen by the SERVICE WORKER when it shows the
+  // notification, so sending `tag` is only half of R13 — sw.js has to read it.
+  // No suite executes a service worker, so this runs the real file's push
+  // listener against a stub ServiceWorkerGlobalScope and reads what it shows.
+  {
+    const shown = [];
+    const handlers = {};
+    const swSelf = {
+      addEventListener: (k, fn) => { handlers[k] = fn; },
+      registration: { showNotification: (title, opts) => { shown.push({ title, opts }); return Promise.resolve(); } },
+    };
+    vm.runInContext(fs.readFileSync(new URL('../public/sw.js', import.meta.url), 'utf8'),
+      vm.createContext({ self: swSelf, caches: {}, clients: {}, fetch: () => {}, Response: {}, console }),
+      { filename: 'sw.js' });
+    if (typeof handlers.push !== 'function') { fail('public/sw.js registered no push listener'); return finish(); }
+    const fire = (data) => { shown.length = 0; handlers.push({ data: { json: () => data }, waitUntil: (p) => p }); return shown[0]; };
+
+    const invite = fire({ title: 'Cannons & Canyons — squad invite', body: COPY, url: `/?squad=${CODE}`, tag: KEY });
+    if (invite && invite.opts.tag === KEY && invite.opts.data.url === `/?squad=${CODE}`) {
+      step('the service worker shows a squad invite under its OWN tag, so it cannot replace a turn nudge');
+    } else fail(`sw.js ignored data.tag: showed tag=${JSON.stringify(invite && invite.opts.tag)} for an invite tagged ${KEY}`);
+
+    // A payload with no tag — an older server, or a cached worker meeting a new
+    // one — must still collapse turn nudges the way it always has.
+    const legacy = fire({ title: 'Cannons & Canyons — your move', body: 'Your turn is up.', url: '/?room=ABCD' });
+    if (legacy && legacy.opts.tag === 'cc-turn') step('a payload with no tag still collapses under cc-turn');
+    else fail(`sw.js lost the cc-turn default: ${JSON.stringify(legacy && legacy.opts.tag)}`);
+  }
 
   finish();
 })().catch((e) => { fail('threw — ' + (e && e.message ? e.message : String(e))); finish(); });

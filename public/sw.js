@@ -140,7 +140,12 @@ self.addEventListener('push', (e) => {
     body: data.body || 'Your turn is up.',
     icon: '/icons/icon-180.png',
     badge: '/icons/icon-180.png',
-    tag: 'cc-turn',                       // a newer nudge replaces the old one
+    // The COLLAPSE KEY, chosen by the sender. A turn nudge sends 'cc-turn' and a
+    // newer one replaces the old, which is what we want. A squad invite sends
+    // 'cc-squad-<code>' and must sit BESIDE an unread turn alert rather than
+    // wipe it (R13). Absent — an older server, or a payload from before this
+    // line — the historical behaviour is unchanged.
+    tag: data.tag || 'cc-turn',
     data: { url: data.url || '/' },
   }));
 });
