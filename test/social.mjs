@@ -1015,7 +1015,7 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     else fail('(c) blocked-by-me: ' + JSON.stringify(last(wa, 'friend')));
     await st.addBlock(D, A);
     await S.handle(wa, { type: 'friend', op: 'add', code: 'DJK567' });
-    if ((last(wa, 'friend') || {}).error === 'blocked') ok('(c) add: someone who blocked YOU is blocked too');
+    if ((last(wa, 'friend') || {}).error === 'no_such_code') ok('(c) add: someone who blocked YOU is refused as an unknown code is, no_such_code (D-BLOCK-4)');
     else fail('(c) blocked-me: ' + JSON.stringify(last(wa, 'friend')));
     if (st.friends.size === 1) ok('(c) add: not one refusal wrote a row');
     else fail('(c) rows after refusals: ' + JSON.stringify([...st.friends]));
@@ -1174,8 +1174,8 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     await st2.addRequest(B, A);
     await st2.addBlock(B, A);                       // B blocked A afterwards
     await S2.handle(wa2, { type: 'friend', op: 'accept', from: B });
-    if ((last(wa2, 'friend') || {}).error === 'blocked' && st2.friends.size === 0)
-      ok('(e2) accept: a pending request from someone who has since blocked YOU is refused too');
+    if ((last(wa2, 'friend') || {}).error === 'no_such_request' && st2.friends.size === 0)
+      ok('(e2) accept: a pending request from someone who has since blocked YOU is refused too, as a request that is gone (D-BLOCK-4)');
     else fail('(e2) accept while blocked: ' + JSON.stringify(last(wa2, 'friend')) + ' rows ' + JSON.stringify([...st2.friends]));
     await S2.handle(wa2, { type: 'friend', op: 'decline', from: B });
     if ((last(wa2, 'friend') || {}).ok === true && st2.requests.size === 0)
@@ -1193,8 +1193,8 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     else fail('(e2) request to blocked: ' + JSON.stringify(last(wa3, 'friend')) + ' rows ' + JSON.stringify([...st3.requests]));
     await st3.addBlock(D, A);
     await S3.handle(wa3, { type: 'friend', op: 'request', to: D });
-    if ((last(wa3, 'friend') || {}).error === 'blocked' && st3.requests.size === 0)
-      ok('(e2) request: someone who blocked YOU cannot be asked either');
+    if ((last(wa3, 'friend') || {}).error === 'no_such_user' && st3.requests.size === 0)
+      ok('(e2) request: someone who blocked YOU cannot be asked either, and is refused as no_such_user (D-BLOCK-4)');
     else fail('(e2) request to blocker: ' + JSON.stringify(last(wa3, 'friend')) + ' rows ' + JSON.stringify([...st3.requests]));
   }
 
@@ -1740,11 +1740,11 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     const res = (f) => (f && Array.isArray(f.results) ? f.results : null);
     const errs = [];
     await S.handle(wb, { type: 'friend', op: 'add', code: 'ABC234' });
-    if ((last(wb, 'friend') || {}).error !== 'blocked') errs.push('add by code, blocked -> blocker: ' + JSON.stringify(last(wb, 'friend')));
+    if ((last(wb, 'friend') || {}).error !== 'no_such_code') errs.push('add by code, blocked -> blocker: ' + JSON.stringify(last(wb, 'friend')));
     await S.handle(wa, { type: 'friend', op: 'add', code: 'BDF345' });
     if ((last(wa, 'friend') || {}).error !== 'blocked') errs.push('add by code, blocker -> blocked: ' + JSON.stringify(last(wa, 'friend')));
     await S.handle(wb, { type: 'friend', op: 'request', to: A });
-    if ((last(wb, 'friend') || {}).error !== 'blocked') errs.push('request, blocked -> blocker: ' + JSON.stringify(last(wb, 'friend')));
+    if ((last(wb, 'friend') || {}).error !== 'no_such_user') errs.push('request, blocked -> blocker: ' + JSON.stringify(last(wb, 'friend')));
     await S.handle(wa, { type: 'friend', op: 'request', to: B });
     if ((last(wa, 'friend') || {}).error !== 'blocked') errs.push('request, blocker -> blocked: ' + JSON.stringify(last(wa, 'friend')));
     await S.handle(wb, { type: 'friend', op: 'search', q: 'Anvil Six' });
@@ -2569,6 +2569,52 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     if (st.reports.length === 3 && st.reports[2].callsign === NO_CALLSIGN && l3.length === 1 && !/PUT THIS|OR THIS/.test(l3[0]))
       ok('(t6m) a reporter cannot smuggle a name into a row about someone else — the frame carries an id and nothing else is read');
     else fail('(t6m) a reporter influenced the row: ' + JSON.stringify(st.reports) + ' ' + JSON.stringify(l3));
+  }
+
+  // ---- (db4) ONLY YOUR OWN BLOCK IS NAMED (D-BLOCK-4) -----------------------
+  // Add, request and accept refuse across a block both ways. The caller's own
+  // block answers `blocked`: it tells them what they did. A block naming the
+  // caller answers the op's own not-found, byte for byte a genuine miss, so
+  // no answer tells a player they were blocked. Blocked both ways is the
+  // caller's own block, or `blocked` would say whether they were blocked back.
+  {
+    const OPS = {
+      add: { frame: { type: 'friend', op: 'add', code: 'BDF345' }, miss: 'no_such_code', genuine: { type: 'friend', op: 'add', code: 'ZZZ999' } },
+      request: { frame: { type: 'friend', op: 'request', to: B }, miss: 'no_such_user', genuine: { type: 'friend', op: 'request', to: uid(99) } },
+      accept: { frame: { type: 'friend', op: 'accept', from: B }, miss: 'no_such_request', genuine: { type: 'friend', op: 'accept', from: B } },
+    };
+    const WRITES = new Set(['addFriendship', 'removeFriendship', 'addRequest', 'deleteRequest', 'addBlock', 'removeBlock']);
+    // A asks about B. For accept, B's request predates the block. `genuine`
+    // sends the op's real miss in a world with no block and no request.
+    const world = async (op, blocks, genuine = false) => {
+      const st = memStore(ROWS);
+      if (op === 'accept' && !genuine) await st.addRequest(B, A);
+      for (const [x, y] of blocks) await st.addBlock(x, y);
+      const S = mkSocial(st);
+      const wa = mkws(A), wb = mkws(B);
+      S.onAuth(wa); S.onAuth(wb);
+      wa.rx.length = 0; wb.rx.length = 0; st.calls.length = 0;
+      await S.handle(wa, { ...(genuine ? OPS[op].genuine : OPS[op].frame), id: 'q' });
+      return { a: JSON.stringify(wa.rx), b: JSON.stringify(wb.rx), writes: st.calls.filter((c) => WRITES.has(c)), friends: st.friends.size, requests: [...st.requests] };
+    };
+    const only = (op, error) => JSON.stringify([{ type: 'friend', op, error, id: 'q' }]);
+    const untouched = (op, w) => w.b === '[]' && !w.writes.length && w.friends === 0
+      && JSON.stringify(w.requests) === JSON.stringify(op === 'accept' ? [B + '>' + A] : []);
+    for (const op of Object.keys(OPS)) {
+      const { miss } = OPS[op];
+      const mine = await world(op, [[A, B]]);
+      if (mine.a === only(op, 'blocked') && untouched(op, mine)) ok(`(db4) ${op}: your own block is named — blocked, nothing written, and they are sent nothing`);
+      else fail(`(db4) ${op} mine: ` + JSON.stringify(mine));
+      const theirs = await world(op, [[B, A]]);
+      if (theirs.a === only(op, miss) && untouched(op, theirs)) ok(`(db4) ${op}: blocked BY them answers ${miss}, nothing written, and they are sent nothing`);
+      else fail(`(db4) ${op} theirs: ` + JSON.stringify(theirs));
+      const real = await world(op, [], true);
+      if (real.a === theirs.a && real.b === theirs.b && real.a === only(op, miss)) ok(`(db4) ${op}: that answer is byte for byte a genuine ${miss}`);
+      else fail(`(db4) ${op} twin: ` + JSON.stringify({ blockedBy: theirs.a, genuine: real.a, b: [theirs.b, real.b] }));
+      const both = await world(op, [[A, B], [B, A]]);
+      if (both.a === only(op, 'blocked') && untouched(op, both)) ok(`(db4) ${op}: blocked both ways is your own block — blocked, whether or not they blocked you back`);
+      else fail(`(db4) ${op} both: ` + JSON.stringify(both));
+    }
   }
 }
 

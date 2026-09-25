@@ -1848,11 +1848,13 @@ export function createSocial({
         }
       }
     }
-    // ws.authGen IS THE CANCEL (server.js's auth sink bumps it on a sign-out
-    // and on every hello). The snapshot waits on a profile read; a sign-out,
-    // or a hello for another account, landing inside it means this socket is
-    // no longer the account whose squad this is, and its client has reset.
-    const gen = ws.authGen;
+    // THE CANCEL IS THE IDENTITY, NOT ws.authGen (join's and invite's rule,
+    // T6-R1-3). The snapshot waits on a profile read; a sign-out, or a hello
+    // verified as another account, landing inside it means this socket is no
+    // longer the one whose squad this is, and its client has reset. A hello
+    // that leaves it the same account (a rotated token, or one that never
+    // verifies) still bumps the generation, and must still be answered.
+    const who = wireId(ws.userId);
     const frame = await squadFrame(sq, ws);
     const live = squads.has(sq.code);
     // A MEMBER WHO WAS DROPPED IS BACK, and the dot beside them has to come
@@ -1861,7 +1863,7 @@ export function createSocial({
     // snapshot: one name read for the whole resume. Everyone else first; the
     // answer, the one send here that can throw, last (pushSquad's order).
     if (back && live) for (const x of sq.members) if (x.ws && x.ws !== ws) safeSend(x.ws, { ...frame, you: youIn(sq, x.ws) });
-    if (ws.authGen !== gen) return;
+    if (wireId(ws.userId) !== who) return;
     // NO ROW OF THIS SQUAD IS THIS SOCKET'S ANY MORE — kicked, or the squad
     // ended, while the names were read. The roster it has just been removed
     // from is not its to see: gone.
@@ -2198,9 +2200,13 @@ export function createSocial({
       friend: ids.includes(other),
       incoming: reqs.incoming.includes(other),
       outgoing: reqs.outgoing.includes(other),
-      // EITHER WAY. Blocking is not a mute: the player who blocked and the
-      // player who was blocked are equally invisible to each other.
-      blocked: blocks.blocked.includes(other) || blocks.blockedBy.includes(other),
+      // BY DIRECTION, and every op refuses both: blocking is not a mute.
+      // `blocked` is the caller's own block and is named to them, checked
+      // first so it says nothing about being blocked back. A block naming
+      // the caller is answered as that op's own not-found, so no answer
+      // tells a player they were blocked (D-BLOCK-4).
+      blocked: blocks.blocked.includes(other),
+      blockedBy: blocks.blockedBy.includes(other),
     };
   }
 
@@ -2257,6 +2263,7 @@ export function createSocial({
     if (them.id === ws.userId) return friendReply(ws, msg, 'add', { error: 'self' });
     const rel = await relationTo(ws.userId, them.id);
     if (rel.blocked) return friendReply(ws, msg, 'add', { error: 'blocked' });
+    if (rel.blockedBy) return friendReply(ws, msg, 'add', { error: 'no_such_code' });
     if (rel.friend) return friendReply(ws, msg, 'add', { error: 'already' });
     // D2: a code or a link is mutual ON ENTRY — no request, straight to friends.
     // Whoever holds the code was given it, so the consent already happened.
@@ -2297,6 +2304,7 @@ export function createSocial({
     if (!them) return friendReply(ws, msg, 'request', { error: 'no_such_user' });
     const rel = await relationTo(ws.userId, to);
     if (rel.blocked) return friendReply(ws, msg, 'request', { error: 'blocked' });
+    if (rel.blockedBy) return friendReply(ws, msg, 'request', { error: 'no_such_user' });
     if (rel.friend) return friendReply(ws, msg, 'request', { error: 'already' });
     if (rel.incoming) {
       // THEY ASKED FIRST, SO THIS REQUEST IS THE ACCEPTANCE (design 4.2, row 4).
@@ -2322,9 +2330,11 @@ export function createSocial({
     // A BLOCK BEATS A REQUEST THAT PREDATES IT. accept is the only op that acts
     // on a row already sitting in the panel, so without this check a request
     // sent before a block is still a way in — for a player you blocked, and for
-    // a player who blocked you. It is checked BEFORE the request exists, so a
-    // blocked player cannot use the two answers to probe for one.
+    // a player who blocked you. It is checked BEFORE the request exists, so
+    // neither answer says whether there is one, and blocked by them it is
+    // the answer a missing request gets.
     if (rel.blocked) return friendReply(ws, msg, 'accept', { error: 'blocked' });
+    if (rel.blockedBy) return friendReply(ws, msg, 'accept', { error: 'no_such_request' });
     if (!rel.incoming) return friendReply(ws, msg, 'accept', { error: 'no_such_request' });
     await store.addFriendship(ws.userId, from);
     await store.deleteRequest(from, ws.userId);

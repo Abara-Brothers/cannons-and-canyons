@@ -7161,6 +7161,50 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     if (!bad.length) ok('(inv-q) a hello that leaves the socket the same account does not cancel an invite whose reads are out: answered once and delivered; a sign-out or another account cancels it');
     else fail('(inv-q) invite and a hello during its reads: ' + JSON.stringify(bad));
   }
+  // ---- (rs-a) and resume, Task 5's, by the same rule (D-BLOCK-4) -----------
+  // C resumes while the roster's name read is out; the same four events land
+  // inside it.
+  {
+    const bad = [];
+    for (const how of Object.keys(BUMPS6)) {
+      const j = await joinWorld6();
+      const gate = j.st.hold('profilesByIds');
+      const pending = j.S.handle(j.wc, { type: 'squad', op: 'resume', code: j.code, id: 'r' });
+      const inside = await within6(gate.inside);
+      if (inside) BUMPS6[how](j.S, j.wc, C);
+      gate.release(); await pending;
+      const answers = j.wc.rx.filter((f) => f.id === 'r');
+      const good = KEEPS6.has(how)
+        ? answers.length === 1 && answers[0].op === 'state' && answers[0].code === j.code && answers[0].you === 1 && same6(ids6(answers[0]), [A, C])
+        : answers.length === 0;
+      if (!(inside && good)) bad.push({ how, inside, answers });
+    }
+    if (!bad.length) ok('(rs-a) a hello that leaves the socket the same account does not cancel a resume whose name read is out: answered once, with the squad; a sign-out or another account cancels it');
+    else fail('(rs-a) resume and a hello during its read: ' + JSON.stringify(bad));
+  }
+  {
+    // A socket with no account: a junk hello leaves it nobody, still answered;
+    // signing in makes it somebody, and cancels.
+    const bad = [];
+    for (const how of ['junk token', 'signs in']) {
+      const j = await joinWorld6();
+      const g = t6ws(null);
+      await join6(j.S, g, j.code, 'Guest');
+      clear6(g);
+      const gate = j.st.hold('profilesByIds');
+      const pending = j.S.handle(g, { type: 'squad', op: 'resume', code: j.code, id: 'r' });
+      const inside = await within6(gate.inside);
+      if (inside) { if (how === 'junk token') BUMPS6[how](j.S, g); else hello6(j.S, g, E); }
+      gate.release(); await pending;
+      const answers = g.rx.filter((f) => f.id === 'r');
+      const good = how === 'junk token'
+        ? answers.length === 1 && answers[0].op === 'state' && answers[0].you === 2 && same6(ids6(answers[0]), [A, C, null])
+        : answers.length === 0;
+      if (!(inside && good)) bad.push({ how, inside, answers });
+    }
+    if (!bad.length) ok('(rs-a) a guest\'s resume: a hello that never verifies is answered; one that signs the socket in cancels it');
+    else fail('(rs-a) guest resume and a hello during its read: ' + JSON.stringify(bad));
+  }
 
   // ---- (lg-a) the log merges a pair the reader BLOCKED, too ----------------
   // T6-R1-4. The reader's own other device blocks a member while the
