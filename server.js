@@ -658,21 +658,30 @@ async function apnsSend(token, title, body, url, tag) {
   throw new Error(`apns send ${r.status} ${r.body.slice(0, 120)}`);
 }
 
-// Nudge every device the player has, not just the one that subscribed in this
-// room's lifetime: the in-memory sub (if any) plus every persisted sub for
-// the account. A push endpoint answering 404/410 is dead — drop it from both
-// stores so the lists self-clean (ISSUE-002's cleanup requirement).
-function pushNudge(room, seat) { pushNudgeAsync(room, seat).catch(() => {}); }
-async function pushNudgeAsync(room, seat) {
-  const pl = room.players[seat];
+// ---- one transport, two callers ---------------------------------------------
+// Every device on one account, one payload, one collapse key. Extracted from
+// pushNudgeAsync when squad invites became a second sender: the target
+// gathering, the per-platform fan-out and the dead-endpoint DELETE are generic,
+// and a second copy of them would mean a second copy of the narrow APNS_DEAD
+// contract to keep in step.
+//
+// THREE THINGS ARE NOT GENERIC, so they are parameters rather than assumptions:
+//   * `tag` — the collapse key (R13). See fcmSend / apnsSend.
+//   * `seed` — an in-memory subscription. Only the nudge has one: it hangs off
+//     the ROOM SEAT, not the account, and it is the copy that still works when
+//     the persist did not land.
+//   * `onDrop` — the caller's own cleanup for a dead endpoint. The Supabase
+//     DELETE below is generic; clearing `pl.pushSub` belongs to the seat and to
+//     nothing else, and dropping it would silently re-send to a dead endpoint
+//     on every later nudge in that room.
+// Never throws, and never awaits a send: a push must never delay or fail a
+// game action.
+async function pushToUser(uid, { title, body, url, tag }, { seed = null, onDrop = null } = {}) {
   // Either transport is enough to be worth trying: a web-only server (no FCM
   // key) still nudges browsers, and an FCM-only one still nudges phones.
-  if ((!webpush && !fcm && !apns) || !pl || pl.bot || pl.connected) return;
+  if (!webpush && !fcm && !apns) return;
   const targets = new Map();   // endpoint -> { sub, platform }
-  if (pl.pushSub && pl.pushSub.endpoint) targets.set(pl.pushSub.endpoint, { sub: pl.pushSub, platform: 'web' });
-  // The live socket first; the identity the engine carried over at disconnect
-  // second — the disconnect case is precisely when a nudge matters.
-  const uid = (pl.ws && pl.ws.userId) || pl.userId;
+  if (seed && seed.endpoint) targets.set(seed.endpoint, { sub: seed, platform: 'web' });
   if (uid && SB_SECRET) {
     try {
       const rows = await sbAdmin('GET',
@@ -683,14 +692,11 @@ async function pushNudgeAsync(room, seat) {
     } catch { /* the in-memory sub still gets its chance */ }
   }
   if (!targets.size) return;
-  const opp = room.players.find((p, i) => p && i !== seat && !p.bot);
-  const title = 'Cannons & Canyons — your move';
-  const body = opp ? `${opp.name} has taken their shot. Your turn.` : 'Your turn is up.';
-  const url = `/?room=${room.code}`;
-  const payload = JSON.stringify({ title, body, url });
+  const payload = JSON.stringify({ title, body, url, tag });
 
   const drop = (endpoint) => {
-    if (pl.pushSub && pl.pushSub.endpoint === endpoint) pl.pushSub = null;
+    // The caller's half FIRST: a throw out of it must not cost the DELETE.
+    if (onDrop) { try { onDrop(endpoint); } catch { /* the store half still runs */ } }
     if (SB_SECRET) {
       sbAdmin('DELETE', `/push_subscriptions?endpoint=eq.${encodeURIComponent(endpoint)}`).catch(() => {});
     }
@@ -706,17 +712,40 @@ async function pushNudgeAsync(room, seat) {
       // The endpoint IS the raw APNs device token, and it goes straight to
       // Apple. It is NOT an FCM registration token and FCM would reject it.
       if (!apns) continue;
-      apnsSend(endpoint, title, body, url, 'cc-turn')
+      apnsSend(endpoint, title, body, url, tag)
         .then((r) => { if (r === 'gone') drop(endpoint); })
-        .catch(() => { /* transient: the next turn tries again */ });
+        .catch(() => { /* transient: the next send tries again */ });
     } else {
       // android: the endpoint IS the FCM registration token.
       if (!fcm) continue;
-      fcmSend(endpoint, title, body, url, 'cc-turn')
+      fcmSend(endpoint, title, body, url, tag)
         .then((r) => { if (r === 'gone') drop(endpoint); })
-        .catch(() => { /* transient: the next turn tries again */ });
+        .catch(() => { /* transient: the next send tries again */ });
     }
   }
+}
+
+// Nudge every device the player has, not just the one that subscribed in this
+// room's lifetime: the in-memory sub (if any) plus every persisted sub for
+// the account. A push endpoint answering 404/410 is dead — drop it from both
+// stores so the lists self-clean (ISSUE-002's cleanup requirement).
+function pushNudge(room, seat) { pushNudgeAsync(room, seat).catch(() => {}); }
+async function pushNudgeAsync(room, seat) {
+  const pl = room.players[seat];
+  if (!pl || pl.bot || pl.connected) return;
+  const opp = room.players.find((p, i) => p && i !== seat && !p.bot);
+  // The live socket first; the identity the engine carried over at disconnect
+  // second — the disconnect case is precisely when a nudge matters.
+  const uid = (pl.ws && pl.ws.userId) || pl.userId;
+  await pushToUser(uid, {
+    title: 'Cannons & Canyons — your move',
+    body: opp ? `${opp.name} has taken their shot. Your turn.` : 'Your turn is up.',
+    url: `/?room=${room.code}`,
+    tag: 'cc-turn',
+  }, {
+    seed: pl.pushSub,
+    onDrop: (endpoint) => { if (pl.pushSub && pl.pushSub.endpoint === endpoint) pl.pushSub = null; },
+  });
 }
 
 // The one capability the engine cannot have: sending a push needs the VAPID keys
