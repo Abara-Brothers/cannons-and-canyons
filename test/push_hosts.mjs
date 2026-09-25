@@ -406,7 +406,7 @@ const requestTargetOk = (s, extra) => {
     fail(`(7) server.js's web push path moved: ${builds} generateRequestDetails, ${libSends} sendNotification, ${requests} https.request/get, `
       + `gate on the requested url ${gated ? 'present' : 'MISSING'}, webPushGate ${gate ? 'intact' : 'CHANGED'} — every web push request must be gated on the URL it requests, and section 6 re-derived for a new sender`);
   }
-  // pushToUser gates sub.endpoint when it COUNTS a device (push_invite Part 6d
+  // pushToUser gates sub.endpoint when it COUNTS a device (push_invite Part 7b
   // proves it by behaviour). That is the URL requested only while web-push's
   // builder hands back the subscription's own endpoint.
   const require = createRequire(import.meta.url);

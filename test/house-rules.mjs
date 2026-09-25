@@ -16,10 +16,12 @@ const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8');
 // public/privacy.html and public/delete-account.html are here because they are
 // player-visible pages, they are in the service-worker shell, and they carry the
 // Guideline 1.2 copy — every reason the no-emoji rule exists applies to them,
-// and they were simply never added (audit 2026-09-21, M14b).
+// and they were simply never added (audit 2026-09-21, M14b). public/sw.js for
+// the same reason: its fallback title and body are what a notification shows
+// when a push carries none, on the player's lock screen (Task 7 review).
 const UI_FILES = ['public/index.html', 'public/app.js', 'public/bay.js', 'public/styles.css', 'server.js',
   'public/game-core.js', 'public/room-engine.js', 'public/cloud.js', 'public/errors.js',
-  'public/privacy.html', 'public/delete-account.html'];
+  'public/privacy.html', 'public/delete-account.html', 'public/sw.js'];
 
 // ---- 1. NO EMOJI ANYWHERE IN THE UI -----------------------------------------
 // Every glyph is hand-drawn inline SVG or canvas art. Both forms must be

@@ -26,10 +26,11 @@
 // outlives the seam's bound sends nothing once it lands.
 //
 // And the sender's own bounds, because an invite needs no match: a web push
-// goes only to a push service's host, judged on the URL it requests; the read
-// takes the ten newest devices; a web send gives up after one absolute deadline
-// and never reads a response body; and nothing is sent before the caller has
-// its answer.
+// goes only to a push service's host, judged on the URL it requests; a push
+// goes to the ten newest devices this host can use, read from a bounded window;
+// a web send gives up after one absolute deadline, never reads a response body,
+// and deletes only on 404 or 410; nothing is sent before the caller has its
+// answer; and no server dies of any of it.
 //
 // Self-hosted: spawns its OWN game servers with Supabase, both Apple hosts and
 // FCM pointed at local mocks. Nothing here can reach production, Apple or Google.
@@ -75,6 +76,8 @@ const FRANK = '66666666-6666-4666-8666-666666666666';   // Bob's friend, an Andr
 const GREG  = '77777777-7777-4777-8777-777777777777';   // Bob's friend, fifteen devices, three hostile browsers
 const HANK  = '88888888-8888-4888-8888-888888888888';   // Bob's friend, two iPhones Apple answers awkwardly
 const IVY   = '99999999-9999-4999-8999-999999999999';   // Bob's friend, two browsers at a host that is no push service
+const JADE  = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';   // Bob's friend, three browsers whose push services refuse
+const KAI   = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';   // Bob's friend, one browser behind 24 newer rows no host can use
 const TOKENS = { 'tok-alice': ALICE, 'tok-bob': BOB, 'tok-carol': CAROL };
 // displayName() proves a name by re-deriving callsign_key from callsign, so
 // these pairs are what the server is entitled to believe. `state.bobKey` is
@@ -90,8 +93,10 @@ const PROFILES = {
   [GREG]: profile(GREG, 'Flint Osprey', 'GGGG88'),
   [HANK]: profile(HANK, 'Cinder Heron', 'HHHH99'),
   [IVY]: profile(IVY, 'Ivory Wren', 'JJJJ22'),
+  [JADE]: profile(JADE, 'Jade Condor', 'KKKK33'),
+  [KAI]: profile(KAI, 'Basalt Kite', 'MMMM44'),
 };
-const FRIENDS = [[ALICE, BOB], [BOB, DAVE], [BOB, ERIN], [BOB, FRANK], [BOB, GREG], [BOB, HANK], [BOB, IVY]];
+const FRIENDS = [[ALICE, BOB], [BOB, DAVE], [BOB, ERIN], [BOB, FRANK], [BOB, GREG], [BOB, HANK], [BOB, IVY], [BOB, JADE], [BOB, KAI]];
 // `holdSubs` parks Alice's next subscription read until the test releases it.
 // `gone` is every endpoint the server has DELETEd: the store stops returning it.
 // `expired` is whether Apple has already told the server its token expired.
@@ -162,8 +167,24 @@ let gregWeb = null;
 // which IS admitted; its sub is not.
 const ivyEc = crypto.createECDH('prime256v1'); ivyEc.generateKeys();
 let IVY_LOCAL = null, IVY_SMUGGLED = null, IVY_KEY = null;
+// ALICE_BLANK is the key of a stored web row whose sub is null (a legacy or
+// hand-edited row): skipped, and it must cost her none of her other devices.
+let ALICE_BLANK = null;
+// Jade's three browsers, named by how their push service refuses (see the
+// inbox). None of those answers means the subscription is dead.
+const JADE_WEB = ['jade-throttled', 'jade-broken', 'jade-forbidden'];
+const REFUSING = { 'jade-throttled': 429, 'jade-broken': 500, 'jade-forbidden': 403 };
+let jadeWeb = null;
+// Kai's one real browser, seen before every row in front of it. Those rows are
+// ones no host here can send to: browsers at a host that is no push service,
+// and iPhones on a host without APNs. KAI_JUNK is one less than pushToUser's
+// read window (25): Part 7c then reaches the browser only if the window is 25
+// or more, and the read-bound step below only passes if it is 25 or less.
+const KAI_JUNK = 24;
+const kaiEc = crypto.createECDH('prime256v1'); kaiEc.generateKeys();
+let KAI_LAPTOP = null;
 
-const hits = { user: [], subGet: [], subPost: [], del: [], inbox: [], fcm: [], apns: [], apnsFallback: [] };
+const hits = { user: [], subGet: [], subLimit: [], subPost: [], del: [], inbox: [], fcm: [], apns: [], apnsFallback: [] };
 const webTo = (name) => hits.inbox.filter((h) => h.path.includes(name));
 // When each of Greg's browsers was reached, and when its connection closed.
 const conns = {};
@@ -224,6 +245,7 @@ const mock = http.createServer((req, res) => {
       }
       const uid = (u.searchParams.get('user_id') || '').slice(3);
       hits.subGet.push(uid);
+      if (uid) hits.subLimit.push(u.searchParams.get('limit'));
       // PostgREST's own order= and limit=, applied the way it applies them —
       // after the filter, order first — because a mock that ignored them would
       // hand back every row and hide the cap under test.
@@ -242,12 +264,15 @@ const mock = http.createServer((req, res) => {
       // ALICE'S LAPTOP, TABLET, PIXEL AND IPHONE — and the phone browser is NOT
       // here. It is only ever the seat's in-memory sub, which is what makes the
       // seed and the seat cleanup observable at all. The laptop is the newest.
+      // The blank row has no sub at all: if counting it threw, the whole
+      // account would be reached on no device, and Parts 1 and 2 would fail.
       if (uid === ALICE) {
         const rows = pg([
           row(LAPTOP.endpoint, LAPTOP, 'web', 24),
           row(TABLET.endpoint, TABLET, 'web', 23),
           row(FCM_TOKEN, { platform: 'android', token: FCM_TOKEN }, 'android', 22),
           row(IOS_TOKEN, { platform: 'ios', token: IOS_TOKEN }, 'ios', 21),
+          row(ALICE_BLANK, null, 'web', 20),
         ]);
         if (state.holdSubs) { state.parked = () => json(rows); return; }
         return json(rows);
@@ -281,6 +306,19 @@ const mock = http.createServer((req, res) => {
           row(IVY_KEY, IVY_SMUGGLED, 'web', 23),
         ]));
       }
+      if (uid === JADE) {
+        return json(pg(jadeWeb.map((s, i) => row(s.endpoint, s, 'web', 24 - i))));
+      }
+      // Oldest first, as stored: the browser seen 1 September, then the rows
+      // seen since, every one of them unusable on the web-only host: browsers
+      // at a host that is no push service, and iPhones on a host without APNs.
+      if (uid === KAI) {
+        const junk = Array.from({ length: KAI_JUNK }, (_, i) => (i % 3 === 2
+          ? row(`apns-token-kai-${i}`, { platform: 'ios', token: `apns-token-kai-${i}` }, 'ios', String(2 + i).padStart(2, '0'))
+          : row(`https://refused.example.invalid/push/kai-${i}`,
+            { endpoint: `https://refused.example.invalid/push/kai-${i}`, keys: KAI_LAPTOP.keys }, 'web', String(2 + i).padStart(2, '0'))));
+        return json(pg([row(KAI_LAPTOP.endpoint, KAI_LAPTOP, 'web', '01'), ...junk]));
+      }
       return json([]);
     }
     return json([]);
@@ -290,6 +328,7 @@ const mock = http.createServer((req, res) => {
 // The web inbox. The LAPTOP endpoint stays alive; the PHONE endpoint is dead
 // (404), so the drop path runs on it and both halves of the cleanup are
 // exercised; the TABLET is Gone (410), the other answer that means dead.
+// Jade's push services refuse with 429, 500 and 403: an error, not a death.
 //
 // Greg's three browsers are push services that misbehave, at a host the
 // servers admit (PUSH_EXTRA_HOSTS names this inbox): one never answers; one
@@ -325,7 +364,7 @@ const inbox = tlsOpts ? https.createServer(tlsOpts, (req, res) => {
       return;
     }
     const dead = req.url.includes('alice-phone') ? 404 : req.url.includes('alice-tablet') ? 410 : 0;
-    res.writeHead(dead || 201); res.end();
+    res.writeHead(dead || REFUSING[name] || 201); res.end();
   });
 }) : null;
 
@@ -397,7 +436,9 @@ const sameReply = (x, y) => x.raw.replace(`"id":"${x.m.id}"`, '') === y.raw.repl
 
 // One game server against the mocks. `env` adds to or overrides the transport
 // settings; the log of every server is kept for the failure dump, and this
-// server's own output is handed back as out().
+// server's own output is handed back as out(). Every server that booted is
+// kept in `servers`, for Part 10's check that each one is still up.
+const servers = [];
 async function boot(port, env) {
   const child = spawn(process.execPath, ['server.js'], {
     env: { ...process.env, PORT: String(port), BOT_FIRE_MS: '150', PICK_MS: '300', SOCIAL_PUSH_MS: '0', ...env },
@@ -413,6 +454,7 @@ async function boot(port, env) {
   // leaving every squad frame answered 'unavailable' — which would make every
   // invite assertion below fail for a reason that has nothing to do with push.
   if (/social off/.test(own)) { fail(`the social layer did not build: ${own.match(/\[boot\] social off.*/)?.[0]}`); return false; }
+  servers.push({ port, child, out: () => own });
   return { out: () => own };
 }
 
@@ -434,6 +476,11 @@ async function boot(port, env) {
   IVY_SMUGGLED = { endpoint: `https://localhost:${INBOX}/push-inbox/ivy-smuggled`,
     keys: { p256dh: b64u(ivyEc.getPublicKey()), auth: b64u(crypto.randomBytes(16)) } };
   IVY_KEY = `https://127.0.0.1:${INBOX}/push-inbox/ivy-key`;
+  ALICE_BLANK = `https://127.0.0.1:${INBOX}/push-inbox/alice-blank`;
+  jadeWeb = JADE_WEB.map((name) => ({ endpoint: `https://127.0.0.1:${INBOX}/push-inbox/${name}`,
+    keys: { p256dh: b64u(erinEc.getPublicKey()), auth: b64u(crypto.randomBytes(16)) } }));
+  KAI_LAPTOP = { endpoint: `https://127.0.0.1:${INBOX}/push-inbox/kai-laptop`,
+    keys: { p256dh: b64u(kaiEc.getPublicKey()), auth: b64u(crypto.randomBytes(16)) } };
   await new Promise((r) => mock.listen(MOCK, '127.0.0.1', r));
   if (inbox) await new Promise((r) => inbox.listen(INBOX, '127.0.0.1', r));
   await new Promise((r) => apnsMock.listen(APNS, '127.0.0.1', r));
@@ -727,9 +774,9 @@ async function boot(port, env) {
 
   // ---- Part 6b: one account, fifteen devices, three hostile browsers ---------
   // The subscription table has no per-account cap and an invite needs no match,
-  // so every invite would fan out to every row an account ever registered. The
-  // read takes the TEN most recently seen devices: Greg's three browsers and
-  // his seven newest phones, never the five oldest. Carol is still in the
+  // so every invite would fan out to every row an account ever registered. A
+  // push goes to the TEN most recently seen devices it can use: Greg's three
+  // browsers and his seven newest phones, never the five oldest. Carol is still in the
   // squad, so the copy reads "2 of 4" — the only size above one this file
   // sends. The browsers' connections are judged after Part 7, which runs
   // meanwhile, so the deadline's ten seconds cost the suite nothing.
@@ -925,7 +972,46 @@ async function boot(port, env) {
       && !webOnly.out().includes('/push-inbox/')) {
       step('the refused host is logged once for both browsers and both invites, by name, and no endpoint reaches the log');
     } else fail(`the refusal log is wrong: ${JSON.stringify(refusals)}${webOnly.out().includes('/push-inbox/') ? ', and an endpoint was logged' : ''}`);
+
+    // ---- Part 7c: what a push service's answer means, and what takes a place --
+    // A REFUSAL IS NOT A DEATH. Only 404 and 410 say a subscription is gone. A
+    // push service that throttles (429), fails (500) or refuses this one
+    // request (403) says nothing about the browser: deleting on any error would
+    // let one outage or rate limit wipe every subscription it touched, silently.
+    // push_apns.mjs pins the same line for Apple from both sides.
+    q = traffic();
+    const jadeDel0 = hits.del.length;
+    const jade = await webOnly.ask({ type: 'squad', op: 'invite', to: JADE, id: 'w10' }, "the web-only host's invite to Jade");
+    if (!jade) return finish();
+    const jadeAsked = () => JADE_WEB.every((n) => hits.inbox.slice(q.web).some((h) => h.path.endsWith(`/${n}`)));
+    if (!(await until(jadeAsked, 10000, "Jade's three refusing push services"))) return finish();
+    await settle(1000);   // room for a DELETE to follow the refusals
+    const wronglyDeleted = JADE_WEB.filter((n) => hits.del.slice(jadeDel0).some((d) => decodeURIComponent(d).includes(`/${n}`)));
+    if (jade.m.delivered === 'push' && !wronglyDeleted.length) {
+      step('a push service that answers 429, 500 or 403 was asked, and no browser was deleted for it: only 404 and 410 mean gone');
+    } else fail(`these live browsers were DELETED over a push service's refusal: ${wronglyDeleted.join(', ') || '(none)'}; reply=${jade.raw}`);
+
+    // A ROW THAT CANNOT BE SENT TO TAKES NO PLACE. A push goes to at most ten
+    // devices, but a row this host cannot use — a browser at a host that is no
+    // push service, which is never deleted, or a transport this host lacks —
+    // is not one of them. Kai's only real browser is older than 24 such rows:
+    // counted before the check, they would fill the ten, and every turn nudge
+    // and invite to Kai would reach nothing.
+    q = traffic();
+    const kai = await webOnly.ask({ type: 'squad', op: 'invite', to: KAI, id: 'w11' }, "the web-only host's invite to Kai");
+    if (!kai) return finish();
+    const kaiHit = () => hits.inbox.slice(q.web).some((h) => h.path.endsWith('/kai-laptop'));
+    if (kai.m.delivered === 'push' && (await waitFor(kaiHit, 10000))) {
+      step(`a browser seen before ${KAI_JUNK} newer rows this host cannot use is still reached: those rows take none of the ten places`);
+    } else fail(`rows this host cannot use pushed Kai's browser out: reply=${kai.raw} ${moved(q)}`);
   }
+
+  // THE READ IS STILL BOUNDED. The window is wider than the ten sends, not
+  // gone: an account can hold any number of rows, and every read must stop at
+  // 25 of them (Part 7c's browser pins the other side of the same number).
+  const wide = hits.subLimit.filter((l) => !(Number(l) >= 1 && Number(l) <= 25));
+  if (hits.subLimit.length && !wide.length) step(`every one of the ${hits.subLimit.length} device reads asked for 25 rows at most`);
+  else fail(`a device read was not bounded at 25 rows: limits ${JSON.stringify(wide)} of ${hits.subLimit.length} reads`);
 
   // ---- Part 6b, concluded: every web send ends, by one absolute deadline ------
   // An endpoint that never answers held its socket for ever, and so did one
@@ -1016,6 +1102,27 @@ async function boot(port, env) {
       fail(`sendAll is not dispatched only through setImmediate: ${named} mentions, deferred line ${deferred ? 'present' : 'MISSING'}`);
     } else step('every send waits a turn of the event loop, after the answer: a real invite answers when a dropped one does');
   }
+
+  // ---- Part 10: every server this file booted is still up ---------------------
+  // A web send that times out or loses its connection must end as a rejection
+  // its caller catches. An 'error' nobody listens for is an uncaughtException,
+  // and that is shutdown: every live match dropped. Nothing above can tell: a
+  // server that died at Greg's deadline closes his sockets at the deadline
+  // too, so Part 6b's own check passes, and no later part asks that server
+  // anything. So each one is asked here, after a moment for a dying process to
+  // finish dying: still running, still answering, nothing fatal in its log.
+  await settle(1000);
+  const FATAL = /\[fatal\]|uncaughtException|unhandledRejection|\[shutdown\]/;
+  const down = [];
+  for (const s of servers) {
+    const health = await fetch(`http://127.0.0.1:${s.port}/health`).then((r) => r.status).catch((e) => e.cause?.code || e.message);
+    const bad = s.out().split('\n').filter((l) => FATAL.test(l)).map((l) => l.slice(0, 160));
+    if (s.child.exitCode !== null || s.child.signalCode !== null || health !== 200 || bad.length) {
+      down.push(`port ${s.port}: exit=${s.child.exitCode} signal=${s.child.signalCode} /health=${health} log=${JSON.stringify(bad.slice(0, 3))}`);
+    }
+  }
+  if (servers.length && !down.length) step(`all ${servers.length} servers are still up and answering, and none logged a fatal error, a rejection nobody caught or a shutdown`);
+  else fail(`a server did not survive its push traffic: ${down.join('; ')}`);
 
   finish();
 })().catch((e) => { fail('threw — ' + (e && e.message ? e.message : String(e))); finish(); });

@@ -769,7 +769,8 @@ async function apnsSend(token, title, body, url, tag) {
 // found, which is the whole of a squad invite's answer (pushSquadInvite):
 // `dryRun` stops there with that answer and sends nothing, and so does an
 // aborted `signal` — its caller has stopped waiting and answered without it.
-const PUSH_DEVICES_MAX = 10;
+const PUSH_DEVICES_MAX = 10;   // devices one push is sent to
+const PUSH_ROWS_READ = 25;     // the newest rows read to find them
 async function pushToUser(uid, { title, body, url, tag }, { seed = null, onDrop = null, dryRun = false, signal = null } = {}) {
   // Either transport is enough to be worth trying: a web-only server (no FCM
   // key) still nudges browsers, and an FCM-only one still nudges phones.
@@ -778,15 +779,16 @@ async function pushToUser(uid, { title, body, url, tag }, { seed = null, onDrop 
   if (seed && seed.endpoint) targets.set(seed.endpoint, { sub: seed, platform: 'web' });
   if (uid && SB_SECRET) {
     try {
-      // THE TEN MOST RECENTLY SEEN DEVICES, not every row. The table has no
+      // THE MOST RECENTLY SEEN ROWS, not every row. The table has no
       // per-account cap, the engine takes five subscriptions per socket and
       // any number of sockets, and an invite needs no match: uncapped, one
       // account could collect a thousand rows and make every nudge or invite
       // to it a thousand sends. last_seen_at is refreshed by every upsert, so
-      // the devices still in use come first.
+      // the devices still in use come first. The window is wider than the ten
+      // sends below, because some rows can never be sent to (see `ready`).
       const rows = await sbAdmin('GET',
         `/push_subscriptions?user_id=eq.${encodeURIComponent(uid)}&select=endpoint,sub,platform`
-        + `&order=last_seen_at.desc&limit=${PUSH_DEVICES_MAX}`);
+        + `&order=last_seen_at.desc&limit=${PUSH_ROWS_READ}`);
       for (const r of rows || []) {
         if (r.endpoint) targets.set(r.endpoint, { sub: r.sub, platform: r.platform || 'web' });
       }
@@ -797,8 +799,12 @@ async function pushToUser(uid, { title, body, url, tag }, { seed = null, onDrop 
   // only at a push service's host, judged on sub.endpoint, the URL webPushSend
   // requests — not the map key, which for a stored row need not match it. A
   // refused one is not counted, not sent to and not deleted (webPushGate).
+  // THEN the ten: a row that cannot be sent to takes none of their places, or
+  // ten refused or transport-less rows (never deleted) would silence every
+  // real device behind them. The seed, when usable, is first.
   const ready = [...targets].filter(([, t]) =>
-    (t.platform === 'web' ? webpush && t.sub && webPushGate(t.sub.endpoint) : t.platform === 'ios' ? apns : fcm));
+    (t.platform === 'web' ? webpush && t.sub && webPushGate(t.sub.endpoint) : t.platform === 'ios' ? apns : fcm))
+    .slice(0, PUSH_DEVICES_MAX);
   // AFTER the read, before any send, and read rather than listened for: an
   // 'abort' listener that throws is an uncaughtException, which is shutdown.
   if (!ready.length || (signal && signal.aborted)) return false;

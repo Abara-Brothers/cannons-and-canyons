@@ -67,10 +67,20 @@ const SMUGGLE_SUB = { endpoint: `https://localhost:${INBOX_PORT}/push-inbox/smug
 // More distinct refused hosts than the server will log, to prove the log is
 // capped (100 lines) rather than a flood a stream of invented hosts could drive.
 // .invalid never resolves (RFC 6761), so even a regression sends nothing anywhere.
-const REFUSED_ROWS = Array.from({ length: 105 }, (_, i) => {
-  const endpoint = `https://refused-${i}.example.invalid/push/${i}`;
-  return { endpoint, sub: { endpoint, keys: SUB.keys }, platform: 'web' };
-});
+// The FIRST is a hostname of 271 characters, every label a legal 63: the
+// player chooses it, so the line that names it is cut to 253, the longest a
+// DNS name can be, and a stream of such hosts cannot fatten the log either.
+const LONG_HOST = Array.from({ length: 4 }, (_, i) => `long${i}`.padEnd(63, 'x')).join('.') + '.example.invalid';
+const LONG_ENDPOINT = `https://${LONG_HOST}/push/long`;
+const REFUSED_ROWS = [{ endpoint: LONG_ENDPOINT, sub: { endpoint: LONG_ENDPOINT, keys: SUB.keys }, platform: 'web' },
+  ...Array.from({ length: 105 }, (_, i) => {
+    const endpoint = `https://refused-${i}.example.invalid/push/${i}`;
+    return { endpoint, sub: { endpoint, keys: SUB.keys }, platform: 'web' };
+  })];
+// A push service at the admitted host that drops the connection without a
+// word. That is a lost connection, not a dead subscription: nothing is
+// deleted, and the send's 'error' must be caught — uncaught, it is shutdown.
+const RESET_SUB = { endpoint: `https://127.0.0.1:${INBOX_PORT}/push-inbox/alice-reset`, keys: SUB.keys };
 
 // ---- Mock Supabase + push endpoint ------------------------------------------
 const hits = { user: [], upsert: [], nudgeGet: [], pushPost: [], del: [], adminDel: [], errIns: [],
@@ -165,6 +175,7 @@ const mock = http.createServer((req, res) => {
         // must fan out across both transports.
         return res.end(JSON.stringify([
           { endpoint: SUB.endpoint, sub: SUB, platform: 'web' },
+          { endpoint: RESET_SUB.endpoint, sub: RESET_SUB, platform: 'web' },
           { endpoint: FCM_TOKEN, sub: { platform: 'android', token: FCM_TOKEN }, platform: 'android' },
           { endpoint: SMUGGLE_KEY, sub: SMUGGLE_SUB, platform: 'web' },
           ...REFUSED_ROWS,
@@ -180,9 +191,11 @@ const mock = http.createServer((req, res) => {
 });
 
 // The TLS push inbox: every delivery answers 404, so a correct server must
-// then DELETE the endpoint from its store.
+// then DELETE the endpoint from its store — bar RESET_SUB's, which is hung up
+// on unanswered.
 const inbox = tlsOpts ? https.createServer(tlsOpts, (req, res) => {
   hits.pushPost.push({ path: req.url, host: req.headers.host || '' });
+  if (req.url === '/push-inbox/alice-reset') return req.socket.destroy();
   res.writeHead(404); res.end();
 }) : null;
 
@@ -333,6 +346,7 @@ const until = async (test, ms, what) => {
     if (!(await until(() => hits.del.length >= 1, 10000, 'dead-endpoint cleanup'))) return finish();
     if (hits.del[0].query.includes('endpoint=eq.')) step('a 404 endpoint was deleted from the store (self-cleaning)');
     else fail(`cleanup query wrong: ${hits.del[0].query}`);
+    if (!(await until(() => hits.pushPost.some((p) => p.path === '/push-inbox/alice-reset'), 10000, 'the push to the service that hangs up'))) return finish();
   }
 
   // The refusal legs below need no inbox, so they run with or without openssl.
@@ -358,6 +372,10 @@ const until = async (test, ms, what) => {
   const wrongDel = [LOCAL_SUB.endpoint, SMUGGLE_KEY, REFUSED_ROWS[0].endpoint].filter((e) => dels.some((q) => q.includes(e)));
   if (wrongDel.length === 0) step('a refused endpoint is skipped, NOT deleted — adding its host later loses nobody');
   else fail(`a refused endpoint was deleted from the store: ${wrongDel.join(', ')}`);
+  if (inbox) {
+    if (!dels.some((q) => q.includes(RESET_SUB.endpoint))) step('a push service that hangs up without answering is a lost connection, not a dead endpoint: NOT deleted');
+    else fail('an endpoint was deleted because its push service hung up: a lost connection says nothing about the subscription');
+  }
   // One line per distinct refused host, worded so it never claims the host is
   // not a push service (an endpoint can be refused for its port or spelling at
   // a real service's host), capped at 100, then ONE line saying the log is full
@@ -372,6 +390,10 @@ const until = async (test, ms, what) => {
   const localLines = hostLines.filter((l) => l.includes('(host "localhost")'));
   if (localLines.length === 1) step('the refused host is logged exactly once for its two endpoints');
   else fail(`expected one log line for the refused host "localhost", got ${localLines.length}: ${JSON.stringify(localLines)}`);
+  const longLines = hostLines.filter((l) => l.includes('(host "long0'));
+  const longQuoted = longLines.length === 1 ? JSON.parse(longLines[0].match(/\(host (".*")\)$/)[1]) : null;
+  if (longQuoted === LONG_HOST.slice(0, 253)) step(`a refused hostname of ${LONG_HOST.length} characters is logged cut to its first 253`);
+  else fail(`the long refused hostname was not logged cut to 253 characters: ${longLines.length} line(s), quoted host of ${longQuoted === null ? '-' : longQuoted.length} characters`);
   if (hostLines.length === 100 && capLines.length === 1 && lines.length === 101 && CAP_LINE.test(lines[100])) {
     step(`the refusal log is capped: ${1 + REFUSED_ROWS.length} distinct refused hosts, 100 host lines, then one "log full" line`);
   } else fail(`expected 100 host lines then one "log full" line for ${1 + REFUSED_ROWS.length} distinct hosts, got ${hostLines.length} host line(s) and ${capLines.length} "log full" line(s) of ${lines.length}`);
@@ -505,6 +527,21 @@ const until = async (test, ms, what) => {
     if (late.length === 0) step('still zero requests to a non-push-service host at the end of the run');
     else fail(`a request reached a non-push-service host after all: ${JSON.stringify(late.slice(0, 4))}`);
   }
+
+  // THE SERVER IS STILL UP. A send that errors — the hang-up above — must end
+  // as a rejection its caller catches: an 'error' nobody listens for is an
+  // uncaughtException, and that is shutdown, every live match dropped. A
+  // moment for a dying process to finish dying, then: still running, still
+  // answering, nothing fatal in its log.
+  await new Promise((r) => setTimeout(r, 1000));
+  const alive = await new Promise((res) => {
+    http.get({ host: '127.0.0.1', port: GAME_PORT, path: '/health' }, (r) => { r.resume(); res(r.statusCode); })
+      .on('error', (e) => res(e.code || e.message));
+  });
+  const fatal = serverOut.split('\n').filter((l) => /\[fatal\]|uncaughtException|unhandledRejection|\[shutdown\]/.test(l));
+  if (child.exitCode === null && child.signalCode === null && alive === 200 && !fatal.length) {
+    step('the server is still up and answering, and logged no fatal error, no rejection nobody caught and no shutdown');
+  } else fail(`the server did not survive its push traffic: exit=${child.exitCode} signal=${child.signalCode} /health=${alive} log=${JSON.stringify(fatal.slice(0, 3).map((l) => l.slice(0, 160)))}`);
 
   try { b.close(); } catch {}
   mock.close();
