@@ -1061,6 +1061,17 @@ export function createSocial({
     return sq.members.findIndex((m) => m.key === key);
   }
 
+  // `held` (D-UI-1): whether THIS SOCKET is the one on a row of this squad.
+  // `you` cannot say it: for a socket holding no row it falls back to the
+  // account's row, so a second device that only LOOKED (a bare resume while a
+  // live socket elsewhere holds the row, task 5) and the device on the row are
+  // told the same index. Only the device on the row is pushed a change, so a
+  // box told held:false shows "open on another device" (and no controls)
+  // rather than a roster that no push will ever update.
+  // THE SOCKET, NEVER THE KEY: the key is the account's, and would say true to
+  // every device of it. Per destination, like `you`, on every state frame.
+  const holds = (sq, ws) => sq.members.some((m) => m.ws === ws);
+
   // WHICH MODES A SQUAD OF n FITS: n within the mode's seats, MINIMUM AND
   // MAXIMUM (plan X6; design 4.3's start row), over the injected table. A
   // squad of one fits no duel and no free-for-all, and three or four fit no
@@ -1075,7 +1086,8 @@ export function createSocial({
     return f;
   };
 
-  // THE FRAME, WITHOUT `you` — the one field that differs per destination.
+  // THE FRAME, WITHOUT `you` AND `held` — the fields that differ per
+  // destination.
   //
   // A GUEST ROW CARRIES callsign null AND guest true, AND NEVER THE NAME THE
   // GUEST SENT. That string arrived off the wire on a socket with no account
@@ -1127,13 +1139,13 @@ export function createSocial({
     };
   }
 
-  // THE FRAME AS ONE SOCKET MUST SEE IT (plan X4): the snapshot plus `you`,
-  // the mirror of forSocket above. For a caller that answers ONE socket —
-  // task 5's resume. A fan-out uses pushSquad, which builds the snapshot once
-  // and applies the same youIn to every destination.
+  // THE FRAME AS ONE SOCKET MUST SEE IT (plan X4): the snapshot plus `you`
+  // and `held`, the mirror of forSocket above. For a caller that answers ONE
+  // socket — task 5's resume. A fan-out uses pushSquad, which builds the
+  // snapshot once and applies the same youIn and holds to every destination.
   async function squadFrame(sq, ws) {
     const base = await squadSnapshot(sq);
-    return { ...base, you: youIn(sq, ws) };
+    return { ...base, you: youIn(sq, ws), held: holds(sq, ws) };
   }
 
   // THE FAN-OUT GOES DOWN THE SQUAD'S OWN SOCKETS, NOT socketsOf(). A guest
@@ -1160,9 +1172,9 @@ export function createSocial({
   async function pushSquad(sq, actor, msg) {
     const base = await squadSnapshot(sq);
     for (const m of sq.members) {
-      if (m.ws && m.ws !== actor) safeSend(m.ws, { ...base, you: youIn(sq, m.ws) });
+      if (m.ws && m.ws !== actor) safeSend(m.ws, { ...base, you: youIn(sq, m.ws), held: holds(sq, m.ws) });
     }
-    if (actor) reply(actor, msg, { ...base, you: youIn(sq, actor) });
+    if (actor) reply(actor, msg, { ...base, you: youIn(sq, actor), held: holds(sq, actor) });
   }
 
   // A SQUAD SOMEBODY HAS JUST LEFT. `has` is the test, because the machine
@@ -1893,7 +1905,8 @@ export function createSocial({
 
   // ---- squad resume (task 5; design 4.3 and 5.4) ----------------------------
   // THE WIRE: the `state` snapshot as this socket must see it (squadFrame —
-  // `you` is its row), with the request's id, or EXACTLY
+  // `you` is its row, `held` false when it only LOOKED, D-UI-1), with the
+  // request's id, or EXACTLY
   // { type:'squad', op:'gone', id } and nothing else. `gone` IS CAUSE-NEUTRAL
   // and the box says only "Your squad has ended.": a restart (squads are
   // memory by design), a kick, a drop-window sweep and a block's removal all
@@ -1959,7 +1972,10 @@ export function createSocial({
     // answer, because the re-attach has already happened. From the same
     // snapshot: one name read for the whole resume. Everyone else first; the
     // answer, the one send here that can throw, last (pushSquad's order).
-    if (back && live) for (const x of sq.members) if (x.ws && x.ws !== ws) safeSend(x.ws, { ...frame, you: youIn(sq, x.ws) });
+    // `you` AND `held` ARE EACH DESTINATION'S OWN, never the resumer's: the
+    // resumer can lose its row inside the names read (a kick), and its frame
+    // then says held:false to a squad that still holds theirs.
+    if (back && live) for (const x of sq.members) if (x.ws && x.ws !== ws) safeSend(x.ws, { ...frame, you: youIn(sq, x.ws), held: holds(sq, x.ws) });
     if (wireId(ws.userId) !== who) return;
     // NO ROW OF THIS SQUAD IS THIS SOCKET'S ANY MORE — kicked, or the squad
     // ended, while the names were read. The roster it has just been removed

@@ -3660,6 +3660,80 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     else fail('(d12b) reloaded leader: ' + JSON.stringify({ before, after, seated, oldDevice: sq5(wl) }));
   }
 
+  // ---- (held) D-UI-1: EVERY STATE FRAME SAYS WHETHER THIS SOCKET HOLDS A ROW -
+  // A bare resume from a second device only LOOKS while a live socket holds
+  // the account's row (d12b): it is answered the roster, the row stays put,
+  // and no push will ever reach the looker. `you` cannot tell the two apart —
+  // it is the account's row either way — so the frame also carries `held`:
+  // true iff THIS socket is the one on a row (m.ws === ws). Per destination,
+  // like `you`, on the reply and on every fan-out. The box renders held:false
+  // as "Your squad is open on another device." and offers no controls.
+  const STATE_KEYS = ['code', 'fits', 'held', 'leader', 'max', 'members', 'mode', 'op', 'tees', 'type', 'you'];
+  const keysOf = (f) => Object.keys(f || {}).filter((k) => k !== 'id').sort();
+  {
+    const S = social5(store5(), { cw: mkClockwork() });
+    const { wl, wm, code } = await pair5(S);
+    const wm2 = up5(S, mkws5(MEM));
+    await S.handle(wm2, { type: 'squad', op: 'resume', id: 'h1' });
+    const look = wm2.rx.find((f) => f.id === 'h1') || {};
+    await S.handle(wm, { type: 'squad', op: 'resume', id: 'h2' });
+    const own = wm.rx.find((f) => f.id === 'h2') || {};
+    if (look.op === 'state' && look.you === 1 && look.held === false && own.op === 'state' && own.you === 1 && own.held === true)
+      ok('(held) a look-only bare resume is answered held:false, and the socket holding the row is answered held:true');
+    else fail('(held) look vs holder: ' + JSON.stringify({ look, own }));
+    if (same(keysOf(look), STATE_KEYS) && same(keysOf(own), STATE_KEYS))
+      ok('(held) the resume reply carries exactly the snapshot\'s fields, `you` and `held`, and nothing else');
+    else fail('(held) reply keys: ' + JSON.stringify([keysOf(look), keysOf(own)]));
+    // ONE FAN-OUT, EACH SOCKET ITS OWN VALUE. The leader's second device holds
+    // no row but may still arm a mode (ledSquad goes by the account); the
+    // actor is always answered the roster (pushSquad), so that one change
+    // reaches a socket that holds no row alongside two that do. The looker
+    // holds none either, and is on no fan-out at all.
+    wl.rx.length = 0; wm.rx.length = 0; wm2.rx.length = 0;
+    const wl2 = up5(S, mkws5(LEAD));
+    await S.handle(wl2, { type: 'squad', op: 'mode', mode: 'duel', id: 'h4' });
+    const got = (w) => sq5(w, 'state').map((f) => [f.you, f.held]);
+    if (same(got(wl), [[0, true]]) && same(got(wm), [[1, true]]) && same(got(wl2), [[0, false]]) && sq5(wm2).length === 0
+      && [wl, wm, wl2].every((w) => same(keysOf(sq5(w, 'state')[0]), STATE_KEYS)))
+      ok('(held) one fan-out tells each socket its own held: true to the two on rows, false to the leader\'s second device that armed the mode');
+    else fail('(held) fan-out: ' + JSON.stringify({ lead: got(wl), mem: got(wm), second: got(wl2), looker: sq5(wm2) }));
+    // A RESUME NAMING THE CODE TAKES THE ROW (d12b): that answer is held:true,
+    // and from then on the pushes this socket gets say so too.
+    wl.rx.length = 0; wm.rx.length = 0; wm2.rx.length = 0;
+    await S.handle(wm2, { type: 'squad', op: 'resume', code, id: 'h3' });
+    const took = wm2.rx.find((f) => f.id === 'h3') || {};
+    await S.handle(wl, { type: 'squad', op: 'mode', mode: 'duel' });
+    const pushed = sq5(wm2, 'state').filter((f) => f.id === undefined), lead = sq5(wl, 'state');
+    if (took.held === true && took.you === 1 && pushed.length === 1 && pushed[0].held === true && pushed[0].you === 1
+      && lead.length === 1 && lead[0].held === true && lead[0].you === 0 && same(keysOf(pushed[0]), STATE_KEYS))
+      ok('(held) a resume that takes the row is answered held:true, and every push after it says held:true to each holder');
+    else fail('(held) take-over: ' + JSON.stringify({ took, pushed, lead }));
+  }
+  {
+    // THE RESUME'S OWN FAN-OUT ("a member who was dropped is back") is built
+    // from the resumer's frame, so each destination's `held` must be its own
+    // there too, not the resumer's. They differ when the resumer loses its row
+    // inside the names read: here the leader kicks the member it is resuming.
+    const st = store5();
+    const S = social5(st, { cw: mkClockwork() });
+    const { wl, wm, code } = await pair5(S);
+    close5(S, wm);
+    await flush5();
+    const wm2 = up5(S, mkws5(MEM));
+    const release = st.hold();
+    const p = S.handle(wm2, { type: 'squad', op: 'resume', code, id: 'h5' });
+    await st.entered;
+    await S.handle(wl, { type: 'squad', op: 'kick', id: MEM });
+    wl.rx.length = 0;
+    release();
+    await p;
+    const back = sq5(wl, 'state');
+    const ans = wm2.rx.find((f) => f.id === 'h5') || {};
+    if (back.length === 1 && back[0].you === 0 && back[0].held === true && back[0].members.length === 1 && ans.op === 'gone')
+      ok('(held) the resume\'s own fan-out tells each member its own held, not the resumer\'s');
+    else fail('(held) resume fan-out: ' + JSON.stringify({ back, ans }));
+  }
+
   // ---- (d13) A SIGN-OUT INSIDE THE NAME READ CANCELS THE ANSWER ------------
   // ws.authGen is the cancel token for anything async hung on a socket
   // (server.js's auth sink). The snapshot waits on a profile read; a sign-out
