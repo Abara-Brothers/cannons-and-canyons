@@ -932,6 +932,15 @@ setFaultSink((err) => {
 let ledgerDropped = 0;
 setMatchSink((r) => {
   if (!SB_SECRET) return;
+  // ONE ACCOUNT ON TWO SEATS IS NOT A MATCH. Two tabs of one account can
+  // create a duel in one and join it by code from the other, and the engine
+  // lets them play; recorded, that is the account winning against itself,
+  // on the one table earnings will ever be derived from. `players` holds one
+  // entry per human seat that proved an account, so a repeat in it is two
+  // seats sharing one. Nothing is written, not even a pared-down solo row:
+  // a win nobody else took part in is no evidence of anything.
+  const seated = Array.isArray(r.players) ? r.players.map((p) => String(p).trim().toLowerCase()) : [];
+  if (new Set(seated).size !== seated.length) return;
   sbAdmin('POST', '/match_results', {
     mode: r.mode,
     players: r.players || [],

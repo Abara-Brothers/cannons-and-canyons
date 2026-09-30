@@ -28,6 +28,13 @@ function freePort() {
 }
 
 const ledgerWrites = [];
+// ONE ACCOUNT PER TOKEN, so a row can be checked for WHO played and who won,
+// not just that it exists. A token this map does not know verifies as nobody.
+const ACCT = {
+  'tok-a': 'aaaaaaaa-0000-4000-8000-00000000000a',
+  'tok-b': 'bbbbbbbb-0000-4000-8000-00000000000b',
+};
+const verified = [];
 const mockPort = await freePort();
 const mock = http.createServer((req, res) => {
   let body = '';
@@ -38,9 +45,16 @@ const mock = http.createServer((req, res) => {
       try { ledgerWrites.push(JSON.parse(body)); } catch { ledgerWrites.push({ unparseable: body }); }
       res.writeHead(201); return res.end();
     }
+    if (url.includes('/auth/v1/user')) {
+      const tok = String(req.headers.authorization || '').replace('Bearer ', '');
+      verified.push(tok);
+      if (!ACCT[tok]) { res.writeHead(401); return res.end('{}'); }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ id: ACCT[tok], is_anonymous: false }));
+    }
     // Everything else the server probes on boot / for /health.
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(url.includes('/auth/v1/user') ? '{"id":"11111111-1111-1111-1111-111111111111"}' : '[]');
+    res.end('[]');
   });
 });
 await new Promise((r) => mock.listen(mockPort, '127.0.0.1', r));
@@ -111,6 +125,61 @@ try {
     else fail('ledger: no winner_seat on the row');
   }
   try { a.close(); } catch {}
+
+  // WHO PLAYED AND WHO WON. Two signed-in accounts, one match each way round,
+  // so a row that always named seat 0's account, dropped `players`, or wrote
+  // winner_user as null would each be caught: the ledger is the only evidence
+  // a player's earnings will ever be derived from.
+  const A = ACCT['tok-a'], B = ACCT['tok-b'];
+  const signedIn = async (tok) => {
+    const ws = await open();
+    const seen = verified.length;
+    send(ws, { type: 'hello', token: tok });
+    for (let i = 0; i < 50 && !verified.slice(seen).includes(tok); i++) await sleep(50);
+    await sleep(150);                           // the verified id lands on the socket
+    return ws;
+  };
+  // host creates, guest joins, `loser` forfeits by closing; resolves with the
+  // rows written by the time the ledger has had a moment to land.
+  const duel = async (hostTok, guestTok, loser) => {
+    const host = await signedIn(hostTok), guest = await signedIn(guestTok);
+    const before = ledgerWrites.length;
+    send(host, { type: 'create', mode: 'duel', name: 'Host', skin: 'olive' });
+    const m = await wait(host, 'created', 6000);
+    if (!m) throw new Error('no room created');
+    send(guest, { type: 'join', code: m.code, name: 'Guest', skin: 'desert' });
+    if (!await wait(host, 'start', 8000)) throw new Error('match never started');
+    const winner = loser === 'guest' ? host : guest;
+    (loser === 'guest' ? guest : host).close();
+    const over = await wait(winner, 'gameover', 8000);
+    for (let i = 0; i < 40 && ledgerWrites.length === before; i++) await sleep(100);
+    await sleep(600);                           // room for a second, wrong row
+    try { winner.close(); } catch {}
+    return { over, rows: ledgerWrites.slice(before) };
+  };
+
+  const m1 = await duel('tok-a', 'tok-b', 'guest');
+  const r1 = m1.rows[0] || {};
+  if (m1.rows.length === 1 && JSON.stringify(r1.players) === JSON.stringify([A, B]))
+    ok('a signed-in match records both accounts, in seat order');
+  else fail(`ledger: players for A (seat 0) v B (seat 1) were ${JSON.stringify(m1.rows.map((r) => r.players))}`);
+  if (r1.winner_seat === 0 && r1.winner_user === A) ok('the host winning is recorded as the host\'s account, on seat 0');
+  else fail(`ledger: B forfeited to A, but the row says seat ${JSON.stringify(r1.winner_seat)} / ${JSON.stringify(r1.winner_user)}`);
+
+  const m2 = await duel('tok-a', 'tok-b', 'host');
+  const r2 = m2.rows[0] || {};
+  if (m2.rows.length === 1 && JSON.stringify(r2.players) === JSON.stringify([A, B]) && r2.winner_seat === 1 && r2.winner_user === B)
+    ok('the guest winning is recorded as the guest\'s account, on seat 1 — not always seat 0\'s');
+  else fail(`ledger: A forfeited to B, but the rows were ${JSON.stringify(m2.rows)}`);
+
+  // ONE ACCOUNT ON BOTH SEATS IS NOT A MATCH. Two tabs of one account: one
+  // creates, the other joins by code, one of them forfeits. The match plays,
+  // but the ledger must not record the account winning against itself — not
+  // as a two-player row, and not stripped down to a solo win either.
+  const m3 = await duel('tok-a', 'tok-a', 'guest');
+  if (m3.over && m3.rows.length === 0)
+    ok('one account on both seats plays out, and the ledger records nothing: no win against itself');
+  else fail(`ledger: one account on both seats (gameover=${!!m3.over}) wrote ${JSON.stringify(m3.rows)}`);
 } catch (e) {
   fail('ledger: threw — ' + (e && e.message ? e.message : String(e)));
 } finally {
