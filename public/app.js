@@ -2288,6 +2288,60 @@ async function enableNativePings() {
 let pendingIntent = null;
 function flushIntent() { if (pendingIntent) { sendMsg(pendingIntent); pendingIntent = null; } }
 
+// ---------------------------------------------------------------------------
+// Deep links
+// ---------------------------------------------------------------------------
+// Three doors lead in with a code on them, and they are NOT the same door:
+//   * boot's own URL;
+//   * sw.js's notificationclick, which calls c.navigate(url) on an existing
+//     window -- a full page load, so the code arrives through boot's own read
+//     of the URL and this file needs nothing extra for it;
+//   * Capacitor's pushNotificationActionPerformed, which does NOT navigate. It
+//     hands the url to the LIVE page, where boot ran hours ago.
+// One parser serves all three; only the third needs an arbiter of its own, and
+// that is onPushTap below.
+//
+// A URL PARSER, NEVER A REGEX OVER THE WHOLE STRING. The native handler used
+// url.match(/room=([A-Z0-9]{4})/i). It cannot see `squad=` at all; it DOES match
+// `?xroom=ABCD` and `?notaroom=ABCD`, joining a room the link never named; and
+// [A-Z0-9]{4} accepts I, L, O, 0 and 1, which the code alphabet does not have.
+// searchParams also decodes for us, which a regex over the raw string does not.
+//
+// MIRRORED, NOT IMPORTED: this is `const CODE_CHARS` from public/room-engine.js
+// (house rule 4's subject). app.js is a classic script and cannot import an ES
+// module. Squad codes and room codes share the one alphabet by design, so one
+// validator serves both.
+const LINK_CODE = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{4}$/;
+function deepLinkCode(v) {
+  const c = (typeof v === 'string' ? v : '').trim().toUpperCase();
+  return LINK_CODE.test(c) ? c : '';
+}
+// ROOM BEFORE SQUAD within one URL, for the same reason a held seat beats both
+// in boot(): THE MOST PERISHABLE CLAIM WINS. A room is joinable only while it is
+// waiting; a squad is still there in a minute. Nothing the server sends carries
+// both -- server.js emits `/?room=CODE` for a turn nudge and `/?squad=CODE` for
+// an invite -- so this only decides a hand-made link, and it decides it the same
+// way every time.
+//
+// RESOLVED AGAINST A FIXED BASE, NEVER AGAINST THIS PAGE. The server's links are
+// relative (`/?squad=CODE`), so they need a base; but `new URL('', location.href)`
+// IS the page's own URL, query and all, and so is `#top`. With the page as the
+// base, a notification whose url was empty would re-follow whatever link the
+// page was booted from. A constant base resolves the path and the query of the
+// string it is given and nothing else, and boot hands in an absolute URL, which
+// ignores the base entirely.
+const LINK_BASE = 'https://link.invalid/';
+function deepLink(u) {
+  if (typeof u !== 'string' || !u) return null;
+  let p;
+  try { p = new URL(u, LINK_BASE).searchParams; } catch { return null; }
+  const room = deepLinkCode(p.get('room'));
+  if (room) return { kind: 'room', code: room };
+  const squad = deepLinkCode(p.get('squad'));
+  if (squad) return { kind: 'squad', code: squad };
+  return null;
+}
+
 // ---- Offline play (BQ-007 / ADR-001) ----------------------------------------
 // vs-CPU duels and solo golf never needed a server: room-engine.js — the same
 // module server.js runs — is precached by the service worker and runs right
