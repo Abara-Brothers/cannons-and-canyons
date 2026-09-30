@@ -69,28 +69,33 @@
     <tr><td>Name reports (who reported whom, the callsign as it was seen, and when)</td><td>So we can act on an offensive callsign</td><td>Our database, and our game server's log</td></tr>
     <tr><td>Match results of ONLINE matches (which accounts played, who won, the mode, the player count, whether a computer opponent was involved, and when it ended)</td><td>A record of what was actually played online, so that anything you earn by playing online can be verified</td><td>Our database, kept permanently — see <a href="#keep">How long we keep it</a></td></tr>
     <tr><td>Progression (wins, achievements, unlocks)</td><td>Your career, synced across devices</td><td>Our database</td></tr>
-    <tr><td>Push subscription (only if you enable nudges)</td><td>Delivering "your turn" notifications</td><td>Our database</td></tr>
+    <tr><td>Push subscription (only if you enable nudges)</td><td>Delivering notifications: your turn in a match, and squad invites from friends</td><td>Our database</td></tr>
     <tr><td>Crash reports (no account identifier, no IP)</td><td>Finding and fixing faults</td><td>Our database, 30 days</td></tr>
   </table>
   <p class="muted"><b>Legal bases.</b> Running the game and its cloud save, including sign-in:
   performance of the contract you enter into by playing. Your friend code, your friends and
   your friend requests: the same contract — they are how the feature works at all. Blocks and
   name reports: our legitimate interest, and yours, in a game free of abusive names; a block
-  exists to protect you, so we keep it for exactly as long as you want it. Turn notifications:
-  your consent, which you can withdraw at any time. Crash reports: our legitimate interest in
+  exists to protect you, so we keep it for exactly as long as you want it. Notifications (your
+  turn, and squad invites from friends): your consent, which you can withdraw at any time. Crash reports: our legitimate interest in
   keeping the game working and diagnosing faults — the data is not linked to your account and
   you can object at any time (see <a href="#rights">Your rights and controls</a>).</p>
 
-  <h2>Turn notifications</h2>
-  <p>Off unless you turn them on. If you enable nudges, your browser or device issues a push
-  subscription — a delivery address plus encryption keys — which we store against your account
-  so notifications work in every future match and on every device you enabled them on.
-  Delivery goes through your platform's push service — Firebase Cloud Messaging (Google) in the
-  Android app, and your browser's own push service (operated by Apple, Google or Mozilla) on the
-  web. You can revoke notifications in your browser or device
+  <h2>Notifications</h2>
+  <p>Off unless you turn them on, and one switch covers both kinds: a nudge when it is your turn
+  in a match, and a notification when a friend invites you to their squad while you are away
+  from the game. An invite notification shows your friend's callsign and how many are in their
+  squad. If you enable nudges, your browser or device
+  issues a push subscription — a delivery address plus encryption keys — which we store against
+  your account so notifications work in every future match and on every device you enabled them
+  on. Delivery goes through your platform's push service — Firebase Cloud Messaging (Google) in
+  the Android app, and your browser's own push service on the web: Apple for Safari, Google for
+  Chrome, Microsoft (Windows Push Notification Services) for Edge, and Mozilla for Firefox.
+  You can revoke notifications in your browser or device
   notification settings at any time, which withdraws your consent for future ones. A
-  subscription your push service reports as expired is deleted the next time we try to use
-  it, and every subscription is deleted with your account.</p>
+  subscription your push service reports as expired is deleted the next time a turn nudge
+  finds it so (an invite never deletes one), and every subscription is deleted with your
+  account.</p>
 
   <h2>Crash reports</h2>
   <p>If the game hits an error, a crash report is sent so we can fix it: the technical error

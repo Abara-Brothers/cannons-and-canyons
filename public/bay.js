@@ -54,8 +54,11 @@ const MODES = [
   { id: 'duel',   name: 'Duel',           players: '2',         tag: 'Head to head',
     blurb: 'Starts the moment your friend joins. First to bring the other down.',
     art: 'alpine-wide',   card: 'alpine-hero',   draft: 5 },
-  { id: 'ffa',    name: 'Free-for-all',   players: '3-4',       tag: 'Last tank standing',
-    blurb: 'Three or four commanders, one ridge line. Everyone for themselves.',
+  // FFA SEATS 2-4 (the engine's MODE_SEATS, and the Seats line), so the card
+  // says so too (fix wave E4): '3-4' beside a squad of two's "Needs 2 players"
+  // read as two different minimums on one card.
+  { id: 'ffa',    name: 'Free-for-all',   players: '2-4',       tag: 'Last tank standing',
+    blurb: 'Two to four commanders, one ridge line. Everyone for themselves.',
     art: 'desert-wide',   card: 'desert-hero',   draft: 5 },
   { id: 'boss',   name: 'Boss Fight',     players: '1-2 co-op', tag: 'Bring down WARLORD-7',
     blurb: 'A mech that fights back. Beat it and the Midnight paint drops.',
@@ -532,13 +535,20 @@ function sqTabs() {
   // which keeps the node without inventing a zero. So does a squad that lives
   // on another socket of this account ('elsewhere', 'open'; review T8-R1-6):
   // "0 / 4" under "Your squad is open on another device." would be false.
-  const count = sq.snap ? (sq.snap.members || []).length : sq.known && !sq.err && !sqAway() ? 0 : -1;
+  // A GUEST'S ZEROS ARE KNOWN (fix wave E9; D10 and design 5.1 state 1: the
+  // Friends tab shows 0). A guest asks the server nothing unless this tab holds
+  // a guest row's resume secret (sqGkOf), so with no squad on screen and none
+  // to resume there is none -- and a guest has no friends at all. Both are
+  // told, not guessed, and read "0 / 4" and "0".
+  const guest = acctState() !== 'in';
+  const count = sq.snap ? (sq.snap.members || []).length
+    : (sq.known || (guest && !sqGkOf())) && !sq.err && !sqAway() ? 0 : -1;
   const sn = snap();
   const inN = sn && sn.requests && Array.isArray(sn.requests.in) ? sn.requests.in.length : 0;
   const onN = sn && Array.isArray(sn.friends) ? sn.friends.filter((x) => x && x.online).length : 0;
   // The request lamp is aria-hidden and the pill is a bare number, so the
   // Friends tab says both in words.
-  const fName = 'Friends' + (sn ? ', ' + onN + ' online' : '')
+  const fName = 'Friends' + (sn || guest ? ', ' + onN + ' online' : '')
     + (inN > 0 ? ', ' + inN + ' request' + (inN === 1 ? '' : 's') + ' waiting' : '');
   // A PENDING INVITE LIGHTS THE SQUAD TAB (D-UI-4, review T9-R1-6), seen from
   // the Friends tab too -- where a player building a squad is looking -- and
@@ -548,7 +558,7 @@ function sqTabs() {
   const sName = invUp ? 'Squad' + (count >= 0 ? ', ' + count + ' of ' + SQ_MAX : '') + ', invite waiting' : '';
   return '<div class="sqt" role="tablist">'
     + sqTab('squad', 'Squad', count < 0 ? '' : count + ' / ' + SQ_MAX, count >= 0, invUp, false, sName)
-    + sqTab('friends', 'Friends', sn ? String(onN) : '', !!sn, inN > 0, true, fName)
+    + sqTab('friends', 'Friends', sn || guest ? String(onN) : '', !!sn || guest, inN > 0, true, fName)
     + '</div>';
 }
 function sqPanel() {
@@ -633,8 +643,29 @@ const sqAway = () => window.CC_SQUAD_END === 'elsewhere' || window.CC_SQUAD_END 
 // Where Invite friends stands in the other answered states: an empty, hidden
 // node of the same tag, so the code row keeps its index (morphChildren).
 const SQ_GAP = '<div class="sqf hidden"></div>';
+// "YOU LEFT THE SQUAD." IS SAID, AND THEN IT GOES (fix wave E9). It took the
+// place of the no-squad copy and its Seats line and never cleared: a player
+// who left read it for as long as they stayed on home. It is spent five
+// seconds after it is first painted on a visible home, or by the next squad
+// action from this box (sqOne, sqEnter), whichever comes first, and the box is
+// design 5.1's state 2 again. A new `left` is a new line: the cc:squad
+// listener resets both on every end that arrives. A kick, and every other
+// end, keeps its line for as long as it stands -- those are news the player
+// did not make, and a leave is one they did.
+const SQ_LEFT_MS = 5000;
+let sqLeftSpent = false, sqLeftT = 0;
+function sqLeftSpend() {
+  clearTimeout(sqLeftT); sqLeftT = 0;
+  if (sqLeftSpent || window.CC_SQUAD_END !== 'left') return;
+  sqLeftSpent = true;
+  sqPaint();
+}
 function sqLead() {
   const end = window.CC_SQUAD_END;
+  if (end === 'left' && sqLeftSpent) return sq.gone ? sqNote(SQ_ENDED) : '';
+  // The five seconds start when the line is first PAINTED where it can be
+  // read: home, on stage, in a tab in front of the player.
+  if (end === 'left' && !sqLeftT && !document.hidden && $('bay') && $('bay').classList.contains('active')) sqLeftT = setTimeout(sqLeftSpend, SQ_LEFT_MS);
   if (end) return sqNote(end === 'kicked' ? 'You were removed from the squad.'
     : end === 'left' ? 'You left the squad.'
     : end === 'elsewhere' ? SQ_ELSEWHERE
@@ -730,7 +761,13 @@ const sqRid = (p) => (p && typeof p.rid === 'string' && p.rid ? p.rid : '');
 function sqRow(p, i, sn, ctl) {
   const you = i === sn.you, name = nameOf(p), lead = sqIsLead(sn, p);
   const lit = !!p.online && !p.dropped;
+  // THE LEADER'S ROW SAYS LEADER AND NOTHING ABOUT READY (fix wave E9): the
+  // leader has no Ready control, the footer's "Waiting for N" counts members
+  // only, and Start takes the leader's rack as their Ready -- so "Not ready"
+  // there was false for ever, and a tick left over from before a hand-off
+  // would be as false. Reconnecting still shows: it is not a Ready state.
   const st = p.dropped ? '<span class="sqr dr">Reconnecting</span>'
+    : lead ? ''
     : p.ready ? '<span class="sqr on" role="img" aria-label="Ready" title="Ready">' + IC.tick + '</span>'
     : '<span class="sqr">Not ready</span>';
   const kick = ctl.lead && !you && !lead && !!sqRid(p);
@@ -905,6 +942,7 @@ function sqJoin(code) {
 function sqOne(frame, o) {
   const mine = sq;
   if (mine.busy) return false;              // one action at a time: the box has one footer
+  sqLeftSpend();                            // a new action: "You left the squad." has been read
   mine.aerr = ''; mine.ierr = ''; mine.ferr = ''; mine.fnote = '';
   mine.busy = o.busy;
   socialTx(frame, o.type || 'squad', o.op, o.kind, (m, err) => {
@@ -918,7 +956,8 @@ function sqOne(frame, o) {
   return true;
 }
 // A START REFUSED FOR ONE MEMBER NAMES THEM, when the server points at one (`at`
-// rides on member_offline and member_busy only) and the roster has a name for
+// rides on member_offline, member_busy and duplicate_member -- the second row of
+// the account that is on two) and the roster has a name for
 // that row. The roster reached the slot before this answer (the server pushes
 // it first), so `at` is read against the rows on screen. A row with no name is
 // never called "No callsign": the sentence falls back to "a player".
@@ -929,6 +968,7 @@ function sqStartSay(m, err) {
   const p = Number.isInteger(m.at) ? ms[m.at] : null, who = named(p) ? p.callsign : '';
   if (m.error === 'member_offline') return who ? who + " isn't ready to start yet." : err;
   if (m.error === 'member_busy') return who ? who + ' is still in a game or a lobby.' : err;
+  if (m.error === 'duplicate_member') return who ? who + ' is in the squad twice. Remove one and try again.' : err;
   return err;
 }
 // READY, a member's toggle. THE CLIENT CHECKS FIRST AND THE SERVER RE-CHECKS
@@ -1048,6 +1088,39 @@ function sqModeSend() {
     sqPaint();
   });
 }
+// A MEMBER'S BOARDS FOLLOW THE SQUAD'S MODE (fix wave E3). The leader's boards
+// are the squad's mode control (D7), so a member's lit board and launch bar
+// showed whatever that member had last tapped -- Golf lit in an FFA squad --
+// and a leader's went back to Duel on the reload after every match while the
+// squad stayed on its mode. So: a member's boards take the squad's mode, tee
+// set and seat count whenever the SQUAD says something new (a first roster, a
+// new squad, a mode the leader changed), and a leader's take them once after a
+// resume -- the reload after a match -- and are otherwise the leader's own
+// taps, which a roster landing before their mode frame must not undo. A
+// member's own tap still arms their own board (E5: they may launch a room of
+// their own) and stands until the squad next changes. Only while home or the
+// Mission board is being drawn (render calls this): a player in Match setup or
+// the Armoury keeps the mode they opened it for, and meets the squad's on
+// their way back home. The tee set and seat counts are written as setField
+// writes them, but the tee set is NOT saved as this player's preference: it is
+// the squad's.
+let sqFollowKey = '', sqLeadFollow = false;
+const SQ_TEES = ['champ', 'mens', 'womens', 'junior'];
+function sqFollow(scr) {
+  const sn = sq.snap, me = sqMe(sn);
+  if (!sqLive(sn) || !me || !MODES.some((x) => x.id === sn.mode)) return;
+  const k = [sn.code, sn.mode, sn.tees, sn.max].join('|');
+  const lead = sqIsLead(sn, me);
+  if (lead && !sqLeadFollow) { sqFollowKey = k; return; }
+  if (!lead && k === sqFollowKey) return;
+  if (scr !== 'home' && scr !== 'modes') return;
+  sqLeadFollow = false; sqFollowKey = k;
+  if (has('ccMode')) ccMode = sn.mode;
+  if (sn.mode === 'golf' && SQ_TEES.includes(sn.tees) && has('ccTees')) { ccTees = sn.tees; if ($('teeSel')) $('teeSel').value = sn.tees; }
+  if (sn.mode === 'golf' && Number.isInteger(sn.max) && sn.max >= 1 && sn.max <= 4 && has('ccGolfMax')) ccGolfMax = sn.max;
+  if (sn.mode === 'ffa' && (sn.max === 3 || sn.max === 4) && has('ccMax')) { ccMax = sn.max; if ($('countSel')) $('countSel').value = String(sn.max); }
+  if (fn('syncCreateRow')) syncCreateRow();
+}
 function sqMine(sn) {
   const ms = Array.isArray(sn.members) ? sn.members : [];
   const stale = !!sq.err;
@@ -1114,6 +1187,10 @@ function sqCanInvite() {
   if (sn) return sqLive(sn) && (sn.members || []).length < SQ_MAX;
   return sq.known && !sq.err && !sqAway();
 }
+// Where a friend row's Invite stands while it is not drawn (sqFriendRows). Its
+// own class, not .sbtn: `.sbtn + .pmb` would space the menu for a button that
+// is not there.
+const SQ_INV_GAP = '<button class="sqgap hidden" tabindex="-1" aria-hidden="true" disabled></button>';
 // Invited, until the next roster reaches the slot or thirty seconds pass.
 const sqInvited = (id) => { const v = sq.invited.get(id); return !!(v && v.snap === sq.snap && Date.now() < v.until); };
 // The line under the row an action was pressed on: red for a refusal, plain for
@@ -1148,14 +1225,19 @@ function sqFriendRows(sn) {
   const rows = fs.filter((p) => p && p.id).map((p) => {
     const name = nameOf(p), key = 'f:' + p.id;
     const mine = sqHas(p.id);
-    const act = mine ? ''
+    // THE INVITE'S PLACE IS HELD WHEN IT IS NOT DRAWN (fix wave B2), by an
+    // empty, hidden button, so the menu beside it keeps its node when the row
+    // flips either way (morphChildren is positional). Without it a focused menu
+    // lost its node, a focused Invite became the menu, and the flip back made a
+    // focused menu an Invite -- each without a word to a keyboard player.
+    const act = mine ? SQ_INV_GAP
       : sqInvited(p.id) ? '<button class="sbtn" data-sq="invite:' + esc(p.id) + '" disabled>Invited</button>'
       : '<button class="sbtn" data-sq="invite:' + esc(p.id) + '"' + (full ? ' title="Your squad is full."' : '') + (can ? '' : ' disabled')
         + (why ? ' aria-describedby="sqInvWhy"' : '') + '>'
         + (sq.busy === 'invite' && sq.fat === key ? 'Inviting' : 'Invite') + '</button>';
     return '<div class="sqm sqfr" data-row="' + esc(key) + '"><div class="sqm1"><span class="pdot' + (p.online ? ' on' : '') + '" title="' + (p.online ? 'Online' : 'Offline') + '">' + IC.dot + '</span>'
       + '<span class="sqmn"><span class="sqmt">' + esc(name) + '</span></span></div>'
-      + '<div class="sqm2"><span class="sqms">' + (mine ? '<span class="sqy">' + IC.tick + 'In your squad</span>' : '') + '</span>' + act
+      + '<div class="sqm2"><span class="sqms">' + (mine ? '<span class="sqy" tabindex="-1">' + IC.tick + 'In your squad</span>' : '') + '</span>' + act
       + menuBtn(p.id, 'id', name, false, !named(p)) + '</div></div>' + sqLineAt(key);
   }).join('');
   // A line whose row has gone -- a request answered, a friend removed -- is
@@ -1211,7 +1293,16 @@ function sqInviteFriend(id) {
     done: (m, mine) => {
       if (m.op !== 'state') { mine.ferr = socErr('squad.create', 'unavailable'); return; }
       mine.known = true; mine.gone = false; mine.err = '';
-      if (sq === mine && sqLive(sq.snap)) invite();
+      if (sq !== mine || !sqLive(sq.snap)) return;
+      // A NEW SQUAD STARTS ON THE LEADER'S LIT BOARD (Task 11 decision 1, fix
+      // wave B3). The server builds every squad on Duel, so the board this
+      // device has lit -- and its tee set and seat count -- go to the squad
+      // now, BEFORE the invite, so the friend is invited to the squad as it
+      // will be. sqModeSend sends only what the roster does not already say,
+      // and the socket keeps order: the mode's roster lands before the
+      // invite's answer. (The members' boards follow it, sqFollow.)
+      sqModeSend();
+      invite();
     } });
 }
 // ACCEPT and DECLINE, from the box: the same friend frames the Friends screen
@@ -1293,6 +1384,52 @@ const sqStore = (c) => { try { if (c) localStorage.setItem(SQ_KEY, c); else loca
 //            socket holds the row (D-UI-1); a join by code lands that way too.
 //            Any end, a `gone`, and leaving the account clear it.
 let sqHeld = null;
+// A GUEST ROW'S RESUME SECRET (fix wave E1; W1's frame contract). A guest's
+// squad row is keyed to the socket it joined on, and every way out of a match
+// reloads the page, so a guest fell out of their squad after every squad match.
+// The server now sends a guest row's own socket a secret, `gk`, on every state
+// frame, and a resume presenting { code, gk } puts that row on the new socket.
+// This is the tab's copy: `{ code, gk }` of the guest row this tab holds, or
+// null. Replaced by every roster that carries one, spent by a roster this
+// socket holds that carries none (the row became an account's at sign-in), by
+// any end but `open` (which moves no row), and by `gone`.
+// PER TAB, AND NEVER COPIED: sessionStorage is copied into a DUPLICATED tab,
+// and a duplicate presenting the secret would take the row from the tab in
+// use. So it lives in memory, and is written to sessionStorage only as the page
+// goes -- a reload, Back to menu -- or is hidden, and read back and deleted the
+// moment the next page boots (sqCarry, below): a tab duplicated while in front
+// of the player copies nothing.
+const SQ_GK_KEY = 'cc_squad_gk';
+const SQ_GK = /^[0-9a-f]{32}$/;
+const SQ_CODE = /^[A-Z0-9]{1,8}$/;
+let sqGk = null;
+// AN INVITE A RELOAD CARRIED (fix wave E2): the one the Squad pane would have
+// shown, with the account it was sent to, until this page's account is known
+// (the cc:account listener hands it back to app.js, or drops it).
+const SQ_INV_KEY = 'cc_squad_invite';
+let sqInvCarry = null;
+try {
+  const g = JSON.parse(sessionStorage.getItem(SQ_GK_KEY) || 'null');
+  if (g && typeof g.code === 'string' && SQ_CODE.test(g.code) && typeof g.gk === 'string' && SQ_GK.test(g.gk)) sqGk = { code: g.code, gk: g.gk };
+  const c = JSON.parse(sessionStorage.getItem(SQ_INV_KEY) || 'null');
+  if (c && typeof c === 'object' && typeof c.acct === 'string' && c.acct) sqInvCarry = c;
+} catch {}
+try { sessionStorage.removeItem(SQ_GK_KEY); sessionStorage.removeItem(SQ_INV_KEY); } catch {}
+const sqGkOf = () => sqGk;
+// Written as the page goes or is hidden, deleted as it comes back: in storage
+// only while nobody can be looking at this tab.
+function sqCarry(going) {
+  try {
+    if (going && sqGk) sessionStorage.setItem(SQ_GK_KEY, JSON.stringify(sqGk));
+    else sessionStorage.removeItem(SQ_GK_KEY);
+    const a = window.CC_ACCOUNT, inv = going && acctState() === 'in' && a && a.id ? sqInvOf(sq.snap) : null;
+    if (inv) sessionStorage.setItem(SQ_INV_KEY, JSON.stringify({ code: inv.code, from: inv.from, size: inv.size, max: inv.max, at: inv.at, acct: a.id }));
+    else sessionStorage.removeItem(SQ_INV_KEY);
+  } catch {}
+}
+window.addEventListener('pagehide', () => sqCarry(true));
+window.addEventListener('pageshow', () => sqCarry(false));
+document.addEventListener('visibilitychange', () => sqCarry(document.hidden));
 // Whether the page's first account event has passed (see the cc:account
 // listener at the foot of this file).
 let sqAcctSeen = false;
@@ -1327,21 +1464,29 @@ function sqAsk(bare, back) {
   // the waiter until its twelve-second timeout -- or it went out under the
   // identity a sign-in's hello has since replaced. Only an ask out under THIS
   // introduction does.
+  // A GUEST ASKS about a squad on screen, or one this tab holds the resume
+  // secret of (sqGk, fix wave E1): the reload after a match left no squad on
+  // screen, and the secret is how the row comes back.
   const n = sqIntro();
-  if (!n || !wsReady() || (sq.asking && sq.via === n) || (acctState() !== 'in' && !sq.snap)) return;
+  if (!n || !wsReady() || (sq.asking && sq.via === n) || (acctState() !== 'in' && !sq.snap && !sqGk)) return;
   if (sqHeld === null) sqHeld = sqStored();    // the tab's first ask: a reload, or a reopen
   // `had`: a squad this answer can take away -- a presented code, a squad on
   // screen, a squad this tab gave up to another tab or device (`elsewhere`: it
   // held one, and its bare question presents no code) or was shown open there
   // (`open`: the player has seen that the account has one), or, for a
   // return's second question, the "has ended" line itself.
-  const mine = sq, code = bare ? '' : sqHeld,
+  // A GUEST ROW'S SECRET GOES WITH ITS OWN CODE (E1): it is this tab's by
+  // construction, so it is presented on every ask that is not bare. The server
+  // answers a socket that already holds a row, or an account that has one,
+  // its own squad as before, and the secret then moves nothing.
+  const gk = bare ? null : sqGk;
+  const mine = sq, code = gk ? gk.code : bare ? '' : sqHeld,
     had = !!code || !!sq.snap || sqAway() || (!!back && sq.gone);
   mine.asking = true; mine.again = false; mine.via = n;
   // Every write below goes to `mine`, the state that asked: an account switch
   // replaces `sq` (sqReset), and an answer to the old account's question must
   // not settle the new account's.
-  socialTx(code ? { type: 'squad', op: 'resume', code } : { type: 'squad', op: 'resume' },
+  socialTx(gk ? { type: 'squad', op: 'resume', code, gk: gk.gk } : code ? { type: 'squad', op: 'resume', code } : { type: 'squad', op: 'resume' },
     'squad', null, 'squad.resume', (m, msg) => {
       // A LATER ASK ON THIS STATE OWNS IT, and this answer is dropped whole: it
       // is about a socket or an identity that ask replaced. A dead socket's
@@ -1349,7 +1494,9 @@ function sqAsk(bare, back) {
       if (mine.via !== n) return;
       mine.asking = false;
       if (m.error) mine.err = msg;
-      else if (m.op === 'state') { mine.known = true; mine.gone = false; mine.err = ''; }
+      // A RESUME'S ROSTER PUTS THE SQUAD'S MODE ON A LEADER'S BOARDS, once
+      // (sqFollow, fix wave E3): the reload after a match left them on Duel.
+      else if (m.op === 'state') { mine.known = true; mine.gone = false; mine.err = ''; sqLeadFollow = true; }
       else if (m.op === 'gone') {
         // Once per introduction: a return's own `gone` arms no further return.
         // The squad is gone for this tab too. (An answer to an old account's
@@ -1358,6 +1505,8 @@ function sqAsk(bare, back) {
         mine.known = true; mine.err = ''; mine.gone = had; mine.again = !back;
         if (code) sqStore('');
         sqHeld = '';
+        // A secret answered `gone` is spent: wrong, expired, or its row swept.
+        if (gk && sqGk === gk) sqGk = null;
       }
       // fits() proves the TYPE; the op is ours to prove, and an op from a
       // newer server is not an empty squad.
@@ -1390,6 +1539,7 @@ function sqAsk(bare, back) {
 function sqEnter() {
   const mine = sq;                             // as in sqAsk: answers settle the state that asked
   if (mine.cbusy) return;
+  sqLeftSpend();                               // a new action: "You left the squad." has been read
   const el = $('sqCode');
   const code = ((el && el.value) || '').trim().toUpperCase();
   mine.cerr = '';
@@ -1565,7 +1715,9 @@ SCREENS.settings = function () {
     ['aimGuide', 'Aim guide',      'Show the first-battle coaching again',   pref('cc_aimguide', false), false],
     ['motion',   'Reduced motion', 'Calm the menu and battlefield motion',   pref('cc_motion', false), false],
     ['haptics',  'Haptics',        IS_NATIVE_BAY ? 'Vibrate on impact' : 'Vibrate on impact (phones only)', hapticsOn(), false],
-    ['notify',   'Turn alerts',    notifyHidden ? 'Not available on this build yet' : 'Nudge me when a battle needs me', notifyOn, notifyHidden],
+    // ONE CONSENT, TWO PURPOSES (fix wave E6): the same subscription carries a
+    // friend's squad invite to a player who is away, so the row says both.
+    ['notify',   'Nudges',         notifyHidden ? 'Not available on this build yet' : 'Your turn, and squad invites from friends', notifyOn, notifyHidden],
   ].map((r) => '<div class="row"><span class="rt"><span class="rn2">' + r[1] + '</span><span class="rd">' + r[2] + '</span></span>'
     + '<button class="rk2' + (r[3] ? ' on' : '') + '" data-toggle="' + r[0] + '" aria-label="' + r[1] + '"' + (r[4] ? ' disabled style="opacity:.4"' : '') + '><i></i><u>' + (r[3] ? 'On' : 'Off') + '</u></button></div>').join('');
   const row = (n, d, btn, act) => '<div class="row"><span class="rt"><span class="rn2">' + n + '</span><span class="rd">' + d + '</span></span>' + (btn ? '<button class="sbtn" ' + act + '>' + btn + '</button>' : '') + '</div>';
@@ -1960,6 +2112,9 @@ const SOC_ERR = {
   // member_offline or member_busy when the server points at one.
   'squad.ready.no_squad':        'Your squad has ended.',
   'squad.ready.no_rack':         'Your rack does not suit this mode. Check your weapons and try again.',
+  // The server holds this player's row as DROPPED (squads.js setReady): the
+  // socket that asks is not yet the one on the row, and its resume will be.
+  'squad.ready.dropped':         'You are reconnecting to the squad. Try again in a moment.',
   'squad.ready.slow_down':       'Too many tries. Wait a moment.',
   'squad.ready.offline':         'Not connected. Try again in a moment.',
   'squad.ready._':               'Squads are not available right now. Try again later.',
@@ -1973,6 +2128,9 @@ const SOC_ERR = {
   'squad.start.wrong_device':    'Start from the device you joined the squad on, or rejoin the squad on this one.',
   'squad.start.no_rack':         'Your rack does not suit this mode. Check your weapons and try again.',
   'squad.start.wont_fit':        "Your squad does not fit this mode's seats.",
+  // ONE ACCOUNT ON TWO ROWS (squadStart's guard). sqStartSay names the row the
+  // server points at; without a name it says what the leader can see and do.
+  'squad.start.duplicate_member': 'One player is in the squad twice. Remove one and try again.',
   'squad.start.not_ready':       'Not everyone in the squad is ready yet.',
   'squad.start.member_offline':  "A player isn't ready to start yet.",
   'squad.start.member_busy':     'Someone in the squad is still in a game or a lobby.',
@@ -2843,11 +3001,39 @@ function morphChildren(live, tpl) {
   for (let i = n; i < T.length; i++) live.appendChild(T[i].cloneNode(true));
 }
 
+// THE KEYBOARD STAYS WHERE THE PLAYER PUT IT (fix wave B2). morphChildren is
+// positional, so a repaint can hand a focused node to a DIFFERENT control --
+// the next friend's button when the list reorders -- or hide or drop it. A
+// control is known by its signature (what it acts on); when the focused node
+// no longer carries it, the keyboard goes to the control that does, in the same
+// row, and failing that to what took its place there: "In your squad" (which
+// is what a friend's Invite becomes), their Invite, their menu -- never to a
+// neighbour row, never to the page's top.
+const focusSig = (e) => e.getAttribute('data-sq') || e.getAttribute('data-pmenu') || e.id || '';
+function focusOf(host) {
+  const e = document.activeElement;
+  if (!e || e === document.body || !host.contains(e)) return null;
+  const r = e.closest('[data-row]');
+  return { el: e, sig: focusSig(e), row: r ? r.getAttribute('data-row') : '' };
+}
+function keepFocus(host, had) {
+  const e = had.el, seen = (x) => !!x && !x.closest('.hidden') && x.getClientRects().length > 0;
+  if (e.isConnected && seen(e) && focusSig(e) === had.sig) return;
+  const r = had.row ? [...host.querySelectorAll('[data-row]')].find((x) => x.getAttribute('data-row') === had.row) : null;
+  if (!r) return;
+  const same = had.sig ? [...r.querySelectorAll('button, [tabindex]')].find((x) => focusSig(x) === had.sig && seen(x)) : null;
+  const t = same || [r.querySelector('.sqy'), r.querySelector('[data-sq^="invite:"]'), r.querySelector('.pmb')].find(seen);
+  if (t) t.focus();
+}
+
 let current = 'home';
 const stack = [];
 function render(name) {
   const host = $('bay'); if (!host) return;
   const next = name in SCREENS ? name : 'home';
+  // Home and the Mission board draw the armed mode: for a squad's member it is
+  // the squad's (sqFollow), set before the markup is built.
+  if (next === 'home' || next === 'modes') sqFollow(next);
   // The Armoury fills the squad's rack only for the visit sqRackOpen began.
   if (next !== 'armoury') sqArm = false;
   // Leaving Bay controls closes the field: it belongs to that screen only, the
@@ -2883,7 +3069,9 @@ function render(name) {
     clearTimeout(render.t); render.t = setTimeout(() => host.classList.remove('enter'), 900);
   } else {
     const tpl = document.createElement('div'); tpl.innerHTML = html;
+    const had = focusOf(host);
     morphChildren(host, tpl);
+    if (had) keepFocus(host, had);
   }
   // The Callsign row can only be honest about a name chosen on ANOTHER device if
   // the server is asked (BINDING resolution 13 puts it on the friends frame).
@@ -3030,15 +3218,28 @@ document.addEventListener('cc:squad', () => {
   // reconnects present it, which is how a socket takes its row back from a
   // dead one a proxy is still holding open (task 5). A join by code lands
   // here too: its roster reaches the slot before its answer.
-  if (sn && typeof sn.code === 'string' && sn.code) { sqStore(sn.code); sqHeld = sn.code; }
+  // AND A `gone` BEFORE IT WAS NOT THE LAST WORD (fix wave E9): `again` arms
+  // one more question on the next return to the tab, and a squad this socket
+  // now holds -- created or joined since -- has answered it. Left armed, that
+  // return asked anyway, and its roster, a new object, turned an Invite the
+  // create had just sent back into a live Invite (sqInvited).
+  if (sn && typeof sn.code === 'string' && sn.code) { sqStore(sn.code); sqHeld = sn.code; sq.again = false; }
+  // THE GUEST ROW'S SECRET (E1) follows every roster this socket holds: the
+  // one it carries, or none -- a roster without one is an account's row now.
+  if (sn && typeof sn.code === 'string' && SQ_CODE.test(sn.code)) sqGk = typeof sn.gk === 'string' && SQ_GK.test(sn.gk) ? { code: sn.code, gk: sn.gk } : null;
   if (end !== sqEndSeen) {
     sqEndSeen = end;
+    // A NEW END IS A NEW LINE (see sqLeftSpend): its own five seconds.
+    clearTimeout(sqLeftT); sqLeftT = 0; sqLeftSpent = false;
     // EVERY END TAKES THE SQUAD OFF THIS TAB, which asks bare from now on.
     // ELSEWHERE: another tab or device of this account took the row or acted
     // on the squad. OPEN: this tab was shown the squad while another socket
     // holds its row. Neither is over for the ACCOUNT, so the device's code
     // stays (see sqBack). Every other end is final, and the code goes too.
     if (end) { sqHeld = ''; if (end !== 'elsewhere' && end !== 'open') sqStore(''); }
+    // Every end but `open` spends a guest row's secret (E1): `open` is a look
+    // at a squad from a socket that holds no row, and moves none.
+    if (end && end !== 'open') sqGk = null;
   }
   sqPaint();
   // THE MISSION BOARD WEARS THE SAME PILLS (design 5.2), so a roster that lands
@@ -3169,6 +3370,17 @@ document.addEventListener('cc:account', () => {
     // button the server would refuse. The comment here used to claim "every
     // item goes when the account does"; this is what makes that true.
     pmClose();
+  }
+  // AN INVITE THE RELOAD CARRIED GOES BACK TO THE ACCOUNT IT WAS SENT TO (fix
+  // wave E2), and to no other: decided at the first account event that names a
+  // signed-in account -- after app.js's own listener has emptied the slot for
+  // this account, which runs first -- and never again. An event that names no
+  // linked account (the boot's own, before the session is read) decides
+  // nothing: the carry can only ever go back to its own account.
+  if (sqInvCarry && acctState() === 'in') {
+    const c = sqInvCarry, a = window.CC_ACCOUNT;
+    sqInvCarry = null;
+    if (a && a.id === c.acct && fn('socialInviteRestore')) socialInviteRestore(c);
   }
   // The open menu's items depend on who is asking — Remove friend is a linked
   // account's.

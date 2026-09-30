@@ -2142,6 +2142,13 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
      blur a .97 alpha still let the Seats line read through it. */
   #bay .sqft{position:sticky;bottom:0;z-index:1;margin-top:calc(6 * var(--u));padding:calc(5 * var(--u)) 0 calc(1 * var(--u));
      border-top:1px solid rgba(140,168,214,.2);background:#0d121c}
+  /* MORE ROWS BELOW (fix wave B1). On a short phone the pinned footer leaves
+     room for a row and a half of a squad of four, and the rest scroll: a fade
+     over the rows just above the footer says so. It is no wider than the gap
+     the footer keeps above itself at rest, so at the end of the list it covers
+     no row, and it takes no taps. */
+  #bay .sqft::before{content:"";position:absolute;left:0;right:0;top:calc(-6 * var(--u));height:calc(6 * var(--u));
+     background:linear-gradient(rgba(13,18,28,0),#0d121c);pointer-events:none}
   #bay .sqfl{font-family:"JetBrains Mono",monospace;font-size:calc(8 * var(--u));font-weight:700;letter-spacing:.1em;
      line-height:1.3;text-transform:uppercase;color:#9dadd0}
   #bay .sqfl.sqq{font-family:Rajdhani,system-ui,sans-serif;font-size:calc(11 * var(--u));font-weight:600;letter-spacing:.02em;

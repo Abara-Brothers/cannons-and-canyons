@@ -1231,7 +1231,13 @@ if (IS_NATIVE) {
       // Same function the web path uses. The consume differs; the merge, the
       // cloud push and the chip refresh after it are the part most worth NOT
       // having a second copy of.
-      cloudBoot(url);
+      // AND THE HELLO AFTER IT (fix wave A8), as goSignIn() and the native
+      // Apple sheet send theirs. The reply is consumed IN this page, so no page
+      // load is coming to introduce the new identity: without it the server
+      // goes on treating this socket as the guest -- or nobody -- it was, and
+      // the Squad box, which asks nothing until the socket's hello has marked
+      // it (socialIntro), waits for a hello that never comes.
+      cloudBoot(url).then(() => { if (S.ws) sendHello(S.ws); });
     });
   }
 }
@@ -1557,8 +1563,9 @@ window.CC_SQUAD_END = '';
 // request id, so left to fall through socialReply it reaches
 // `if (m.id == null) return;` and vanishes -- and the only invite a CONNECTED
 // player would ever get is the push notification design 4.4 declines to send
-// to somebody who is online. Written only by socialInvite() below; bay.js
-// reads it. null MEANS NOTHING PENDING, never "not known yet": there is no
+// to somebody who is online. Written only by socialInvite() below, and by
+// socialInviteRestore() for one a reload carried (both through squadInviteSet);
+// bay.js reads it. null MEANS NOTHING PENDING, never "not known yet": there is no
 // read behind this slot, only pushes, so there is no third state to tell.
 window.CC_SQUAD_INVITE = null;
 let socialId = 0;
@@ -1735,6 +1742,12 @@ function socialInvite(m) {
   // account, one is dropped here too -- which is what the boot's first
   // account event would do to it anyway.
   if (!socialSignedIn()) return;
+  squadInviteSet(m, Date.now(), SQUAD_INVITE_MS + 50);
+}
+// THE SLOT'S ONE WRITER OF AN INVITE, for a fresh one (above) and a carried one
+// (below): the frame read field by field, stamped `at`, and a timer that
+// empties the slot of THIS invite when its time is up.
+function squadInviteSet(m, at, ms) {
   const f = m.from && typeof m.from === 'object' ? m.from : {};
   const n = (v, d) => (Number.isInteger(v) && v >= 1 && v <= 4 ? v : d);
   const inv = window.CC_SQUAD_INVITE = {
@@ -1742,7 +1755,7 @@ function socialInvite(m) {
     from: { callsign: typeof f.callsign === 'string' && f.callsign ? f.callsign : null },
     size: n(m.size, 1),
     max: n(m.max, 4),
-    at: Date.now(),
+    at,
   };
   // Only THIS invite is taken: a newer one, a Join or an account change may
   // have replaced it by then.
@@ -1750,8 +1763,23 @@ function socialInvite(m) {
     if (window.CC_SQUAD_INVITE !== inv) return;
     window.CC_SQUAD_INVITE = null;
     document.dispatchEvent(new Event('cc:social'));
-  }, SQUAD_INVITE_MS + 50);
+  }, ms);
   document.dispatchEvent(new Event('cc:social'));
+}
+// AN INVITE THE RELOAD CARRIED (fix wave E2). Every way out of a match reloads
+// the page, which emptied this slot: an invite that reached a player mid-match
+// -- shown nowhere off home (D-UI-4) -- was lost, while the inviter had been
+// told it went. bay.js carries the one its Squad pane would show across the
+// reload (per tab, in sessionStorage) and hands it back here once the page
+// knows its account, having checked the carry was made for THIS account. It
+// goes back exactly as it arrived: the same fields, read the same way, and its
+// OWN `at`, so its ten minutes still run from when it came -- a carry older
+// than that is refused, and the timer takes the rest of its time.
+function socialInviteRestore(c) {
+  if (!c || typeof c.code !== 'string' || !SQUAD_INVITE_CODE.test(c.code) || !socialSignedIn()) return false;
+  if (!socialInviteFresh({ at: c.at })) return false;
+  squadInviteSet(c, c.at, Math.max(0, SQUAD_INVITE_MS + 50 - (Date.now() - c.at)));
+  return true;
 }
 // A SQUAD START REFUSED AFTER THE ENGINE HAD ALREADY SHOWN THIS CLIENT A LOBBY
 // (task 4's client obligation, R6). The seating builds the room seat by seat
@@ -2550,7 +2578,7 @@ function handle(m) {
       buildWeaponStrip(); updateDock();
       showToast('LOADOUTS LOCKED — BATTLE ON');
       break;
-    case 'pushOk': showToast('Nudges on — play whenever, we will fetch you'); break;
+    case 'pushOk': showToast('Nudges on: your turn, and squad invites from friends.'); break;
     case 'crateTaken': deferHp(() => applyCrateTaken(m)); break;
     case 'crates':      // post-shot re-settle: survivors follow the new ground
       deferHp(() => {

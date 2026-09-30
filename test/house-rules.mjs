@@ -1406,5 +1406,47 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   }
 }
 
+// ---- 19. WHAT A NUDGE IS FOR IS SAID WHERE IT IS ASKED FOR (fix wave E6, B4) --
+// Since squads, a friend's squad invite reaches an offline player through the
+// same push subscription as a turn nudge (server.js pushSquadInvite), and the
+// player's one consent covers both (no separate toggle, E6). So every place
+// that asks for that consent or describes it must name both purposes: the
+// policy's table row, its legal basis and its section, the Bay controls row
+// that turns it on, the toast that confirms it, the legacy button and the
+// store declaration. And the policy names every web push operator a
+// subscription can go to: Edge's goes to Microsoft (Windows Push Notification
+// Services), which the page left out (B4). Comments are blanked first, as in
+// rule 16: a commented-out sentence tells a reader nothing. Every run of white
+// space is read as one space, so a sentence the page wraps still matches.
+{
+  const flat = (rel) => read(rel).replace(/<!--[\s\S]*?-->/g, ' ').replace(/\s+/g, ' ');
+  const privacy = flat('public/privacy.html'), store = flat('store/STORE_LISTING.md');
+  const MUST = [
+    ['public/privacy.html', privacy, /<tr><td>Push subscription[^<]*<\/td><td>[^<]*squad invites from friends/, 'its data table says a push subscription also delivers squad invites from friends'],
+    ['public/privacy.html', privacy, /Notifications \(your turn, and squad invites from friends\): your consent/, 'its legal bases name both purposes under consent'],
+    ['public/privacy.html', privacy, /<h2>Notifications<\/h2>/, 'its section is "Notifications", not "Turn notifications"'],
+    ['public/privacy.html', privacy, /Microsoft[^<]*Windows Push Notification Services[^<]*Edge/, 'it names Microsoft (Windows Push Notification Services, for Edge) among the push operators'],
+    ['public/bay.js', flat('public/bay.js'), /\['notify', 'Nudges', notifyHidden \? '[^']*' : 'Your turn, and squad invites from friends'/, 'the Bay controls row that turns nudges on names both purposes'],
+    ['public/app.js', flat('public/app.js'), /case 'pushOk': showToast\('Nudges on: your turn, and squad invites from friends\.'\)/, 'the toast that confirms the opt-in names both purposes'],
+    ['public/index.html', flat('public/index.html'), /Nudge me for my turn and squad invites/, 'the legacy opt-in button names both purposes'],
+    ['store/STORE_LISTING.md', store, /opt-in nudges for your turn and for squad invites from friends/, 'the store declaration names squad invites from friends'],
+    ['store/STORE_LISTING.md', store, /Apple\/Google\/Microsoft\/Mozilla push services/, 'the store processors list names Microsoft'],
+  ];
+  const missing = MUST.filter(([, src, re]) => !re.test(src));
+  // And no sentence still gives the subscription ONE purpose.
+  const STALE = [
+    ['public/privacy.html', privacy, /Delivering "your turn" notifications/],
+    ['public/privacy.html', privacy, /Turn notifications: your consent/],
+    ['public/privacy.html', privacy, /operated by Apple, Google or Mozilla\)/],
+    ['store/STORE_LISTING.md', store, /opt-in turn nudges\./],
+  ].filter(([, src, re]) => re.test(src));
+  if (missing.length || STALE.length) {
+    fail('a nudge is described as turns only, or a push operator is missing:\n      '
+      + missing.map(([rel, , , why]) => `${rel}: ${why}`).concat(STALE.map(([rel, , re]) => `${rel} still says ${re}`)).join('\n      '));
+  } else {
+    ok(`every place that asks for or describes the nudge consent names turns AND squad invites from friends (${MUST.length} checks), and the policy names Microsoft for Edge`);
+  }
+}
+
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nALL GOOD');
 process.exit(out.errors.length ? 1 : 0);

@@ -32,7 +32,7 @@ const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Conte
 if (!existsSync(CHROME)) { console.log(`SKIP  squad_ui tests -- no Chrome at ${CHROME}`); process.exit(3); }
 const ROOT = fileURLToPath(new URL('..', import.meta.url));   // decoded: the path has spaces
 const CDP_MS = 15000;                                           // one call
-const RUN_MS = 240000;                                          // the whole suite
+const RUN_MS = 300000;                                          // the whole suite
 const errors = [];
 const ok = (m) => console.log('  ok -- ' + m);
 const fail = (m) => { errors.push(m); console.error('FAIL ' + m); };
@@ -41,8 +41,11 @@ const freePort = () => new Promise((res, rej) => { const s = net.createServer();
 const get = (url) => fetch(url, { signal: AbortSignal.timeout(2000) });
 
 let srv = null, chrome = null, prof = null;
+// SIGKILL (fix wave A4): a stopped process ignores SIGTERM until it is
+// continued, so a frozen Chrome -- the hang the deadlines exist for -- outlived
+// the SIGTERM this sent.
 const cleanup = () => {
-  try { chrome && chrome.kill(); } catch {} try { srv && srv.kill(); } catch {}
+  try { chrome && chrome.kill('SIGKILL'); } catch {} try { srv && srv.kill('SIGKILL'); } catch {}
   try { prof && rmSync(prof, { recursive: true, force: true, maxRetries: 5, retryDelay: 120 }); } catch {}
 };
 process.on('exit', cleanup);
@@ -831,15 +834,22 @@ try {
     // join a squad by code meanwhile. If that squad has ended by the time the
     // return asks, the bare question presents no code, and the squad on screen
     // alone makes "has ended" the true line.
+    // CHANGED BY FIX WAVE W2 (E9, the Invite that flipped back). A squad this
+    // tab joined since a `gone` has answered the question that `gone` left
+    // owing: the return asks NOTHING, and roster pushes keep the box true from
+    // here. (What this check pinned before -- a BARE question answered `gone`
+    // while a squad is on screen reads "has ended" -- can no longer be reached:
+    // a tab with a squad on screen holds its row and asks by code, and the
+    // coded path's "has ended" is pinned by the reconnect checks above.)
+    // Proved red with the fix's `sq.again = false` taken out of the cc:squad
+    // listener: the return then asks bare again.
     await ask(''); await reply({ op: 'gone' });
     await joinWith(SNAP);
     await clearTx(); await focus();
     const hq = await squads();
-    await reply({ op: 'gone' });
-    const hg = await box();
-    if (bare1(hq) && hg && hg.text.startsWith('Your squad has ended. Squad up again.'))
-      ok(`${V}: a bare question asked with a squad on screen, answered \`gone\`, reads "has ended"`);
-    else fail(`${V}: gone with a squad on screen ${JSON.stringify({ hq, text: hg && hg.text })}`);
+    if (hq.length === 0)
+      ok(`${V}: a return after joining a squad asks nothing more of the server`);
+    else fail(`${V}: gone with a squad on screen ${JSON.stringify({ hq })}`);
     // (d) NONE
     await push({ op: 'ended', reason: 'left' });
     await enterCode('ZZZZ'); await codeReply({ kind: 'none' });
@@ -1375,7 +1385,7 @@ try {
     await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
     const a1 = await t9box();
     if (a1 && a1.rows.length === 2
-        && a1.rows[0].name === 'Dusty Crag' && a1.rows[0].you && a1.rows[0].lead && a1.rows[0].tick && a1.rows[0].dot && a1.rows[0].lit
+        && a1.rows[0].name === 'Dusty Crag' && a1.rows[0].you && a1.rows[0].lead && !a1.rows[0].tick && a1.rows[0].dot && a1.rows[0].lit  // no tick on the leader (fix wave E9)
         && a1.rows[1].name === 'Steel Mule' && !a1.rows[1].you && !a1.rows[1].lead && a1.rows[1].tick
         && a1.add && a1.invite && !a1.invite.dis && a1.link && a1.link.t === 'Code QK7T' && !a1.link.dis
         && JSON.stringify(a1.seats) === JSON.stringify(['Duel 2*', 'FFA 2–4*', 'Boss 1–2*', 'Aliens 1–2*', 'Golf 1–4*'])
@@ -1667,7 +1677,8 @@ try {
       ['not_ready', undefined, 'Not everyone in the squad is ready yet.'],
       ['capacity', undefined, 'The server is at capacity. Try again shortly.'],
       ['refused', undefined, 'That match could not be started. Try again.'],
-      ['duplicate_member', 1, 'That match could not be started. Try again.'],
+      ['duplicate_member', 1, 'Steel Mule is in the squad twice. Remove one and try again.'],   // fix wave E9
+      ['duplicate_member', undefined, 'One player is in the squad twice. Remove one and try again.'],
       ['slow_down', undefined, 'Too many tries. Wait a moment.'],
       ['unavailable', undefined, 'That match could not be started. Try again.'],
       ['a_code_from_a_newer_server', undefined, 'That match could not be started. Try again.'],
@@ -2715,12 +2726,12 @@ try {
     await friendsIn(FR9);
     const iNamed = (rows, names, words) => Array.isArray(rows) && JSON.stringify(rows.map((r) => r.name)) === JSON.stringify(names)
       && JSON.stringify(rows.map((r) => r.words)) === JSON.stringify(words) && rows.every((r) => !r.cut && r.under && r.foot);
-    if (iNamed(iN.lead, ['Dusty Crag', 'Steel Mule', 'Ridge Pike'], [2, 1, 1]) && iNamed(iN.member, ['Dusty Crag', 'Ridge Pike', 'Steel Mule'], [1, 2, 1])
+    if (iNamed(iN.lead, ['Dusty Crag', 'Steel Mule', 'Ridge Pike'], [1, 1, 1])   // the leader's row: Leader, no tick (fix wave E9) && iNamed(iN.member, ['Dusty Crag', 'Ridge Pike', 'Steel Mule'], [1, 2, 1])
         && iNamed(iN.friends, ['Nia Vale', 'Steel Mule', 'Ridge Pike'], [0, 1, 0]))
       ok(`${V}: every fixture name reads in full on a line of its own, the status words beneath it and no control's target reaching into it -- a reconnecting member, a reconnecting leader, a request, a squadmate and a friend to invite`);
     else fail(`${V}: two-line rows, names ${JSON.stringify(iN)}`);
     const iAll = [].concat(iW.lead, iW.member, iW.friends);
-    if (iW.lead.length === 4 && iW.member.length === 4 && iW.friends.length === 1
+    if (iW.lead.length === 3 && iW.member.length === 4 && iW.friends.length === 1   // no tick on the leader (fix wave E9)
         && iAll.every((w) => w.clear && w.hit.length === 0 && !w.open && !w.ask && w.sent === 0) && iMenuSq === true && iMenuFr === true && iShut)
       ok(`${V}: a tap anywhere on Leader, Ready, Not ready, Reconnecting or In your squad opens no menu and asks nothing, and a tap on a menu opens it`);
     else fail(`${V}: a tap on the status words ${JSON.stringify({ iW, iMenuSq, iMenuFr, iShut })}`);
@@ -3108,8 +3119,8 @@ try {
     const r3f = (await squads()).filter((f) => f.op === 'ready');
     if (r3f.length) await reply({ op: 'ready', ok: true });
     if (r3scr === 'home' && r3.ready && !r3.ready.dis && r3.ready.t === 'Ready' && !r3.rack
-        && r3f.length === 1 && r3f[0].ready === true && JSON.stringify(r3f[0].loadout) === JSON.stringify(SEVEN11) && (await ev('ccMode')) === 'duel')
-      ok(`${V}: back in the box the member's Ready is live and sends all seven picks, with Duel still armed on this device`);
+        && r3f.length === 1 && r3f[0].ready === true && JSON.stringify(r3f[0].loadout) === JSON.stringify(SEVEN11) && (await ev('ccMode')) === 'boss')
+      ok(`${V}: back in the box the member's Ready is live and sends all seven picks, with the device now armed on the squad's Boss (fix wave E3)`);
     else fail(`${V}: ready after the squad rack ${JSON.stringify({ r3scr, r3, sent: r3f })}`);
     // ---- R4. THE ARMOURY OF THE LAUNCH FLOW IS UNTOUCHED: from Match setup it
     //      drafts for the armed mode, step 3 of 3, and launches.
@@ -3117,7 +3128,9 @@ try {
     await click('#bay .pfoot [data-go="armoury"]'); await sleep(80);
     const r4 = await t11arm();
     await ev(`(Bay.show('home'), true)`);
-    if (r4.scr === 'armoury' && r4.title === 'Duel' && r4.slots === 5 && r4.meta === 'Step 3 of 3' && r4.launch)
+    // CHANGED BY FIX WAVE W2 (E3): a member's device follows the squad's mode,
+    // so the armed mode here is the squad's Boss. Proved red with sqFollow off.
+    if (r4.scr === 'armoury' && r4.title === 'Boss Fight' && r4.slots === 7 && r4.meta === 'Step 3 of 3' && r4.launch)
       ok(`${V}: the Armoury reached from Match setup still drafts for the armed mode and launches`);
     else fail(`${V}: launch-flow armoury ${JSON.stringify(r4)}`);
     // ---- R5. THE LEADER'S SHORT START IS THE SAME DOOR, and it opens on the
@@ -3159,7 +3172,11 @@ try {
     await ev(`(() => { const b = document.querySelector('#bay [data-pick="wall"]'); if (b) b.click(); return true; })()`);
     const r6 = await t11arm();
     await ev(`(Bay.show('home'), true)`);
-    if (r6a.title === 'Boss Fight' && r6.scr === 'armoury' && r6.title === 'Duel' && r6.slots === 5 && r6.meta === 'Step 3 of 3' && r6.launch)
+    // CHANGED BY FIX WAVE W2 (E3): the armed mode is the squad's Boss now, so
+    // the launch flow's own Armoury is Boss's; what this pins is that it is the
+    // LAUNCH flow's (Step 3 of 3, no way back to a squad), not the squad's.
+    if (r6a.title === 'Boss Fight' && r6.scr === 'armoury' && r6.title === 'Boss Fight' && r6.slots === 7 && r6.meta === 'Step 3 of 3'
+        && Array.isArray(r6.foot) && !r6.foot.some((f) => f.back))
       ok(`${V}: an Armoury opened for a squad that then ends draws the armed mode's own Armoury on the next pick`);
     else fail(`${V}: squad armoury after the squad ${JSON.stringify({ r6a: r6a.title, r6 })}`);
     await t11rack(FIVE11);
@@ -3307,6 +3324,155 @@ try {
   fail('squad_ui task 11 stopped: ' + (e && e.message));
 }
 
+// ============================================================================
+// FIX WAVE W2 (client half of the whole-branch fix wave; .superpowers/sdd3/
+// final-wave.md). Each check pins one decided behaviour through what the page
+// shows, stores and sends -- bay.js keeps its internals private -- and was
+// shown RED with the matching part of the fix reverted. One viewport: these are
+// behaviours, not layout.
+try {
+  const W2_MULE = '00000000-0000-4000-8000-0000000000cc';
+  const W2R = (tag) => (tag + '0'.repeat(32)).slice(0, 32);
+  const W2GK = 'ab'.repeat(16);
+  const w2m = (id, callsign, rid, o) => Object.assign({ id, rid: W2R(rid), callsign, guest: id === null, online: true, ready: false, dropped: false }, o);
+  const w2fits = (n) => ({ duel: n === 2, ffa: n >= 2 && n <= 4, boss: n >= 1 && n <= 2, aliens: n >= 1 && n <= 2, golf: n >= 1 && n <= 4 });
+  const w2state = async (patch) => {
+    const n = (patch.members || []).length;
+    await ev(`(handle(Object.assign({ type: 'squad', op: 'state', code: 'QK7T', leader: ${JSON.stringify(ME)},
+      mode: 'duel', tees: null, max: null, you: 0, held: true, members: [], fits: ${JSON.stringify(w2fits(n))} }, ${JSON.stringify(patch)})), true)`);
+    await sleep(80);
+  };
+  // A fresh page in the SAME tab, as the reload after a match gives: the same
+  // sessionStorage.
+  const w2load = async () => {
+    await send('Page.navigate', { url: `http://127.0.0.1:${appPort}/` });
+    for (let i = 0; i < 80; i++) {
+      if (await ev('!!window.Bay && typeof handle === "function" && !!document.querySelector("#bay .boards")').catch(() => false)) {
+        for (let k = 0; k < 40 && (await ev(`document.getElementById('bay').classList.contains('enter')`)); k++) await sleep(100);
+        return true;
+      }
+      await sleep(200);
+    }
+    return false;
+  };
+  const w2hello = async () => { await clearTx(); await ev('sendHello(S.ws).then(() => true)'); await sleep(80); };
+  const w2hide = () => ev(`(window.dispatchEvent(new Event('pagehide')), true)`);
+  const w2pane = () => ev(`(() => { Bay.show('home'); const p = document.getElementById('sqPane-squad'); return p ? p.textContent.replace(/\\s+/g, ' ') : ''; })()`);
+  const V = '667x375';
+  await send('Emulation.setDeviceMetricsOverride', { width: 667, height: 375, deviceScaleFactor: 2, mobile: true });
+  if (!(await w2load())) throw new Error('page never became ready for the fix-wave checks');
+  await ev(`(localStorage.removeItem('cc_squad'), sessionStorage.clear(), true)`);
+
+  // ---- W1. A GUEST ROW'S SECRET RIDES THE RELOAD (E1). Written to this
+  //      tab's sessionStorage only on pagehide; the next page takes it OUT of
+  //      storage (a duplicated tab copies nothing), presents it on its first
+  //      ask, and a `gone` spends it.
+  await stubSocket(); await setWho('guest'); await w2hello();
+  await w2state({ leader: W2_MULE, you: 0, gk: W2GK, members: [w2m(null, null, 'g1'), w2m(W2_MULE, 'Steel Mule', 'c1')] });
+  const w1before = await ev(`sessionStorage.getItem('cc_squad_gk')`);
+  await w2hide();
+  const w1stored = await ev(`sessionStorage.getItem('cc_squad_gk')`);
+  if (!(await w2load())) throw new Error('page never came back after the reload');
+  const w1left = await ev(`sessionStorage.getItem('cc_squad_gk')`);
+  await stubSocket(); await setWho('guest'); await w2hello();
+  const w1ask = await squads();
+  await reply({ op: 'gone' });
+  await w2hide();
+  const w1spent = await ev(`sessionStorage.getItem('cc_squad_gk')`);
+  if (w1before === null && w1stored === JSON.stringify({ code: 'QK7T', gk: W2GK }) && w1left === null
+      && w1ask.length === 1 && w1ask[0].op === 'resume' && w1ask[0].code === 'QK7T' && w1ask[0].gk === W2GK && w1spent === null)
+    ok(`${V}: a guest row's secret goes to sessionStorage only on pagehide, the next page takes it out, asks {resume, code, gk}, and a gone spends it`);
+  else fail(`${V}: guest secret across a reload ${JSON.stringify({ w1before, w1stored, w1left, w1ask, w1spent })}`);
+
+  // ---- W2. AN INVITE RIDES THE RELOAD TO ITS OWN ACCOUNT ONLY (E2), with its
+  //      own arrival time, and not once it is ten minutes old.
+  await stubSocket(); await setWho('in'); await w2hello(); await reply({ op: 'gone' });
+  await ev(`(handle({ type: 'squad', op: 'invited', code: 'ZK4P', from: { callsign: 'Steel Mule' }, size: 2, max: 4 }), true)`); await sleep(80);
+  const w2at = await ev('window.CC_SQUAD_INVITE && window.CC_SQUAD_INVITE.at');
+  await w2hide();
+  const w2carry = JSON.parse((await ev(`sessionStorage.getItem('cc_squad_invite')`)) || 'null');
+  if (!(await w2load())) throw new Error('page never came back after the invite reload');
+  await stubSocket(); await setWho('in');
+  const w2back = await ev('window.CC_SQUAD_INVITE && { code: window.CC_SQUAD_INVITE.code, at: window.CC_SQUAD_INVITE.at, from: window.CC_SQUAD_INVITE.from.callsign }');
+  if (w2carry && w2carry.acct === ME && w2carry.code === 'ZK4P' && w2back && w2back.code === 'ZK4P' && w2back.at === w2at && w2back.from === 'Steel Mule')
+    ok(`${V}: an invite that arrived before a reload is offered again after it, to the same account, with its own arrival time`);
+  else fail(`${V}: invite carry ${JSON.stringify({ w2carry, w2back, w2at })}`);
+  // The page being left writes its OWN carry on pagehide and visibilitychange,
+  // so the planted one goes in from listeners registered after bay.js's, which
+  // run last.
+  const w2try = async (carry) => {
+    await ev(`(() => { const put = () => sessionStorage.setItem('cc_squad_invite', ${JSON.stringify(JSON.stringify(carry))});
+      window.addEventListener('pagehide', put); document.addEventListener('visibilitychange', put); return true; })()`);
+    if (!(await w2load())) return 'no page';
+    await stubSocket();
+    // Read in the SAME turn as the account event: a stale invite let through
+    // would be emptied again by its own zero-length timer a moment later, and a
+    // later read could not tell it was ever offered.
+    const got = await ev(`(() => { const b = $('accountBtn'); b.classList.remove('hidden'); b.dataset.state = 'in';
+      window.CC_ACCOUNT = ${ACC.in}; document.dispatchEvent(new CustomEvent('cc:account')); return window.CC_SQUAD_INVITE; })()`);
+    await setWho('in');
+    return got;
+  };
+  const w2other = await w2try({ code: 'ZK4P', from: { callsign: 'Steel Mule' }, size: 2, max: 4, at: Date.now(), acct: W2_MULE });
+  const w2old = await w2try({ code: 'ZK4P', from: { callsign: 'Steel Mule' }, size: 2, max: 4, at: Date.now() - 11 * 60 * 1000, acct: ME });
+  if (w2other === null && w2old === null)
+    ok(`${V}: a carried invite is refused for another account, and once it is older than ten minutes`);
+  else fail(`${V}: invite carry guards ${JSON.stringify({ w2other, w2old })}`);
+
+  // ---- W3. A MEMBER'S BOARDS FOLLOW THE SQUAD'S MODE (E3).
+  await stubSocket(); await setWho('in'); await w2hello(); await reply({ op: 'gone' });
+  await ev(`(ccMode = 'duel', ccTees = 'mens', ccGolfMax = 2, true)`);
+  await w2state({ leader: W2_MULE, you: 1, mode: 'golf', tees: 'womens', max: 3,
+    members: [w2m(W2_MULE, 'Steel Mule', 'c1'), w2m(ME, 'Dusty Crag', 'a1')] });
+  await ev(`(Bay.show('home'), true)`); await sleep(60);
+  const w3 = await ev('({ mode: ccMode, tees: ccTees, max: ccGolfMax })');
+  if (w3.mode === 'golf' && w3.tees === 'womens' && w3.max === 3)
+    ok(`${V}: a member's lit board, tees and seat count follow the squad's mode`);
+  else fail(`${V}: member follows squad ${JSON.stringify(w3)}`);
+
+  // ---- W4. A READY REFUSED 'dropped' SAYS SO (E9), and names no block.
+  await clearTx();
+  await ev(`(() => { const b = document.querySelector('#sqPane-squad [data-sq="ready"]'); if (b) { b.removeAttribute('disabled'); b.click(); } return !!b; })()`); await sleep(60);
+  const w4sent = (await squads()).filter((f) => f.op === 'ready').length;
+  if (w4sent) await reply({ op: 'ready', error: 'dropped' });
+  const w4 = await w2pane();
+  if (w4sent === 1 && w4.includes('You are reconnecting to the squad. Try again in a moment.') && !/block/i.test(w4))
+    ok(`${V}: a Ready refused 'dropped' reads "You are reconnecting to the squad. Try again in a moment."`);
+  else fail(`${V}: ready dropped ${JSON.stringify({ w4sent, w4: w4.slice(0, 200) })}`);
+
+  // ---- W5. "You left the squad." IS READ, THEN GOES (E9): five seconds on the
+  //      home screen, and it is gone.
+  await ev(`(handle({ type: 'squad', op: 'ended', reason: 'left' }), true)`); await sleep(80);
+  const w5a = await w2pane();
+  await sleep(5400);
+  const w5b = await w2pane();
+  if (/You left the squad\./.test(w5a) && !/You left the squad\./.test(w5b))
+    ok(`${V}: "You left the squad." shows, and is gone five seconds later`);
+  else fail(`${V}: left line ${JSON.stringify({ w5a: w5a.slice(0, 120), w5b: w5b.slice(0, 120) })}`);
+
+  // ---- W6. A GUEST'S TABS SHOW COUNTS (E9, spec D10): "0 / 4" and "0".
+  await stubSocket(); await setWho('guest'); await w2hello();
+  const w6 = await ev(`(() => { Bay.show('home'); return [...document.querySelectorAll('#bay [data-sq^="tab:"]')].map((t) => t.textContent.replace(/\\s+/g, ' ').trim()); })()`);
+  if (w6.length === 2 && /0\s*\/\s*4/.test(w6[0]) && /Friends\s*0$/.test(w6[1]))
+    ok(`${V}: a guest with no squad sees "0 / 4" on Squad and "0" on Friends`);
+  else fail(`${V}: guest tab counts ${JSON.stringify(w6)}`);
+
+  // ---- W7. INVITE THAT CREATES THE SQUAD SENDS THE LIT BOARD FIRST (B3).
+  await stubSocket(); await setWho('in'); await w2hello(); await reply({ op: 'gone' });
+  await ev(`(ccMode = 'boss', true)`);
+  await ev(`(window.CC_SOCIAL = ${JSON.stringify({ friends: [{ id: W2_MULE, callsign: 'Steel Mule', online: true }], requests: { in: [], out: [] }, blocked: [], friendCode: 'AB12CD', callsign: null })}, document.dispatchEvent(new Event('cc:social')), true)`); await sleep(60);
+  await ev(`(() => { const b = document.querySelector('#bay [data-sq="tab:friends"]'); if (b) b.click(); return true; })()`); await sleep(60);
+  await clearTx();
+  await ev(`(() => { const b = document.querySelector('#bay [data-sq="invite:${W2_MULE}"]'); if (b) b.click(); return !!b; })()`); await sleep(60);
+  await reply({ op: 'state', code: 'QK7T', leader: ME, mode: 'duel', tees: null, max: null, you: 0, held: true, members: [w2m(ME, 'Dusty Crag', 'a1')], fits: w2fits(1) });
+  await sleep(400);
+  const w7 = (await squads()).map((f) => f.op + (f.mode ? ':' + f.mode : ''));
+  if (w7[0] === 'create' && w7.indexOf('mode:boss') > 0 && w7.indexOf('invite') > w7.indexOf('mode:boss'))
+    ok(`${V}: Invite that creates the squad sets the leader's lit board before it invites`);
+  else fail(`${V}: create, mode, invite order ${JSON.stringify(w7)}`);
+} catch (e) {
+  fail('squad_ui fix wave W2 stopped: ' + (e && e.message));
+}
 clearTimeout(watchdog);
 cleanup();
 console.log(errors.length ? `\n${errors.length} FAILED` : '\nall squad_ui checks passed');
