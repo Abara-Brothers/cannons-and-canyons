@@ -72,7 +72,13 @@ const SMUGGLE_SUB = { endpoint: `https://localhost:${INBOX_PORT}/push-inbox/smug
 // DNS name can be, and a stream of such hosts cannot fatten the log either.
 const LONG_HOST = Array.from({ length: 4 }, (_, i) => `long${i}`.padEnd(63, 'x')).join('.') + '.example.invalid';
 const LONG_ENDPOINT = `https://${LONG_HOST}/push/long`;
+// The SECOND is a stored row whose sub.endpoint is no URL at all (a legacy or
+// hand-edited row): the log cannot name a host for it, so it says
+// "(unparseable)" — and working that out must not throw, or the nudge would
+// fail for every device the account has (noteRefusedPushHost's try/catch).
+const UNPARSEABLE = 'no url here';
 const REFUSED_ROWS = [{ endpoint: LONG_ENDPOINT, sub: { endpoint: LONG_ENDPOINT, keys: SUB.keys }, platform: 'web' },
+  { endpoint: 'row-with-no-url', sub: { endpoint: UNPARSEABLE, keys: SUB.keys }, platform: 'web' },
   ...Array.from({ length: 105 }, (_, i) => {
     const endpoint = `https://refused-${i}.example.invalid/push/${i}`;
     return { endpoint, sub: { endpoint, keys: SUB.keys }, platform: 'web' };
@@ -392,6 +398,9 @@ const until = async (test, ms, what) => {
   else fail(`expected one log line for the refused host "localhost", got ${localLines.length}: ${JSON.stringify(localLines)}`);
   const longLines = hostLines.filter((l) => l.includes('(host "long0'));
   const longQuoted = longLines.length === 1 ? JSON.parse(longLines[0].match(/\(host (".*")\)$/)[1]) : null;
+  if (hostLines.filter((l) => l.includes('(host "(unparseable)")')).length === 1)
+    step('an endpoint that is no URL is refused and logged as "(unparseable)", and the nudge still reached every other device');
+  else fail(`the endpoint that is no URL was not logged once as "(unparseable)": ${JSON.stringify(hostLines.slice(0, 4))}`);
   if (longQuoted === LONG_HOST.slice(0, 253)) step(`a refused hostname of ${LONG_HOST.length} characters is logged cut to its first 253`);
   else fail(`the long refused hostname was not logged cut to 253 characters: ${longLines.length} line(s), quoted host of ${longQuoted === null ? '-' : longQuoted.length} characters`);
   if (hostLines.length === 100 && capLines.length === 1 && lines.length === 101 && CAP_LINE.test(lines[100])) {
