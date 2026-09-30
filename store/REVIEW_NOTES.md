@@ -4,8 +4,9 @@
 > 2026-08-15 from the shipping code, not from the marketing copy. Keep it short in the
 > field itself — the detail below is here so whoever submits can answer follow-ups.
 
-> **OWNER — read this before you paste.** Two things ARE behind Google sign-in from this release:
-> a callsign the player types, and the Friends screen. Apple Guideline 2.1 expects working demo
+> **OWNER — read this before you paste.** THREE things ARE behind Google sign-in from this release:
+> a callsign the player types, the Friends screen, and starting a squad or inviting friends to one
+> (joining a squad by its code or link needs no account). Apple Guideline 2.1 expects working demo
 > credentials for anything behind a login, so decide before submitting whether to supply a test
 > Google account or to say you will provide one on request, and add that line to the block below.
 > The sentence that used to stand here — "there is no review test account because there is nothing
@@ -15,9 +16,10 @@
 
 > **No account is needed to play**, and none is needed to report a callsign or block a player
 > either. Every mode is reachable without signing in. Signing in with Google is optional. It
-> saves progress across devices and it adds exactly two things: a callsign the player types instead
-> of one rolled for them, and the Friends screen. No mode, weapon, level or gameplay feature is
-> behind it.
+> saves progress across devices and it adds exactly three things: a callsign the player types instead
+> of one rolled for them, the Friends screen, and starting a squad or inviting friends to one.
+> **Joining** a squad or a game by its code or link stays open to everyone, signed in or not. No
+> mode, weapon, level or gameplay feature is behind it.
 >
 > **The game is landscape-only by design.** Both builds are locked to landscape at the
 > OS level, so the device will rotate the app for you.
@@ -105,6 +107,36 @@ joined a room without firing yet does not have one and the menu asks them to sig
 — see the note in "Things that look like bugs and are not". Setting a callsign and using friends do
 need a signed-in account. The published contact for any report or complaint is
 support@abarabrothers.com.
+
+**Squads and invites (new in this version):** a signed-in player can gather up to three friends into a
+squad — a group of at most four that persists across matches. The leader picks a mode the squad fits
+(Duel seats two, Free-for-all two to four, Boss Fight and Alien Invasion one or two, Artillery Golf one
+to four) and, once every member is ready, starts; the server places every member in the same room in one
+step, and after the match they are back in the squad. A squad has a 4-character code and a link, from
+the same ambiguity-free alphabet as a game code, and the one code field in the Squad box takes either
+kind of code and opens whichever it turns out to be. **A player who has not signed in can join a squad
+or a game by its code or link, but cannot start a squad, invite anyone or be invited.**
+
+An invite goes only to someone the inviter is already friends with, and it is never delivered to a
+player who has blocked, or been blocked by, anyone in the squad. If the friend has the game open, the
+invite appears there; if not, and they have turned notifications on, it arrives as a notification
+reading `<callsign> invites you to their squad (n of 4).` It carries the squad's link and no personal
+data beyond the inviter's callsign, which is already public inside the game, and it has its own
+notification key, so it does not replace an unread turn alert. Squads live only in the game server's
+memory: there is no squad table, nothing about a squad itself is written to the database (a match a
+squad plays is recorded like any other online match), and every squad ends when the server restarts,
+which the app says plainly rather than leaving a stale group on screen. Friends are unaffected by that
+and are stored, as before, only as links between accounts.
+
+Every squad member shown by a callsign, and every row on the Squad box's Friends tab, carries the same
+menu as every other player card, with **Report name** and **Block**, and the leader can remove any
+member. A member who has not signed in has no callsign and is listed as "No callsign", so no text of
+theirs is shown. Blocking someone you share a squad with removes one of you from it immediately: if you
+lead the squad they are removed as if kicked, otherwise you leave it. Neither player is told that a
+block caused it, and the blocked account cannot rejoin by code, be invited back, or sign in to a squad
+seat beside you. Squad members are shown by callsign only: another player's app receives each
+signed-in member's random account identifier, which the menu needs in order to report or block them,
+and never an email address or any Google profile detail.
 
 **Where do name reports actually go?** We would rather state this plainly than imply a mailbox
 we do not have. The game has no email provider, so nothing is emailed. A report is written as a
