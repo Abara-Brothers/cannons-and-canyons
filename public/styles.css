@@ -2530,15 +2530,6 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay.enter .phead, #bay.enter .pbody, #bay.enter .pfoot{animation:up .42s cubic-bezier(.2,.8,.3,1) both}
   #bay.enter .pbody{animation-delay:.05s}
   #bay.enter .pfoot{animation-delay:.09s}
-/* ---- bay glue: the join panel (the concept had no code input) ---- */
-#bay .jn{position:absolute;inset:0;z-index:30;display:grid;place-items:center;background:rgba(3,5,10,.55);backdrop-filter:blur(6px)}
-#bay .jcard{position:relative;width:calc(300 * var(--u));padding:calc(12 * var(--u)) calc(14 * var(--u)) calc(14 * var(--u))}
-#bay .b-code-in{display:block;width:100%;margin-top:calc(10 * var(--u));height:calc(56 * var(--u));border-radius:calc(6 * var(--u));
-  border:1px solid rgba(255,180,107,.5);background:rgba(10,14,23,.8);color:#ffb46b;text-align:center;
-  font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:calc(34 * var(--u));letter-spacing:.3em;text-transform:uppercase;outline:none}
-#bay .b-code-in:focus{border-color:#ffb46b;box-shadow:0 0 0 calc(2 * var(--u)) rgba(255,180,107,.25)}
-#bay .jerr{min-height:calc(14 * var(--u));margin-top:calc(6 * var(--u));font-size:calc(10.5 * var(--u));color:#ff8b8b}
-#bay .jrow{display:flex;align-items:center;gap:calc(8 * var(--u));margin-top:calc(8 * var(--u))}
 /* ---- Set callsign: the inline field in Bay controls (design 5.6) ---- */
 /* .cs wraps the row so the settings column's child COUNT never changes when the
    editor opens — morphChildren() matches children by position, and a column

@@ -3284,6 +3284,24 @@ try {
     if (c5.lobby === '' && c5.superseded === SQ_NONE11 && c5.window.length === 1 && c5.late === '')
       ok(`${V}: the room watch says nothing written once the lobby is up, after another code, or after its window`);
     else fail(`${V}: room watch bounds ${JSON.stringify(c5)}`);
+    // ---- J1. THE JOIN SCREEN IS GONE (design 5.3, R10). render() falls back to
+    //      home for an unknown name, so the stamp alone would pass either way:
+    //      what proves the removal is that no overlay is built, the launch bar
+    //      has lost its button (and kept Launch), and the page holds ONE code
+    //      field -- the Squad box's -- where the overlay used to add a second.
+    const gone = await ev(`(() => {
+      Bay.show('join');
+      const out = { scr: $('bay').dataset.scr, overlay: !!document.querySelector('#bay .jn'),
+        bar: [...document.querySelectorAll('#bay .lbar button')].map((b) => b.textContent.trim()),
+        fields: document.querySelectorAll('#bay input[maxlength="4"]').length, sqCode: document.querySelectorAll('#sqCode').length,
+        old: !!document.getElementById('bayCode') };
+      Bay.show('home');
+      return out;
+    })()`);
+    if (gone.scr === 'home' && !gone.overlay && !gone.bar.some((t) => /join/i.test(t)) && gone.bar.some((t) => /Launch/.test(t))
+        && gone.fields === 1 && gone.sqCode === 1 && !gone.old)
+      ok(`${V}: no join screen, no Join code button beside Launch, and one code field on the page`);
+    else fail(`${V}: join leftovers ${JSON.stringify(gone)}`);
   }
 } catch (e) {
   fail('squad_ui task 11 stopped: ' + (e && e.message));

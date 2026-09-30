@@ -173,11 +173,6 @@ const IC = {
   medal:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7.4 2.2h3.1l2.1 5.7-2.9 1.3z" opacity=".65"/>' +
        '<path d="M16.6 2.2h-3.1l-2.1 5.7 2.9 1.3z" opacity=".65"/><circle cx="12" cy="15.6" r="6"/>' +
        '<circle cx="12" cy="15.6" r="2.6" fill="#0a0e18"/></svg>',
-  keypad:'<svg viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3.4" width="18" height="17.2" rx="2.4" opacity=".35"/>' +
-       '<rect x="6" y="6.4" width="3.2" height="3.2" rx="1"/><rect x="10.4" y="6.4" width="3.2" height="3.2" rx="1"/>' +
-       '<rect x="14.8" y="6.4" width="3.2" height="3.2" rx="1"/><rect x="6" y="10.8" width="3.2" height="3.2" rx="1"/>' +
-       '<rect x="10.4" y="10.8" width="3.2" height="3.2" rx="1"/><rect x="14.8" y="10.8" width="3.2" height="3.2" rx="1"/>' +
-       '<rect x="6" y="15.2" width="12" height="3.2" rx="1.3"/></svg>',
   gear:'<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="3.1"/>' +
        '<path d="M12 2.4l1.5 2.8 3.1-.6.5 3.1 2.8 1.4-1.6 2.7 1.6 2.7-2.8 1.4-.5 3.1-3.1-.6L12 21.6l-1.5-2.8-3.1.6-.5-3.1' +
        '-2.8-1.4L5.7 12 4.1 9.3l2.8-1.4.5-3.1 3.1.6z" opacity=".5"/></svg>',
@@ -461,7 +456,7 @@ const PROVIDER_NAME = { apple: 'Apple', google: 'Google' };
    also protects the code field: morphNode returns early for INPUT/TEXTAREA
    ("the value is the player's"), so what was typed survives a repaint. THE
    MORPH PATH ONLY -- render() does `host.innerHTML = html` whenever
-   base(next) !== base(current), so leaving home for any other screen and
+   next !== current, so leaving home for any other screen and
    coming back DOES clear the field. Tab taps, snapshots, presence pushes and
    account changes all repaint home in place, and all keep it.
 
@@ -2803,20 +2798,8 @@ SCREENS.home = function () {
     +   '<span class="ro"><span class="rk">Paint</span><span class="rv">' + esc(s.skin.name) + '</span></span>'
     +   '</button>'
     +   '<span class="grow"></span>'
-    +   '<button class="ghost" data-go="join">' + IC.keypad + 'Join code</button>'
     +   '<button class="launch" data-go="setup">' + IC.play + 'Launch</button>'
     + '</div>'
-    + '</div></div>';
-};
-
-// A code to join: the one thing the old home had that the bay needs a home for.
-SCREENS.join = function () {
-  const err = has('$') && $('homeError') ? $('homeError').textContent : '';
-  return SCREENS.home() +
-    '<div class="jn"><div class="pnl jcard"><div class="ph">Join a code<s></s></div>'
-    + '<input id="bayCode" class="b-code-in" maxlength="4" placeholder="CODE" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="4-letter game code">'
-    + '<p class="jerr">' + esc(err) + '</p>'
-    + '<div class="jrow"><button class="ghost" data-go="home">Cancel</button><span class="grow"></span><button class="go" data-join>' + IC.play + 'Join</button></div>'
     + '</div></div>';
 };
 
@@ -2862,7 +2845,6 @@ function morphChildren(live, tpl) {
 
 let current = 'home';
 const stack = [];
-const base = (n) => (n === 'join' ? 'home' : n);     // the join panel is an overlay on home
 function render(name) {
   const host = $('bay'); if (!host) return;
   const next = name in SCREENS ? name : 'home';
@@ -2880,7 +2862,7 @@ function render(name) {
   // The Friends screen has two fields of its own, so it owns the same duty: the
   // lift must not survive the screen it was measured on.
   if (kbdOn && current === 'friends' && next !== 'friends') kbdWatch(false);
-  const entering = !host.firstChild || base(next) !== base(current);
+  const entering = !host.firstChild || next !== current;
   // CLEARED BEFORE THE MARKUP IS BUILT. This reset used to sit below, AFTER the
   // html had already been generated from the old state, so a stale red sentence
   // was painted once more on the way in and only went on the next repaint —
@@ -2893,9 +2875,8 @@ function render(name) {
   current = next;
   // Which screen is up, for CSS that must apply to one screen only (the home
   // geometry and type sizes, the service record sizes). Set before the markup
-  // lands so the first paint is right. The BASE screen: the join panel renders
-  // the whole home under its overlay, so it must not drop home's rules.
-  host.dataset.scr = base(next);   // join is home under an overlay: it keeps home's geometry and sizes
+  // lands so the first paint is right.
+  host.dataset.scr = next;
   if (entering) {
     host.innerHTML = html;
     host.classList.add('enter');
@@ -2904,7 +2885,6 @@ function render(name) {
     const tpl = document.createElement('div'); tpl.innerHTML = html;
     morphChildren(host, tpl);
   }
-  if (current === 'join') { const i = $('bayCode'); if (i) setTimeout(() => i.focus(), 50); }
   // The Callsign row can only be honest about a name chosen on ANOTHER device if
   // the server is asked (BINDING resolution 13 puts it on the friends frame).
   // Asked on ENTRY, not on every re-render: a tap on a toggle re-renders this
@@ -2947,7 +2927,7 @@ function setField(k, v) {
 
 document.addEventListener('click', (e) => {
   const host = $('bay'); if (!host || !host.classList.contains('active')) return;
-  const t = e.target.closest('[data-go],[data-back],[data-set],[data-roll],[data-toggle],[data-launch],[data-join],[data-pick],[data-old],[data-skin],[data-solo],[data-cs],[data-fr],[data-sq]');
+  const t = e.target.closest('[data-go],[data-back],[data-set],[data-roll],[data-toggle],[data-launch],[data-pick],[data-old],[data-skin],[data-solo],[data-cs],[data-fr],[data-sq]');
   if (!t || !host.contains(t)) return;
   if (has('Audio')) Audio.ensure();
   // The lobby's Back IS Cancel. Leaving any other way strands a queued create
@@ -3011,13 +2991,6 @@ document.addEventListener('click', (e) => {
     render(current); return;
   }
   if ('launch' in t.dataset) { const b = $('createBtn'); if (b) b.onclick(); return; }   // one tap: the exact old path
-  if ('join' in t.dataset) {
-    const code = ($('bayCode') && $('bayCode').value || '').trim().toUpperCase();
-    if ($('codeInput')) $('codeInput').value = code;
-    if ($('joinBtn')) $('joinBtn').onclick();
-    setTimeout(() => { if (current === 'join') render('join'); }, 350);   // surface homeError
-    return;
-  }
   if (t.dataset.go) go(t.dataset.go);
 });
 
@@ -3132,12 +3105,12 @@ document.addEventListener('focusout', (e) => {
     if (!a || (a.id !== 'frQ' && a.id !== 'frCode')) kbdWatch(false);
   }, 0);
 });
-// Enter commits, the way it does in the callsign editor and the join panel.
+// Enter commits, the way it does in the callsign editor and the code field.
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter') return;
-  // The Squad box's code field, on home. The join panel never had an Enter key
-  // despite the comment above claiming it did -- this one does, because a
-  // 4-letter code on a phone keyboard ends with the Go key and nothing else.
+  // The Squad box's code field, on home. The join panel this field replaced
+  // never had an Enter key -- this one does, because a 4-letter code on a
+  // phone keyboard ends with the Go key and nothing else.
   // A HELD KEY IS ONE PRESS: autorepeat would send a code frame (and a join)
   // per repeat, enough to trip the socket's message limiter, which closes it.
   if (e.target && e.target.id === 'sqCode') { e.preventDefault(); if (!e.repeat) sqEnter(); return; }
