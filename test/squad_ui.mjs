@@ -2098,15 +2098,17 @@ try {
       ok(`${V}: a lobby whose room the server still holds is left exactly as it is`);
     else fail(`${V}: real lobby left ${JSON.stringify({ asked: f2q, then: f2l, after: f2e })}`);
     await ev(`($('cancelBtn').onclick(), true)`); await sleep(80);
-    // F3. Not in a lobby, or in a quick-match SEARCH (no room shown, whatever
-    //     S.code still holds): nothing is asked.
+    // F3. Not in a lobby -- home, with the code of a room a finished match
+    //     left in S.code -- or in a quick-match SEARCH (no room shown, whatever
+    //     S.code still holds): nothing is asked, and nothing is cancelled.
+    await ev(`(S.code = 'RM5Q', true)`);
     await clearTx(); await ev(`(handle({ type: 'squad', op: 'start', error: 'refused' }), true)`); await sleep(60);
     const f3a = await kinds();
     await ev(`(S.code = 'RM9Q', showLobby('search'), true)`); await sleep(80);
     await clearTx(); await ev(`(handle({ type: 'squad', op: 'start', error: 'refused' }), true)`); await sleep(60);
     const f3b = await kinds(), f3s = await scr();
     await ev(`($('cancelBtn').onclick(), true)`); await sleep(80);
-    if (f3a.length === 0 && f3b.length === 0 && f3s === 'lobby')
+    if (f3a.length === 0 && f3b.length === 0 && f3s === 'lobby' && (await ev('S.code')) === null)
       ok(`${V}: a refused start asks nothing from home, or from a quick-match search`);
     else fail(`${V}: needless lobby check ${JSON.stringify({ home: f3a, search: f3b, scr: f3s })}`);
     // F4. The LEADER's own refused Start, answered after the engine's create:
@@ -2124,6 +2126,19 @@ try {
     if (probe && probe.code === 'RM6Q' && f4e === 'home' && f4 && f4.aerr === 'That match could not be started. Try again.' && f4.start && !f4.start.dis)
       ok(`${V}: the leader's refused Start leaves the dead lobby too, and the box says why`);
     else fail(`${V}: leader dead lobby ${JSON.stringify({ asked: f4q, scr: f4e, aerr: f4 && f4.aerr })}`);
+
+    // ---- F5. A JOIN FOR A CODE THE INVITE DOES NOT HOLD SENDS NOTHING: the
+    //      frame takes the SLOT's code, never a button's word for it.
+    await invite({ code: 'RM3P' });
+    await clearTx(); await t9inject('join:ZZ9Z'); await sleep(50);
+    const f5a = await squads();
+    await t9inject('join:RM3P'); await sleep(50);
+    const f5b = await squads();
+    await reply({ op: 'join', error: 'full' });
+    await t9click('#bay [data-sq^="ignore:"]'); await sleep(40);
+    if (f5a.length === 0 && f5b.length === 1 && f5b[0].code === 'RM3P')
+      ok(`${V}: a Join for a code the invite does not hold sends nothing`);
+    else fail(`${V}: forged join ${JSON.stringify({ forged: f5a, real: f5b })}`);
 
     // ---- G. EVERY PLACE A PLAYER'S NAME REACHES MARKUP, fed markup (design 6.3:
     //      names are esc()'d everywhere). A member's name in a start refusal and
