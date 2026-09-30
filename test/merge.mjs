@@ -39,23 +39,45 @@ const freePort = () => new Promise((resolve, reject) => {
   s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); });
 });
 
+// EVERY CDP CALL HAS A DEADLINE, AND SO DOES THE WHOLE RUN (fix wave A4). This
+// suite runs in the pre-push hook: a Chrome or a server that stops answering
+// must fail it loudly, never hang the push. And EVERY WAY OUT -- the end, a
+// throw, a signal, the watchdog -- takes Chrome and the server with it: this
+// file had no exit hook at all, so any throw mid-run left both running.
+// SIGKILL, because a stopped process ignores SIGTERM until it is continued.
+const CDP_MS = 15000;                                           // one call
+const RUN_MS = 90000;                                           // the whole suite
+const get = (url) => fetch(url, { signal: AbortSignal.timeout(2000) });
+let srv = null, chrome = null, profile = null, dbgPort = 0;
+let cleaned = false;
+const cleanup = () => {
+  if (cleaned) return;
+  cleaned = true;
+  try { chrome && chrome.kill('SIGKILL'); } catch {} try { srv && srv.kill('SIGKILL'); } catch {}
+  try { profile && rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 120 }); } catch {}   // Chrome may still be writing
+  try { dbgPort && execSync(`pkill -f 'cc-merge-${dbgPort}'`, { stdio: 'ignore' }); } catch {}
+};
+process.on('exit', cleanup);
+for (const [sig, n] of [['SIGINT', 2], ['SIGTERM', 15], ['SIGHUP', 1]]) process.on(sig, () => { cleanup(); process.exit(128 + n); });
+const watchdog = setTimeout(() => { console.error(`FAIL  merge overran ${RUN_MS} ms -- a CDP peer stopped answering`); process.exit(1); }, RUN_MS);
+
 // ---- server ----------------------------------------------------------------
 const appPort = await freePort();
-const srv = spawn('node', ['server.js'], {
+srv = spawn('node', ['server.js'], {
   env: { ...process.env, PORT: String(appPort) }, stdio: ['ignore', 'pipe', 'pipe'],
 });
 let serverUp = false;
 for (let i = 0; i < 80; i++) {
-  try { await fetch(`http://127.0.0.1:${appPort}/health`); serverUp = true; break; } catch {}
+  try { await get(`http://127.0.0.1:${appPort}/health`); serverUp = true; break; } catch {}
   await sleep(150);
 }
-if (!serverUp) { srv.kill(); console.error('FAIL  server never came up'); process.exit(1); }
+if (!serverUp) { console.error('FAIL  server never came up'); process.exit(1); }
 
 // ---- browser ---------------------------------------------------------------
-const dbgPort = await freePort();
-const profile = join(tmpdir(), `cc-merge-${dbgPort}`);
+dbgPort = await freePort();
+profile = join(tmpdir(), `cc-merge-${dbgPort}`);
 rmSync(profile, { recursive: true, force: true });
-const chrome = spawn(CHROME, [
+chrome = spawn(CHROME, [
   '--headless=new', `--remote-debugging-port=${dbgPort}`, `--user-data-dir=${profile}`,
   '--no-first-run', '--no-default-browser-check', '--mute-audio',
   '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
@@ -65,18 +87,18 @@ const chrome = spawn(CHROME, [
 let wsUrl = null;
 for (let i = 0; i < 60; i++) {
   try {
-    const list = await (await fetch(`http://127.0.0.1:${dbgPort}/json/list`)).json();
+    const list = await (await get(`http://127.0.0.1:${dbgPort}/json/list`)).json();
     const page = list.find((t) => t.type === 'page');
     if (page?.webSocketDebuggerUrl) { wsUrl = page.webSocketDebuggerUrl; break; }
   } catch {}
   await sleep(250);
 }
-if (!wsUrl) { chrome.kill(); srv.kill(); console.error('FAIL  Chrome exposed no debugger'); process.exit(1); }
+if (!wsUrl) { console.error('FAIL  Chrome exposed no debugger'); process.exit(1); }
 
 let id = 0;
 const pending = new Map();
 const ws = new WebSocket(wsUrl);
-await new Promise((r) => { ws.onopen = r; });
+await Promise.race([new Promise((r) => { ws.onopen = r; }), sleep(CDP_MS).then(() => { throw new Error('CDP socket never opened'); })]);
 ws.onmessage = (e) => {
   const m = JSON.parse(e.data);
   const p = pending.get(m.id);
@@ -86,7 +108,8 @@ ws.onmessage = (e) => {
 };
 const send = (method, params = {}) => new Promise((resolve, reject) => {
   const msgId = ++id;
-  pending.set(msgId, { resolve, reject });
+  const t = setTimeout(() => { pending.delete(msgId); reject(new Error(`CDP ${method} gave no answer in ${CDP_MS} ms`)); }, CDP_MS);
+  pending.set(msgId, { resolve: (v) => { clearTimeout(t); resolve(v); }, reject: (e) => { clearTimeout(t); reject(e); } });
   ws.send(JSON.stringify({ id: msgId, method, params }));
 });
 
@@ -334,10 +357,8 @@ for (const [label, raw] of [
 
 // ---- done ------------------------------------------------------------------
 ws.close();
-chrome.kill();
-srv.kill();
-try { rmSync(profile, { recursive: true, force: true }); } catch {}   // Chrome may still be writing
-try { execSync(`pkill -f 'cc-merge-${dbgPort}'`, { stdio: 'ignore' }); } catch {}
+clearTimeout(watchdog);
+cleanup();
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

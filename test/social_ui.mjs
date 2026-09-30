@@ -38,18 +38,42 @@ const fail = (m) => { errors.push(m); console.error('FAIL ' + m); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const freePort = () => new Promise((res, rej) => { const s = net.createServer(); s.on('error', rej); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => res(port)); }); });
 
-const appPort = await freePort();
-const srv = spawn(process.execPath, ['server.js'], { cwd: ROOT, env: { ...process.env, PORT: String(appPort) }, stdio: 'ignore' });
-for (let i = 0; i < 80; i++) { try { await fetch(`http://127.0.0.1:${appPort}/health`); break; } catch {} await sleep(150); }
-const dbg = await freePort(); const prof = join(tmpdir(), `cc-soc-${dbg}`); rmSync(prof, { recursive: true, force: true });
-const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${dbg}`, `--user-data-dir=${prof}`, '--no-first-run', '--mute-audio', '--hide-scrollbars', 'about:blank'], { stdio: 'ignore' });
-let wsUrl = null;
-for (let i = 0; i < 60; i++) { try { const l = await (await fetch(`http://127.0.0.1:${dbg}/json/list`)).json(); const p = l.find((t) => t.type === 'page'); if (p?.webSocketDebuggerUrl) { wsUrl = p.webSocketDebuggerUrl; break; } } catch {} await sleep(200); }
-const cleanup = () => { try { chrome.kill(); } catch {} try { srv.kill(); } catch {} try { rmSync(prof, { recursive: true, force: true, maxRetries: 5, retryDelay: 120 }); } catch {} };
+// EVERY CDP CALL HAS A DEADLINE, AND SO DOES THE WHOLE RUN (fix wave A4). This
+// suite runs in the pre-push hook: a Chrome or a server that stops answering
+// must fail it loudly, never hang the push. And every way out -- the end, a
+// throw, a signal, the watchdog -- takes Chrome and the server with it,
+// registered before either is spawned. SIGKILL, because a stopped process
+// ignores SIGTERM until it is continued, and a frozen Chrome is the hang this
+// exists for.
+const CDP_MS = 15000;                                           // one call
+const RUN_MS = 150000;                                          // the whole suite
+const get = (url) => fetch(url, { signal: AbortSignal.timeout(2000) });
+let srv = null, chrome = null, prof = null;
+const cleanup = () => {
+  try { chrome && chrome.kill('SIGKILL'); } catch {} try { srv && srv.kill('SIGKILL'); } catch {}
+  try { prof && rmSync(prof, { recursive: true, force: true, maxRetries: 5, retryDelay: 120 }); } catch {}
+};
 process.on('exit', cleanup);
-let id = 0; const pend = new Map(); const ws = new WebSocket(wsUrl); await new Promise((r) => (ws.onopen = r));
+for (const [sig, n] of [['SIGINT', 2], ['SIGTERM', 15], ['SIGHUP', 1]]) process.on(sig, () => { cleanup(); process.exit(128 + n); });
+const watchdog = setTimeout(() => { console.error(`FAIL social_ui overran ${RUN_MS} ms -- a CDP peer stopped answering`); process.exit(1); }, RUN_MS);
+
+const appPort = await freePort();
+srv = spawn(process.execPath, ['server.js'], { cwd: ROOT, env: { ...process.env, PORT: String(appPort) }, stdio: 'ignore' });
+for (let i = 0; i < 80; i++) { try { await get(`http://127.0.0.1:${appPort}/health`); break; } catch {} await sleep(150); }
+const dbg = await freePort(); prof = join(tmpdir(), `cc-soc-${dbg}`); rmSync(prof, { recursive: true, force: true });
+chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${dbg}`, `--user-data-dir=${prof}`, '--no-first-run', '--mute-audio', '--hide-scrollbars', 'about:blank'], { stdio: 'ignore' });
+let wsUrl = null;
+for (let i = 0; i < 60; i++) { try { const l = await (await get(`http://127.0.0.1:${dbg}/json/list`)).json(); const p = l.find((t) => t.type === 'page'); if (p?.webSocketDebuggerUrl) { wsUrl = p.webSocketDebuggerUrl; break; } } catch {} await sleep(200); }
+if (!wsUrl) { console.error('FAIL social_ui: Chrome never offered a page to drive'); process.exit(1); }
+let id = 0; const pend = new Map(); const ws = new WebSocket(wsUrl);
+await Promise.race([new Promise((r) => (ws.onopen = r)), sleep(CDP_MS).then(() => { throw new Error('CDP socket never opened'); })]);
 ws.onmessage = (e) => { const m = JSON.parse(e.data); const p = pend.get(m.id); if (!p) return; pend.delete(m.id); m.error ? p.reject(new Error(m.error.message)) : p.resolve(m.result); };
-const send = (method, params = {}) => new Promise((res, rej) => { const i = ++id; pend.set(i, { resolve: res, reject: rej }); ws.send(JSON.stringify({ id: i, method, params })); });
+const send = (method, params = {}) => new Promise((res, rej) => {
+  const i = ++id;
+  const t = setTimeout(() => { pend.delete(i); rej(new Error(`CDP ${method} gave no answer in ${CDP_MS} ms`)); }, CDP_MS);
+  pend.set(i, { resolve: (v) => { clearTimeout(t); res(v); }, reject: (e) => { clearTimeout(t); rej(e); } });
+  ws.send(JSON.stringify({ id: i, method, params }));
+});
 const ev = async (expr) => { const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error(r.exceptionDetails.text + ' ' + JSON.stringify(r.exceptionDetails.exception && r.exceptionDetails.exception.description)); return r.result.value; };
 await send('Page.enable'); await send('Runtime.enable');
 
@@ -1914,6 +1938,7 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   else fail(`${V}: lift left behind ${JSON.stringify(gone)}`);
 }
 
+clearTimeout(watchdog);
 cleanup();
 console.log(errors.length ? `\n${errors.length} FAILED` : '\nall social_ui checks passed');
 process.exit(errors.length ? 1 : 0);

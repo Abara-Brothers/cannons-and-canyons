@@ -33,36 +33,58 @@ const fail = (m) => { out.errors.push(m); console.error('FAIL ' + m); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const freePort = () => new Promise((res, rej) => { const s = net.createServer(); s.on('error', rej); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => res(port)); }); });
 
+// EVERY CDP CALL HAS A DEADLINE, AND SO DOES THE WHOLE RUN (fix wave A4). This
+// suite runs in the pre-push hook: a Chrome or a server that stops answering
+// must fail it loudly, never hang the push. And every way out -- the end, a
+// throw, a signal, the watchdog -- takes Chrome and the server with it,
+// registered before either is spawned. SIGKILL, because a stopped process
+// ignores SIGTERM until it is continued: this suite freezes its own server on
+// purpose, and a frozen Chrome is the hang this exists for.
+const CDP_MS = 15000;                                           // one call
+const RUN_MS = 180000;                                          // the whole suite
+const get = (url) => fetch(url, { signal: AbortSignal.timeout(2000) });
+let srv = null, chrome = null, profile = null;
+const cleanup = () => {
+  try { chrome && chrome.kill('SIGKILL'); } catch {} try { srv && srv.kill('SIGKILL'); } catch {}
+  try { profile && rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 120 }); } catch {}
+};
+process.on('exit', cleanup);
+for (const [sig, n] of [['SIGINT', 2], ['SIGTERM', 15], ['SIGHUP', 1]]) process.on(sig, () => { cleanup(); process.exit(128 + n); });
+const watchdog = setTimeout(() => { console.error(`FAIL  offline overran ${RUN_MS} ms -- a CDP peer stopped answering`); process.exit(1); }, RUN_MS);
+
 // ---- server ----------------------------------------------------------------
 const appPort = await freePort();
-const srv = spawn('node', ['server.js'], { env: { ...process.env, PORT: String(appPort) }, stdio: 'ignore' });
+srv = spawn('node', ['server.js'], { env: { ...process.env, PORT: String(appPort) }, stdio: 'ignore' });
 let up = false;
-for (let i = 0; i < 80; i++) { try { await fetch(`http://127.0.0.1:${appPort}/health`); up = true; break; } catch {} await sleep(150); }
-if (!up) { srv.kill(); console.error('FAIL  server never came up'); process.exit(1); }
+for (let i = 0; i < 80; i++) { try { await get(`http://127.0.0.1:${appPort}/health`); up = true; break; } catch {} await sleep(150); }
+if (!up) { console.error('FAIL  server never came up'); process.exit(1); }
 let stopped = false;
 const stopServer = () => { if (!stopped) { srv.kill('SIGSTOP'); stopped = true; } };
 const resumeServer = () => { if (stopped) { srv.kill('SIGCONT'); stopped = false; } };
 
 // ---- browser ---------------------------------------------------------------
 const dbgPort = await freePort();
-const profile = join(tmpdir(), `cc-offline-${dbgPort}`);
+profile = join(tmpdir(), `cc-offline-${dbgPort}`);
 rmSync(profile, { recursive: true, force: true });
-const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${dbgPort}`, `--user-data-dir=${profile}`,
+chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${dbgPort}`, `--user-data-dir=${profile}`,
   '--no-first-run', '--no-default-browser-check', '--mute-audio', '--disable-background-timer-throttling', '--disable-renderer-backgrounding', 'about:blank'], { stdio: 'ignore' });
 let wsUrl = null;
 for (let i = 0; i < 60; i++) {
-  try { const list = await (await fetch(`http://127.0.0.1:${dbgPort}/json/list`)).json(); const page = list.find((t) => t.type === 'page'); if (page?.webSocketDebuggerUrl) { wsUrl = page.webSocketDebuggerUrl; break; } } catch {}
+  try { const list = await (await get(`http://127.0.0.1:${dbgPort}/json/list`)).json(); const page = list.find((t) => t.type === 'page'); if (page?.webSocketDebuggerUrl) { wsUrl = page.webSocketDebuggerUrl; break; } } catch {}
   await sleep(250);
 }
-const cleanup = () => { resumeServer(); try { chrome.kill(); } catch {} try { srv.kill(); } catch {} try { rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 120 }); } catch {} };
-process.on('exit', cleanup);
 if (!wsUrl) { console.error('FAIL  Chrome exposed no debugger'); process.exit(1); }
 
 let id = 0; const pending = new Map();
 const ws = new WebSocket(wsUrl);
-await new Promise((r) => { ws.onopen = r; });
+await Promise.race([new Promise((r) => { ws.onopen = r; }), sleep(CDP_MS).then(() => { throw new Error('CDP socket never opened'); })]);
 ws.onmessage = (e) => { const m = JSON.parse(e.data); const p = pending.get(m.id); if (!p) return; pending.delete(m.id); m.error ? p.reject(new Error(m.error.message)) : p.resolve(m.result); };
-const send = (method, params = {}) => new Promise((resolve, reject) => { const i = ++id; pending.set(i, { resolve, reject }); ws.send(JSON.stringify({ id: i, method, params })); });
+const send = (method, params = {}) => new Promise((resolve, reject) => {
+  const i = ++id;
+  const t = setTimeout(() => { pending.delete(i); reject(new Error(`CDP ${method} gave no answer in ${CDP_MS} ms`)); }, CDP_MS);
+  pending.set(i, { resolve: (v) => { clearTimeout(t); resolve(v); }, reject: (e) => { clearTimeout(t); reject(e); } });
+  ws.send(JSON.stringify({ id: i, method, params }));
+});
 async function ev(expression) {
   const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
   if (r.exceptionDetails) throw new Error((r.exceptionDetails.exception?.description || r.exceptionDetails.text) + ' :: ' + expression.slice(0, 120));
@@ -275,6 +297,7 @@ try {
   fail('harness: ' + e.message);
 }
 
+clearTimeout(watchdog);
 cleanup();
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nALL GOOD');
 process.exit(out.errors.length ? 1 : 0);
