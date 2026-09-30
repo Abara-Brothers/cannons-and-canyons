@@ -19,13 +19,20 @@ PORT="${PORT:-3000}"
 # 3000 — 7 passed / 11 ECONNREFUSED. This header exists to prevent exactly that
 # class of misleading failure. The ${WS:-…} form leaves --remote untouched.
 export WS="${WS:-ws://localhost:$PORT/ws}"
+# ONE RUN'S LOGS, NAMED BY ITS PORT. Every suite's output and the shared
+# server's went to fixed /tmp/cc_<name>.log paths, so two runs at once (two
+# sessions, even on different ports) wrote over each other's logs and the
+# readiness grep could see the other run's banner: fake failures. Each run
+# now writes /tmp/cc_<PORT>_<name>.log and /tmp/cc_<PORT>_server.log.
+# .github/workflows/ci.yml's failure-log step reads the same names.
+LOG="/tmp/cc_${PORT}"
 REMOTE=0
 [ "${1:-}" = "--remote" ] && REMOTE=1
 
 pass=0; fail=0; skip=0
 run() {                      # run <name> <cmd...>
   local name="$1"; shift
-  "$@" > /tmp/cc_$name.log 2>&1
+  "$@" > "${LOG}_$name.log" 2>&1
   local rc=$?
   if [ "$rc" -eq 0 ]; then
     printf '  %-16s PASS\n' "$name"; pass=$((pass+1))
@@ -34,10 +41,10 @@ run() {                      # run <name> <cmd...>
     # scoring that as PASS meant the only client-side coverage in the tree
     # reported success on every CI run without ever executing — CI is
     # ubuntu-latest and never sets CHROME_PATH. A skip must be VISIBLE.
-    printf '  %-16s SKIP  %s\n' "$name" "$(tail -1 /tmp/cc_$name.log)"; skip=$((skip+1))
+    printf '  %-16s SKIP  %s\n' "$name" "$(tail -1 "${LOG}_$name.log")"; skip=$((skip+1))
   else
     printf '  %-16s FAIL\n' "$name"; fail=$((fail+1))
-    sed 's/^/      /' /tmp/cc_$name.log | tail -14
+    sed 's/^/      /' "${LOG}_$name.log" | tail -14
   fi
 }
 
@@ -125,13 +132,13 @@ start_server() {             # start_server [extra env assignments...]
   # previous server's line would satisfy it instantly — the tests would then
   # connect before this server is listening, which shows up much later as a
   # bare "timeout waiting for gameover" that looks like a product bug.
-  : > /tmp/cc_server.log
-  env "$@" node server.js >> /tmp/cc_server.log 2>&1 &
+  : > "${LOG}_server.log"
+  env "$@" node server.js >> "${LOG}_server.log" 2>&1 &
   # Record the PID NOW: $! is clobbered by the next background job, and a server
   # that never reports ready still has to be cleaned up.
   SERVER_PIDS="$SERVER_PIDS $!"
   for _ in $(seq 1 40); do
-    grep -q "running at" /tmp/cc_server.log 2>/dev/null && sleep 0.3 && return 0
+    grep -q "running at" "${LOG}_server.log" 2>/dev/null && sleep 0.3 && return 0
     sleep 0.25
   done
   echo "  WARNING: server did not report ready"; return 1
@@ -335,8 +342,8 @@ else
   # line only reaches STDERR when something is wired WRONG, so a `[boot]` here
   # with bad_key_or_url/unreachable is still worth reading.
   benign='running at|^\[boot\]|^\[shutdown\] SIGTERM'
-  stray=$(grep -vE "$benign" /tmp/cc_server.log 2>/dev/null | wc -l | tr -d ' ')
-  [ "$stray" != "0" ] && { echo "  server stderr:"; grep -vE "$benign" /tmp/cc_server.log; }
+  stray=$(grep -vE "$benign" "${LOG}_server.log" 2>/dev/null | wc -l | tr -d ' ')
+  [ "$stray" != "0" ] && { echo "  server stderr:"; grep -vE "$benign" "${LOG}_server.log"; }
 fi
 
 echo

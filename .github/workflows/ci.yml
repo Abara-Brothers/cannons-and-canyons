@@ -50,6 +50,9 @@ jobs:
           node --check public/app.js
           node --check public/bay.js
           node --check public/cloud.js
+          node --check public/room-engine.js
+          node --check public/config.js
+          for f in server/*.js; do node --check "$f"; done
 
       - name: House rules
         run: node test/house-rules.mjs
@@ -59,15 +62,24 @@ jobs:
 
       # run-all.sh exits non-zero when any suite fails and prints a 14-line tail
       # inline; this surfaces the FULL logs so a red build is diagnosable
-      # without re-running locally.
+      # without re-running locally. run-all.sh names them by the run's port,
+      # /tmp/cc_<PORT>_<suite>.log and /tmp/cc_<PORT>_server.log, so they are
+      # globbed: a fresh runner holds this run's logs and no other.
       - name: Failure logs
         if: failure()
         run: |
-          echo "::group::server log"
-          tail -50 /tmp/cc_server.log 2>/dev/null || echo "(none)"
-          echo "::endgroup::"
+          found=0
+          for f in /tmp/cc_*_server.log; do
+            [ -e "$f" ] || continue
+            found=1
+            echo "::group::server log $f"
+            tail -50 "$f"
+            echo "::endgroup::"
+          done
+          [ "$found" = 1 ] || echo "(no server log)"
           for f in /tmp/cc_*.log; do
-            [ "$f" = "/tmp/cc_server.log" ] && continue
+            [ -e "$f" ] || continue
+            case "$f" in *_server.log) continue ;; esac
             echo "::group::$f"
             tail -40 "$f"
             echo "::endgroup::"
