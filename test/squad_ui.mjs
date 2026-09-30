@@ -1841,6 +1841,21 @@ try {
     const d4g = await squads();
     await reply({ op: 'state', code: 'QK7T', leader: ME, mode: 'duel', tees: null, max: null, you: 0, held: true,
       members: [T9YOU({ ready: true })], fits: t9fits(1) });
+    // AND IT NEVER COMES BACK. Guests all look alike on the wire (id null), so
+    // a roster can return to the same SHAPE with a different guest in the row:
+    // the first guest leaves and a new one joins. The question asked about the
+    // old row must stay withdrawn, and a Remove for it must send nothing.
+    await t9state({ members: [T9YOU({ ready: true }), T9M({ guest: true, ready: true }), T9M({ guest: true, ready: false })] });
+    await clearTx(); await t9click('#bay [data-sq="kick:2"]'); await sleep(40);
+    await t9state({ members: [T9YOU({ ready: true }), T9M({ guest: true, ready: false })] });
+    await t9state({ members: [T9YOU({ ready: true }), T9M({ guest: true, ready: false }), T9M({ guest: true, ready: false })] });
+    const d4x = await t9box();
+    await t9inject('kok'); await sleep(60);
+    const d4xf = await squads();
+    if (d4xf.length) await reply({ op: 'kick', error: 'no_such_member' });   // an answer, so a red run does not cascade
+    if (d4x && !d4x.kok && d4x.start && d4xf.length === 0)
+      ok(`${V}: a guest's Remove stays withdrawn when the roster returns to the same shape with another guest in the row`);
+    else fail(`${V}: guest remove came back ${JSON.stringify({ kok: d4x && d4x.kok, line: d4x && d4x.line, sent: d4xf })}`);
     if (d4a && d4a.line === 'Remove this player from the squad?' && d4b && !d4b.kok && d4b.start
         && d4f.length === 0 && d4c && d4c.aerr === 'The squad changed. Check the list and try again.'
         && d4d && d4d.line === 'Remove Ridge Pike from the squad?' && d4g.length === 1 && d4g[0].id === T9_PIKE)

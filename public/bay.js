@@ -914,22 +914,24 @@ function sqStart() {
 // for a guest (server/social.js squadTarget). An index is a guess the moment
 // the roster changes shape: an earlier row leaving shifts every later guest up
 // one, and the Remove would land on somebody else (task 2's review). So a
-// guest's question lives only while the roster it was asked on is unchanged,
-// and a Remove that arrives after that sends nothing. What is left is the
-// flight time of the frame itself -- a leave the server handles between this
-// send and its arrival; only a per-row handle in the roster can close that,
-// and it is the server's to add.
-const sqSig = (sn) => JSON.stringify(((sn && sn.members) || []).map((p) => [p.id, !!p.guest]));
+// guest's question lives only while the roster FRAME it was asked on is the
+// one in the slot: any new roster withdraws it for good. Not the roster's
+// shape: guests all look alike on the wire (id null), so a roster can come
+// back to the same shape with a different guest in the row -- one leaves and
+// another joins. A Remove that arrives after that sends nothing. What is
+// left is the flight time of the frame itself -- a leave the server handles
+// between this send and its arrival; only a per-row handle in the roster can
+// close that, and it is the server's to add.
 function sqKickLive(sn) {
   const k = sq.kick;
   if (!k || !sn || sn.code !== k.code) return false;
   if (k.id) return (sn.members || []).some((p) => p.id === k.id);
-  return sqSig(sn) === k.sig;
+  return sn === k.snap;
 }
 function sqKickAsk(i) {
   const sn = sq.snap, p = sn && Number.isInteger(i) ? (sn.members || [])[i] : null;
   if (!sqLive(sn) || !sqIsLead(sn, sqMe(sn)) || sq.busy || !p || i === sn.you || sqIsLead(sn, p) || (p.id == null && !p.guest)) return;
-  sq.kick = { i, id: p.id || null, code: sn.code, sig: sqSig(sn), name: nameOf(p), anon: !named(p) };
+  sq.kick = { i, id: p.id || null, code: sn.code, snap: sn, name: nameOf(p), anon: !named(p) };
   sq.aerr = '';
   sqPaint();
   // THE KEYBOARD GOES TO CANCEL, so a stray Enter removes nobody.
