@@ -146,11 +146,13 @@ run export_shape node test/export_shape.mjs
 # The chosen-callsign rules (design 4.5): normalising, length, characters, the
 # folded blocklist, and the loader's own guards. Pure module, no server.
 run callsign node test/callsign.mjs
-# ONE proof of a name, for every screen that shows one: server/display-name.js,
-# imported by the social layer's panels AND by server.js's GET /history, which
-# names an opponent in Recent sorties (BINDING.md resolution 27). Drives the real
-# proofs against the REAL server/blocklist.txt -- a suite with its own term list
-# would not notice the shipped list and the rule drifting apart. No server.
+# ONE proof of a name, for every screen that shows one: server/display-name.js.
+# It has ONE caller now -- the social layer's panels, search results, the blocked
+# list, the squad roster and its invites, and the name a report records. It stays
+# its own module because it is a security rule with its own suite against the
+# SHIPPED server/blocklist.txt (BINDING.md resolution 27), not because two files
+# import it -- a suite with its own term list would not notice the shipped list
+# and the rule drifting apart. No server.
 run display_name node test/display_name.mjs
 # Web push is only ever SENT to a real push service (live hotfix, 2026-09-25):
 # server/push-hosts.js, a pure module. Every legitimate endpoint shape, every
@@ -281,9 +283,6 @@ else
   # and mocks GoTrue/PostgREST locally; no Chrome, no real Supabase.
   run code_frame node test/code_frame.mjs
   run ledger node test/ledger.mjs
-  # GET /history (Launch Bay recent sorties): the one client read path into the
-  # ledger. Mocks Supabase; asserts no uuid ever leaves, W/L derivation, auth, rate limit.
-  run history node test/history.mjs
   # /health's three Supabase verdicts, which are what the deploy procedure tells
   # the owner to read and act on. Spawns a server per world against a mock that
   # answers a chosen status, because each verdict is latched at boot. Exists

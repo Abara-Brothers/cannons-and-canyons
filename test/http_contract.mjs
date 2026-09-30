@@ -119,6 +119,21 @@ const cbErr = await cbRaw('/auth/callback?error=access_denied&error_description=
 const cbFollowed = await get('/auth/callback');          // default follow: lands on the game
 const cbSibling = await get('/auth/callbackx');          // not the route: ordinary deep link
 
+// ---- (j) /history is GONE, and gone means "not a route" ---------------------
+// The Bay panel it fed was removed on 2026-09-30 when the Squad box took that
+// slot, and match_results has no other client path: the table is service-key
+// only, RLS on with no policies. A deleted route does NOT 404 here — /history
+// carries no file extension, so it lands on the same SPA deep-link fallback as
+// /some-deep-link above and answers 200 text/html. Asserting a 404 would fail
+// for a reason that has nothing to do with the route, and asserting 200 alone
+// would pass while the route was alive underneath. So this asserts the two
+// things only a live route can produce, both of which it DID produce before it
+// was removed: a 204 preflight carrying Access-Control-Allow-Methods, and a 401
+// for a call with no Authorization header. Put the route back and both go red.
+const histOpts = await fetch(`http://127.0.0.1:${port}/history`, { method: 'OPTIONS' })
+  .then(async (r) => { await r.arrayBuffer(); return { status: r.status, acam: r.headers.get('access-control-allow-methods') }; });
+const histGet = await get('/history');
+
 // ---- (d) an unauthenticated /account/delete must not spend the budget -------
 // Until 2026-08-18 `delTokens -= 1` ran BEFORE the Authorization header was even
 // read, so ten header-less requests emptied the bucket and one every six seconds
@@ -256,6 +271,10 @@ const results = [
   ['(c) extension-less deep link still 200 html', deepLink.status === 200 && deepLink.type.includes('html')],
   ['(c) real asset still 200 js', realAsset.status === 200 && realAsset.type.includes('javascript')],
   ['(c) root still 200 html', root.status === 200 && root.type.includes('html')],
+  ['(j) /history answers no CORS preflight — it is not a route any more',
+    histOpts.status === 200 && histOpts.acam === null],
+  ['(j) an unauthenticated GET /history is an ordinary deep link, not a 401 from a live route',
+    histGet.status === 200 && histGet.type.includes('html')],
   ['(i) /auth/callback -> 302', cb.status === 302],
   ['(i) Location is exactly "/" (no fragment, so the browser inherits the request\'s)', cb.location === '/'],
   ['(i) redirect body is empty', cb.body === ''],

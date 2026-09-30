@@ -32,11 +32,6 @@ import { createStore } from './server/store.js';
 import { createSocial, SOCIAL_TYPES, codeOf } from './server/social.js';
 import { createSeatSquad } from './server/seat-squad.js';
 import { loadBlocklist, normaliseCallsign } from './server/callsign.js';
-// ONE proof of a name, shared with server/social.js rather than written twice.
-// GET /history paints an opponent's callsign on another player's home screen,
-// and it is the last name path in this codebase that predates chosen names
-// (BINDING.md resolution 27). See server/display-name.js for what it proves.
-import { createNameProofs } from './server/display-name.js';
 // Which hosts a web push may be sent to. See server/push-hosts.js for why a
 // client-supplied endpoint must never choose where this process connects.
 import { webPushHostAllowed } from './server/push-hosts.js';
@@ -200,18 +195,11 @@ const seatSquad = createSeatSquad({
 // A missing or malformed blocklist turns the whole layer OFF rather than
 // running it unfiltered — an unfiltered chosen callsign is the one outcome
 // this feature must never produce — and says so loudly on stderr.
-let store = null, social = null, nameProofs = null;
+let store = null, social = null;
 try {
   const terms = loadBlocklist(path.join(__dirname, 'server', 'blocklist.txt'));
   if (SB_URL && SB_SECRET) {
     store = createStore({ sbAdmin });
-    // THE SAME PROOFS, FROM THE SAME LIST, as the social layer's own panels --
-    // one module, imported by both (server/display-name.js). Module scope,
-    // because matchHistory below is at module scope and `terms` is a const
-    // inside this block, so the history handler could not otherwise see it.
-    // Built BEFORE createSocial so a throw out of the social layer cannot also
-    // cost /history its names.
-    nameProofs = createNameProofs({ terms });
     // resolveSeatHandle is the JOIN, and this line is the only place the two
     // halves meet (BINDING.md resolution 24). The room engine mints a per-room
     // opaque handle for every occupied, accounted seat and puts it in the lobby
@@ -1470,119 +1458,6 @@ function setSecurityHeaders(res) {
   res.setHeader('Content-Security-Policy', CSP);
 }
 
-// ---- /history: a player's recent ONLINE matches, from the ledger -------------
-// Bounded in every direction: one request per player every two seconds, eight
-// rows, and only the fields the panel shows.
-//
-// OPPONENTS ARE RESOLVED TO A NAME THE SERVER CAN VOUCH FOR, by one of the two
-// proofs in server/display-name.js, and an unprovable name reads 'Commander'.
-// This comment used to say opponents were resolved to their generated callsigns,
-// the same names already broadcast in the match itself. BOTH HALVES WERE FALSE
-// once a callsign could be chosen: the select asked for `profiles.callsign`
-// alone, which is a column the account itself PATCHes on every cloud save, so
-// whatever 16 characters it wrote were painted verbatim as the opponent of a
-// recent match on another player's home screen -- a name that need never have
-// been generated and need never have been broadcast anywhere. It is escaped at
-// public/bay.js, so this was never script injection; it was impersonation and
-// an unfiltered name, and worse here than in a lobby because this panel carries
-// no seat handle, so the name could not be reported or blocked from the screen
-// showing it (BINDING.md resolution 27).
-//
-// What is true now: a name is shown only if it case-folds onto the row's
-// callsign_key -- a column no client may write -- or is one of the curated
-// rolled pairs, and only if the shipped blocklist still admits it. That is the
-// same function, on the same list, that names a friend in the Friends screen.
-const HIST_MIN_MS = 2000;
-const histLast = new Map();                // user id -> last served (ms)
-// One stderr line a minute, at most, when the opponent-name lookup is failing.
-// The panel still serves in that state, so this is the only trace there is; it
-// is throttled because the state it reports is per-REQUEST and every player on
-// the service hits it at once.
-let lastHistNameWarn = 0;
-setInterval(() => { const cut = Date.now() - 60000; for (const [k, t] of histLast) if (t < cut) histLast.delete(k); }, 60000).unref();
-async function matchHistory(req, res, cors) {
-  const json = (code, body) => { res.writeHead(code, { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)); };
-  const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-  const uid = await sbUserFromToken(token);
-  if (!uid) return json(401, { error: 'unauthorized' });
-  if (!SB_SECRET) return json(503, { error: 'unavailable' });
-  const last = histLast.get(uid) || 0;
-  if (Date.now() - last < HIST_MIN_MS) return json(429, { error: 'slow down' });
-  histLast.set(uid, Date.now());
-  try {
-    const rows = await sbAdmin('GET',
-      `/match_results?players=cs.${encodeURIComponent('{' + uid + '}')}&order=ended_at.desc&limit=8`
-      + '&select=mode,players,winner_user,winner_seat,vs_bot,ended_at');
-    const others = new Set();
-    for (const r of rows || []) for (const p of r.players || []) if (p && p !== uid) others.add(p);
-    const names = new Map();
-    if (others.size) {
-      // THE NAME LOOKUP HAS ITS OWN NET, AND THE PANEL OUTLIVES IT. This read
-      // is a DECORATION on rows that are already in hand: mode, result and date
-      // need no profile at all. Inside the outer try it was load-bearing, and
-      // the state that makes that bite is the ordinary one for this release --
-      // the phase 6 migration is applied BY HAND after the deploy, and until it
-      // lands PostgREST answers this select 400 (42703, unknown column
-      // callsign_key), sbAdmin throws on any non-2xx, and the whole route
-      // answered 502. public/bay.js does `if (!r.ok) return;`, so the Recent
-      // sorties panel did not degrade, it DISAPPEARED -- silently, for every
-      // player who has ever faced a human -- and because that client only
-      // advances its 60-second throttle on success, every return to the home
-      // screen re-fired it and wrote another error_reports row.
-      //
-      // Degrading here costs exactly the names and NOTHING ELSE, and it costs
-      // them in the direction that was already chosen a few lines below: an
-      // empty map means every opponent reads the existing 'Commander' fallback.
-      // The security property is untouched -- an unproven name is still never
-      // shown, because no name is shown at all.
-      //
-      // NOT reportServerError: this path does not fail the request, and the one
-      // fault it is expected to see is the hand-applied migration being late,
-      // which would put one row per player per home-screen visit into the very
-      // table crash reporting depends on. /health's own supabaseSocial field is
-      // the signal for that state (BINDING.md resolution 7) and names it
-      // 'migration_missing' outright. One throttled stderr line is kept so the
-      // degradation is never completely silent.
-      try {
-        // THREE COLUMNS, NOT ONE, for the same reason server/store.js:181 reads
-        // three: the key is what the proof compares the writable column against,
-        // and without it in the row there is no check to run.
-        const prof = await sbAdmin('GET', `/profiles?id=in.(${[...others].join(',')})&select=id,callsign,callsign_key`);
-        // FAIL CLOSED. A null nameProofs means the social layer never started --
-        // in practice the blocklist failed to load, which is the one boot fault
-        // that turns the layer off while Supabase stays configured and this route
-        // goes on serving. Falling back to the raw column there would quietly
-        // restore the exact hole this closes, so every opponent reads 'Commander'
-        // instead. A degraded name is a cosmetic loss; an unproven one is not.
-        for (const p of prof || []) if (p && p.id) names.set(p.id, nameProofs ? nameProofs.displayName(p) : null);
-      } catch (e) {
-        names.clear();
-        if (Date.now() - lastHistNameWarn > 60000) {
-          lastHistNameWarn = Date.now();
-          console.error(`[history] opponent names unavailable, serving 'Commander' — ${e && e.message ? e.message : String(e)}`);
-        }
-      }
-    }
-    const out = (rows || []).map((r) => {
-      const opp = (r.players || []).filter((p) => p && p !== uid);
-      const opponent = r.vs_bot && !opp.length ? 'Computer'
-        : opp.length === 1 ? (names.get(opp[0]) || 'Commander')
-        : opp.length ? (opp.length + ' commanders') : 'Solo';
-      // winner_user is set only for a HUMAN winner (recordMatch). So: a human
-      // won -> W or L by identity; the computer won (vs_bot, a winning seat,
-      // no user) -> L; anything else (team modes, an unattributed end) is
-      // reported as neither rather than guessed.
-      const result = r.winner_user ? (r.winner_user === uid ? 'W' : 'L')
-        : (r.vs_bot && r.winner_seat != null) ? 'L' : '';
-      return { mode: r.mode, opponent, result, when: r.ended_at, players: (r.players || []).length };
-    });
-    json(200, { rows: out });
-  } catch (e) {
-    reportServerError('history', e);
-    json(502, { error: 'ledger unavailable' });
-  }
-}
-
 function handleRequest(req, res) {
   setSecurityHeaders(res);
   // decodeURIComponent THROWS on a malformed escape ('%', '%zz', '%e0%a4%a').
@@ -1682,21 +1557,6 @@ function handleRequest(req, res) {
     if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
     if (req.method !== 'POST') { res.writeHead(405, cors); return res.end(); }
     accountDelete(req, res, cors);
-    return;
-  }
-  if (urlPath === '/history') {
-    // LAUNCH BAY "Recent sorties". The ledger (match_results) is deny-all to
-    // clients by design; this is the one read path, service-key side, and it
-    // hands back callsigns and outcomes -- never a uuid. Same CORS story as
-    // /account/delete: the Authorization header is the whole auth.
-    const cors = {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, OPTIONS',
-      'Access-Control-Allow-Headers': 'Authorization',
-    };
-    if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
-    if (req.method !== 'GET') { res.writeHead(405, cors); return res.end(); }
-    matchHistory(req, res, cors);
     return;
   }
   if (urlPath === '/push/key') {

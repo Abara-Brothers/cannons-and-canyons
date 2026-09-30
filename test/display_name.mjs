@@ -1,11 +1,16 @@
 // server/display-name.js — the one proof of a name, in process.
 //
-// WHY THIS EXISTS: two call sites now show another player's name — the social
-// layer's panels and search results, and GET /history's Recent sorties list —
-// and `profiles.callsign` is a column the account itself PATCHes on every cloud
-// save. A rule copied into two files drifts, and a drift here fails OPEN on the
-// one string every other player has to look at (BINDING.md resolution 27). So
-// the rule is ONE module with ONE suite, and this is it.
+// WHY THIS EXISTS: this is the rule that decides whether the server can vouch
+// for another player's name before it is shown — the social layer's panels,
+// search results, the blocked list, the squad roster and its invites, and the
+// name a report records — and `profiles.callsign` is a column the account
+// itself PATCHes on every cloud save. It was pulled out of server/social.js when
+// a second call site needed the same rule; that call site was removed on
+// 2026-09-30, and the module stayed, because a security rule with its own suite
+// is worth more than an import count. A rule copied into two files drifts, and a
+// drift here fails OPEN on the one string every other player has to look at
+// (BINDING.md resolution 27). So the rule is ONE module with ONE suite, and this
+// is it.
 //
 // It drives the REAL createNameProofs against the REAL server/blocklist.txt.
 // A suite with its own term list would pass happily while the shipped list and

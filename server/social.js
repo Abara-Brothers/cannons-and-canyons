@@ -21,13 +21,15 @@ import { validateCallsign, normaliseCallsign, CALLSIGN_MIN, CALLSIGN_MAX } from 
 // stored, not the one it was handed.
 import { isUuid, isRefusal, reportCallsign } from './store.js';
 // THE NAME PROOFS. Written here, MOVED to server/display-name.js and imported
-// back, because they now have TWO callers: this layer's panels and search
-// results, and server.js's GET /history, which paints an opponent's name in
-// the Bay's Recent sorties list (BINDING.md resolution 27). Copying the rule
-// into the second caller would leave two copies to drift, and drift here fails
-// OPEN on the one string every other player has to look at. The reasoning for
-// each proof — and the two reviews and three decisions behind them — travelled
-// with them; this layer's behaviour is unchanged.
+// back. They had two callers when they moved: this layer's panels and search
+// results, and the route behind the Bay's recent-match panel, which was removed
+// on 2026-09-30 with the panel itself. They stay in their own module anyway,
+// because the rule is a security rule with its own suite against the shipped
+// blocklist (BINDING.md resolution 27) — copying it into a second caller would
+// leave two copies to drift, and drift here fails OPEN on the one string every
+// other player has to look at. The reasoning for each proof — and the two
+// reviews and three decisions behind them — travelled with them; this layer's
+// behaviour is unchanged.
 import { createNameProofs } from './display-name.js';
 // THE SQUAD STATE MACHINE. Built and held HERE rather than in server.js (plan
 // R1): every squad op needs the per-socket queue, the rate buckets, `reply`,
@@ -760,15 +762,17 @@ export function createSocial({
   // ---- names that came out of the database -----------------------------------
   // BUILT HERE, DEFINED IN server/display-name.js. The five helpers that used to
   // sit in this spot — provenName, presentable, rolledName, displayName and
-  // seenName — moved there whole, comments and all, because GET /history has to
-  // prove an opponent's name the same way these panels prove a friend's and a
-  // rule kept in two files drifts. Everything those comments record is still
-  // binding: the OWN-callsign narrowness of provenName (resolution 13), what a
-  // block does and does not promise (resolution 25), and why seenName skips the
-  // blocklist pass that displayName applies (resolution 26).
+  // seenName — moved there whole, comments and all, when a second caller had to
+  // prove an opponent's name the same way these panels prove a friend's. That
+  // caller was removed on 2026-09-30 and they stay there: the rule is a security
+  // rule with its own suite against the shipped blocklist. Everything those
+  // comments record is still binding: the OWN-callsign narrowness of provenName
+  // (resolution 13), what a block does and does not promise (resolution 25), and
+  // why seenName skips the blocklist pass that displayName applies (resolution
+  // 26).
   //
-  // `terms` is this layer's own injected blocklist, and server.js passes the SAME
-  // list to the same factory for /history — one file, one rule, one term list.
+  // `terms` is this layer's own injected blocklist, and it is now the only list
+  // this factory is ever built with — one file, one rule, one term list.
   const { provenName, rolledName, displayName, seenName } = createNameProofs({ terms });
 
   // ---- squads (design 4.3) -------------------------------------------------

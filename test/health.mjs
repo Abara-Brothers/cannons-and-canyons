@@ -1,12 +1,14 @@
 // /health's THREE SUPABASE VERDICTS, one per probe group, driven through the
 // REAL server against a mock Supabase that can be told to answer any status.
-// Self-hosted like history.mjs: every server here is spawned by this file on a
-// free port. Never aim it at a deployment.
+// Self-hosted: every server here is spawned by this file on its own free port.
+// Never aim it at a deployment.
 //
 // WHY THIS EXISTS: these three fields are what the deploy procedure tells the
-// owner to read and act on, and until now only their happy path was asserted
-// anywhere (push_persist.mjs proves supabase+supabaseAdmin read 'ok', and
-// history.mjs proves supabaseSocial's three states). NOT ONE FAILURE VERDICT OF
+// owner to read and act on, and when this file was written only their happy path
+// was asserted anywhere (push_persist.mjs proves supabase+supabaseAdmin read
+// 'ok', and the ledger-route suite deleted on 2026-09-30 proved supabaseSocial's
+// states — its one assertion this file did not already carry, the migration boot
+// line, moved into case 5 below). NOT ONE FAILURE VERDICT OF
 // THE OTHER TWO WAS TESTED, which is how this shipped: `probes.every(r => r.ok)
 // ? 'ok' : 'bad_secret_key'` collapsed a 500, a 503, a 429, a 404 and a 403 into
 // "your secret key is wrong". Observed live on 2026-09-21 — one probe read

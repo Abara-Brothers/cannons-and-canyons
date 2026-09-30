@@ -5,21 +5,24 @@
 // server/social.js, while the friends panels were the only screens that painted
 // somebody else's callsign. They are not any more.
 //
-// IT HAS TWO CALLERS NOW, AND THAT IS WHY IT IS A MODULE:
-//   1. server/social.js — the friends panel, add-by-code, search results, the
-//      blocked list, and the name a report records;
-//   2. server.js's GET /history — the opponent named in the Bay's Recent
-//      sorties panel. That is the one name path older than this feature, and it
-//      was the last place a name reached another player's screen with nothing
-//      standing behind it (BINDING.md resolution 27).
+// IT HAS ONE CALLER, AND IT IS STILL ITS OWN MODULE:
+//   server/social.js — the friends panel, add-by-code, search results, the
+//   blocked list, the squad roster and its invites, and the name a report
+//   records.
 //
-// THE RULE MAY NOT BE WRITTEN TWICE, and that is the whole reason the helpers
-// moved out of social.js rather than being copied into server.js. A security
-// rule kept in two files drifts, and drift here fails OPEN: the stale copy goes
-// on painting a name the other would have refused, on a screen whose entire
-// claim is that the server vouched for it. /history is the worse of the two to
-// get wrong, because that panel carries no seat handle — a name shown there
-// cannot be reported or blocked from where it appears.
+// It had a second. The Bay's recent-match panel and the route that fed it were
+// removed on 2026-09-30, when the Squad box took that slot, and with them went
+// the last name path in this codebase older than chosen names (BINDING.md
+// resolution 27). THE FILE DOES NOT GO BACK INTO social.js. It is a security
+// rule — the thing that decides whether the server can vouch for a name before
+// another player is shown it — and it has its own suite, test/display_name.mjs,
+// driven against the SHIPPED server/blocklist.txt. Folding it back would bury
+// the rule and its proof inside a socket layer and lose the one property that
+// makes it checkable on its own. It is also where the NEXT caller goes: any new
+// screen that paints somebody else's name imports this and never copies it,
+// because a rule kept in two files drifts and drift here fails OPEN — the stale
+// copy goes on painting a name the other would have refused, on a screen whose
+// entire claim is that the server vouched for it.
 //
 // Pure and synchronous, all of it: the blocklist terms are injected (server.js
 // reads them from disk once, at boot), and nothing here touches the database, a
@@ -40,8 +43,8 @@ import { isGeneratedCallsign, isProfane } from '../public/game-core.js';
 
 // `terms` is the shipped blocklist, injected rather than read here: presentable()
 // below is the only part of this module that needs it, and injecting it keeps
-// every function in the file pure. Both callers pass the same list, loaded once
-// by server.js — one file, one rule, one term list.
+// every function in the file pure. Its one caller, server/social.js, passes the
+// list server.js loads once, at boot — one file, one rule, one term list.
 export function createNameProofs({ terms }) {
   // ---- names that came out of the database -----------------------------------
   // WHO CAN WRITE THIS COLUMN? profiles.callsign is PATCHed by the account
