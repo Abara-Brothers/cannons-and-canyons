@@ -102,6 +102,11 @@ const reply = async (patch) => {
   })()`);
   await sleep(120); return r;
 };
+// Answer ONE frame by its id, whatever was sent since: the checks that race two
+// questions must say which one the server is answering.
+const answer = async (i, patch) => { await ev(`(handle(Object.assign({ id: ${JSON.stringify(i)} }, ${JSON.stringify(patch)})), true)`); await sleep(120); };
+// Exactly one frame was sent, and it is a BARE resume: no code in it.
+const bare1 = (q) => q.length === 1 && q[0].op === 'resume' && !('code' in q[0]);
 // A SIGN-IN STARTS A FRIENDS READ (app.js asks once per sign-in), and left
 // unanswered it holds socialAsking for twelve seconds and then writes a refusal
 // into the Friends tab mid-check. Settled here the way the server would, and
@@ -284,6 +289,13 @@ try {
         && w0.btns.some((b) => b.sq === 'retry' && !b.dis) && w0.tabs[0].pill === null)
       ok(`${V}: before any answer the box says "Not loaded yet." with a live Retry, and asks nothing before the hello`);
     else fail(`${V}: third state ${JSON.stringify(w0 && { text: w0.text, btns: w0.btns, pill: w0.tabs[0].pill, sent: q0 })}`);
+    // THE CODE FIELD DOES NOT WAIT FOR THE SQUAD ANSWER (review T8-R1-2). The
+    // code frame is answered from memory, before any sign-in and with the
+    // social layer off, and after Task 11 this is the one field a room code
+    // goes in.
+    if (w0 && w0.field && w0.field.on && w0.btns.some((b) => b.sq === 'code' && !b.dis) && w0.fold === true)
+      ok(`${V}: the unanswered box still offers a live code field, above the fold`);
+    else fail(`${V}: unanswered code field ${JSON.stringify(w0 && { field: w0.field, btns: w0.btns, fold: w0.fold })}`);
     // The introduction: the real sendHello, which finds no session to send
     // here and marks the socket anyway. The ask follows it, once.
     const ask = async (stored) => {
@@ -336,6 +348,21 @@ try {
     const quiet = await squads();
     if (answered.length === 1 && quiet.length === 0) ok(`${V}: neither the answer nor a repaint re-asks a question this socket has had answered`);
     else fail(`${V}: sqNeed re-asked: one question sent ${answered.length} resume frame(s), want 1; a repaint sent ${quiet.length}`);
+    // A HELLO THAT LANDS WHILE AN ASK IS OUT (review T8-R1-3). An in-page
+    // sign-in resets the box, which asks under the OLD introduction; the new
+    // hello lands while that ask is in flight, and sqAsk refuses a second one.
+    // The first answer must ask again, or the box stands on the old identity's
+    // answer until the next reconnect.
+    const h1 = await ask('');                                   // introduction 1: its resume is out
+    await ev('sendHello(S.ws).then(() => true)'); await sleep(60);
+    const h2 = await squads();                                  // introduction 2: nothing more while 1 is out
+    await clearTx();
+    await answer(h1[0] && h1[0].id, { type: 'squad', op: 'gone' });
+    const h3 = await squads();                                  // what the first answer set off
+    await reply({ op: 'gone' });
+    if (h1.length === 1 && h2.length === 1 && h3.length === 1 && h3[0].op === 'resume')
+      ok(`${V}: a hello that lands while a resume is out is asked about as soon as that answer comes`);
+    else fail(`${V}: hello during an ask: first ${JSON.stringify(h1)}, during ${JSON.stringify(h2)}, after the answer ${JSON.stringify(h3)}`);
 
     // ---- 7. A REFUSAL. On the live build every linked player meets this path
     //      until the phase 6 migration is applied, so it is the shipped state,
@@ -347,11 +374,19 @@ try {
         && x.btns.some((b) => b.sq === 'retry' && !b.dis) && x.tabs[0].pill === null)
       ok(`${V}: a refused resume says so, keeps the pill empty, and offers a live Retry`);
     else fail(`${V}: refusal ${JSON.stringify(x && { text: x.text, err: x.err, pill: x.tabs[0].pill, btns: x.btns })}`);
+    // A REFUSED RESUME KEEPS THE CODE FIELD (review T8-R1-2): while squads are
+    // refused -- every linked player on the live build -- a room code must
+    // still join from the box, as it did in any outage before this project.
+    if (x && x.field && x.field.on && x.btns.some((b) => b.sq === 'code' && !b.dis) && x.fold === true)
+      ok(`${V}: a refused resume still offers a live code field, above the fold`);
+    else fail(`${V}: refused code field ${JSON.stringify(x && { field: x.field, btns: x.btns, fold: x.fold })}`);
     // A refusal is Retry's to clear: a repaint does not re-ask a server saying no.
     await clearTx();
     await ev(`(() => { document.dispatchEvent(new Event('cc:social')); return true; })()`);
     await sleep(60);
     const still = await squads();
+    // What the player has typed must outlive the answer Retry brings back.
+    await ev(`(() => { const i = document.getElementById('sqCode'); if (i) i.value = 'MNPQ'; return true; })()`);
     // AND RETRY REALLY RE-ASKS. Clicked through the real listener.
     await click('#bay [data-sq="retry"]');
     await sleep(60);
@@ -359,6 +394,13 @@ try {
     if (still.length === 0 && again.length === 1 && again[0].op === 'resume') ok(`${V}: Retry clears the refusal and asks again; a repaint does not`);
     else fail(`${V}: Retry sent ${JSON.stringify(again)} (a repaint sent ${still.length})`);
     await reply({ op: 'gone' });
+    // THE ANSWER REPAINTS IN PLACE: the code field sits at the same place in
+    // the pane before and after it, so morphChildren keeps the node and the
+    // player's typing (morphNode never touches an INPUT's value).
+    const kept7 = await ev(`(() => { const i = document.getElementById('sqCode'); return i ? i.value : null; })()`);
+    if (kept7 === 'MNPQ') ok(`${V}: the answer to Retry repaints the box and keeps what was typed in the code field`);
+    else fail(`${V}: the answer dropped the typed code (${JSON.stringify(kept7)})`);
+    await ev(`(() => { const i = document.getElementById('sqCode'); if (i) i.value = ''; return true; })()`);
 
     // ---- 8. A SQUAD THIS CLIENT HAS BEEN TOLD ABOUT must never read "No squad
     //      yet", and it lives in ONE slot (plan X7): window.CC_SQUAD.
@@ -394,6 +436,16 @@ try {
     if (JSON.stringify(await slot()) === '{"code":"BKPQ","n":3}' && (await stored()) === 'BKPQ')
       ok(`${V}: a roster this socket is not in, or that names another account as us, is ignored`);
     else fail(`${V}: a foreign roster was written: slot=${JSON.stringify(await slot())} held=${JSON.stringify(await stored())}`);
+    // THE SAME ACCOUNT AGAIN IS NOT A SWITCH (review T8-R1-4). app.js's
+    // refreshAccountChip fires cc:account on boot, on every resume and on every
+    // token refresh; a squad in hand must survive all of them.
+    await clearTx();
+    await ev(`(document.dispatchEvent(new CustomEvent('cc:account')), true)`); await sleep(60);
+    const same = await box();
+    if (JSON.stringify(await slot()) === '{"code":"BKPQ","n":3}' && same && same.text.includes('BKPQ') && same.tabs[0].pill === '3 / 4'
+        && (await squads()).length === 0)
+      ok(`${V}: cc:account for the account already signed in keeps the squad and asks nothing`);
+    else fail(`${V}: same-account cc:account ${JSON.stringify(same && { text: same.text, pill: same.tabs[0].pill })} slot=${JSON.stringify(await slot())} sent=${JSON.stringify(await squads())}`);
 
     // ---- 10. A RECONNECT, through the REAL ws.onopen. A member whose socket
     //      blips is dropped and removed a minute later unless the new socket
@@ -723,6 +775,77 @@ try {
       ok(`${V}: Friends reads 2 friends, 1 online, 1 request, and offers the door to the screen`);
     else fail(`${V}: friends known ${JSON.stringify(fk && { text: fk.text, btns: fk.btns })}`);
     await click('#bay [data-sq="tab:squad"]');
+
+    // ---- 20. A ROSTER THIS SOCKET WAS ONLY SHOWN (D-UI-1; review T8-R1-1). A
+    //       bare resume from a second tab or device, while a live socket
+    //       elsewhere holds the account's row, is answered the roster with
+    //       held:false: the row stays where it is and no push will ever reach
+    //       this socket. The box says where the squad is, keeps it out of the
+    //       slot and out of storage, offers no squad control -- the code field
+    //       stays -- and asks again, bare, on a return and on a reconnect,
+    //       exactly as after `elsewhere`. A roster it HOLDS is its own again.
+    const OPEN = 'Your squad is open on another device.';
+    const LOOK = { ...SNAP, held: false }, HELD = { ...SNAP, held: true };
+    // A tab with no squad of its own on a device that remembers no code: the
+    // laptop opened while the phone holds the squad.
+    await push({ op: 'gone' });
+    const lk = await ask('');
+    await reply(LOOK);
+    const lb = await box();
+    const lookEnd = await ev('window.CC_SQUAD_END');
+    if (lk.length === 1 && !('code' in lk[0]) && lb && lb.text.startsWith(OPEN) && !lb.text.includes('BKPQ') && !lb.text.includes('Dusty Crag')
+        && (await slot()) === null && lookEnd === 'open' && (await stored()) === null
+        && !lb.btns.some((b) => b.sq === 'tab:friends') && lb.field && lb.field.on && lb.btns.some((b) => b.sq === 'code' && !b.dis))
+      ok(`${V}: a held:false roster reads "${OPEN}", with no squad control and the code field, and is neither in the slot nor stored`);
+    else fail(`${V}: look-only answer ${JSON.stringify(lb && { text: lb.text, btns: lb.btns, field: lb.field })} slot=${JSON.stringify(await slot())} end=${JSON.stringify(lookEnd)} held=${JSON.stringify(await stored())} asked=${JSON.stringify(lk)}`);
+    // A RETURN ASKS AGAIN, BARE -- even with a code another tab has stored
+    // meanwhile, which would pull the row off the socket in use -- and each
+    // return asks once, whatever the answer was.
+    await ev(`(localStorage.setItem('cc_squad', 'BKPQ'), true)`);
+    await clearTx(); await focus();
+    const lr1 = await squads();
+    await reply(LOOK);
+    await clearTx(); await focus();
+    const lr2 = await squads();
+    await reply(LOOK);
+    // A RECONNECT ASKS AGAIN, BARE, after the hello.
+    await reconnect(); await token();
+    const lseq = await tx(), lre = lseq.filter((f) => f.type === 'squad');
+    await reply(LOOK); await settleFriends();
+    const lhi = lseq.findIndex((f) => f.type === 'hello'), lsi = lseq.findIndex((f) => f.type === 'squad');
+    if (bare1(lr1) && bare1(lr2) && bare1(lre) && lhi >= 0 && lsi > lhi
+        && (await stored()) === 'BKPQ')
+      ok(`${V}: after a held:false answer every return and a reconnect ask again, bare, and the device's code is kept`);
+    else fail(`${V}: re-ask after held:false: returns ${JSON.stringify([lr1, lr2])} reconnect ${JSON.stringify(lseq.map((f) => f.type + (f.op ? ':' + f.op : '') + (f.code ? ':' + f.code : '')))} held=${JSON.stringify(await stored())}`);
+    // THE OTHER SOCKET LET GO: the next return is answered held:true, and the
+    // squad is this tab's -- shown, in the slot, and its reconnect carries the
+    // code again, to take its row back from a dead socket a proxy holds open.
+    await clearTx(); await focus();
+    await reply(HELD);
+    const lh = await box();
+    await reconnect(); await token();
+    const lcoded = (await tx()).filter((f) => f.type === 'squad');
+    await reply(HELD); await settleFriends();
+    if (lh && lh.text.includes('BKPQ') && !lh.text.includes(OPEN) && JSON.stringify(await slot()) === '{"code":"BKPQ","n":2}'
+        && lcoded.length === 1 && lcoded[0].op === 'resume' && lcoded[0].code === 'BKPQ')
+      ok(`${V}: a held:true answer makes the squad this tab's again, and its next reconnect resumes by code`);
+    else fail(`${V}: held again ${JSON.stringify(lh && lh.text)} slot=${JSON.stringify(await slot())} reconnect=${JSON.stringify(lcoded)}`);
+    // A held:false frame never writes over the slot, even one holding a
+    // roster, and never spends the device's code: the account's squad lives.
+    await push(LOOK);
+    const lp = await box();
+    if ((await slot()) === null && (await ev('window.CC_SQUAD_END')) === 'open' && (await stored()) === 'BKPQ' && lp && lp.text.startsWith(OPEN))
+      ok(`${V}: a held:false push empties the slot, says the squad is open elsewhere, and keeps the code`);
+    else fail(`${V}: held:false push ${JSON.stringify(lp && lp.text)} slot=${JSON.stringify(await slot())} held=${JSON.stringify(await stored())}`);
+    // THE SQUAD ENDED ON THE OTHER DEVICE: this tab showed it, so the answer to
+    // the next return is the neutral "has ended" line, and the code the bare
+    // question did not present is not spent.
+    await clearTx(); await focus();
+    await reply({ op: 'gone' });
+    const lg = await box();
+    if (lg && lg.text.startsWith('Your squad has ended. Squad up again.') && (await stored()) === 'BKPQ')
+      ok(`${V}: \`gone\` after a held:false answer is "has ended", and spends no code the tab did not present`);
+    else fail(`${V}: gone after held:false ${JSON.stringify(lg && lg.text)} held=${JSON.stringify(await stored())}`);
   }
 } catch (e) {
   fail('squad_ui stopped: ' + (e && e.message));

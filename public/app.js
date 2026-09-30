@@ -1533,7 +1533,8 @@ window.CC_SOCIAL_ASKING = false;         // a friends read is in flight right no
 // export has a stable place to look. null still means NOT LOADED.
 window.CC_SOCIAL_BLOCKED = null;         // how many that read found, or null
 // THE SQUAD THIS SOCKET IS IN (plan X7): the last `{type:'squad', op:'state'}`
-// frame, or null. ONE SLOT, written only by socialSquad() below (and emptied
+// frame whose row IS ON THIS SOCKET (not `held: false`, D-UI-1), or null. ONE
+// SLOT, written only by socialSquad() below (and emptied
 // when its account leaves), and every client squad view reads it -- the Squad
 // box through bay.js's `sq.snap` -- because the server PUSHES the roster with
 // no request id whenever somebody else acts (a friend joins, the leader
@@ -1544,9 +1545,11 @@ window.CC_SOCIAL_BLOCKED = null;         // how many that read found, or null
 window.CC_SQUAD = null;
 // WHY THE LAST SQUAD ENDED FOR THIS TAB, '' when nothing has since the last
 // roster: 'kicked', 'left', 'elsewhere' or 'no_leader' from the server's
-// `{op:'ended'}` push, 'left' from this client's own leave, and 'ended' for a
-// reason this build does not know. Closed, so the server's word is never
-// looked up unchecked.
+// `{op:'ended'}` push, 'left' from this client's own leave, 'open' when the
+// server showed this socket the account's squad without putting its row here
+// (a state frame with `held: false`, D-UI-1), and 'ended' for a reason this
+// build does not know. Closed, so the server's word is never looked up
+// unchecked -- and 'open' is this client's word, never a server reason.
 window.CC_SQUAD_END = '';
 let socialId = 0;
 let socialSeq = 0;                       // the waiter key, minted here and never sent
@@ -1656,8 +1659,21 @@ function socialSquad(m) {
     const me = Array.isArray(m.members) && Number.isInteger(m.you) ? m.members[m.you] : null;
     const acct = window.CC_ACCOUNT && window.CC_ACCOUNT.id;
     if (!me || (me.id && me.id !== acct)) return;
-    window.CC_SQUAD = m;
-    window.CC_SQUAD_END = '';
+    // A ROSTER THIS SOCKET ONLY LOOKED AT IS NOT THIS TAB'S SQUAD (D-UI-1).
+    // `held: false` is the server saying no row is on this socket: a bare
+    // resume while a live socket elsewhere holds the account's row is answered
+    // the roster, `you` naming that row, but the row stays where it is and no
+    // push will ever reach this socket -- written here it would freeze on
+    // screen as if it were live. The slot is emptied and the end says where
+    // the squad is. Only an explicit false: a frame without the field is from
+    // a server that cannot tell, and is read as it always was.
+    if (m.held === false) {
+      window.CC_SQUAD = null;
+      window.CC_SQUAD_END = 'open';
+    } else {
+      window.CC_SQUAD = m;
+      window.CC_SQUAD_END = '';
+    }
   } else if (m.op === 'ended' || m.op === 'left') {
     window.CC_SQUAD = null;
     window.CC_SQUAD_END = m.op === 'left' ? 'left' : SQUAD_ENDS.includes(m.reason) ? m.reason : 'ended';
