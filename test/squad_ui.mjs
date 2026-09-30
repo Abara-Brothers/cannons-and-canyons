@@ -1631,7 +1631,126 @@ try {
     if (clip === `http://127.0.0.1:${appPort}/?squad=QK7T` && b7f.length === 0)
       ok(`${V}: the code link copies /?squad=QK7T and sends nothing`);
     else fail(`${V}: code link copied ${JSON.stringify(clip)}, sent ${JSON.stringify(b7f)}`);
-    // T9-CHECKS-C
+    // ---- C1. THE INVITE YOU JUST RECEIVED (design 5.1 state 5), with no squad
+    //      of your own. It is a PUSH with no request id (design 4.3), so it has
+    //      to be routed ahead of socialReply's `if (m.id == null) return;` --
+    //      left to fall through, the only invite a CONNECTED player ever got
+    //      would be the push notification 4.4 declines to send them.
+    const invite = (o) => ev(`(handle(Object.assign({ type: 'squad', op: 'invited', code: 'RM4P', from: { callsign: 'Steel Mule' }, size: 2, max: 4 }, ${JSON.stringify(o || {})})), true)`).then(() => sleep(80));
+    // Out of the squad (a push the server sends a leaver's other tabs): the box
+    // is in a no-squad state, with the code field.
+    await ev(`(handle({ type: 'squad', op: 'ended', reason: 'left' }), true)`); await sleep(60);
+    await ev(`(document.getElementById('sqCode').value = 'ZX9K', true)`);
+    const c1at = await ev(`[...document.getElementById('sqPane-squad').children].findIndex((c) => c.querySelector && c.querySelector('#sqCode'))`);
+    await invite();
+    const c1 = await t9box();
+    const c1slot = await ev('JSON.stringify(window.CC_SQUAD_INVITE)');
+    const c1kept = await ev(`document.getElementById('sqCode').value`);
+    const c1at2 = await ev(`[...document.getElementById('sqPane-squad').children].findIndex((c) => c.querySelector && c.querySelector('#sqCode'))`);
+    await ev(`(document.getElementById('sqCode').value = '', true)`);
+    if (c1 && c1.inv && c1.inv.t === 'Steel Mule invites you to their squad · 2 / 4' && c1.inv.join && !c1.inv.join.dis && c1.inv.join.t === 'Join'
+        && c1.inv.ign && !c1.inv.ign.dis && c1slot === '{"code":"RM4P","from":{"callsign":"Steel Mule"},"size":2,"max":4}'
+        && c1kept === 'ZX9K' && c1at === c1at2 && c1at >= 0)
+      ok(`${V}: an invite from a connected friend lands as a row with Join and Ignore, and the code field keeps what was typed`);
+    else fail(`${V}: invite row ${JSON.stringify({ inv: c1 && c1.inv, slot: c1slot, kept: c1kept, at: [c1at, c1at2] })}`);
+
+    // ---- C2. THE SENDER'S NAME IS THE SERVER'S, AND IS TEXT. A callsign the
+    //      server could not vouch for arrives null and is never shown as
+    //      "No callsign"; markup arrives as text. A malformed frame is no invite.
+    await invite({ code: 'RM5P', from: { callsign: null }, size: 3 });
+    const c2a = await t9box();
+    await invite({ code: 'RM6P', from: { callsign: '<img src=x onerror=1>' } });
+    const c2b = await t9box();
+    const c2imgs = await ev(`document.querySelectorAll('#bay .sqi img').length`);
+    await invite({ code: 42 }); const c2c = await ev('window.CC_SQUAD_INVITE && window.CC_SQUAD_INVITE.code');
+    await invite({ code: '<b>' }); const c2d = await ev('window.CC_SQUAD_INVITE && window.CC_SQUAD_INVITE.code');
+    if (c2a && c2a.inv && c2a.inv.t === 'A friend invites you to their squad · 3 / 4'
+        && c2b && c2b.inv && c2b.inv.t === '<img src=x onerror=1> invites you to their squad · 2 / 4' && c2imgs === 0
+        && c2c === 'RM6P' && c2d === 'RM6P')
+      ok(`${V}: a nameless sender reads "A friend", a sender's markup is text, and a malformed invite changes nothing`);
+    else fail(`${V}: invite names ${JSON.stringify({ a: c2a && c2a.inv, b: c2b && c2b.inv, imgs: c2imgs, c: c2c, d: c2d })}`);
+
+    // ---- C3. IGNORE HIDES THIS INVITE, NOT INVITES, AND SENDS NOTHING. A
+    //      different squad's invite still arrives; the ignored squad's does not.
+    await invite();
+    await clearTx(); await t9click('#bay [data-sq^="ignore:"]'); await sleep(60);
+    const c3a = await t9box(), c3f = await squads();
+    await invite({ code: 'QK7T', from: { callsign: 'Ridge Pike' }, size: 3 });
+    const c3b = await t9box();
+    await invite();
+    const c3c = await t9box();
+    if (c3a && !c3a.inv && c3f.length === 0 && c3b && c3b.inv && c3b.inv.t.indexOf('Ridge Pike') === 0 && c3c && !c3c.inv)
+      ok(`${V}: Ignore hides that one squad's invite and sends nothing; another squad's still arrives, the ignored one does not`);
+    else fail(`${V}: ignore ${JSON.stringify({ gone: c3a && !c3a.inv, sent: c3f.length, next: c3b && c3b.inv, again: c3c && c3c.inv })}`);
+
+    // ---- C4. JOIN SENDS ONE CORRELATED JOIN FRAME -- the code, this device's
+    //      current name and paint -- and the row says so while it is out.
+    await invite({ code: 'QK7T', from: { callsign: 'Steel Mule' }, size: 2 });
+    await clearTx(); await t9click('#bay [data-sq^="join:"]'); await sleep(60);
+    const c4f = await squads(), c4 = await t9box();
+    const myName = await ev('myName()'), mySkin = await ev('mySkin()');
+    if (c4f.length === 1 && c4f[0].op === 'join' && c4f[0].code === 'QK7T' && c4f[0].name === myName && typeof myName === 'string' && myName
+        && c4f[0].skin === mySkin && typeof c4f[0].id === 'number'
+        && c4 && c4.inv && c4.inv.join && c4.inv.join.t === 'Joining' && c4.inv.join.dis && c4.inv.ign && c4.inv.ign.dis)
+      ok(`${V}: Join sends one correlated join frame with the current name and paint, and the row reads Joining while it is out`);
+    else fail(`${V}: join frame ${JSON.stringify({ c4f, myName, mySkin, inv: c4 && c4.inv })}`);
+    // ---- C5. A REFUSED JOIN FREES THE ROW AND SAYS WHY INSIDE IT, in task 8's
+    //      words for a join (the D-BLOCK line for no_such_squad).
+    const joinSays = [['no_such_squad', 'No squad or game with that code.'], ['full', 'That squad is full.'],
+      ['already_in', 'You are already in that squad on another device.'], ['unavailable', 'That squad could not be joined right now. Try again later.']];
+    const c5bad = [];
+    for (const [code, line] of joinSays) {
+      if (code !== 'no_such_squad') { await clearTx(); await t9click('#bay [data-sq^="join:"]'); await sleep(40); }
+      await reply({ op: 'join', error: code });
+      const bx = await t9box();
+      if (!(bx && bx.inv && bx.inv.err === line && bx.inv.join && !bx.inv.join.dis && bx.inv.join.t === 'Join')) c5bad.push({ code, inv: bx && bx.inv });
+    }
+    if (!c5bad.length) ok(`${V}: a refused join frees the row and says why inside it, for all ${joinSays.length} refusals`);
+    else fail(`${V}: join refusals ${JSON.stringify(c5bad)}`);
+    // ---- C6. A JOIN THAT LANDS. The roster reaches the slot first (the server
+    //      answers the roster with the request's id), the box is the squad, and
+    //      the invite it answered is spent: it does not come back when the
+    //      player later leaves that squad.
+    await clearTx(); await t9click('#bay [data-sq^="join:"]'); await sleep(40);
+    await reply({ op: 'state', code: 'QK7T', leader: T9_MULE, mode: 'duel', tees: null, max: null, you: 1, held: true,
+      members: [T9MULE({ ready: true }), T9YOU({ ready: false })], fits: t9fits(2) });
+    const c6a = await t9box();
+    await clearTx(); await t9click('#bay [data-sq="leave"]'); await sleep(40);
+    await reply({ op: 'left', ok: true });
+    const c6b = await t9box();
+    if (c6a && c6a.rows.length === 2 && c6a.rows[1].you && !c6a.inv && c6a.ready && c6b && !c6b.inv && (await ev('window.CC_SQUAD')) === null)
+      ok(`${V}: a join that lands shows the squad, and the invite it answered does not return after leaving`);
+    else fail(`${V}: join landed ${JSON.stringify({ a: c6a && { rows: c6a.rows.length, inv: c6a.inv }, b: c6b && c6b.inv })}`);
+
+    // ---- C7. AN INVITE WHILE IN ANOTHER SQUAD (design 7): it sits ABOVE the
+    //      squad, and Join names the NEW squad. An invite to the squad you are
+    //      standing in is not an invite.
+    await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
+    await invite({ code: 'RM8P', from: { callsign: 'Ridge Pike' }, size: 3 });
+    const c7a = await t9box();
+    await clearTx(); await t9click('#bay [data-sq^="join:"]'); await sleep(40);
+    const c7f = await squads();
+    await reply({ op: 'join', error: 'full' });
+    await invite({ code: 'QK7T' });
+    const c7b = await t9box();
+    if (c7a && c7a.inv && c7a.inv.t.indexOf('Ridge Pike') === 0 && c7a.rows.length === 2 && c7f.length === 1 && c7f[0].code === 'RM8P'
+        && c7b && !c7b.inv)
+      ok(`${V}: an invite while in another squad sits above it and joins the new one; an invite to your own squad is not shown`);
+    else fail(`${V}: invite over a squad ${JSON.stringify({ a: c7a && { inv: c7a.inv, rows: c7a.rows.length }, sent: c7f, b: c7b && c7b.inv })}`);
+
+    // ---- C8. AN INVITE BELONGS TO THE ACCOUNT IT WAS SENT TO. The same account
+    //      again (a token refresh fires cc:account) keeps it; a sign-out drops it.
+    await invite({ code: 'RM9P' });
+    await ev(`(document.dispatchEvent(new CustomEvent('cc:account')), true)`); await sleep(40);
+    const c8a = await ev('window.CC_SQUAD_INVITE && window.CC_SQUAD_INVITE.code');
+    await setWho('out');
+    const c8b = await ev('window.CC_SQUAD_INVITE');
+    await setWho('in');
+    const c8c = await t9box();
+    if (c8a === 'RM9P' && c8b === null && c8c && !c8c.inv)
+      ok(`${V}: a token refresh keeps the invite and a sign-out drops it`);
+    else fail(`${V}: invite across accounts ${JSON.stringify({ same: c8a, out: c8b, back: c8c && c8c.inv })}`);
+    // T9-CHECKS-D
   }
 } catch (e) {
   fail('squad_ui task 9 stopped: ' + (e && e.message));

@@ -1551,6 +1551,16 @@ window.CC_SQUAD = null;
 // build does not know. Closed, so the server's word is never looked up
 // unchecked -- and 'open' is this client's word, never a server reason.
 window.CC_SQUAD_END = '';
+// THE SQUAD INVITE THIS PLAYER JUST RECEIVED (task 9): `{ code, from:{ callsign },
+// size, max }`, or null. An invite is a PUSH, not a reply: the server sends it
+// unsolicited down every socket the invited player holds (design 4.3), with no
+// request id, so left to fall through socialReply it reaches
+// `if (m.id == null) return;` and vanishes -- and the only invite a CONNECTED
+// player would ever get is the push notification design 4.4 declines to send
+// to somebody who is online. Written only by socialInvite() below; bay.js
+// reads it. null MEANS NOTHING PENDING, never "not known yet": there is no
+// read behind this slot, only pushes, so there is no third state to tell.
+window.CC_SQUAD_INVITE = null;
 let socialId = 0;
 let socialSeq = 0;                       // the waiter key, minted here and never sent
 // token -> { match, cb, t }. KEYED ON THE TOKEN, NOT ON THE FRAME'S id. BINDING
@@ -1627,6 +1637,8 @@ function socialReply(m) {
   // squad op gets its roster first and its answer last, so a callback always
   // finds the slot already current.
   if (m.type === 'squad' && !m.error) socialSquad(m);
+  // AN INVITE IS ALWAYS A PUSH (task 9): no request is waiting on it.
+  if (m.type === 'squad' && m.op === 'invited') { socialInvite(m); return; }
   // PRESENCE IS ALWAYS A PUSH, NEVER A REPLY, and it must not be matched like
   // one: `id` on this frame is the FRIEND's uuid (server/social.js's presence
   // fan-out), which is the very value BINDING resolution 3 puts in `id` on
@@ -1682,6 +1694,26 @@ function socialSquad(m) {
     window.CC_SQUAD_END = '';
   } else return;
   document.dispatchEvent(new Event('cc:squad'));
+}
+// THE LAST INVITE WINS AND NOTHING IS MERGED: two friends inviting you is two
+// routes to one decision, and the newer squad is the one still filling. The
+// frame is read field by field rather than kept. The code must look like one
+// (the server's own bound, server/social.js codeOf: at most 8, upper case), so
+// nothing else can ride into a data attribute or a join frame. A callsign the
+// server could not vouch for arrives null and stays null, so the box renders
+// its no-name wording instead of the string "null".
+const SQUAD_INVITE_CODE = /^[A-Z0-9]{1,8}$/;
+function socialInvite(m) {
+  if (!m || typeof m.code !== 'string' || !SQUAD_INVITE_CODE.test(m.code)) return;
+  const f = m.from && typeof m.from === 'object' ? m.from : {};
+  const n = (v, d) => (Number.isInteger(v) && v >= 1 && v <= 4 ? v : d);
+  window.CC_SQUAD_INVITE = {
+    code: m.code,
+    from: { callsign: typeof f.callsign === 'string' && f.callsign ? f.callsign : null },
+    size: n(m.size, 1),
+    max: n(m.max, 4),
+  };
+  document.dispatchEvent(new Event('cc:social'));
 }
 // A friend came online or went. The server sends this INSTEAD of a whole
 // snapshot (one frame per friend per change rather than eight round trips), so
@@ -1850,6 +1882,11 @@ document.addEventListener('cc:account', () => {
   const key = accountKey();
   if (key && key === socialAccount) return;
   socialAccount = key;
+  // AN INVITE BELONGS TO THE ACCOUNT IT WAS SENT TO (task 9). Left standing
+  // across a sign-out or a switch it would offer the next player on this
+  // device a squad whose member invited somebody else. The box repaints from
+  // bay.js's own cc:account listener, which runs after this one.
+  window.CC_SQUAD_INVITE = null;
   // GIVE THE NAME UP -- the symmetric act to adopting it. socialSnapshot() makes
   // a chosen callsign this device's name because the name belongs to the
   // ACCOUNT; when the account goes, the name has to go with it. Without this the

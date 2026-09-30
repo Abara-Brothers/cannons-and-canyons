@@ -2101,6 +2101,14 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .sqfb .go.cy[disabled] svg{fill:#616e94}
   #bay .sqfb .ghost[disabled]{opacity:.45;cursor:default}
   #bay .sqfb .ghost[disabled]:hover{border-color:rgba(140,168,214,.34);color:#c0cce8;background:none}
+  /* The invite this player just received: a highlighted row above the pane. */
+  #bay .sqi{margin-top:calc(2 * var(--u));padding:calc(6 * var(--u));border-radius:calc(4 * var(--u));
+     border:1px solid rgba(84,200,255,.5);background:rgba(84,200,255,.12)}
+  #bay .sqit{font-family:Rajdhani,system-ui,sans-serif;font-weight:600;font-size:calc(11 * var(--u));line-height:1.25;
+     color:#e6ecfb;overflow-wrap:anywhere}
+  #bay .sqib{display:flex;gap:calc(6 * var(--u));margin-top:calc(5 * var(--u))}
+  #bay .sqib .sbtn{flex:1;height:calc(22 * var(--u));padding:0 calc(8 * var(--u));font-size:calc(10.5 * var(--u))}
+  #bay .sqib .sbtn.on{border-color:#54c8ff;color:#fff;background:rgba(84,200,255,.18)}
 
   /* ------------------------------------------------------------ launch bar -- */
   #bay .lbar{position:absolute;left:calc(18 * var(--u));right:calc(18 * var(--u));bottom:calc(12 * var(--u));height:calc(56 * var(--u));z-index:16;display:flex;

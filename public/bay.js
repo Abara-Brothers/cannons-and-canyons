@@ -508,9 +508,13 @@ const SQ_NONE = 'No squad or game with that code.';
 //             one footer.
 //   aerr   -- what the last footer action was refused with. NOT `err`, which
 //             is the re-ask's refusal and swaps the squad for Retry.
+//   ierr   -- what the last Join from the invite row was refused with.
+//   ignored -- the ONE squad code whose invite Ignore hid.
+//   used   -- the invite a Join from its row answered (the slot's object),
+//             so it does not come back when the player later leaves.
 const sqFresh = (tab) => ({
   tab, known: false, gone: false, err: '', asking: false, cerr: '', via: 0, again: false,
-  busy: '', aerr: '',
+  busy: '', aerr: '', ierr: '', ignored: '', used: null,
   get snap() { return window.CC_SQUAD || null; },
 });
 let sq = sqFresh('squad');
@@ -590,10 +594,13 @@ function sqPane() {
   // neither this answer nor the social layer: the code frame is answered from
   // memory, so a room code still joins while squads are refused (task 1's
   // carry-forward), and after task 11 this is the one field there is (X8).
-  // The field is the pane's THIRD child here exactly as in the answered states
+  // The field is the pane's FOURTH child here exactly as in the answered states
   // below, so the answer's repaint morphs it in place and keeps what the player
   // has typed (morphChildren is positional); that is why Retry follows it.
-  if (!sq.known || sq.err) return sqNote('Not loaded yet.') + sqErr(sq.err) + sqCodeRow(true) + sqRetry();
+  // THE FIRST CHILD IS THE INVITE ROW'S WRAPPER (sqInvRow, task 9), here and
+  // in both branches below: an invite is a push, and it can land before the
+  // answer does, after a squad ended, or with no squad at all.
+  if (!sq.known || sq.err) return sqInvRow(null) + sqNote('Not loaded yet.') + sqErr(sq.err) + sqCodeRow(true) + sqRetry();
   // NO INVITE UNDER A SQUAD THIS ACCOUNT HOLDS ELSEWHERE (D-UI-1, review
   // T8-R1-9): the squad is on another tab or device, and every squad control
   // belongs to the socket on its row. The code field stays -- it is the one
@@ -601,8 +608,8 @@ function sqPane() {
   // player choosing to join it from here -- at the same child index as in
   // every other answered state, so a repaint keeps what was typed.
   const lead = sqLead();
-  if (lead) return lead + (sqAway() ? SQ_GAP : sqInvite()) + sqCodeRow(true);
-  return sqNote('No squad yet. Squad up, then pick a mode on the boards and start together.')
+  if (lead) return sqInvRow(null) + lead + (sqAway() ? SQ_GAP : sqInvite()) + sqCodeRow(true);
+  return sqInvRow(null) + sqNote('No squad yet. Squad up, then pick a mode on the boards and start together.')
     + sqInvite() + sqCodeRow(true) + sqSeats();
 }
 // WHAT BECAME OF THE LAST SQUAD, said above whatever the box offers next.
@@ -773,8 +780,43 @@ function sqFoot(sn, ctl, hide) {
     + '<button class="ghost" data-sq="leave"' + (!ctl.on || sq.busy ? ' disabled' : '') + '>'
     + (sq.busy === 'leave' ? 'Leaving' : 'Leave') + '</button></div></div>';
 }
-// DESIGN 5.1 STATE 5, filled in with the invite route.
-const sqInvRow = () => '<div class="sqiw"></div>';
+// DESIGN 5.1 STATE 5: THE INVITE THIS PLAYER JUST RECEIVED (app.js's
+// CC_SQUAD_INVITE). It sits ABOVE whatever the pane shows -- no squad, an ended
+// one, or a squad the player is in (design 7: an invite reaches a player already
+// in a squad, and Join moves them) -- inside a wrapper that is always there and
+// empty when there is nothing to show, so nothing beneath it changes index.
+// NOT SHOWN: an invite to the squad the player is standing in; the squad whose
+// invite Ignore hid ("for this invite only": that squad's, not every invite);
+// and the invite a Join from this row has already answered.
+function sqInvRow(sn) {
+  const inv = window.CC_SQUAD_INVITE;
+  if (!inv || typeof inv.code !== 'string' || !inv.code || inv === sq.used || inv.code === sq.ignored
+      || (sn && sn.code === inv.code)) return '<div class="sqiw"></div>';
+  const f = inv.from || {}, joining = sq.busy === 'join';
+  return '<div class="sqiw"><div class="sqi">'
+    + '<p class="sqit">' + (named(f) ? esc(f.callsign) : 'A friend') + ' invites you to their squad &middot; '
+    +   esc(inv.size) + ' / ' + esc(inv.max) + '</p>'
+    + '<div class="sqib"><button class="sbtn on" data-sq="join:' + esc(inv.code) + '"' + (wsReady() && !sq.busy ? '' : ' disabled') + '>'
+    +   (joining ? 'Joining' : 'Join') + '</button>'
+    + '<button class="sbtn" data-sq="ignore:' + esc(inv.code) + '"' + (joining ? ' disabled' : '') + '>Ignore</button></div>'
+    + sqAErr(sq.ierr) + '</div></div>';
+}
+// JOIN, from the invite row. The code is the SLOT's, never the attribute's
+// alone, and the current callsign and paint ride the frame as they do on the
+// code field's join (sqEnter): a squad seat's name is whatever this frame
+// carried, and Start hands it to the engine (task 4). The server answers a
+// join with the roster itself (`op:'state'`), which app.js has already put in
+// the slot by the time this answer runs.
+function sqJoin(code) {
+  const inv = window.CC_SQUAD_INVITE;
+  if (!inv || inv.code !== code || inv === sq.used || inv.code === sq.ignored) return;
+  sqOne({ type: 'squad', op: 'join', code: inv.code, name: has('myName') ? myName() : '', skin: has('mySkin') ? mySkin() : '' },
+    { op: null, kind: 'squad.join', busy: 'join', sink: 'ierr', done: (m, mine) => {
+      // fits() proves the type; the op is this callback's to prove.
+      if (m.op !== 'state') { mine.ierr = socErr('squad.join', 'unavailable'); return; }
+      mine.known = true; mine.gone = false; mine.err = ''; mine.used = inv;
+    } });
+}
 // ONE SENDER FOR EVERY SQUAD ACTION, AND THE ORDER OF ITS FIRST LINES IS THE
 // GUARD. socialTx answers SYNCHRONOUSLY when the socket is down -- `cb({ error:
 // 'offline' }, ...)` before it returns -- so a caller that set `busy` AFTER the
@@ -793,15 +835,17 @@ const sqInvRow = () => '<div class="sqiw"></div>';
 //           create or a kick is answered with the roster, `op:'state'`)
 //   o.kind  the SOC_ERR group; o.busy the word for sq.busy
 //   o.say   (m, sentence) -> the sentence to show, when a refusal says more
+//   o.sink  where a refusal is said: 'aerr' (the footer's line, the default)
+//           or 'ierr' (inside the invite row)
 //   o.done  (m, mine) on success
 function sqOne(frame, o) {
   const mine = sq;
   if (mine.busy) return false;              // one action at a time: the box has one footer
-  mine.aerr = '';
+  mine.aerr = ''; mine.ierr = '';
   mine.busy = o.busy;
   socialTx(frame, o.type || 'squad', o.op, o.kind, (m, err) => {
     mine.busy = '';
-    if (err) mine.aerr = o.say ? o.say(m, err) : err;
+    if (err) mine[o.sink || 'aerr'] = o.say ? o.say(m, err) : err;
     else if (o.done) o.done(m, mine);
     sqPaint();
   });
@@ -920,6 +964,9 @@ function sqAct(v) {
   if (op === 'start') { sqStart(); return; }
   // The server answers a leave with its own op, `left`.
   if (op === 'leave') { if (sqLive(sq.snap)) sqOne({ type: 'squad', op: 'leave' }, { op: 'left', kind: 'squad.leave', busy: 'leave' }); return; }
+  if (op === 'join') { sqJoin(arg); return; }
+  // IGNORE sends nothing: the inviter is not told (design 5.1 state 5).
+  if (op === 'ignore') { if (sq.busy !== 'join') { sq.ignored = arg; sq.ierr = ''; sqPaint(); } return; }
 }
 // Retry is HELD, and says why, while an ask is out AND until the socket's
 // hello has marked it: sqAsk refuses to ask before the hello, so a live Retry
