@@ -2038,6 +2038,70 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .sqf .sbtn,#bay .sqf .go,#bay .sqf .ghost{flex:1;justify-content:center}
   #bay .sqg{height:calc(32 * var(--u));font-size:calc(12.5 * var(--u))}
 
+  /* --------------------------------------------- the Squad box: a squad -- */
+  /* Task 9's classes, none of them Task 8's (.sqb .sqn .sqc .sqf are taken).
+     A row keeps every fixed part flex:none and lets only the name shrink, so
+     no row is ever wider than the box however long the callsign. */
+  #bay .sqm{display:flex;align-items:center;gap:calc(5 * var(--u));height:calc(26 * var(--u));padding:0 calc(4 * var(--u)) 0 calc(6 * var(--u));
+     border-radius:calc(4 * var(--u));border:1px solid rgba(140,168,214,.22);background:rgba(16,21,31,.6);margin-top:calc(4 * var(--u))}
+  #bay .sqm .pdot{width:calc(11 * var(--u));height:calc(11 * var(--u))}
+  #bay .sqmn{flex:1;min-width:0;display:flex;align-items:baseline;gap:calc(3 * var(--u))}
+  #bay .sqmt{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:Rajdhani,system-ui,sans-serif;
+     font-weight:600;font-size:calc(12.5 * var(--u));line-height:1.1;color:#e6ecfb}
+  #bay .sqmy{flex:none;font-family:Rajdhani,system-ui,sans-serif;font-weight:500;font-size:calc(10.5 * var(--u));color:#7f8fb5}
+  #bay .sql{flex:none;font-family:"JetBrains Mono",monospace;font-size:calc(6.5 * var(--u));font-weight:700;letter-spacing:.08em;
+     text-transform:uppercase;color:#ffb46b}
+  #bay .sqr{flex:none;display:inline-flex;align-items:center;font-family:"JetBrains Mono",monospace;font-size:calc(6.5 * var(--u));
+     font-weight:500;letter-spacing:.03em;text-transform:uppercase;color:#7f8fb5}
+  #bay .sqr.on svg{width:calc(12 * var(--u));height:calc(12 * var(--u));fill:#3ce88f;display:block}
+  #bay .sqr.dr{color:#ffb46b}
+  #bay .sqm .pmb,#bay .sqic{width:calc(18 * var(--u));height:calc(18 * var(--u));border-radius:calc(3 * var(--u))}
+  #bay .sqm .pmb svg{width:calc(11 * var(--u));height:calc(11 * var(--u))}
+  #bay .sqic{flex:none;display:grid;place-items:center;border:1px solid rgba(140,168,214,.26);color:#8798bd;transition:.15s}
+  #bay .sqic svg{width:calc(9 * var(--u));height:calc(9 * var(--u));display:block}
+  #bay .sqic:hover{border-color:#ff8b8b;color:#ff8b8b;background:rgba(255,107,107,.12)}
+  #bay .sqic[disabled]{opacity:.4;cursor:default}
+  #bay .sqic[disabled]:hover{border-color:rgba(140,168,214,.26);color:#8798bd;background:none}
+  #bay .sqadd{display:flex;align-items:center;gap:calc(6 * var(--u));height:calc(26 * var(--u));padding:0 calc(6 * var(--u));
+     border-radius:calc(4 * var(--u));border:1px dashed rgba(140,168,214,.42);margin-top:calc(4 * var(--u))}
+  #bay .sqai{flex:1;min-width:0;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+     font-family:Rajdhani,system-ui,sans-serif;font-weight:600;font-size:calc(11.5 * var(--u));letter-spacing:.02em;
+     color:#c0cce8;transition:.15s}
+  #bay .sqai:hover{color:#54c8ff}
+  #bay .sqcl{flex:none;display:inline-flex;align-items:center;gap:calc(4 * var(--u));font-family:"JetBrains Mono",monospace;
+     font-size:calc(8 * var(--u));font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#ffb46b;transition:.15s}
+  #bay .sqcl svg{width:calc(10 * var(--u));height:calc(10 * var(--u));flex:none}
+  #bay .sqcl:hover{color:#ffd0a2}
+  #bay .sqs{margin-top:calc(6 * var(--u));font-family:"JetBrains Mono",monospace;font-size:calc(7.5 * var(--u));font-weight:700;
+     letter-spacing:.06em;line-height:1.5;text-transform:uppercase;color:#5d6c92}
+  #bay .sqs span{white-space:nowrap}
+  #bay .sqs span.on{color:#54c8ff}
+  #bay .sqs i{font-style:normal}
+  #bay .sqnote{margin-top:calc(6 * var(--u));font-family:Rajdhani,system-ui,sans-serif;font-size:calc(10 * var(--u));
+     line-height:1.3;font-weight:500;color:#9dadd0}
+  #bay .sqae{margin-top:calc(5 * var(--u));font-size:calc(10 * var(--u));line-height:1.25;font-weight:500;color:#ff8b8b}
+  /* THE FOOTER STAYS IN VIEW. The pane scrolls, and a full squad, an invite
+     and the code field are more than its 145u; Start and Ready are pinned to
+     its visible bottom rather than scrolled out of reach. The background hides
+     the rows passing under it, and it is OPAQUE: under this panel's backdrop
+     blur a .97 alpha still let the Seats line read through it. */
+  #bay .sqft{position:sticky;bottom:0;z-index:1;margin-top:calc(6 * var(--u));padding:calc(5 * var(--u)) 0 calc(1 * var(--u));
+     border-top:1px solid rgba(140,168,214,.2);background:#0d121c}
+  #bay .sqfl{font-family:"JetBrains Mono",monospace;font-size:calc(8 * var(--u));font-weight:700;letter-spacing:.1em;
+     line-height:1.3;text-transform:uppercase;color:#9dadd0}
+  #bay .sqfl.sqq{font-family:Rajdhani,system-ui,sans-serif;font-size:calc(11 * var(--u));font-weight:600;letter-spacing:.02em;
+     text-transform:none;color:#e6ecfb}
+  #bay .sqfb{display:flex;gap:calc(6 * var(--u));margin-top:calc(4 * var(--u))}
+  #bay .sqfb .go,#bay .sqfb .ghost{flex:1;justify-content:center;height:calc(26 * var(--u));padding:0 calc(8 * var(--u));
+     font-size:calc(12 * var(--u));gap:calc(5 * var(--u));box-shadow:none}
+  #bay .sqfb .go svg,#bay .sqfb .ghost svg{width:calc(11 * var(--u));height:calc(11 * var(--u))}
+  #bay .sqfb .go.cy.on{background:rgba(84,200,255,.16);color:#8adaff;border:1px solid #54c8ff}
+  #bay .sqfb .go.cy.on svg{fill:#54c8ff}
+  #bay .sqfb .go.cy[disabled]{background:#1f2740;color:#616e94;border:0}
+  #bay .sqfb .go.cy[disabled] svg{fill:#616e94}
+  #bay .sqfb .ghost[disabled]{opacity:.45;cursor:default}
+  #bay .sqfb .ghost[disabled]:hover{border-color:rgba(140,168,214,.34);color:#c0cce8;background:none}
+
   /* ------------------------------------------------------------ launch bar -- */
   #bay .lbar{position:absolute;left:calc(18 * var(--u));right:calc(18 * var(--u));bottom:calc(12 * var(--u));height:calc(56 * var(--u));z-index:16;display:flex;
      align-items:center;gap:calc(14 * var(--u));padding:0 calc(12 * var(--u)) 0 calc(11 * var(--u));border-radius:calc(8 * var(--u));

@@ -1221,6 +1221,282 @@ try {
   fail('squad_ui stopped: ' + (e && e.message));
 }
 
+// ============================================================================
+// TASK 9: THE SQUAD ITSELF -- the forming box, Ready, Leave, Start, the leader's
+// Remove, the invite a connected player receives, and the Friends tab's rows.
+// Its own viewport loop, on a freshly loaded page, so it shares no state with
+// the checks above. Every roster below goes in through app.js's real handle(),
+// so the real routing, the real CC_SQUAD write and the real bay.js render are
+// what is measured; only the socket is a stub. Every control is pressed
+// through the real delegated listener (click()), never by calling sqAct().
+// A roster in these checks carries `held: true`, as every roster this server
+// puts in the slot does (D-UI-1): the box gates every squad control on it.
+try {
+  const T9_MULE = '00000000-0000-4000-8000-0000000000cc';
+  const T9_PIKE = '00000000-0000-4000-8000-0000000000dd';
+  const T9M = (o) => Object.assign({ id: null, callsign: null, guest: false, online: true, ready: false, dropped: false }, o);
+  const T9YOU = (o) => T9M(Object.assign({ id: ME, callsign: 'Dusty Crag' }, o));
+  const T9MULE = (o) => T9M(Object.assign({ id: T9_MULE, callsign: 'Steel Mule' }, o));
+  const T9PIKE = (o) => T9M(Object.assign({ id: T9_PIKE, callsign: 'Ridge Pike' }, o));
+  // THE SERVER'S SEAT TABLE, for fixtures only (duel 2, ffa 2-4, boss 1-2,
+  // aliens 1-2, golf 1-4). The box never computes this: it reads `fits`, and
+  // check A2b hands it a `fits` this table would not produce to prove it.
+  const t9fits = (n) => ({ duel: n === 2, ffa: n >= 2 && n <= 4, boss: n >= 1 && n <= 2, aliens: n >= 1 && n <= 2, golf: n >= 1 && n <= 4 });
+  const t9rack = (picks) => ev(`(localStorage.setItem('cc_loadout', ${JSON.stringify(JSON.stringify(picks))}), true)`);
+  const FIVE = ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'];
+  // A roster PUSH: no request id, exactly as the server fans one out.
+  const t9state = async (patch) => {
+    const n = (patch.members || []).length;
+    await ev(`(handle(Object.assign({ type: 'squad', op: 'state', code: 'QK7T', leader: ${JSON.stringify(ME)},
+      mode: 'duel', tees: null, max: null, you: 0, held: true, members: [], fits: ${JSON.stringify(t9fits(n))} }, ${JSON.stringify(patch)})), true)`);
+    await sleep(80);
+  };
+  // ONE READER FOR THE SQUAD PANE AND ONE FOR THE FRIENDS PANE. Visible means
+  // rendered: a node carrying .hidden is in the tree for morphChildren's sake
+  // and says nothing.
+  const t9box = () => ev(`(() => {
+    Bay.show('home');
+    const pane = document.getElementById('sqPane-squad'), pnl = document.querySelector('#bay .pnl.sqx');
+    if (!pane || !pnl) return null;
+    const vis = (e) => !!e && !e.closest('.hidden') && e.getClientRects().length > 0;
+    const q = (s, r) => (r || pane).querySelector(s);
+    const btn = (s, r) => { const e = q(s, r); return vis(e) ? { t: e.textContent.trim(), dis: e.disabled, pressed: e.getAttribute('aria-pressed'), cy: e.classList.contains('cy') } : null; };
+    const txt = (s) => { const e = q(s); return vis(e) ? e.textContent : ''; };
+    const i = q('.sqi');
+    const pr = pane.getBoundingClientRect();
+    return {
+      rows: [...pane.querySelectorAll('.sqml .sqm')].filter(vis).map((r) => ({
+        name: (r.querySelector('.sqmt') || { textContent: null }).textContent, you: vis(r.querySelector('.sqmy')),
+        lead: vis(r.querySelector('.sql')), tick: vis(r.querySelector('.sqr.on svg')),
+        state: (r.querySelector('.sqr') || { textContent: '' }).textContent,
+        dot: !!r.querySelector('.pdot svg'), lit: !!r.querySelector('.pdot.on'),
+        menu: vis(r.querySelector('.pmb')), anon: !!r.querySelector('.pmb[data-pmanon="1"]'),
+        kick: (() => { const k = r.querySelector('[data-sq^="kick:"]'); return vis(k) ? { v: k.dataset.sq, dis: k.disabled } : null; })(),
+        over: r.scrollWidth > r.clientWidth + 1, imgs: r.querySelectorAll('img').length,
+      })),
+      summary: txt('.sqml .sqn'),
+      add: vis(q('.sqadd')), invite: btn('.sqadd [data-sq="tab:friends"]'), link: btn('[data-sq="link"]'),
+      seats: vis(q('.sqs')) ? [...pane.querySelectorAll('.sqs span')].map((s) => s.textContent + (s.classList.contains('on') ? '*' : '')) : [],
+      note: txt('.sqnote'), line: txt('.sqft .sqfl'), foot: vis(q('.sqft')),
+      start: btn('[data-sq="start"]'), ready: btn('[data-sq="ready"]'), leave: btn('[data-sq="leave"]'),
+      kok: btn('[data-sq="kok"]'), kcancel: btn('[data-sq="kcancel"]'),
+      aerr: txt('.sqft ~ .sqae, .sqml ~ .sqae'),
+      rerr: (() => { const e = pane.querySelector(':scope > .sqe'); return vis(e) ? e.textContent : ''; })(),
+      retry: btn('[data-sq="retry"]'),
+      inv: vis(i) ? { t: (i.querySelector('.sqit') || { textContent: '' }).textContent, join: btn('[data-sq^="join:"]', i), ign: btn('[data-sq^="ignore:"]', i),
+        err: (() => { const e = i.querySelector('.sqae'); return vis(e) ? e.textContent : ''; })() } : null,
+      codes: document.querySelectorAll('#sqCode').length,
+      codeInPane: !!pane.querySelector('#sqCode'),
+      // Where the one code field sits among the pane's own children: the typed
+      // value survives a repaint only while this index does (morphChildren).
+      codeAt: [...pane.children].findIndex((c) => c.querySelector && c.querySelector('#sqCode')),
+      codeAfterRoster: (() => { const l = q('.sqml'), c = q('#sqCode'); return !!(l && c && (l.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING)); })(),
+      footIn: (() => { const f = q('.sqft'); if (!vis(f)) return null; const r = f.getBoundingClientRect(); return r.top >= pr.top - 0.5 && r.bottom <= pr.bottom + 0.5; })(),
+      inside: pnl.getBoundingClientRect().bottom >= pr.bottom - 0.5,
+      ownLaunch: !!pnl.querySelector('.launch, [data-launch]'),
+      probeInBar: (() => { const lp = document.querySelector('#bay .launch, #bay [data-launch]'); return !!(lp && lp.closest('.lbar')); })(),
+      bayOver: (() => { const b = document.getElementById('bay'); return b.scrollWidth > b.clientWidth || b.scrollHeight > b.clientHeight; })(),
+    };
+  })()`);
+  const t9click = (sel) => ev(`(() => { const b = document.querySelector(${JSON.stringify(sel)}); if (!b) return false; b.click(); return true; })()`);
+  // A TAP ON A CONTROL THE RENDER HAS DISABLED, to prove the gate is in the
+  // handler and not only in the attribute: a disabled attribute is a hint
+  // about a DOM this client does not own for the whole of its life.
+  const t9force = (sel) => ev(`(() => { const b = document.querySelector(${JSON.stringify(sel)}); if (!b) return false; b.removeAttribute('disabled'); b.click(); return true; })()`);
+
+  for (const [w, h] of [[932, 430], [667, 375]]) {
+    const V = `${w}x${h}`;
+    await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: w < 900 });
+    await send('Page.navigate', { url: `http://127.0.0.1:${appPort}/` });
+    let t9up = false;
+    for (let i = 0; i < 80; i++) {
+      if (await ev('!!window.Bay && typeof handle === "function" && !!document.querySelector("#bay .top")').catch(() => false)) { t9up = true; break; }
+      await sleep(200);
+    }
+    if (!t9up) { fail(`${V}: page never became ready for the task 9 checks`); continue; }
+    for (let k = 0; k < 40 && (await ev(`document.getElementById('bay').classList.contains('enter')`)); k++) await sleep(100);
+    await ev(`(localStorage.removeItem('cc_squad'), true)`);
+    await t9rack(FIVE);
+    await stubSocket(); await setWho('in');
+    // Introduced, then answered: this account holds no squad. The box KNOWS.
+    await clearTx(); await ev('sendHello(S.ws).then(() => true)'); await sleep(60);
+    await reply({ op: 'gone' });
+    await clearTx();
+
+    // ---- A1. THE LEADER'S FORMING BOX (design 5.1 state 3). Two of four, both
+    //      ready, duel fits: rows with a DRAWN lamp, "(you)", Leader and the
+    //      ready ticks, the dashed invite row carrying the code link, the Seats
+    //      line lit by `fits`, the mode readout and a live Start -- and the
+    //      one code field below the roster (D-UI-2).
+    await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
+    const a1 = await t9box();
+    if (a1 && a1.rows.length === 2
+        && a1.rows[0].name === 'Dusty Crag' && a1.rows[0].you && a1.rows[0].lead && a1.rows[0].tick && a1.rows[0].dot && a1.rows[0].lit
+        && a1.rows[1].name === 'Steel Mule' && !a1.rows[1].you && !a1.rows[1].lead && a1.rows[1].tick
+        && a1.add && a1.invite && !a1.invite.dis && a1.link && a1.link.t === 'Code QK7T' && !a1.link.dis
+        && JSON.stringify(a1.seats) === JSON.stringify(['Duel 2*', 'FFA 2–4*', 'Boss 1–2*', 'Aliens 1–2*', 'Golf 1–4*'])
+        && a1.line === 'Duel · 2' && a1.start && !a1.start.dis && a1.start.t === 'Start' && !a1.ready && !a1.leave
+        && a1.codes === 1 && a1.codeInPane && a1.codeAfterRoster
+        && !a1.ownLaunch && a1.probeInBar && a1.inside && !a1.bayOver && !a1.rows.some((r) => r.over))
+      ok(`${V}: leader forming -- rows with a drawn lamp, (you), Leader and ticks, the dashed invite row with the code link, the Seats line lit by fits, Start live, and the one code field below the roster`);
+    else fail(`${V}: leader forming ${JSON.stringify(a1)}`);
+    // The leader's Remove and the player menu are on the OTHER row only.
+    if (a1 && a1.rows.length === 2 && !a1.rows[0].menu && !a1.rows[0].kick && a1.rows[1].menu && a1.rows[1].kick && !a1.rows[1].kick.dis && a1.rows[1].kick.v === 'kick:1')
+      ok(`${V}: the leader sees Remove and the player menu on every row but their own`);
+    else fail(`${V}: leader row controls ${JSON.stringify(a1 && a1.rows.map((r) => ({ menu: r.menu, kick: r.kick })))}`);
+
+    // ---- A2. START REFUSED BY SEATS, BOTH WAYS (X6). Too big: three on a duel.
+    //      Too small: one on a free-for-all. The footer keeps the spec's
+    //      "<Mode> · seats N, squad M", which is true in both directions.
+    await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true }), T9PIKE({ ready: true })] });
+    const a2 = await t9box();
+    await t9state({ mode: 'ffa', members: [T9YOU({ ready: true })] });
+    const a2s = await t9box();
+    if (a2 && a2.start && a2.start.dis && a2.line === 'Duel · seats 2, squad 3'
+        && JSON.stringify(a2.seats) === JSON.stringify(['Duel 2', 'FFA 2–4*', 'Boss 1–2', 'Aliens 1–2', 'Golf 1–4*'])
+        && a2s && a2s.start && a2s.start.dis && a2s.line === 'Free-for-all · seats 2–4, squad 1')
+      ok(`${V}: a squad too big or too small for the armed mode has a dead Start and a footer that says so`);
+    else fail(`${V}: seats refusal ${JSON.stringify({ big: a2 && { dis: a2.start && a2.start.dis, line: a2.line, seats: a2.seats }, small: a2s && { dis: a2s.start && a2s.start.dis, line: a2s.line } })}`);
+    // A2b. THE BOX READS `fits`, IT DOES NOT COUNT. Two members, which the seat
+    //      table says fit a duel, and a frame that says they do not: the frame
+    //      wins, because it is the one truth the boards read too.
+    await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })], fits: { duel: false, ffa: true, boss: true, aliens: true, golf: true } });
+    const a2b = await t9box();
+    if (a2b && a2b.start && a2b.start.dis && a2b.line === 'Duel · seats 2, squad 2' && a2b.seats[0] === 'Duel 2')
+      ok(`${V}: Start and the Seats line follow the frame's fits, not a count of the rows`);
+    else fail(`${V}: fits not read ${JSON.stringify(a2b && { dis: a2b.start && a2b.start.dis, line: a2b.line, seats: a2b.seats })}`);
+
+    // ---- A3. START REFUSED BY READINESS. One flag different from A1. And a
+    //      member who is DROPPED is not ready whatever their flag says (task 5:
+    //      a dropped row can arrive ready, readied from another device before
+    //      the drop): the row says Reconnecting, no tick, the lamp is dark.
+    await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: false })] });
+    const a3 = await t9box();
+    await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true, dropped: true })] });
+    const a3d = await t9box();
+    if (a3 && a3.rows.length === 2 && a3d && a3d.rows.length === 2 && a3.start && a3.start.dis && a3.line === 'Waiting for 1' && a3.rows[1].state === 'Not ready' && !a3.rows[1].tick
+        && a3d && a3d.start && a3d.start.dis && a3d.line === 'Waiting for 1' && a3d.rows[1].state === 'Reconnecting' && !a3d.rows[1].tick && !a3d.rows[1].lit)
+      ok(`${V}: a member not ready, or dropped though marked ready, holds Start and the footer counts them`);
+    else fail(`${V}: readiness refusal ${JSON.stringify({ a3: a3 && { dis: a3.start && a3.start.dis, line: a3.line, row: a3.rows[1] }, a3d: a3d && { dis: a3d.start && a3d.start.dis, line: a3d.line, row: a3d.rows[1] } })}`);
+
+    // ---- A4. THE RACK IS THE SQUAD MODE'S, NOT THE ARMED ONE'S. Five picks
+    //      fill a duel; a Boss Fight squad drafts seven, whatever mode this
+    //      device has armed on its own boards.
+    await t9rack(['mortar', 'cluster', 'napalm']);
+    await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
+    const a4 = await t9box();
+    await t9rack(FIVE);
+    await t9state({ mode: 'boss', members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
+    const a4b = await t9box();
+    if (a4 && a4.start && a4.start.dis && a4.start.t === 'Pick 2 more' && a4b && a4b.start && a4b.start.dis && a4b.start.t === 'Pick 2 more'
+        && (await ev('ccMode')) === 'duel')
+      ok(`${V}: a rack short of the squad mode's draft holds Start and says how many more to pick`);
+    else fail(`${V}: short rack ${JSON.stringify({ a4: a4 && a4.start, a4b: a4b && a4b.start, armed: await ev('ccMode') })}`);
+
+    // ---- A5. THE MEMBER'S BOX (design 5.1 state 4): no Start, no Seats line,
+    //      a cyan Ready toggle that carries its state as aria-pressed, Leave,
+    //      and the sentence that names who decides. No Remove anywhere.
+    await t9state({ leader: T9_MULE, members: [T9YOU({ ready: false }), T9MULE({ ready: true })] });
+    const a5 = await t9box();
+    await t9state({ leader: T9_MULE, members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
+    const a5r = await t9box();
+    if (a5 && a5.rows.length === 2 && !a5.start && a5.ready && a5.ready.cy && !a5.ready.dis && a5.ready.pressed === 'false' && a5.ready.t === 'Ready'
+        && a5.leave && !a5.leave.dis && a5.leave.t === 'Leave'
+        && !a5.rows[0].lead && a5.rows[1].lead && a5.seats.length === 0 && !a5.rows.some((r) => r.kick)
+        && a5.note === 'Steel Mule picks the mode and starts. You will be placed in the room together.'
+        && a5.line === 'Duel · 2'
+        && a5r && a5r.ready && a5r.ready.pressed === 'true' && a5r.ready.t === 'Ready' && !a5r.ready.dis)
+      ok(`${V}: member forming -- no Start, a cyan Ready toggle with its state in aria-pressed, Leave, the leader named, no Remove`);
+    else fail(`${V}: member forming ${JSON.stringify({ a5, a5r: a5r && a5r.ready })}`);
+    await t9rack(['mortar']);
+    await t9state({ leader: T9_MULE, members: [T9YOU({ ready: false }), T9MULE({ ready: true })] });
+    const a5s = await t9box();
+    await t9rack(FIVE);
+    if (a5s && a5s.ready && a5s.ready.dis && a5s.ready.t === 'Pick 4 more' && a5s.leave && !a5s.leave.dis)
+      ok(`${V}: a member short of a full rack cannot stand up, and can still leave`);
+    else fail(`${V}: member short rack ${JSON.stringify(a5s && { ready: a5s.ready, leave: a5s.leave })}`);
+
+    // ---- A6. A FRAME THAT NAMES NO LEADER MUST NOT CROWN EVERY GUEST. A
+    //      guest's id is null by construction, so a bare `p.id === leader`
+    //      against a null leader would crown all of them at once.
+    await t9state({ leader: null, members: [T9YOU({ ready: true }), T9M({ guest: true }), T9M({ guest: true })] });
+    const a6 = await t9box();
+    if (a6 && a6.rows.length === 3 && a6.rows.filter((r) => r.lead).length === 0 && !a6.start
+        && a6.note === 'The squad leader picks the mode and starts. You will be placed in the room together.')
+      ok(`${V}: a squad with no named leader crowns nobody, guests included, and gives nobody Start`);
+    else fail(`${V}: leaderless squad ${JSON.stringify(a6 && { lead: a6.rows.map((r) => r.lead), start: a6.start, note: a6.note })}`);
+
+    // ---- A7. A NULL CALLSIGN KEEPS ITS ROW, AND THE ROW STAYS ACTIONABLE.
+    //      displayName() returns null legitimately and often; a blank row is a
+    //      player nobody can report. A GUEST row has no id to report, but the
+    //      leader can still remove it.
+    await t9state({ members: [T9YOU({ ready: true }), T9M({ id: '00000000-0000-4000-8000-0000000000ee', callsign: null }), T9M({ guest: true })] });
+    const a7 = await t9box();
+    if (a7 && a7.rows.length === 3 && a7.rows[1].name === 'No callsign' && a7.rows[1].menu && a7.rows[1].anon && a7.rows[1].kick
+        && a7.rows[2].name === 'No callsign' && !a7.rows[2].menu && a7.rows[2].kick && a7.rows[2].kick.v === 'kick:2'
+        && !a7.rows[0].menu && !a7.rows.some((r) => r.over))
+      ok(`${V}: a null callsign keeps its row, its menu and its placeholder mark; a guest row has Remove but no menu; nothing overflows`);
+    else fail(`${V}: null callsign ${JSON.stringify(a7 && a7.rows)}`);
+
+    // ---- A8. EVERY NAME GOES THROUGH esc(). Markup in a callsign arrives as text.
+    await t9state({ members: [T9YOU({ ready: true }), T9M({ id: '00000000-0000-4000-8000-0000000000ff', callsign: '<img src=x onerror=1>' })] });
+    const a8 = await t9box();
+    if (a8 && a8.rows.length === 2 && a8.rows[1].name === '<img src=x onerror=1>' && a8.rows[1].imgs === 0)
+      ok(`${V}: a callsign carrying markup renders as text, not as an element`);
+    else fail(`${V}: esc ${JSON.stringify(a8 && a8.rows[1])}`);
+
+    // ---- A9. EVERY SQUAD CONTROL WAITS FOR held === true (D-UI-1). A frame
+    //      with no `held` (an older server) is still shown, and none of its
+    //      controls are live: this socket may not be the one on the row.
+    await ev(`(handle({ type: 'squad', op: 'state', code: 'QK7T', leader: ${JSON.stringify(ME)}, mode: 'duel', tees: null, max: null, you: 0,
+      members: [${JSON.stringify(T9YOU({ ready: true }))}, ${JSON.stringify(T9MULE({ ready: true }))}], fits: ${JSON.stringify(t9fits(2))} }), true)`);
+    await sleep(80);
+    const a9 = await t9box();
+    if (a9 && a9.rows.length === 2 && a9.start && a9.start.dis && a9.rows[1].kick && a9.rows[1].kick.dis)
+      ok(`${V}: a roster that does not say held:true shows its rows with every squad control dead`);
+    else fail(`${V}: held gate ${JSON.stringify(a9 && { start: a9.start, kick: a9.rows[1] && a9.rows[1].kick })}`);
+
+    // ---- A10. THE ONE CODE FIELD UNDER A SQUAD (D-UI-2). It is the pane's
+    //       seventh child in every squad state -- with a refused re-ask and
+    //       without -- so what the player typed survives a roster push, the
+    //       refusal and its Retry (morphChildren is positional).
+    await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
+    await ev(`(document.getElementById('sqCode').value = 'RM4P', true)`);
+    await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: false })] });
+    const a10 = await t9box();
+    const kept1 = await ev(`document.getElementById('sqCode').value`);
+    await clearTx(); await ev('sendHello(S.ws).then(() => true)'); await sleep(60);   // a new introduction asks again
+    await reply({ error: 'unavailable' });
+    const a10r = await t9box();
+    const kept2 = await ev(`document.getElementById('sqCode').value`);
+    await clearTx(); await t9click('#bay [data-sq="retry"]'); await sleep(60);
+    await reply({ op: 'state', code: 'QK7T', leader: ME, mode: 'duel', tees: null, max: null, you: 0, held: true,
+      members: [T9YOU({ ready: true }), T9MULE({ ready: true })], fits: t9fits(2) });
+    const a10b = await t9box();
+    const kept3 = await ev(`document.getElementById('sqCode').value`);
+    await ev(`(document.getElementById('sqCode').value = '', true)`);
+    if (a10 && a10.codeAt === 6 && kept1 === 'RM4P'
+        && a10r && a10r.codeAt === 6 && kept2 === 'RM4P' && a10r.rerr === 'Squads are not available right now. Try again later.'
+        && a10r.retry && !a10r.retry.dis && !a10r.foot && !a10r.add && a10r.rows.length === 0
+        && a10r.summary.includes('QK7T') && a10r.codes === 1
+        && a10b && a10b.codeAt === 6 && kept3 === 'RM4P' && a10b.rerr === '' && !a10b.retry && a10b.foot && a10b.rows.length === 2)
+      ok(`${V}: the code field keeps what was typed across a roster push, a refused re-ask and its Retry; under the refusal the squad is shown read-only, with no controls`);
+    else fail(`${V}: code field under a squad ${JSON.stringify({ a10: a10 && a10.codeAt, kept1, a10r: a10r && { at: a10r.codeAt, rerr: a10r.rerr, retry: a10r.retry, foot: a10r.foot, add: a10r.add, rows: a10r.rows.length, summary: a10r.summary }, kept2, a10b: a10b && { at: a10b.codeAt, rerr: a10b.rerr, retry: a10b.retry, foot: a10b.foot }, kept3 })}`);
+
+    // ---- A11. START STAYS IN VIEW. Four members overflow the pane, and the
+    //       footer holding Start is pinned to its visible bottom rather than
+    //       scrolled out of reach.
+    await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true }), T9PIKE({ ready: true }), T9M({ guest: true, ready: true })] });
+    const a11 = await t9box();
+    if (a11 && a11.rows.length === 4 && !a11.add && a11.footIn === true && a11.start && a11.inside && !a11.rows.some((r) => r.over))
+      ok(`${V}: a full squad drops the invite row, and the footer holding Start stays inside the visible pane`);
+    else fail(`${V}: full squad ${JSON.stringify(a11 && { rows: a11.rows.length, add: a11.add, footIn: a11.footIn, start: a11.start })}`);
+    // T9-CHECKS-B
+  }
+} catch (e) {
+  fail('squad_ui task 9 stopped: ' + (e && e.message));
+}
+
 clearTimeout(watchdog);
 cleanup();
 console.log(errors.length ? `\n${errors.length} FAILED` : '\nall squad_ui checks passed');

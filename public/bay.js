@@ -191,6 +191,10 @@ const IC = {
   dot:'<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="8.4" stroke="currentColor" stroke-width="2.2" opacity=".42"/>' +
        '<circle cx="12" cy="12" r="4.4" fill="currentColor"/></svg>',
   more:'<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5.2" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="18.8" cy="12" r="1.9"/></svg>',
+  // THE SQUAD BOX'S REMOVE AND DECLINE. Two strokes, drawn: the obvious
+  // characters for a cross sit in the Dingbats block, which test/house-rules.mjs
+  // rejects with the rest of the emoji ranges.
+  cross:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></svg>',
   share:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
        '<path d="M12 3.6v11"/><path d="M8.3 7.3L12 3.6l3.7 3.7"/><path d="M5.8 12.6v6.1a1.9 1.9 0 0 0 1.9 1.9h8.6a1.9 1.9 0 0 0 1.9-1.9v-6.1"/></svg>'
 };
@@ -497,8 +501,16 @@ const SQ_NONE = 'No squad or game with that code.';
 //             next return asks once more (see sqBack)
 // Which code a resume may present is NOT kept here: it belongs to the tab, not
 // to one account's answer (sqHeld, below).
+// TASK 9's fields, one account's like the rest (an account switch replaces the
+// whole object, sqReset):
+//   busy   -- the one squad action in flight: '' | 'join' | 'ready' | 'leave' |
+//             'start' | 'kick' | 'invite' | 'friend'. One at a time: the box has
+//             one footer.
+//   aerr   -- what the last footer action was refused with. NOT `err`, which
+//             is the re-ask's refusal and swaps the squad for Retry.
 const sqFresh = (tab) => ({
   tab, known: false, gone: false, err: '', asking: false, cerr: '', via: 0, again: false,
+  busy: '', aerr: '',
   get snap() { return window.CC_SQUAD || null; },
 });
 let sq = sqFresh('squad');
@@ -564,9 +576,14 @@ function sqPane() {
   // socket back on its row, and a squad shown as if nothing were wrong would
   // be swept from under the player a minute later (task 5). The code field
   // comes with it (D-UI-2; review T8-R1-5): #sqCode is the one code field
-  // (X8), and a room code needs no squad. Task 9's sqMine renders the field
-  // below the roster; when it does, this one goes, so that there is one.
-  if (sq.snap) return sqMine(sq.snap) + sqErr(sq.err) + (sq.err ? sqCodeRow(true) + sqRetry() : '');
+  // (X8), and a room code needs no squad. It sits below the roster in every
+  // squad state, refused or not, and this is the one place it is rendered
+  // under a squad, so there is one.
+  // The squad's own five nodes come from sqMine; the refusal, the field and
+  // Retry follow them in EVERY squad state, Retry's place held by an empty
+  // node when there is nothing to retry, so the field is the seventh child
+  // with a refusal standing and without it.
+  if (sq.snap) return sqMine(sq.snap) + sqErr(sq.err) + sqCodeRow(true) + (sq.err ? sqRetry() : SQ_GAP);
   if (acctState() !== 'in') return sqLead() + sqGuest();
   // NOT KNOWN YET, AND WHY, AND WHAT WILL BE DONE ABOUT IT -- frWait()'s three
   // parts, in a panel a third the size -- AND THE CODE FIELD, which needs
@@ -625,17 +642,152 @@ function sqLead() {
     : SQ_ENDED);
   return sq.gone ? sqNote(SQ_ENDED) : '';
 }
-// TASK 9 OWNS WHAT A SQUAD LOOKS LIKE: the member rows, the dashed "+ Invite a
-// friend" row with the code link, the Seats line lit by sn.fits, and the two
-// footers (design 5.1 states 3 and 4). Its signature and its single call site
-// above do not change. What this minimal body exists to make impossible is the
-// fall-through -- a squad this client has been TOLD about rendering "No squad
-// yet" -- so the check that guards it is written before the rows are. Names go
-// through nameOf(), which is null-safe: a null name keeps its row.
+/* ---- THE SQUAD ITSELF: forming, Ready and Start (design 5.1 states 3-5) ---
+   sqMine(sn) draws the squad in the slot as FIVE nodes, the same five in every
+   squad state, and sqPane follows them with the refusal, the one code field
+   and Retry. morphChildren is positional, so a node with nothing to say is
+   kept with .hidden rather than left out, and the field stays the pane's
+   seventh child whatever the squad does:
+     0 .sqiw  the invite this player just received (empty when there is none)
+     1 .sqml  the member rows and the dashed "+ Invite a friend" row -- or,
+              under a refused re-ask, the squad in two read-only lines
+     2        the Seats line (the leader) or who decides (a member)
+     3 .sqae  what the last squad action was refused with
+     4 .sqft  the footer: the mode readout and Start, or Ready and Leave, or
+              the leader's "Remove <name> from the squad?"
+   UNDER A REFUSED RE-ASK (sq.err) this socket may no longer hold its row -- a
+   blip drops it and only a resume puts it back (task 5) -- so the squad is
+   shown, and nothing in it is offered: Retry is the way back.
+   EVERY CONTROL WAITS FOR held === true (D-UI-1). app.js writes only rosters
+   this socket holds, but a frame from a server that cannot say so has no
+   `held` at all, and it is shown with its controls dead.
+   Names go through nameOf(), which is null-safe: a null name keeps its row. */
+// THE SEAT COPY, NEVER A DECISION. `fits` is computed on the SERVER from the
+// engine's own seat table so this box and the mode boards read one truth (X6);
+// this map only spells that truth out in words, and nothing gates on it.
+const SQ_SEATS = { duel: '2', ffa: '2&ndash;4', boss: '1&ndash;2', aliens: '1&ndash;2', golf: '1&ndash;4' };
+// This socket's own row, found by `you` alone: a guest's row, and a signed-in
+// player's row while the server checks their blocks, carry id null.
+const sqMe = (sn) => (sn && Array.isArray(sn.members) && Number.isInteger(sn.you) ? sn.members[sn.you] || null : null);
+// THE LEADER IS WHOEVER THE FRAME NAMES, and a frame that names nobody crowns
+// nobody: a guest's id is null by construction, so a bare `p.id === leader`
+// against a leader of null would crown every guest in the squad at once.
+const sqIsLead = (sn, p) => !!(sn && p && sn.leader != null && p.id === sn.leader);
+// Whether this socket may act on the squad on screen: it holds the row
+// (D-UI-1) and no refused re-ask stands under it.
+const sqLive = (sn) => !!(sn && sn.held === true && !sq.err);
+// THE RACK FOR THE SQUAD'S MODE, NOT THE ARMED ONE. state() caps the picks at
+// the ARMED mode's draft, so a device armed on Duel whose squad is playing
+// Boss Fight would read five picks of a seven-weapon draft as a full rack.
+// The read is state()'s own against the squad's mode, and a repeated id
+// counts once: the server's rack check refuses duplicates.
+function sqRack(modeId) {
+  const m = modeOf(modeId), pool = has('ARM_POOL') ? ARM_POOL : [];
+  let picks = [];
+  try {
+    const p = JSON.parse(localStorage.getItem('cc_loadout') || 'null');
+    if (Array.isArray(p)) picks = p.filter((id, i) => pool.includes(id) && p.indexOf(id) === i);
+  } catch {}
+  if (!picks.length && has('ARM_DEFAULT')) picks = ARM_DEFAULT.slice();
+  return picks.slice(0, m.draft);
+}
+// What a squad action was refused with. Its own line and its own class: the
+// pane's first .sqe is the re-ask's refusal (sqPane), and a second sentence
+// with that class above it would stand in for it.
+const sqAErr = (s) => '<p class="sqae' + (s ? '' : ' hidden') + '">' + esc(s || '') + '</p>';
+// ONE MEMBER. The lamp is IC.dot -- drawn, never typed (house rule 1 rejects
+// the whole Geometric Shapes block). DROPPED OUTRANKS READY: a dropped row can
+// arrive ready -- readied from another device before the drop -- and Start
+// refuses it all the same (task 5), so it is never shown a tick. The menu is on
+// every row but your own (report.self and block.self can only fail) and a
+// guest's (a guest has no id to report); the leader's Remove is on every row
+// but their own, a guest's included -- the server names a guest by its index.
+function sqRow(p, i, sn, ctl) {
+  const you = i === sn.you, name = nameOf(p), lead = sqIsLead(sn, p);
+  const lit = !!p.online && !p.dropped;
+  const st = p.dropped ? '<span class="sqr dr">Reconnecting</span>'
+    : p.ready ? '<span class="sqr on" role="img" aria-label="Ready" title="Ready">' + IC.tick + '</span>'
+    : '<span class="sqr">Not ready</span>';
+  const kick = ctl.lead && !you && !lead && (p.id != null || p.guest);
+  return '<div class="sqm">'
+    + '<span class="pdot' + (lit ? ' on' : '') + '" title="' + (p.dropped ? 'Reconnecting' : lit ? 'Online' : 'Offline') + '">' + IC.dot + '</span>'
+    + '<span class="sqmn"><span class="sqmt">' + esc(name) + '</span>' + (you ? '<span class="sqmy">(you)</span>' : '') + '</span>'
+    + (lead ? '<span class="sql">Leader</span>' : '') + st
+    + (you || p.id == null ? '' : menuBtn(p.id, 'id', name, false, !named(p)))
+    + (kick ? '<button class="sqic" data-sq="kick:' + i + '" title="Remove from the squad" aria-label="Remove '
+      + esc(name) + ' from the squad"' + (ctl.on ? '' : ' disabled') + '>' + IC.cross + '</button>' : '')
+    + '</div>';
+}
+// THE DASHED ROW, while the squad has room: the row opens the Friends tab
+// (design 5.1 state 2's Invite friends), and the code COPIES THE LINK --
+// /?squad=<code> is what an invite push carries (design 4.4), so the friend who
+// is sent it is one tap from the squad.
+function sqAddRow(sn) {
+  if ((sn.members || []).length >= SQ_MAX) return '';
+  return '<div class="sqadd"><button class="sqai" data-sq="tab:friends">+ Invite a friend</button>'
+    + '<button class="sqcl" data-sq="link" title="Copy the squad link"' + (sn.code ? '' : ' disabled') + '>'
+    + IC.copy + '<span>Code ' + esc(sn.code || '') + '</span></button></div>';
+}
+// THE SEATS LINE, LIT BY `fits` (D12). The modes the squad does not fit are
+// stated, not hidden: a player who cannot see Duel cannot learn that their
+// squad is one too many for it.
+function sqSeatsLine(sn, hide) {
+  const f = sn.fits || {};
+  return '<div class="sqs' + (hide ? ' hidden' : '') + '">' + MODES.map((m) =>
+    '<span' + (f[m.id] ? ' class="on"' : '') + '>' + esc(SHORT[m.id]) + ' ' + SQ_SEATS[m.id] + '</span>').join('<i> &middot; </i>') + '</div>';
+}
+// DESIGN 5.1 STATE 4. Where the leader has the Seats line, a member has the
+// one thing they need to know: who decides, and what happens to them then.
+function sqLeadNote(sn, hide) {
+  const L = (sn.members || []).find((p) => sqIsLead(sn, p));
+  return '<p class="sqnote' + (hide ? ' hidden' : '') + '">' + (L && named(L) ? esc(L.callsign) : 'The squad leader')
+    + ' picks the mode and starts. You will be placed in the room together.</p>';
+}
+// THE FOOTER. The leader's reads the mode and its seats, or -- in design
+// 5.1's order -- why Start is dead: seats first, because no Ready can fix a
+// squad the mode has no room for, and telling the leader who to wait for would
+// be a lie about what is wrong. A member's carries Ready and Leave. The Ready
+// toggle says its state with a tick and aria-pressed, not with a second word.
+function sqFoot(sn, ctl, hide) {
+  const ms = sn.members || [], me = sqMe(sn), m = modeOf(sn.mode), seats = SQ_SEATS[m.id];
+  const open = '<div class="sqft' + (hide ? ' hidden' : '') + '">';
+  const short = m.draft - sqRack(m.id).length;
+  if (ctl.lead) {
+    const fit = !!(sn.fits && sn.fits[sn.mode]);
+    const waiting = ms.filter((p, i) => i !== sn.you && (!p.ready || p.dropped)).length;
+    const line = sq.busy === 'start' ? 'Rolling out'
+      : !fit ? esc(m.name) + ' &middot; seats ' + seats + ', squad ' + ms.length
+      : waiting ? 'Waiting for ' + waiting
+      : esc(m.name) + ' &middot; ' + seats;
+    const off = !ctl.on || !!sq.busy || !fit || waiting > 0 || short > 0;
+    return open + '<p class="sqfl">' + line + '</p><div class="sqfb">'
+      + '<button class="go" data-sq="start"' + (off ? ' disabled' : '') + '>'
+      + (short > 0 && sq.busy !== 'start' ? 'Pick ' + short + ' more' : IC.play + 'Start') + '</button></div></div>';
+  }
+  const ready = !!(me && me.ready && !me.dropped);
+  const need = short > 0 && !ready;               // standing DOWN never needs a rack
+  return open + '<p class="sqfl">' + esc(m.name) + ' &middot; ' + seats + '</p><div class="sqfb">'
+    + '<button class="go cy' + (ready ? ' on' : '') + '" data-sq="ready" aria-pressed="' + ready + '"'
+    + (!ctl.on || sq.busy || need ? ' disabled' : '') + '>'
+    + (sq.busy === 'ready' ? 'Sending' : need ? 'Pick ' + short + ' more' : (ready ? IC.tick : '') + 'Ready') + '</button>'
+    + '<button class="ghost" data-sq="leave"' + (!ctl.on || sq.busy ? ' disabled' : '') + '>'
+    + (sq.busy === 'leave' ? 'Leaving' : 'Leave') + '</button></div></div>';
+}
+// DESIGN 5.1 STATE 5, filled in with the invite route.
+const sqInvRow = () => '<div class="sqiw"></div>';
 function sqMine(sn) {
   const ms = Array.isArray(sn.members) ? sn.members : [];
-  return sqNote('Squad ' + esc(sn.code) + ' &middot; ' + ms.length + ' of ' + SQ_MAX + '.')
-    + sqNote(esc(ms.map(nameOf).join(', ')));
+  const stale = !!sq.err;
+  const lead = sqIsLead(sn, sqMe(sn));
+  const ctl = { on: wsReady() && sqLive(sn), lead };
+  return sqInvRow(sn)
+    + '<div class="sqml">' + (stale
+      ? sqNote('Squad ' + esc(sn.code) + ' &middot; ' + ms.length + ' of ' + SQ_MAX + '.') + sqNote(esc(ms.map(nameOf).join(', ')))
+      : ms.map((p, i) => sqRow(p, i, sn, ctl)).join('') + sqAddRow(sn))
+    + '</div>'
+    + (lead ? sqSeatsLine(sn, stale) : sqLeadNote(sn, stale))
+    + sqAErr(stale ? '' : sq.aerr)
+    + sqFoot(sn, ctl, stale);
 }
 function sqFriends() {
   if (!wsReady()) return sqNote('Needs a connection.') + sqAdd(false);
