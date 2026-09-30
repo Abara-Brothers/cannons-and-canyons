@@ -198,6 +198,16 @@ try {
     if (/push_subscriptions and\/or error_reports are missing/.test(instructions(log)))
       ok('and the admin boot line names those two tables instead of the secret key');
     else fail(`the admin boot line for a missing table: ${JSON.stringify(instructions(log))}`);
+    // THE VERDICT IS NOT THE WHOLE INSTRUCTION. Step 7 of the ship procedure has
+    // the owner read supabaseSocial, but what he sees FIRST, on the deploy log,
+    // is this line — and it has to say the migration is missing in the words the
+    // procedure uses, not "check SUPABASE_SECRET_KEY", which sends him to rotate
+    // a key that is fine. This assertion is the one thing the ledger-route suite
+    // deleted on 2026-09-30 carried that nothing else did; it was moved here
+    // rather than dropped, and the overlap was proved before that suite went.
+    if (/FRIENDS\/CALLSIGNS are dead: the phase 6 migration has not been applied/.test(instructions(log)))
+      ok('and the social boot line says the migration is missing, in those words, on stderr');
+    else fail(`the social boot line for a missing migration: ${JSON.stringify(instructions(log))}`);
   }
 
   // ---- 6. a column is not there, and a 403 ---------------------------------
