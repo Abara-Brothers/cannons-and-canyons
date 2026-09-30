@@ -2280,12 +2280,10 @@ async function enableNativePings() {
       });
     });
     Push.addListener('registrationError', () => showToast('Could not enable nudges here'));
-    // Tapping a notification deep-links into the room it is about.
-    Push.addListener('pushNotificationActionPerformed', (a) => {
-      const url = a && a.notification && a.notification.data && a.notification.data.url;
-      const code = typeof url === 'string' && (url.match(/room=([A-Z0-9]{4})/i) || [])[1];
-      if (code) { $('codeInput').value = code.toUpperCase(); intent({ type: 'join', code: code.toUpperCase(), name: myName(), skin: mySkin() }); }
-    });
+    // Tapping a notification deep-links into whatever it names: the room of a
+    // turn nudge, or the squad of an invite. onPushTap is top level so it can be
+    // driven by test/deeplink.mjs; this line is the whole registration.
+    Push.addListener('pushNotificationActionPerformed', (a) => onPushTap(a && a.notification && a.notification.data && a.notification.data.url));
     await Push.register();
   } catch {
     showToast('Could not enable nudges here');
@@ -2396,6 +2394,27 @@ function joinSquadByCode(code) {
   });
 }
 function flushSquadJoin(ws) { if (pendingSquadJoin && ws === S.ws) joinSquadByCode(pendingSquadJoin); }
+
+// The body of the native notification tap, named so a suite can drive the real
+// thing: the listener registration lives inside enableNativePings, behind the
+// Capacitor bridge, where no test can reach it.
+//
+// THIS PATH DOES NOT NAVIGATE. sw.js's notificationclick calls c.navigate(url)
+// and the page boots again, so the web tap is arbitrated by boot's precedence;
+// Capacitor hands the data to this live page instead, where boot ran hours ago
+// and cc_resume is not the question -- S.playing is.
+function onPushTap(url) {
+  const link = deepLink(url);
+  if (!link) return;
+  if (link.code === S.code) return;              // already where the tap points
+  if (S.playing) { showToast('Finish this match first'); return; }
+  if (link.kind === 'room') {
+    $('codeInput').value = link.code;
+    intent({ type: 'join', code: link.code, name: myName(), skin: mySkin() });
+    return;
+  }
+  joinSquadByCode(link.code);
+}
 
 // ---- Offline play (BQ-007 / ADR-001) ----------------------------------------
 // vs-CPU duels and solo golf never needed a server: room-engine.js — the same

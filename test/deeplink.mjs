@@ -255,5 +255,82 @@ const CASES = [
   else fail(`B7: a nameless first visit followed the link — ${JSON.stringify(squadJoins(f))}`);
 }
 
+// ---- C. THE NATIVE NOTIFICATION TAP ----------------------------------------
+// Capacitor's pushNotificationActionPerformed does NOT navigate: it hands the
+// url to the live page. So this path arbitrates against LIVE state, not against
+// cc_resume. onPushTap(url) is the whole handler body, named so this drives the
+// real function rather than a copy of it -- the listener registration inside
+// enableNativePings is one line that calls it, and needs the Capacitor bridge
+// that headless Chrome does not have.
+{
+  await seed(false);
+  await nav('');
+  await ev('window.__tx = []; S.playing = false; S.code = null; onPushTap("/?squad=ABCD"); true');
+  await sleep(500);
+  const s = squadJoins(await tx());
+  if (s.length === 1 && s[0].code === 'ABCD') ok('C1: a tap on /?squad=CODE sends one squad join in the live page');
+  else fail(`C1: tap on /?squad=ABCD sent ${JSON.stringify(s)}`);
+}
+{
+  await ev('window.__tx = []; S.playing = false; S.code = null; onPushTap("/?room=ABCD"); true');
+  await sleep(500);
+  const f = await tx();
+  const r = roomJoins(f);
+  const field = await ev('($("codeInput") || {}).value || ""');
+  if (r.length === 1 && r[0].code === 'ABCD' && field === 'ABCD') ok('C2: a tap on /?room=CODE joins the room and fills the legacy field, as it always did');
+  else fail(`C2: tap on /?room=ABCD sent ${JSON.stringify(r)}, field=${JSON.stringify(field)}`);
+}
+{
+  // THE REGRESSION THE REGEX WAS. /room=([A-Z0-9]{4})/i matches this and joined
+  // a room the link never named.
+  await ev('window.__tx = []; S.playing = false; S.code = null; onPushTap("/?xroom=ABCD"); true');
+  await sleep(500);
+  const f = await tx();
+  if (!roomJoins(f).length && !squadJoins(f).length) ok('C3: a tap on /?xroom=CODE does nothing — the old regex joined a room off this link');
+  else fail(`C3: tap on /?xroom=ABCD sent ${JSON.stringify(f.filter((m) => m.type === 'join' || m.type === 'squad'))}`);
+}
+{
+  // A MATCH IN PROGRESS OUTRANKS A NOTIFICATION. The engine already refuses a
+  // second seat for the same socket, so this is not the seat guard -- it is the
+  // player's screen. A tap must not yank someone out of a turn they are lining
+  // up, and a squad join mid-match would seat them twice over.
+  await ev('window.__tx = []; S.playing = true; S.code = "WXYZ"; onPushTap("/?squad=ABCD"); true');
+  let seen = '';
+  for (let i = 0; i < 30; i++) { seen = await ev('document.body.innerText || ""'); if (seen.includes('Finish this match first')) break; await sleep(120); }
+  const f = await tx();
+  if (!squadJoins(f).length && !roomJoins(f).length && seen.includes('Finish this match first')) {
+    ok('C4: a tap during a match sends nothing and says so out loud');
+  } else fail(`C4: tap during a match sent ${JSON.stringify(f)}, body=${JSON.stringify(seen.slice(0, 160))}`);
+}
+{
+  await ev('window.__tx = []; S.playing = false; S.code = "ABCD"; onPushTap("/?room=ABCD"); true');
+  await sleep(500);
+  const f = await tx();
+  if (!roomJoins(f).length) ok('C5: a tap pointing at the room already open sends nothing — no second join for the seat you are in');
+  else fail(`C5: tap on the current room re-joined it — ${JSON.stringify(roomJoins(f))}`);
+  await ev('S.playing = false; S.code = null; true');
+}
+{
+  // THE OFFLINE STAND-IN IS NOT A SOCKET. While S.local is set, S.ws is the
+  // in-page face of room-engine.js (startLocal), which has no social code: a
+  // squad frame fed to it vanishes, and its waiter blames the account service
+  // twelve seconds later. So the code PARKS, and goes down the real socket once
+  // that socket is S.ws again and its hello hook flushes it -- driven here by
+  // putting the real socket back and calling that hook's flush for it.
+  await ev(`(() => { window.__tx = []; window.__face = []; window.__realWs = S.ws;
+    S.local = true; S.playing = false; S.code = null;
+    S.ws = { readyState: 1, send: (d) => window.__face.push(JSON.parse(d)), close() {} };
+    onPushTap("/?squad=ABCD"); return true; })()`);
+  await sleep(500);
+  const face = await ev('JSON.stringify(window.__face)').then(JSON.parse);
+  const parked = await ev('pendingSquadJoin');
+  await ev('S.ws = window.__realWs; S.local = false; flushSquadJoin(S.ws); true');
+  await sleep(500);
+  const s = squadJoins(await tx());
+  if (!face.length && parked === 'ABCD' && s.length === 1 && s[0].code === 'ABCD') {
+    ok('C6: a tap while the offline stand-in holds S.ws sends it nothing, parks the code, and the real socket\'s flush sends it once');
+  } else fail(`C6: offline stand-in — face got ${JSON.stringify(face)}, parked=${JSON.stringify(parked)}, real socket then sent ${JSON.stringify(s)}`);
+}
+
 console.log(errors.length ? `\n${errors.length} FAILED` : '\nall deeplink checks passed');
 process.exit(errors.length ? 1 : 0);

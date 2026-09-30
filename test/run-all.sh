@@ -325,6 +325,12 @@ else
   # answered yet, ended, no squad). The socket is stubbed and Supabase is never
   # touched. Every CDP call carries a deadline. Skips without Chrome.
   run squad_ui node test/squad_ui.mjs
+  # Deep links, in a real page: the ONE parser behind ?room=, ?squad= and the
+  # native notification tap, and which of the three claimants on boot wins. The
+  # socket is TAPPED, not stubbed, so a frame that was sent can be told from a
+  # frame that was merely attempted. Every CDP call carries a deadline. Skips
+  # without Chrome.
+  run deeplink node test/deeplink.mjs
   # SECOND client-side suite, and the only one that looks at LAYOUT. Drives the
   # real bundle in headless Chrome at 14 exact viewports and diffs the measured
   # geometry against test/fixtures/layout-baseline.json. It is a change
