@@ -1448,5 +1448,117 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   }
 }
 
+// ---- 20. public/ NEVER TALKS TO THE SOCIAL TABLES DIRECTLY -------------------
+// Cross-cutting rule 1 of the design: no client ever reads or writes the social
+// tables. Every social action is a socket frame the server executes with its
+// secret key. Section 12 proves those tables are service-key only IN THE
+// MIGRATION; this proves the client never even tries -- the half that would
+// silently start working the day anyone adds a policy, and the half the squad
+// feature is most likely to break, because the Squad box is the first panel that
+// renders the friend graph and public/cloud.js already holds a working PostgREST
+// caller with the player's own token in it.
+//
+// MATCH THE REST SHAPE, NEVER THE BARE TABLE NAME. Section 11 records what the
+// bare word costs: /blocklist/i would fire on a legitimate client variable and
+// fail the build with a message about a leaked slur file. The words `blocks`,
+// `friends` and `name reports` are all over public/ for honest reasons --
+// privacy.html and delete-account.html list what an account holds in exactly
+// those words, and bay.js renders the Blocked list. A pointer at a TABLE always
+// spells a REST path: either the literal `/rest/v1/blocks`, or cloud.js's
+// helper shape `rest('/blocks?...')`, which builds `BASE + '/rest/v1' + path`
+// and so never contains the join.
+//
+// THE RAW TEXT IS READ ON PURPOSE, AND A COMMENTED-OUT CALL STILL FAILS. This
+// rule is NEGATIVE -- it fails on FINDING something -- so stripping comments
+// would be the hole here, not the fix. Section 17 strips them because its
+// assertions are POSITIVE and a commented-out `begin;` satisfied a positive
+// read; the two are opposite shapes and want opposite treatment. A commented-out
+// fetch('/rest/v1/blocks') is a working call one keystroke away, sitting in a
+// file that ships to every browser, and it is caught here.
+{
+  const TABLES = ['friendships', 'friend_requests', 'blocks', 'name_reports'];
+  const TEXT_EXT = new Set(['.js', '.html', '.css', '.webmanifest', '.svg', '.json', '.txt']);
+  const publicDir = path.join(ROOT, 'public');
+  const walk = (dir) => {
+    let files = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) files = files.concat(walk(full));
+      else files.push(full);
+    }
+    return files;
+  };
+  const literal = new RegExp(`/rest/v1/(?:${TABLES.join('|')})\\b`);
+  const helper = new RegExp(`\\brest\\s*\\(\\s*['"\`]/(?:${TABLES.join('|')})\\b`);
+  const hits = [];
+  for (const file of walk(publicDir)) {
+    if (!TEXT_EXT.has(path.extname(file))) continue;
+    const rel = path.relative(ROOT, file);
+    readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+      if (literal.test(line)) hits.push(`${rel}:${i + 1} (PostgREST path)`);
+      else if (helper.test(line)) hits.push(`${rel}:${i + 1} (cloud.js rest() helper)`);
+    });
+  }
+  if (hits.length) {
+    fail('public/ reaches a social table directly — every social action is a socket frame the server'
+      + ' executes with its secret key, and a COMMENTED-OUT call counts because it ships to the browser'
+      + ` either way:\n      ${hits.join('\n      ')}`);
+  } else {
+    ok(`nothing under public/ builds a PostgREST call to ${TABLES.join(', ')}, by literal path or through cloud.js's rest() helper`);
+  }
+}
+
+// ---- 21. SQUADS MUST NOT TOUCH offlineKind ----------------------------------
+// offlineKind(modeId) paints the cpu / solo / online badge on every board in the
+// Launch Bay, and it is DERIVED: it asks the two offline predicates section 7d
+// protects and adds nothing of its own. Squads give a board a SECOND reason to
+// look unavailable -- `.nofit`, dimmed from the server's `fits` map when the
+// squad does not fit the mode's seats (design 5.2) -- and both reasons land on
+// the same card. The temptation is to fold them into one answer here. That
+// would make the offline badge lie in the one direction that matters: a board
+// a squad does not fit is not a board that needs a connection, and a player
+// with no squad and no signal would be told the opposite of the truth by the
+// one function whose whole job is to say it plainly. Two reasons, two answers,
+// and this is the rule that keeps them apart.
+//
+// COMMENTS ARE STRIPPED FIRST, and unlike section 20 that is the right way round
+// here: these assertions are POSITIVE -- they require text to be PRESENT -- and
+// section 17 records exactly what a positive read over raw text is worth.
+// Comment the real function out, leave a copy of it in the comment above, and
+// an unstripped version of this rule prints ALL GOOD over a file that no longer
+// contains the function at all.
+{
+  const raw = read('public/app.js');
+  // Block comments, then line comments, then blank lines: only EXECUTABLE
+  // JavaScript is tested. A `//` inside a string literal is stripped too; that
+  // costs nothing here, because every line this rule looks for is code and none
+  // of them contains one.
+  const src = raw
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n').map((l) => l.replace(/\/\/.*$/, '').trimEnd()).filter((l) => l.trim()).join('\n');
+  const bad = [];
+  const WANT = [
+    'function offlineKind(modeId) {',
+    "  if ((modeId === 'duel' || modeId === 'ffa') && soloByConstruction({ type: 'ai', mode: modeId })) return 'cpu';",
+    "  if (soloOfferable({ type: 'create', mode: modeId })) return 'solo';",
+    "  return 'online';",
+    '}',
+  ].join('\n');
+  const body = src.match(/function offlineKind\(modeId\) \{[\s\S]*?\n\}/);
+  if (!body) {
+    bad.push('offlineKind(modeId) is not in app.js as EXECUTABLE code (comments stripped) — if it looks'
+      + ' present in the file, it has been commented out');
+  } else {
+    if (!src.includes(WANT)) {
+      bad.push(`offlineKind is no longer the four executable lines it shipped as: ${JSON.stringify(body[0])}`);
+    }
+    if (/squad|fits|nofit/i.test(body[0])) {
+      bad.push(`offlineKind consults the squad fit: ${JSON.stringify(body[0])}`);
+    }
+  }
+  if (bad.length) fail(`the offline badge and the squad fit have been folded together:\n      ${bad.join('\n      ')}`);
+  else ok('offlineKind still derives cpu/solo/online from the two offline predicates alone — the squad fit is a separate answer on the same card');
+}
+
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nALL GOOD');
 process.exit(out.errors.length ? 1 : 0);
