@@ -775,6 +775,89 @@ function sqFoot(sn, ctl, hide) {
 }
 // DESIGN 5.1 STATE 5, filled in with the invite route.
 const sqInvRow = () => '<div class="sqiw"></div>';
+// ONE SENDER FOR EVERY SQUAD ACTION, AND THE ORDER OF ITS FIRST LINES IS THE
+// GUARD. socialTx answers SYNCHRONOUSLY when the socket is down -- `cb({ error:
+// 'offline' }, ...)` before it returns -- so a caller that set `busy` AFTER the
+// call would set it on top of the callback that had already cleared it, and
+// the footer would be dead for the rest of the session with nothing on screen
+// to say why. It is set BEFORE.
+// A REPLY THAT IS MERELY SLOW IS NOT A FAILURE: social frames queue per socket
+// behind store calls, so while one is out the box keeps its LAST SNAPSHOT --
+// every row, every name -- and only the control that was tapped changes its
+// word. It invents no timer: socialSend's own waiter answers 'unavailable' on
+// a live socket and 'offline' on a dead one, and that becomes the sentence.
+// Every write goes to `mine`, the state that asked: an account switch replaces
+// `sq`, and an answer to the old account's action must not settle the new
+// account's box (sqAsk's rule).
+//   o.op    the reply op fits() must see (null: the type alone -- a join, a
+//           create or a kick is answered with the roster, `op:'state'`)
+//   o.kind  the SOC_ERR group; o.busy the word for sq.busy
+//   o.say   (m, sentence) -> the sentence to show, when a refusal says more
+//   o.done  (m, mine) on success
+function sqOne(frame, o) {
+  const mine = sq;
+  if (mine.busy) return false;              // one action at a time: the box has one footer
+  mine.aerr = '';
+  mine.busy = o.busy;
+  socialTx(frame, o.type || 'squad', o.op, o.kind, (m, err) => {
+    mine.busy = '';
+    if (err) mine.aerr = o.say ? o.say(m, err) : err;
+    else if (o.done) o.done(m, mine);
+    sqPaint();
+  });
+  sqPaint();
+  return true;
+}
+// A START REFUSED FOR ONE MEMBER NAMES THEM, when the server points at one (`at`
+// rides on member_offline and member_busy only) and the roster has a name for
+// that row. The roster reached the slot before this answer (the server pushes
+// it first), so `at` is read against the rows on screen. A row with no name is
+// never called "No callsign": the sentence falls back to "a player".
+// member_offline is ALSO what a live row gets while the server reads the blocks
+// of a player who has just signed in (task 6), so it never says anyone left.
+function sqStartSay(m, err) {
+  const ms = (sq.snap && sq.snap.members) || [];
+  const p = Number.isInteger(m.at) ? ms[m.at] : null, who = named(p) ? p.callsign : '';
+  if (m.error === 'member_offline') return who ? who + " isn't ready to start yet." : err;
+  if (m.error === 'member_busy') return who ? who + ' is still in a game or a lobby.' : err;
+  return err;
+}
+// READY, a member's toggle. THE CLIENT CHECKS FIRST AND THE SERVER RE-CHECKS
+// (design 4.3): standing down is always allowed and carries no rack; standing
+// up needs a full rack for the SQUAD's mode.
+function sqReady() {
+  const sn = sq.snap, me = sqMe(sn);
+  if (!sqLive(sn) || !me || sqIsLead(sn, me)) return;
+  const up = !(me.ready && !me.dropped), picks = sqRack(sn.mode);
+  if (up && picks.length < modeOf(sn.mode).draft) return;
+  sqOne(up ? { type: 'squad', op: 'ready', ready: true, loadout: picks } : { type: 'squad', op: 'ready', ready: false },
+    { op: 'ready', kind: 'squad.ready', busy: 'ready' });
+}
+// START, the leader's. THE GATES ARE IN THE HANDLER as well as on the button:
+// a disabled attribute is a hint about a DOM this client does not own for the
+// whole of its life, and a Start that outlived its snapshot must not ask the
+// server to seat a squad the mode has no room for. The server re-checks every
+// one of them; these keep a stale tap from spending a request on a refusal.
+function sqStart() {
+  const sn = sq.snap, ms = (sn && sn.members) || [];
+  if (!sqLive(sn) || !sqIsLead(sn, sqMe(sn))) return;
+  const picks = sqRack(sn.mode);
+  if (!(sn.fits && sn.fits[sn.mode] === true)) return;
+  if (picks.length < modeOf(sn.mode).draft) return;
+  if (ms.some((p, i) => i !== sn.you && (!p.ready || p.dropped))) return;
+  // The leader's rack rides on the frame: the server takes it as the leader's
+  // Ready for this start only (squadStart).
+  sqOne({ type: 'squad', op: 'start', loadout: picks }, { op: 'start', kind: 'squad.start', busy: 'start', say: sqStartSay });
+}
+// COPY THE LINK, NOT THE CODE (design 4.4 and 5.7): /?squad=<code> is what the
+// invite push opens, so the two ways in are one URL.
+function sqCopyLink() {
+  const sn = sq.snap;
+  if (!sn || typeof sn.code !== 'string' || !sn.code) return;
+  const url = location.origin + '/?squad=' + encodeURIComponent(sn.code);
+  try { navigator.clipboard.writeText(url).then(() => { if (fn('showToast')) showToast('Squad link copied.'); }, () => prompt('Your squad link:', url)); }
+  catch { prompt('Your squad link:', url); }
+}
 function sqMine(sn) {
   const ms = Array.isArray(sn.members) ? sn.members : [];
   const stale = !!sq.err;
@@ -831,6 +914,12 @@ function sqAct(v) {
   // The Friends tab's Retry: the same read the Friends screen's Retry asks for.
   // socialResync() refuses a second while one is out, and repaints at once.
   if (op === 'fretry') { if (fn('socialResync')) socialResync(); return; }
+  // TASK 9: the squad's own controls.
+  if (op === 'link') { sqCopyLink(); return; }
+  if (op === 'ready') { sqReady(); return; }
+  if (op === 'start') { sqStart(); return; }
+  // The server answers a leave with its own op, `left`.
+  if (op === 'leave') { if (sqLive(sq.snap)) sqOne({ type: 'squad', op: 'leave' }, { op: 'left', kind: 'squad.leave', busy: 'leave' }); return; }
 }
 // Retry is HELD, and says why, while an ask is out AND until the socket's
 // hello has marked it: sqAsk refuses to ask before the hello, so a live Retry
@@ -1468,6 +1557,34 @@ const SOC_ERR = {
   'squad.join._':                'That squad could not be joined right now. Try again later.',
   'code.offline':                'Not connected. Try again in a moment.',
   'code._':                      'That code could not be checked right now. Try again later.',
+  // THE SQUAD'S OWN ACTIONS (task 9), keyed on the codes server/social.js
+  // really sends (squadReady, squadLeave, squadStart), each op with its own
+  // `_`: "not available" is a different next move for a Ready than for a
+  // Start. No sentence blames the player's connection for a server-side cause,
+  // and none names a block (D-BLOCK-2 A). sqStartSay names the member behind a
+  // member_offline or member_busy when the server points at one.
+  'squad.ready.no_squad':        'Your squad has ended.',
+  'squad.ready.no_rack':         'Your rack does not suit this mode. Check your weapons and try again.',
+  'squad.ready.slow_down':       'Too many tries. Wait a moment.',
+  'squad.ready.offline':         'Not connected. Try again in a moment.',
+  'squad.ready._':               'Squads are not available right now. Try again later.',
+  'squad.leave.slow_down':       'Too many tries. Wait a moment.',
+  'squad.leave.offline':         'Not connected. Try again in a moment.',
+  'squad.leave._':               'Squads are not available right now. Try again later.',
+  'squad.start.no_squad':        'Your squad has ended.',
+  'squad.start.not_leader':      'Only the squad leader can start.',
+  // Also what a leader's reloaded tab met before its resume moved the row
+  // (task 4, then task 5), so it does not say "use your other device" alone.
+  'squad.start.wrong_device':    'Start from the device you joined the squad on, or rejoin the squad on this one.',
+  'squad.start.no_rack':         'Your rack does not suit this mode. Check your weapons and try again.',
+  'squad.start.wont_fit':        "Your squad does not fit this mode's seats.",
+  'squad.start.not_ready':       'Not everyone in the squad is ready yet.',
+  'squad.start.member_offline':  "A player isn't ready to start yet.",
+  'squad.start.member_busy':     'Someone in the squad is still in a game or a lobby.',
+  'squad.start.capacity':        'The server is at capacity. Try again shortly.',
+  'squad.start.slow_down':       'Too many tries. Wait a moment.',
+  'squad.start.offline':         'Not connected. Try again in a moment.',
+  'squad.start._':               'That match could not be started. Try again.',
   _:                             'That did not work. Try again.',
 };
 function socErr(kind, code) {

@@ -1491,7 +1491,147 @@ try {
     if (a11 && a11.rows.length === 4 && !a11.add && a11.footIn === true && a11.start && a11.inside && !a11.rows.some((r) => r.over))
       ok(`${V}: a full squad drops the invite row, and the footer holding Start stays inside the visible pane`);
     else fail(`${V}: full squad ${JSON.stringify(a11 && { rows: a11.rows.length, add: a11.add, footIn: a11.footIn, start: a11.start })}`);
-    // T9-CHECKS-B
+    // ---- B1. READY SENDS ONE CORRELATED FRAME, WITH THE RACK, AND SAYS SO
+    //      WHILE IT IS OUT. Standing down carries no rack: only standing up
+    //      needs one (design 4.3). The server answers `ready` with its own op.
+    await t9state({ leader: T9_MULE, members: [T9YOU({ ready: false }), T9MULE({ ready: true })] });
+    await clearTx(); await t9click('#bay [data-sq="ready"]'); await sleep(60);
+    const b1f = await squads(), b1 = await t9box();
+    await reply({ op: 'ready', ok: true });
+    const b1d = await t9box();
+    await t9state({ leader: T9_MULE, members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
+    await clearTx(); await t9click('#bay [data-sq="ready"]'); await sleep(60);
+    const b1g = await squads();
+    await reply({ op: 'ready', ok: true });
+    if (b1f.length === 1 && b1f[0].op === 'ready' && b1f[0].ready === true && JSON.stringify(b1f[0].loadout) === JSON.stringify(FIVE)
+        && typeof b1f[0].id === 'number' && b1 && b1.ready && b1.ready.t === 'Sending' && b1.ready.dis && b1.leave && b1.leave.dis
+        && b1d && b1d.ready && !b1d.ready.dis && b1d.ready.t === 'Ready' && b1d.aerr === ''
+        && b1g.length === 1 && b1g[0].op === 'ready' && b1g[0].ready === false && !('loadout' in b1g[0]))
+      ok(`${V}: Ready sends one correlated frame carrying the rack, reads Sending while it is out, and standing down sends no rack`);
+    else fail(`${V}: ready frames ${JSON.stringify({ b1f, b1g, out: b1 && { ready: b1.ready, leave: b1.leave }, back: b1d && b1d.ready })}`);
+
+    // ---- B2. LEAVE. The server answers the leaver `left`, and the box says what
+    //      the player did (task 8's end line), with the slot emptied.
+    await clearTx(); await t9click('#bay [data-sq="leave"]'); await sleep(60);
+    const b2f = await squads(), b2 = await t9box();
+    await reply({ op: 'left', ok: true });
+    const b2t = await ev(`(Bay.show('home'), document.getElementById('sqPane-squad').innerText)`);
+    if (b2f.length === 1 && b2f[0].op === 'leave' && typeof b2f[0].id === 'number' && b2 && b2.leave && b2.leave.t === 'Leaving' && b2.leave.dis
+        && b2t.includes('You left the squad.') && (await ev('window.CC_SQUAD')) === null)
+      ok(`${V}: Leave sends one frame, reads Leaving while it is out, and the answer leaves the player out of the squad`);
+    else fail(`${V}: leave ${JSON.stringify({ b2f, leave: b2 && b2.leave, text: b2t })}`);
+
+    // ---- B3. START SENDS ONE FRAME WITH THE LEADER'S RACK (the server takes it
+    //      as the leader's Ready for this start), and the box says Rolling out
+    //      -- keeping every row on screen -- until the answer frees it.
+    await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
+    await clearTx(); await t9click('#bay [data-sq="start"]'); await sleep(60);
+    const b3f = await squads(), b3 = await t9box();
+    await reply({ op: 'start', ok: true, code: 'RM7Q' });
+    const b3d = await t9box();
+    if (b3f.length === 1 && b3f[0].op === 'start' && JSON.stringify(b3f[0].loadout) === JSON.stringify(FIVE) && typeof b3f[0].id === 'number'
+        && b3 && b3.line === 'Rolling out' && b3.start && b3.start.dis && b3.rows.length === 2
+        && b3d && b3d.start && !b3d.start.dis && b3d.line === 'Duel · 2')
+      ok(`${V}: Start sends one frame with the rack, says Rolling out with the rows kept, and the answer frees the footer`);
+    else fail(`${V}: start ${JSON.stringify({ b3f, out: b3 && { line: b3.line, start: b3.start, rows: b3.rows.length }, back: b3d && { line: b3d.line, start: b3d.start } })}`);
+
+    // ---- B4. EVERY REFUSAL OF A START SAYS ITS OWN SENTENCE, frees the footer,
+    //      blames no connection for a server-side cause, and names nobody the
+    //      server did not point at. `at` names the roster row at fault on
+    //      member_offline and member_busy only; a null callsign there is never
+    //      rendered as a name ("No callsign isn't ready" would be nonsense).
+    //      member_offline is also what a live row gets while the server checks
+    //      the blocks of a player who just signed in (task 6), so it must not
+    //      say anyone disconnected.
+    const NAMELESS = '00000000-0000-4000-8000-0000000000ee';
+    const says = [
+      ['member_offline', 1, "Steel Mule isn't ready to start yet."],
+      ['member_offline', 2, "A player isn't ready to start yet."],
+      ['member_offline', undefined, "A player isn't ready to start yet."],
+      ['member_busy', 1, 'Steel Mule is still in a game or a lobby.'],
+      ['member_busy', undefined, 'Someone in the squad is still in a game or a lobby.'],
+      ['wrong_device', undefined, 'Start from the device you joined the squad on, or rejoin the squad on this one.'],
+      ['not_leader', undefined, 'Only the squad leader can start.'],
+      ['no_squad', undefined, 'Your squad has ended.'],
+      ['no_rack', undefined, 'Your rack does not suit this mode. Check your weapons and try again.'],
+      ['wont_fit', undefined, "Your squad does not fit this mode's seats."],
+      ['not_ready', undefined, 'Not everyone in the squad is ready yet.'],
+      ['capacity', undefined, 'The server is at capacity. Try again shortly.'],
+      ['refused', undefined, 'That match could not be started. Try again.'],
+      ['duplicate_member', 1, 'That match could not be started. Try again.'],
+      ['slow_down', undefined, 'Too many tries. Wait a moment.'],
+      ['unavailable', undefined, 'That match could not be started. Try again.'],
+      ['a_code_from_a_newer_server', undefined, 'That match could not be started. Try again.'],
+    ];
+    const b4bad = [];
+    for (const [code, at, line] of says) {
+      await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true }), T9M({ id: NAMELESS, callsign: null, ready: true })],
+        mode: 'ffa', fits: t9fits(3) });
+      await clearTx(); await t9click('#bay [data-sq="start"]'); await sleep(40);
+      const sent = (await squads()).length;
+      await reply(at === undefined ? { op: 'start', error: code } : { op: 'start', error: code, at });
+      const bx = await t9box();
+      if (!(sent === 1 && bx && bx.aerr === line && bx.start && !bx.start.dis)) b4bad.push({ code, at, sent, aerr: bx && bx.aerr, start: bx && bx.start });
+    }
+    if (!b4bad.length) ok(`${V}: all ${says.length} start refusals say their own sentence and free Start`);
+    else fail(`${V}: start refusals ${JSON.stringify(b4bad)}`);
+
+    // ---- B5. THE LATCH. socialTx answers SYNCHRONOUSLY when the socket is down,
+    //      so a busy flag set AFTER the call is set on top of the callback that
+    //      already cleared it, and the control is dead for the rest of the
+    //      session. Nothing is sent, the sentence is the offline one, and once
+    //      the socket is back the control is usable.
+    await t9state({ leader: T9_MULE, members: [T9YOU({ ready: false }), T9MULE({ ready: true })] });
+    await clearTx(); await up(false);
+    await t9force('#bay [data-sq="ready"]'); await sleep(60);
+    const b5f = await squads();
+    await up(true);
+    const b5 = await t9box();
+    if (b5f.length === 0 && b5 && b5.ready && !b5.ready.dis && b5.ready.t === 'Ready' && b5.aerr === 'Not connected. Try again in a moment.')
+      ok(`${V}: a tap with the socket down sends nothing, says so, and leaves the control usable`);
+    else fail(`${V}: offline latch ${JSON.stringify({ sent: b5f.length, ready: b5 && b5.ready, aerr: b5 && b5.aerr })}`);
+
+    // ---- B6. THE GATES ARE IN THE HANDLER, NOT IN THE ATTRIBUTE. Each of these
+    //      Starts and Readies is pressed with its disabled attribute stripped,
+    //      and none may reach the server: a squad the mode has no seats for, a
+    //      member not ready, a member dropped though ready, a short rack, a
+    //      roster this socket does not say it holds, and a squad under a
+    //      refused re-ask. The control run (B3) proves the same tap sends.
+    const b6 = {};
+    const gate = async (name, setup, sel) => { await setup(); await clearTx(); await t9force(sel); await sleep(50); b6[name] = (await squads()).length; };
+    await gate('seats', () => t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true }), T9PIKE({ ready: true })] }), '#bay [data-sq="start"]');
+    await gate('notReady', () => t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: false })] }), '#bay [data-sq="start"]');
+    await gate('dropped', () => t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true, dropped: true })] }), '#bay [data-sq="start"]');
+    await gate('shortStart', async () => { await t9rack(['mortar']); await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] }); }, '#bay [data-sq="start"]');
+    await gate('shortReady', () => t9state({ leader: T9_MULE, members: [T9YOU({ ready: false }), T9MULE({ ready: true })] }), '#bay [data-sq="ready"]');
+    await t9rack(FIVE);
+    await gate('notHeld', async () => {
+      await ev(`(handle({ type: 'squad', op: 'state', code: 'QK7T', leader: ${JSON.stringify(ME)}, mode: 'duel', tees: null, max: null, you: 0,
+        members: [${JSON.stringify(T9YOU({ ready: true }))}, ${JSON.stringify(T9MULE({ ready: true }))}], fits: ${JSON.stringify(t9fits(2))} }), true)`);
+      await sleep(60);
+    }, '#bay [data-sq="start"]');
+    await gate('refused', async () => {
+      await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
+      await ev('sendHello(S.ws).then(() => true)'); await sleep(60);
+      await reply({ error: 'unavailable' });
+    }, '#bay [data-sq="start"]');
+    await clearTx(); await t9click('#bay [data-sq="retry"]'); await sleep(60);
+    await reply({ op: 'state', code: 'QK7T', leader: ME, mode: 'duel', tees: null, max: null, you: 0, held: true,
+      members: [T9YOU({ ready: true }), T9MULE({ ready: true })], fits: t9fits(2) });
+    if (Object.keys(b6).length === 7 && Object.values(b6).every((n) => n === 0))
+      ok(`${V}: Start and Ready pressed past a dead attribute send nothing: seats, readiness, a dropped member, a short rack, an unheld roster, a refused re-ask`);
+    else fail(`${V}: handler gates ${JSON.stringify(b6)}`);
+
+    // ---- B7. THE CODE LINK COPIES THE LINK, NOT THE CODE (design 4.4 / 5.7):
+    //      /?squad=<code> is what an invite push opens. Nothing is sent.
+    await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
+    await ev(`(window.__clip = null, navigator.clipboard.writeText = (t) => { window.__clip = t; return Promise.resolve(); }, true)`);
+    await clearTx(); await t9click('#bay [data-sq="link"]'); await sleep(60);
+    const clip = await ev('window.__clip'), b7f = await squads();
+    if (clip === `http://127.0.0.1:${appPort}/?squad=QK7T` && b7f.length === 0)
+      ok(`${V}: the code link copies /?squad=QK7T and sends nothing`);
+    else fail(`${V}: code link copied ${JSON.stringify(clip)}, sent ${JSON.stringify(b7f)}`);
+    // T9-CHECKS-C
   }
 } catch (e) {
   fail('squad_ui task 9 stopped: ' + (e && e.message));
