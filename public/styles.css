@@ -1878,6 +1878,7 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay[data-scr=home] .st .std{font-size:calc(9.5 * var(--u))}
   #bay[data-scr=home] .ro .rk{font-size:calc(9.5 * var(--u))}
   #bay[data-scr=home] .bpl{font-size:calc(10 * var(--u))}
+  #bay[data-scr=home] .bnf{font-size:calc(9 * var(--u))}
   #bay[data-scr=home] .ph{font-size:calc(10 * var(--u))}
   #bay[data-scr=home] .ltg{font-size:calc(10 * var(--u))}
   /* HOME HEADER TAP TARGETS (owner, 2026-09-18, second pass: "go to 44pt"). On
@@ -1941,6 +1942,28 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .board.on .btg{color:#ffb46b}
   #bay .barm{position:absolute;left:0;right:0;top:calc(-1 * var(--u));height:calc(3 * var(--u));background:#ffb46b;opacity:0;transition:.2s}
   #bay .board.on .barm{opacity:1}
+  /* THE SQUAD DOES NOT FIT (design 5.2, D12). `fits` comes from the server, so
+     a dimmed board and a refused Start read one truth. EVERYTHING ON THE CARD
+     DIMS BUT THE PILL: a filter on the board itself would grey the one thing
+     that says why, so it is set on the card's children instead, the pill
+     excepted. The card's own border stays, so a dimmed board the player has
+     armed still reads as armed. :hover and .on raise .bcard, and a board that
+     greys out while rising reads as a press rather than a refusal, so the lift
+     is cancelled. ARMING IS STILL ALLOWED (design 5.2): nothing here touches
+     the board's pointer events, and the pill is inside the board's button, so
+     a tap on it is the board's exactly as before (pointer-events:none on the
+     pill is .bof's, for parity, and decides nothing). The pill is absolutely
+     positioned in the badge slot, like .bof, so no sibling moves and the layout
+     baseline is untouched. Its home size is with the home type sizes above:
+     the bump there left .bof out, and the pill must not inherit that hole. */
+  #bay .board.nofit .bcard > :not(.bnf){filter:grayscale(.85) brightness(.62)}
+  #bay .board.nofit:hover .bcard, #bay .board.nofit.on .bcard{transform:none}
+  #bay .mb.nofit .mbi > :not(.bnf), #bay .mb.nofit .mbc{filter:grayscale(.85) brightness(.62)}
+  #bay .mb.nofit:hover, #bay .mb.nofit.on{transform:none}
+  #bay .mb.nofit:hover .mbi img, #bay .mb.nofit.on .mbi img{transform:none}
+  #bay .bnf{position:absolute;top:calc(26 * var(--u));right:calc(9 * var(--u));font-family:"JetBrains Mono",monospace;font-size:calc(7.5 * var(--u));
+     font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#ffb46b;background:rgba(5,8,14,.72);padding:calc(2 * var(--u)) calc(5 * var(--u));
+     border-radius:calc(3 * var(--u));white-space:nowrap;pointer-events:none}
 
   /* ---------------------------------------------------------- side panels -- */
   #bay .pnl{position:absolute;border-radius:calc(7 * var(--u));padding:calc(9 * var(--u)) calc(10 * var(--u)) calc(10 * var(--u));z-index:12;

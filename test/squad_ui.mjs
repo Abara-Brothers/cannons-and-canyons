@@ -2719,6 +2719,215 @@ try {
   fail('squad_ui task 9 stopped: ' + (e && e.message));
 }
 
+// ============================================================================
+// TASK 11: THE BOARDS DIM FROM THE SQUAD'S `fits`, the leader's boards are the
+// squad's mode control (D7), the Armoury fills the squad's rack (D-UI-3), the
+// one code field (X8: #sqCode, task 8's) gets its busy guard and says a room's
+// refusal, and the join screen goes. Its own viewport loop on a freshly loaded
+// page, so it shares no state with the checks above. Every roster goes in
+// through app.js's real handle() -- the real CC_SQUAD write and the real
+// cc:squad repaint -- with `held: true`, as every roster this server puts in
+// the slot carries it (D-UI-1). Every control is pressed through the real
+// delegated listener. Frames are filtered by TYPE, never counted whole: a
+// sign-in also starts a friends read that lands in the same recorder.
+try {
+  const T11_MULE = '00000000-0000-4000-8000-0000000000cc';
+  const T11_PIKE = '00000000-0000-4000-8000-0000000000dd';
+  const T11R = (tag) => (tag + '0'.repeat(32)).slice(0, 32);
+  const t11m = (id, callsign, rid, o) => Object.assign({ id, rid: T11R(rid), callsign, guest: false, online: true, ready: false, dropped: false }, o);
+  const T11YOU = (o) => t11m(ME, 'Dusty Crag', 'a1', o);
+  const T11MULE = (o) => t11m(T11_MULE, 'Steel Mule', 'c1', o);
+  const T11PIKE = (o) => t11m(T11_PIKE, 'Ridge Pike', 'd1', o);
+  // THE SERVER'S SEAT TABLE, for fixtures only (duel 2, ffa 2-4, boss 1-2,
+  // aliens 1-2, golf 1-4). The client never computes this: it reads `fits`,
+  // and check B2c hands it a `fits` this table would not produce to prove it.
+  const t11fits = (n) => ({ duel: n === 2, ffa: n >= 2 && n <= 4, boss: n >= 1 && n <= 2, aliens: n >= 1 && n <= 2, golf: n >= 1 && n <= 4 });
+  // A roster PUSH, exactly as the server fans one out: no request id.
+  const t11state = async (patch) => {
+    const n = (patch.members || []).length;
+    await ev(`(handle(Object.assign({ type: 'squad', op: 'state', code: 'QK7T', leader: ${JSON.stringify(ME)},
+      mode: 'duel', tees: null, max: null, you: 0, held: true, members: [], fits: ${JSON.stringify(t11fits(n))} }, ${JSON.stringify(patch)})), true)`);
+    await sleep(80);
+  };
+  const t11rack = (picks) => ev(`(localStorage.setItem('cc_loadout', ${JSON.stringify(JSON.stringify(picks))}), true)`);
+  const FIVE11 = ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'];
+  // The home boards and the Mission board cards, as a player sees them.
+  const t11boards = (sel) => ev(`(() => {
+    const b = [...document.querySelectorAll(${JSON.stringify(sel)})];
+    return { cls: b.map((x) => x.className), nofit: b.map((x) => x.classList.contains('nofit')),
+      pills: b.map((x) => { const p = x.querySelector('.bnf'); return p ? p.textContent : null; }),
+      bof: b.map((x) => !!x.querySelector('.bof')) };
+  })()`);
+
+  for (const [w, h] of [[932, 430], [667, 375]]) {
+    const V = `${w}x${h}`;
+    await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: w < 900 });
+    await send('Page.navigate', { url: `http://127.0.0.1:${appPort}/` });
+    let t11up = false;
+    for (let i = 0; i < 80; i++) {
+      if (await ev('!!window.Bay && typeof handle === "function" && !!document.querySelector("#bay .boards")').catch(() => false)) { t11up = true; break; }
+      await sleep(200);
+    }
+    if (!t11up) { fail(`${V}: page never became ready for the task 11 checks`); continue; }
+    for (let k = 0; k < 40 && (await ev(`document.getElementById('bay').classList.contains('enter')`)); k++) await sleep(100);
+    await ev(`(localStorage.removeItem('cc_squad'), true)`);
+    await t11rack(FIVE11);
+    // S.connected and S.local are set by stubSocket, so wsReady() does not
+    // depend on whether the real socket had opened first; the account button's
+    // state is set by setWho, which is what acctState() reads.
+    await stubSocket(); await setWho('in');
+    await ev(`(ccMode = 'duel', ccMax = 4, ccGolfMax = 2, ccTees = 'mens', true)`);
+    // Introduced, then answered: this account holds no squad. The box KNOWS.
+    await clearTx(); await ev('sendHello(S.ws).then(() => true)'); await sleep(60);
+    await reply({ op: 'gone' });
+    await clearTx();
+    await ev(`(Bay.show('home'), true)`);
+
+    // ---- B1. NO SQUAD, NO CHANGE. Every player who never squads up must get
+    //      the board that shipped -- so this reads every board's whole class
+    //      list, not a flag -- and still no offline badge on home (owner,
+    //      2026-09-18; test/offline.mjs asserts the same).
+    const b1 = await t11boards('#bay .board');
+    if (JSON.stringify(b1.cls) === JSON.stringify(['board on', 'board', 'board', 'board', 'board'])
+        && b1.pills.every((p) => p === null) && b1.bof.every((x) => !x))
+      ok(`${V}: no squad -- the five home boards are exactly as they shipped, no pill and still no offline badge`);
+    else fail(`${V}: plain boards ${JSON.stringify(b1)}`);
+
+    // ---- B2. `fits` FROM THE SERVER DIMS EXACTLY THE MODES IT NAMES. Three
+    //      strong: duel (2), boss (1-2) and aliens (1-2) cannot seat them.
+    await t11state({ leader: T11_MULE, members: [T11YOU(), T11MULE(), T11PIKE()] });
+    const b2 = await t11boards('#bay .board');
+    if (JSON.stringify(b2.nofit) === JSON.stringify([true, false, true, true, false])
+        && JSON.stringify(b2.pills) === JSON.stringify(['Squad too big', null, 'Squad too big', 'Squad too big', null]))
+      ok(`${V}: a squad of three dims duel, boss and aliens with "Squad too big"; free-for-all and golf are untouched`);
+    else fail(`${V}: too big ${JSON.stringify(b2)}`);
+    // B2b. TOO SMALL IS NOT TOO BIG (X6: fits checks the minimum too). A squad
+    //      of one fits no duel and no free-for-all, and "Squad too big" would
+    //      be false there: the pill names the mode's minimum instead.
+    await t11state({ members: [T11YOU()] });
+    const b2b = await t11boards('#bay .board');
+    if (JSON.stringify(b2b.nofit) === JSON.stringify([true, true, false, false, false])
+        && JSON.stringify(b2b.pills) === JSON.stringify(['Needs 2 players', 'Needs 2 players', null, null, null]))
+      ok(`${V}: a squad of one dims duel and free-for-all with "Needs 2 players", never "Squad too big"`);
+    else fail(`${V}: too small ${JSON.stringify(b2b)}`);
+    // B2c. THE BOARDS READ `fits`, THEY DO NOT COUNT. Two members, which the
+    //      seat table says fit everything, and a frame that says duel does
+    //      not: the frame wins, because it is the one truth Start reads too.
+    await t11state({ leader: T11_MULE, members: [T11YOU(), T11MULE()], fits: { duel: false, ffa: true, boss: true, aliens: true, golf: true } });
+    const b2c = await t11boards('#bay .board');
+    if (JSON.stringify(b2c.nofit) === JSON.stringify([true, false, false, false, false]) && b2c.pills[0] === 'Squad too big' && b2c.pills.slice(1).every((p) => p === null))
+      ok(`${V}: the boards follow the frame's fits, not a count of the rows`);
+    else fail(`${V}: fits not read ${JSON.stringify(b2c)}`);
+
+    // ---- B3. A DIM IS A DIM, AND IT MUST NOT LIFT. .board.on raises .bcard,
+    //      and a board that greys out while rising reads as a press rather
+    //      than a refusal. Measured once the .22s transitions have settled.
+    //      AND THE PILL IS NOT DIMMED WITH IT: no filter anywhere between the
+    //      pill and its board, or the one thing that says why goes grey too.
+    await t11state({ leader: T11_MULE, members: [T11YOU(), T11MULE(), T11PIKE()] });
+    await sleep(400);
+    const look = await ev(`(() => {
+      const b = [...document.querySelectorAll('#bay .board')];
+      const img = (i) => getComputedStyle(b[i].querySelector('.bcard img')).filter;
+      const p = b[0].querySelector('.bnf'), chain = [];
+      for (let e = p; e && e !== b[0].parentNode; e = e.parentNode) chain.push(getComputedStyle(e).filter);
+      return { duelOn: b[0].classList.contains('on'), duelImg: img(0), ffaImg: img(1), pillChain: chain,
+        duelLift: getComputedStyle(b[0].querySelector('.bcard')).transform };
+    })()`);
+    if (look.duelOn && /grayscale/.test(look.duelImg) && !/grayscale/.test(look.ffaImg) && look.duelLift === 'none'
+        && look.pillChain.length >= 3 && look.pillChain.every((f) => f === 'none'))
+      ok(`${V}: the armed board the squad does not fit is dimmed and does not lift, its pill is not dimmed, and a board that fits is untouched`);
+    else fail(`${V}: dim look ${JSON.stringify(look)}`);
+
+    // ---- B4. THE PILL MUST NOT EAT THE TAP, CLIP ITS TEXT OR LEAVE ITS BOARD.
+    //      Both pills, the long one included, at the point a finger lands.
+    const t11pillHit = () => ev(`(() => [...document.querySelectorAll('#bay .board .bnf')].map((p) => {
+      const r = p.getBoundingClientRect(), bd = p.closest('.board').getBoundingClientRect();
+      const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      const b = el && el.closest ? el.closest('.board') : null;
+      return { set: b ? b.dataset.set : null, own: p.closest('.board').dataset.set, clipped: p.scrollWidth > p.clientWidth + 1,
+        inside: r.left >= bd.left - 0.5 && r.right <= bd.right + 0.5 && r.top >= bd.top - 0.5 && r.bottom <= bd.bottom + 0.5 };
+    }))()`);
+    const hitBig = await t11pillHit();
+    await t11state({ members: [T11YOU()] });
+    const hitSmall = await t11pillHit();
+    const pillOk = (a) => a.length > 0 && a.every((x) => x.set === x.own && !x.clipped && x.inside);
+    if (hitBig.length === 3 && hitSmall.length === 2 && pillOk(hitBig) && pillOk(hitSmall))
+      ok(`${V}: a tap on either pill lands on its board, and neither pill clips its text or leaves its board`);
+    else fail(`${V}: pill hit test ${JSON.stringify({ hitBig, hitSmall })}`);
+
+    // ---- B5. THE HOME TYPE-SIZE HOLE. styles.css makes the home screen's small
+    //      mono text a fifth larger and left .bof out, because home has no
+    //      offline badge. A pill in that slot needs its own home rule: 7.5 x
+    //      1.2 = 9. In design units, like every other size check in the tree.
+    const size = await ev(`(() => {
+      const e = document.createElement('div'); e.style.cssText = 'position:absolute;width:calc(100 * var(--u))';
+      $('bay').appendChild(e); const u = e.getBoundingClientRect().width / 100; e.remove();
+      const p = document.querySelector('#bay .board .bnf');
+      return { scr: $('bay').dataset.scr, pill: p ? +(parseFloat(getComputedStyle(p).fontSize) / u).toFixed(1) : null };
+    })()`);
+    if (size.scr === 'home' && size.pill === 9) ok(`${V}: the pill takes the home type bump (9u), not the 7.5u hole .bof sits in`);
+    else fail(`${V}: pill size ${JSON.stringify(size)}`);
+
+    // ---- B6. ARMING A DIMMED BOARD IS ALLOWED (design 5.2). The dim is advice;
+    //      the control that refuses is Start, in the box. A member here, so the
+    //      tap is the board's alone: first tap arms, second opens Match setup.
+    await t11state({ leader: T11_MULE, members: [T11YOU(), T11MULE(), T11PIKE()] });
+    const tap = await ev(`(() => {
+      const boards = () => [...document.querySelectorAll('#bay .board')];
+      boards()[2].click();
+      const armed = Bay.state().mode.id, cls = boards()[2].className;
+      boards()[2].click();
+      const scr = $('bay').dataset.scr;
+      Bay.show('home');
+      return { armed, cls, scr };
+    })()`);
+    await ev(`(ccMode = 'duel', Bay.show('home'), true)`);
+    if (tap.armed === 'boss' && /\bon\b/.test(tap.cls) && /\bnofit\b/.test(tap.cls) && tap.scr === 'setup')
+      ok(`${V}: a tap on a dimmed board arms it and keeps it dimmed; a second tap opens Match setup, like any other board`);
+    else fail(`${V}: dimmed tap ${JSON.stringify(tap)}`);
+
+    // ---- B7. THE MISSION BOARD SHOWS THE SAME PILL (design 5.2), keeps every
+    //      offline badge test/offline.mjs asserts on its five cards, and the
+    //      two do not overlap: .mbi .bof sits at 8u, the pill beneath it.
+    const t11mission = () => ev(`(() => {
+      const c = [...document.querySelectorAll('#bay .mb')];
+      return { nofit: c.map((x) => x.classList.contains('nofit')),
+        pills: c.map((x) => { const p = x.querySelector('.bnf'); return p ? p.textContent : null; }),
+        bof: c.map((x) => !!x.querySelector('.bof')),
+        clear: c.filter((x) => x.querySelector('.bnf')).every((x) => x.querySelector('.bnf').getBoundingClientRect().top >= x.querySelector('.bof').getBoundingClientRect().bottom - 0.5),
+        clipped: [...document.querySelectorAll('#bay .mb .bnf')].some((p) => p.scrollWidth > p.clientWidth + 1),
+        through: [...document.querySelectorAll('#bay .mb .bnf')].every((p) => { const r = p.getBoundingClientRect();
+          const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !!(el && el.closest && el.closest('.mb') === p.closest('.mb')); }) };
+    })()`);
+    await ev(`(Bay.show('modes'), true)`); await sleep(450);
+    const mis = await t11mission();
+    // AND IT FOLLOWS THE SQUAD WHILE IT IS ON SCREEN: a roster that lands while
+    // the Mission board is up repaints it, with no tap in between.
+    await t11state({ members: [T11YOU()] });
+    const misLive = await t11mission();
+    await ev(`(Bay.show('home'), true)`);
+    if (JSON.stringify(mis.nofit) === JSON.stringify([true, false, true, true, false])
+        && JSON.stringify(mis.pills) === JSON.stringify(['Squad too big', null, 'Squad too big', 'Squad too big', null])
+        && mis.bof.every(Boolean) && mis.clear && !mis.clipped && mis.through)
+      ok(`${V}: the Mission board carries the same pill, keeps every offline badge, and the two do not overlap`);
+    else fail(`${V}: mission ${JSON.stringify(mis)}`);
+    if (JSON.stringify(misLive.pills) === JSON.stringify(['Needs 2 players', 'Needs 2 players', null, null, null]) && misLive.bof.every(Boolean) && misLive.clear)
+      ok(`${V}: a roster that lands while the Mission board is up repaints its pills`);
+    else fail(`${V}: mission repaint ${JSON.stringify(misLive)}`);
+
+    // ---- B8. AND WHEN THE SQUAD IS OVER, THE DIM GOES WITH IT: a board left
+    //      grey after a leave would refuse a mode nobody is refusing.
+    await ev(`(handle({ type: 'squad', op: 'ended', reason: 'left' }), true)`); await sleep(80);
+    const b8 = await t11boards('#bay .board');
+    if (JSON.stringify(b8.cls) === JSON.stringify(['board on', 'board', 'board', 'board', 'board']) && b8.pills.every((p) => p === null))
+      ok(`${V}: a squad that ends takes every dim and pill with it`);
+    else fail(`${V}: after the squad ${JSON.stringify(b8)}`);
+  }
+} catch (e) {
+  fail('squad_ui task 11 stopped: ' + (e && e.message));
+}
+
 clearTimeout(watchdog);
 cleanup();
 console.log(errors.length ? `\n${errors.length} FAILED` : '\nall squad_ui checks passed');

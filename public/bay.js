@@ -205,6 +205,27 @@ const IC = {
 const OFF_TXT = { cpu: 'Offline vs CPU', solo: 'Offline solo', online: 'Online only' };
 const offKind = (id) => (fn('offlineKind') ? offlineKind(id) : 'online');
 const offBadge = (id) => '<span class="bof">' + esc(OFF_TXT[offKind(id)] || OFF_TXT.online) + '</span>';
+// SQUAD SEATS ON THE BOARDS (design 5.2, D12). `fits` is computed on the
+// SERVER from the engine's own seat table (plan X6), so a board that dims and
+// a Start that refuses read one truth: nothing in this file decides whether a
+// squad fits a mode. The squad is the box's one read of app.js's slot (sq.snap,
+// plan X7). No squad, or a frame with no `fits`, dims nothing -- the board
+// every player who never squads up still gets.
+const noFit = (id) => { const q = sq.snap; return !!(q && q.fits && q.fits[id] === false); };
+// WHICH WAY IT DOES NOT FIT, in words. `fits` checks the mode's MINIMUM as well
+// as its maximum (X6), so a squad of one fits no duel, and D12's "Squad too
+// big" would be false there. The minimum is read off the box's own seat copy
+// (SQ_SEATS: '2', '2&ndash;4', '1&ndash;2' ...), the one place this file spells
+// the seats, and it only ever picks the words: whether a board dims is `fits`
+// alone. ITS OWN CLASS, NEVER .bof: the home boards lost the offline badge on
+// 2026-09-18, and test/offline.mjs asserts the home boards carry no .bof at
+// all. Fixed words and a number, so there is nothing here to escape.
+function noFitPill(id) {
+  if (!noFit(id)) return '';
+  const n = Array.isArray(sq.snap.members) ? sq.snap.members.length : 0;
+  const min = parseInt(SQ_SEATS[id], 10) || 1;
+  return '<span class="bnf">' + (n < min ? 'Needs ' + min + ' player' + (min === 1 ? '' : 's') : 'Squad too big') + '</span>';
+}
 
 const MOTES = [
   [118,318,9.2,0.0,2],[206,262,11.4,1.4,1.6],[332,344,8.6,2.6,2.2],[418,296,12.2,0.7,1.6],
@@ -2502,8 +2523,8 @@ SCREENS.modes = function () {
   const s = state();
   const cards = MODES.map((x) => {
     const on = x.id === s.mode.id;
-    return '<button class="mb' + (on ? ' on' : '') + '" data-set="mode=' + x.id + '" data-go="setup">'
-      + '<span class="mbi"><img src="' + art(x.card) + '" alt=""><span class="g"></span><span class="lip"></span>' + offBadge(x.id)
+    return '<button class="mb' + (on ? ' on' : '') + (noFit(x.id) ? ' nofit' : '') + '" data-set="mode=' + x.id + '" data-go="setup">'
+      + '<span class="mbi"><img src="' + art(x.card) + '" alt=""><span class="g"></span><span class="lip"></span>' + offBadge(x.id) + noFitPill(x.id)
       +   '<span class="mbicn">' + MODE_IC[x.id] + '</span><span class="mbn">' + esc(x.name) + '</span></span>'
       + '<span class="mbc"><span class="mbt' + (on ? '' : ' mbt2') + '">' + (on ? 'Armed &middot; ' : '') + esc(x.tag) + '</span>'
       +   '<span class="mbb">' + esc(x.blurb) + '</span>'
@@ -2580,12 +2601,13 @@ SCREENS.home = function () {
     : m.players;
   const arc = [[-6, 14], [-3, 5], [0, 0], [3, 5], [6, 14]];
   const boards = MODES.map((x, i) =>
-    '<button class="board' + (x.id === m.id ? ' on' : '') + '" style="transform:rotate(' + arc[i][0] + 'deg) translateY(' + u(arc[i][1]) + ')" '
+    '<button class="board' + (x.id === m.id ? ' on' : '') + (noFit(x.id) ? ' nofit' : '') + '" style="transform:rotate(' + arc[i][0] + 'deg) translateY(' + u(arc[i][1]) + ')" '
     + 'data-set="mode=' + x.id + '" title="' + esc(x.name) + '">'
     + '<span class="bcard"><img src="' + art(x.card) + '" alt=""><span class="bsc"></span><span class="barm"></span>'
     // No offline badge on the home boards (owner, 2026-09-18); the Mission
-    // board keeps its badge, and offline play itself is unchanged.
-    + '<span class="bic">' + MODE_IC[x.id] + '</span><span class="bpl">' + esc(x.players) + '</span>'
+    // board keeps its badge, and offline play itself is unchanged. The squad
+    // pill (noFitPill) takes the badge's slot and none of its class.
+    + '<span class="bic">' + MODE_IC[x.id] + '</span><span class="bpl">' + esc(x.players) + '</span>' + noFitPill(x.id)
     + '<span class="blab"><span class="bnm">' + esc(x.name) + '</span><span class="btg">' + esc(x.tag) + '</span></span></span></button>').join('');
 
 
@@ -2887,6 +2909,11 @@ document.addEventListener('cc:squad', () => {
     if (end) { sqHeld = ''; if (end !== 'elsewhere' && end !== 'open') sqStore(''); }
   }
   sqPaint();
+  // THE MISSION BOARD WEARS THE SAME PILLS (design 5.2), so a roster that lands
+  // while it is up repaints it too -- in place, and only while the bay is on
+  // stage, the guard every repaint here keeps.
+  const host = $('bay');
+  if (host && host.classList.contains('active') && current === 'modes') render('modes');
   sqNeed();
 });
 // BACK TO THIS TAB. An `ended: elsewhere`, a roster this tab was only shown
