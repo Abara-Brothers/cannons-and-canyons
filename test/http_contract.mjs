@@ -29,6 +29,29 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const withTimeout = (p, ms, label) =>
   Promise.race([p, sleep(ms).then(() => { throw new Error('timeout: ' + label); })]);
 
+// NOTHING THIS FILE STARTS OUTLIVES IT, AND IT CANNOT HANG. This suite is
+// plain top-level awaits: anything that threw between a spawn and its kill
+// left that server.js running, and a response that never came waited out
+// undici's 300 s default, so a pre-push run could stall for minutes. So:
+//   * every server it spawns is registered, and killed on ANY exit — a
+//     throw, a failed check, the watchdog, or a signal (SIGKILL: it also
+//     ends one a hang left SIGSTOPped);
+//   * every fetch carries a 10 s deadline (the module-scope `fetch` below
+//     shadows the global one for this file);
+//   * the whole run has a budget; overrun, it fails loudly and exits.
+const children = [];
+const spawnServer = (...a) => { const c = spawn(...a); children.push(c); return c; };
+process.on('exit', () => { for (const c of children) { try { c.kill('SIGKILL'); } catch {} } });
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => process.exit(1));
+const WATCHDOG_MS = 60000;
+setTimeout(() => {
+  console.log(`FAIL  timeout — the suite overran its ${WATCHDOG_MS / 1000} s budget`);
+  process.exit(1);
+}, WATCHDOG_MS).unref();
+const FETCH_MS = 10000;
+const globalFetch = globalThis.fetch;
+const fetch = (url, opts = {}) => globalFetch(url, { signal: AbortSignal.timeout(FETCH_MS), ...opts });
+
 // Ask the OS for a free port rather than hardcoding one. run-all.sh's
 // kill_server() only clears $PORT, so a hardcoded port left busy by a crashed
 // run would fail here as "server never came up" — the exact misleading failure
@@ -52,7 +75,7 @@ async function startServer() {
     const env = { ...process.env, PORT: String(port) };
     delete env.SUPABASE_SECRET_KEY;          // force the console.error branch in ingestError
     delete env.SUPABASE_URL;
-    const srv = spawn('node', ['server.js'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const srv = spawnServer('node', ['server.js'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
     const state = { log: '' };
     srv.stdout.on('data', (d) => { state.log += d; });
     srv.stderr.on('data', (d) => { state.log += d; });
@@ -164,7 +187,7 @@ let mockOrigin = '';
     ...process.env, PORT: String(port2),
     SUPABASE_URL: `http://127.0.0.1:${mockPort}`, SUPABASE_PUBLISHABLE_KEY: 'fake', SUPABASE_SECRET_KEY: 'fake',
   };
-  const srv2 = spawn('node', ['server.js'], { env: env2, stdio: ['ignore', 'pipe', 'pipe'] });
+  const srv2 = spawnServer('node', ['server.js'], { env: env2, stdio: ['ignore', 'pipe', 'pipe'] });
   try {
     for (let i = 0; i < 80; i++) {
       try { await fetch(`http://127.0.0.1:${port2}/health`); break; } catch {}
@@ -231,7 +254,7 @@ const alinkUnset = await fetch(`http://127.0.0.1:${port}${alinkPath}`).then(asyn
 let aasaType = '', aasa = null, alinks = null, deleteStillWeb = 0;
 {
   const port3 = await freePort();
-  const srv3 = spawn('node', ['server.js'], {
+  const srv3 = spawnServer('node', ['server.js'], {
     env: { ...process.env, PORT: String(port3),
            APPLE_TEAM_ID: 'ABCDE12345',
            ANDROID_CERT_SHA256: 'AA:BB:CC:DD, EE:FF:00:11' },
