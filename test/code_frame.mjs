@@ -285,6 +285,33 @@ async function layerOff() {
     h.close(); q.close();
   }
 
+  // A RATE BUCKET, SPENT LIKE A MISS (whole-branch fix wave, B5). The frame
+  // is pre-auth and answered from memory, and the socket limiter alone let one
+  // socket ask 60 codes a second: live squad codes could be enumerated in
+  // minutes. Ten a minute per socket, and an exhausted bucket answers exactly
+  // what a code that names nothing answers — no new oracle — so a prober
+  // cannot tell "slow down" from "no such code". The eleventh ask of a LIVE
+  // room's code is that miss; another socket is unaffected; a token comes
+  // back after six seconds.
+  {
+    const r = await open(s.port);
+    const answers = [];
+    for (let i = 1; i <= 11; i++) answers.push(await ask(r, { type: 'code', code: A, id: 'r' + i }));
+    const firstTen = answers.slice(0, 10).every((x, i) => same(x, { type: 'code', kind: 'room', id: 'r' + (i + 1) }));
+    const miss = await ask(await open(s.port), { type: 'code', code: U, id: 'r11' });
+    const other = await ask(await open(s.port), { type: 'code', code: A, id: 'o1' });
+    if (firstTen && same(answers[10], miss) && same(miss, { type: 'code', kind: 'none', id: 'r11' }) && same(other, { type: 'code', kind: 'room', id: 'o1' }))
+      ok('(5b) ten code frames a minute per socket: the eleventh, of a LIVE room\'s code, is answered exactly as a code that names nothing, and another socket still asks');
+    else fail('(5b) the code bucket: ' + JSON.stringify({ firstTen, eleventh: answers[10], miss, other }));
+    await sleep(6100);
+    const back = await ask(r, { type: 'code', code: A, id: 'r12' });
+    const empty = await ask(r, { type: 'code', code: A, id: 'r13' });
+    if (same(back, { type: 'code', kind: 'room', id: 'r12' }) && same(empty, { type: 'code', kind: 'none', id: 'r13' }))
+      ok('(5b) the bucket refills one code every six seconds, and not two');
+    else fail('(5b) the code bucket refill: ' + JSON.stringify({ back, empty }));
+    r.close();
+  }
+
   w.close(); host.close();
   await sleep(100);
   const stray = strayLines(s);
@@ -402,6 +429,16 @@ async function layerOn() {
     if (same(rd, { type: 'squad', op: 'ready', ok: true, id: 'sq3' }) && readied && readied.members[0].ready === true)
       ok('(8b) the real server.js readies a five-pick golf rack — the engine\'s validRackFor is wired');
     else fail('(8b) a five-pick ready on the real server.js answered ' + JSON.stringify(rd) + ', roster ' + JSON.stringify(readied));
+    // (8c) THE CODE BUCKET COVERS SQUADS TOO, the codes it exists to hide:
+    // ten asks of this live squad's code answer 'squad', the eleventh exactly
+    // what a code that names nothing answers.
+    const q = await open(s.port);
+    const said = [];
+    for (let i = 1; i <= 11; i++) said.push(await ask(q, { type: 'code', code: r && r.code, id: 'q' + i }));
+    if (said.slice(0, 10).every((x, i) => same(x, { type: 'code', kind: 'squad', id: 'q' + (i + 1) })) && same(said[10], { type: 'code', kind: 'none', id: 'q11' }))
+      ok('(8c) the eleventh ask a minute of a LIVE squad\'s code is answered as a miss, like a room\'s');
+    else fail('(8c) the code bucket over a squad code: ' + JSON.stringify(said.slice(9)));
+    q.close();
     w.close();
   }
 

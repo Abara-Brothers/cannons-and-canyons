@@ -1750,6 +1750,8 @@ const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 64 * 1024 });
 // peer, and an offline match has no peer to distrust.
 const MSG_RATE = Number(process.env.MSG_RATE) || 60;      // sustained messages/second
 const MSG_BURST = Number(process.env.MSG_BURST) || 120;   // bucket capacity
+// The code frame's own bucket, per socket: its capacity and its refill a minute.
+const CODE_RATE = 10;
 
 wss.on('connection', (ws) => {
   ws.isAlive = true;
@@ -1813,12 +1815,19 @@ wss.on('connection', (ws) => {
         // because nothing the earlier frame can do changes whether a string
         // names a live room or squad.
         //
-        // NO RATE BUCKET: two Map lookups, no store round trip to protect and
-        // no write to amplify; the socket limiter above bounds it. SQUADS
-        // FIRST, then rooms — the spec's order, and the tie-break if the one
-        // namespace (plan R4) were ever broken: once makeCode consults
-        // codeTaken (wired at boot, above) and the squad minter consults rooms (task 2
-        // writes that minter and hands it roomExists), no string is both.
+        // A RATE BUCKET OF ITS OWN, SPENT LIKE A MISS (whole-branch fix wave).
+        // There is no store round trip to protect, but the answer is a
+        // pre-auth oracle over every live squad and room, and the socket
+        // limiter alone let one socket ask 60 a second: the live squad codes
+        // could be walked in minutes. CODE_RATE a minute per socket, far above
+        // a player typing codes. AN EMPTY BUCKET ANSWERS EXACTLY WHAT A CODE
+        // THAT NAMES NOTHING ANSWERS: a distinct 'slow down' would be a new
+        // oracle (a miss and a throttled hit told apart), and a prober learns
+        // nothing from it that a miss does not already say. SQUADS FIRST,
+        // then rooms — the spec's order, and the tie-break if the one
+        // namespace (plan R4) were ever broken: makeCode consults codeTaken
+        // (wired at boot, above) and the squad minter consults rooms through
+        // roomExists, so no string is both.
         //
         // codeOf is server/social.js's, IMPORTED rather than restated — one
         // of exactly two copies of the rule in the tree; the other is
@@ -1826,7 +1835,13 @@ wss.on('connection', (ws) => {
         // rooms up through. See codeOf's comment for why there are two.
         if (msg.type === 'code') {
           const c = codeOf(msg.code);
-          const frame = { type: 'code', kind: social && social.hasSquad(c) ? 'squad' : rooms.has(c) ? 'room' : 'none' };
+          // Refill before spending; the elapsed term is clamped at zero so a
+          // clock stepped backwards cannot starve the socket (rateOk's rule).
+          ws.codeTokens = Math.min(CODE_RATE, (ws.codeTokens ?? CODE_RATE) + (Math.max(0, now - (ws.codeRefill ?? now)) / 60000) * CODE_RATE);
+          ws.codeRefill = now;
+          const asked = ws.codeTokens >= 1;
+          if (asked) ws.codeTokens -= 1;
+          const frame = { type: 'code', kind: asked && social && social.hasSquad(c) ? 'squad' : asked && rooms.has(c) ? 'room' : 'none' };
           if (msg.id !== undefined) frame.id = msg.id;
           send(ws, frame);
           return;
