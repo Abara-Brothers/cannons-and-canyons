@@ -1490,7 +1490,14 @@ function connect() {
     // holds this one on its own authPending while the token is verified. Both
     // settlements ask: a hello that failed is answered `sign_in`, which is a
     // refusal this client can see rather than a frame it never sent.
-    sendHello(ws).then(socialBoot, socialBoot);
+    // AND THE PARKED ?squad= LINK LAST, for the same reason the read model comes
+    // after the hello: a squad join that arrives before the token is verified is
+    // answered for a guest. Both settlements flush, because a hello that FAILED
+    // still leaves a socket a guest may legitimately join a squad down (D5).
+    // ON THIS SOCKET ONLY: a hello that settles after its socket has been
+    // replaced leaves the link parked for the new socket's own hello.
+    const flush = () => flushSquadJoin(ws);
+    sendHello(ws).then(socialBoot, socialBoot).then(flush, flush);
   };
   ws.onclose = () => {
     const wasUp = S.connected;
@@ -2341,6 +2348,54 @@ function deepLink(u) {
   if (squad) return { kind: 'squad', code: squad };
   return null;
 }
+
+// A ?squad= link CANNOT ride intent(). Squad frames are intercepted in server.js
+// before handleClientMessage (ADR-001: the offline page imports the engine and
+// must gain no social protocol), so they go through socialSend -- and socialSend
+// has NO queue of its own: with the socket down it calls back { error: 'offline' }
+// and returns 0. intent() survives a cold socket because it parks the frame in
+// pendingIntent and connect()'s onopen flushes it; socialSend has no equivalent,
+// so boot's old 300 ms setTimeout would have thrown a squad link away on most
+// cold starts. Worse, on the starts where it DID land, sendHello had not
+// resolved, so the server would have answered for a GUEST -- and a guest row in
+// someone's squad is not something the account can take back afterwards.
+// Park it, and let the socket's own hello hook flush it. server.js closes the
+// last millisecond on its side: it holds every social frame on the socket's
+// authPending while a hello is being verified.
+// NOR DOWN THE OFFLINE STAND-IN. While S.local is set, S.ws is the in-page face
+// of room-engine.js (startLocal), which has no social code: a squad frame sent
+// there vanishes, and the reply's waiter would blame the account service twelve
+// seconds later. The code parks instead, and goes when the real socket is back.
+//
+// The one code a player will enter through a link at a time, '' for none. The
+// Squad box is not told the answer: app.js's socialReply puts the roster a join
+// is answered with into window.CC_SQUAD before this callback runs (plan X7), and
+// bay.js's cc:squad listener records the code and a guest row's secret from it.
+let pendingSquadJoin = '';
+// The box's own words for the same refusals (bay.js SOC_ERR, 'squad.join.*'),
+// so a join by link and a join by the code field read alike, with one sentence
+// of this path's own for `unavailable`: the server's answer when the social
+// layer is off (R14) or could not read the joiner's blocks. A refused join
+// NEVER names a block: the server refuses a join a block forbids as
+// `no_such_squad`, and that reads exactly as an unknown code does (D-BLOCK-2 A).
+const SQUAD_LINK_ERR = {
+  no_such_squad: 'No squad or game with that code.',
+  full: 'That squad is full.',
+  already_in: 'You are already in that squad on another device.',
+  slow_down: 'Too many tries. Wait a moment.',
+  offline: 'Not connected. Try again in a moment.',
+  unavailable: 'Squads need the account service, which is not answering.',
+};
+function joinSquadByCode(code) {
+  const c = deepLinkCode(code);
+  if (!c) return;
+  if (S.local || !S.ws || S.ws.readyState !== 1) { pendingSquadJoin = c; connect(); return; }
+  pendingSquadJoin = '';
+  socialSend({ type: 'squad', op: 'join', code: c, name: myName(), skin: mySkin() }, (r) => {
+    if (r && r.error) showToast(SQUAD_LINK_ERR[r.error] || 'That squad could not be joined right now. Try again later.');
+  });
+}
+function flushSquadJoin(ws) { if (pendingSquadJoin && ws === S.ws) joinSquadByCode(pendingSquadJoin); }
 
 // ---- Offline play (BQ-007 / ADR-001) ----------------------------------------
 // vs-CPU duels and solo golf never needed a server: room-engine.js — the same
@@ -8308,9 +8363,12 @@ function boot() {
   else setCallsign(rollCallsign(null));
   $('muteBtn').innerHTML = Audio.muted ? UI_IC.speakerOff : UI_IC.speakerOn;
   buildSkinRow();
-  const params = new URLSearchParams(location.search);
-  const room = params.get('room');
-  if (room) $('codeInput').value = room.toUpperCase();
+  // ONE PARSER, and the legacy field is prefilled for a ROOM link only: that
+  // field is #codeInput, it feeds $('joinBtn').onclick, and a squad code put
+  // there would be handed to the ENGINE's join path, which knows nothing about
+  // squads and would answer "No game with that code."
+  const link = deepLink(location.href);
+  if (link && link.kind === 'room') $('codeInput').value = link.code;
   resize();
   snapCamera();
   connect();
@@ -8319,9 +8377,28 @@ function boot() {
   // visitor does nothing (lazy sign-in — see cloudWorthIt).
   cloudBoot();
   requestAnimationFrame(frame);
-  // Deep-link join only if there's no match to resume.
-  if (room && hadName && !loadResume()) {
-    setTimeout(() => intent({ type: 'join', code: room.toUpperCase(), name: savedName(), skin: mySkin() }), 300);
+  // THREE CLAIMANTS ON BOOT, ONE WINNER, AND THE RULE IS WRITTEN DOWN.
+  // deepLink() has already chosen between ?room= and ?squad=; a held seat beats
+  // both. One principle decides all three -- THE MOST PERISHABLE CLAIM WINS:
+  //   1. cc_resume: a seat a server is holding RIGHT NOW, for RESUME_GRACE_MS
+  //      (120 s; ASYNC_GRACE_MS, 24 h, for an async duel). Miss it and the
+  //      player forfeits a match in progress.
+  //   2. ?room=: a room is joinable only while its state is `waiting`, and the
+  //      lobby is filling as the link is being read.
+  //   3. ?squad=: a squad persists until its last member leaves or the server
+  //      restarts. It is still there in a minute.
+  // THE LOSER IS DROPPED, NOT QUEUED. The link is still in the address bar, so
+  // reloading once the match is over makes it the winner on the next boot; a
+  // queue that fired later would drag a player out of a screen they chose.
+  // hadName is unchanged and gates both kinds, for the reason it was captured
+  // above: a name the player has never seen is not a name to enter someone's
+  // squad under.
+  if (link && hadName && !loadResume()) {
+    if (link.kind === 'room') {
+      setTimeout(() => intent({ type: 'join', code: link.code, name: savedName(), skin: mySkin() }), 300);
+    } else {
+      joinSquadByCode(link.code);   // no timer: it parks until the socket's hello settles
+    }
   }
 }
 boot();

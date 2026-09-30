@@ -97,20 +97,32 @@ await send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
   window.WebSocket = Tap;
 })();` });
 
+let navs = 0;
 const nav = async (q) => {
+  // THE OLD DOCUMENT IS MARKED before it is left, so no check below can be
+  // answered by the page this navigation is replacing.
+  await ev('window.__stale = true').catch(() => {});
   await send('Page.navigate', { url: `http://127.0.0.1:${appPort}/${q}` });
-  for (let i = 0; i < 100; i++) {
-    if (await ev('typeof deepLink === "function" && typeof onPushTap === "function" && !!window.Bay').catch(() => false)) break;
-    await sleep(150);
+  // Ready means the NEW PAGE is up, never that a function under test exists: a
+  // missing one must fail where it is called, not stall every navigation.
+  let ready = false;
+  for (let i = 0; i < 100 && !ready; i++) {
+    ready = await ev('!window.__stale && typeof handle === "function" && typeof connect === "function" && !!window.Bay').catch(() => false);
+    if (!ready) await sleep(150);
   }
   // Wait for the SOCKET, not just the scripts. Every claim in parts B and C is
   // about a frame, and a frame cannot be sent down a socket that never opened;
   // a suite that only waited for the scripts would read an empty ledger and
-  // call it "no frame sent", which is the answer half these cases want.
+  // call it "no frame sent", which is the answer half these cases want. So a
+  // page that never connected ends the run, loudly.
   let up = false;
-  for (let i = 0; i < 100; i++) { if (await ev('!!(S.connected && S.ws && S.ws.readyState === 1)').catch(() => false)) { up = true; break; } await sleep(100); }
+  for (let i = 0; ready && i < 100 && !up; i++) {
+    up = await ev('!!(S.connected && S.ws && S.ws.readyState === 1)').catch(() => false);
+    if (!up) await sleep(100);
+  }
+  if (!up) throw new Error(`navigation ${++navs} to /${q} never ${ready ? 'connected its socket' : 'became ready'}`);
+  navs++;
   await sleep(700);        // boot's 300 ms room timer, plus the hello hook, plus slack
-  return up;
 };
 const tx = () => ev('JSON.stringify(window.__tx)').then(JSON.parse);
 const squadJoins = (f) => f.filter((m) => m.type === 'squad' && m.op === 'join');
@@ -161,6 +173,86 @@ const CASES = [
   });
   if (wrong.length) fail(`A: deepLink disagrees on ${wrong.length} of ${CASES.length} links: ${wrong.join(' | ')}`);
   else ok(`A: deepLink reads ?room= and ?squad= off ${CASES.length} links, room before squad, and refuses xroom, notaroom, the wrong length and the five characters the code alphabet does not have`);
+}
+
+// ---- B. BOOT: THREE CLAIMANTS, ONE WINNER ----------------------------------
+// The rule, in one line: THE MOST PERISHABLE CLAIM WINS. A held seat (120 s, or
+// 24 h for an async duel) beats both links; ?room= (a lobby that is filling)
+// beats ?squad= (a group that persists). The loser is dropped, not queued.
+{
+  await seed(true);
+  await nav('?squad=ABCD');
+  const f = await tx();
+  if (!squadJoins(f).length) ok('B1: a held seat beats a ?squad= link — no squad join on boot');
+  else fail(`B1: a held seat did not beat ?squad= — frames: ${JSON.stringify(squadJoins(f))}`);
+}
+{
+  await seed(true);
+  await nav('?room=ABCD');
+  const f = await tx();
+  if (!roomJoins(f).length) ok('B2: a held seat beats a ?room= link — no room join on boot');
+  else fail(`B2: a held seat did not beat ?room= — frames: ${JSON.stringify(roomJoins(f))}`);
+}
+{
+  await seed(false);
+  await nav('?room=ABCD');
+  const f = await tx();
+  const r = roomJoins(f), s = squadJoins(f);
+  if (r.length === 1 && r[0].code === 'ABCD' && !s.length) ok('B3: ?room= alone joins the room, once, and sends no squad frame');
+  else fail(`B3: ?room= alone sent ${JSON.stringify({ room: r, squad: s })}`);
+}
+{
+  await seed(false);
+  await nav('?squad=ABCD');
+  const f = await tx();
+  const s = squadJoins(f), r = roomJoins(f);
+  // AFTER the hello, not before it. socialSend has no queue, so a squad frame
+  // sent while the socket is CONNECTING is simply lost; and one sent before the
+  // hello settles is answered for a GUEST. The frame must therefore appear at
+  // all, and it must appear after the hello when there is one to send.
+  const helloAt = f.findIndex((m) => m.type === 'hello');
+  const joinAt = f.findIndex((m) => m.type === 'squad' && m.op === 'join');
+  const ordered = helloAt === -1 || joinAt > helloAt;
+  if (s.length === 1 && s[0].code === 'ABCD' && s[0].name === 'Deep Linker' && typeof s[0].skin === 'string' && s[0].skin && !r.length && ordered) {
+    ok('B4: ?squad= alone sends one squad join, with the saved name and a skin, after the hello and never through intent()');
+  } else fail(`B4: ?squad= alone sent ${JSON.stringify({ squad: s, room: r, helloAt, joinAt })}`);
+}
+{
+  await seed(false);
+  await nav('?squad=ABCD&room=WXYZ');
+  const f = await tx();
+  const r = roomJoins(f), s = squadJoins(f);
+  if (r.length === 1 && r[0].code === 'WXYZ' && !s.length) ok('B5: both params on one link — the room wins and the squad frame is never sent');
+  else fail(`B5: both params sent ${JSON.stringify({ room: r, squad: s })}`);
+}
+{
+  // THE SERVER ANSWERED, AND THE PLAYER WAS TOLD. This asserts three things at
+  // once, and it is the one assertion in this suite that reaches past the
+  // client: the frame left the page, server.js INTERCEPTED it before the engine
+  // (only the interception answers 'unavailable'; the engine's switch has no
+  // default and would answer nothing at all), and the reply reached a REAL
+  // showToast that is REALLY on screen. Locally there is no Supabase secret, so
+  // the social layer is not built and 'unavailable' is the correct answer by
+  // construction (R14) -- which is exactly what makes it a usable probe. The
+  // toast is found BY ITS TEXT: any other toast on screen proves nothing.
+  const SAID = 'Squads need the account service, which is not answering.';
+  await seed(false);
+  await nav('?squad=ABCD');
+  let shown = false;
+  for (let i = 0; i < 40 && !shown; i++) {
+    shown = await ev(`[...document.querySelectorAll('.toast-item')].some((t) => t.textContent === ${JSON.stringify(SAID)} && t.getClientRects().length > 0)`);
+    if (!shown) await sleep(120);
+  }
+  if (shown) ok('B6: the squad frame reached server.js\'s interception (not the engine) and its refusal is on screen, in a toast with a box');
+  else fail(`B6: squad refusal not shown — body=${JSON.stringify((await ev('document.body.innerText || ""')).slice(0, 200))}`);
+}
+{
+  await nav('');
+  await ev('localStorage.clear(); true');
+  await nav('?squad=ABCD');
+  const f = await tx();
+  if (!squadJoins(f).length) ok('B7: a first-ever visit, with no saved name, follows no link — hadName gates a squad the same way it gates a room');
+  else fail(`B7: a nameless first visit followed the link — ${JSON.stringify(squadJoins(f))}`);
 }
 
 console.log(errors.length ? `\n${errors.length} FAILED` : '\nall deeplink checks passed');
