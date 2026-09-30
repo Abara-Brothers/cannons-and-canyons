@@ -2112,7 +2112,10 @@ export function handleClientMessage(ws, msg) {
       // Relay both players' aims so barrels track live (pre-aiming included).
       const relayPow = Math.max(1, Math.min(100, Number.isFinite(Number(msg.power)) ? Number(msg.power) : 60));
       const relayAng = clampAim(msg.angle);
-      const relayWeapon = (typeof msg.weapon === 'string' && WEAPON_BY_ID[msg.weapon]) ? msg.weapon : null;
+      // OWN PROPERTIES ONLY. WEAPON_BY_ID is a plain object, so a bare lookup
+      // also finds what it inherits: 'constructor', 'toString', '__proto__'
+      // and the rest passed as weapons and were relayed to the other seats.
+      const relayWeapon = (typeof msg.weapon === 'string' && Object.prototype.hasOwnProperty.call(WEAPON_BY_ID, msg.weapon)) ? msg.weapon : null;
       for (let i = 0; i < room.players.length; i++) {
         const p = room.players[i];
         if (i === ws.seat || !p || !p.ws) continue;

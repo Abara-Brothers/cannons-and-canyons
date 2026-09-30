@@ -650,6 +650,20 @@ async function aimRelay() {
   if (leaked && leaked.weapon === PAYLOAD) fail('aim relay: arbitrary text reached the opponent');
   else step('aim relay: an unknown weapon id is not forwarded');
 
+  // NAMES THE WEAPON TABLE INHERITS ARE NOT WEAPONS. WEAPON_BY_ID is a plain
+  // object, so a bare lookup finds Object.prototype's members: measured before
+  // the fix, twelve such words were relayed verbatim to the other seats, a
+  // vocabulary outside the weapon ids. Each must arrive as null.
+  const INHERITED = ['constructor', 'toString', '__proto__', 'hasOwnProperty', 'valueOf', 'isPrototypeOf'];
+  const inherited = [];
+  for (const name of INHERITED) {
+    send(guest, { type: 'aim', angle: 45, power: 60, weapon: name });
+    const got = await wait(host, 'aim', 3000);
+    if (!got || got.weapon !== null) inherited.push([name, got && got.weapon]);
+  }
+  if (inherited.length) fail('aim relay: a name the weapon table inherits was relayed: ' + JSON.stringify(inherited));
+  else step('aim relay: a name the weapon table only inherits (constructor, toString, __proto__ ...) relays as null');
+
   send(guest, { type: 'aim', angle: 40, power: 55, weapon: 'cannon' });
   const real = await wait(host, 'aim', 3000);
   if (!real || real.weapon !== 'cannon') fail('aim relay: a REAL weapon stopped relaying');
