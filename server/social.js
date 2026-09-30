@@ -887,6 +887,7 @@ export function createSocial({
   // until its failure would have expired. Expired entries go as each
   // failure is written.
   const THROWN_EACH = 64;
+  const KEPT = false;             // withLanded's answer for a reader kept whole (below)
   const blockThrown = new Map();  // 'blocker>blocked' -> { blocker, blocked, until }
   const thrownBy = new Map();     // blocker -> how many pairs of blockThrown are its
   const thrownAll = new Map();    // blocker -> until: an account kept whole
@@ -916,12 +917,23 @@ export function createSocial({
   }
   // `b`, the store's answer for `id`, plus every pair logged from `from` on,
   // every pair being written and every unexpired thrown pair that names
-  // `id`, and every other account kept whole as blocking `id`; null when
-  // some of the logged entries have been dropped, when `id` is an account
-  // kept whole, or while every reader fails safe.
+  // `id`; and, apart, in `doubt`, every other account kept whole.
+  //
+  // TWO FAILURES, TOLD APART (D-BLOCK-6 O). null: some of the logged entries
+  // have been dropped while the read was out, and one more read can finish
+  // the job (landedBlocks makes it). KEPT: `id` is itself an account kept
+  // whole, or every reader fails safe; nothing a second read could find
+  // changes that, so it is not asked. Both are falsy, and every reader fails
+  // on either exactly as it did on null.
+  //
+  // DOUBT IS NOT A BLOCK (D-BLOCK-6 M). An account kept whole MAY have
+  // blocked anybody, and that is all anyone knows. Join and invite treat it
+  // as blocked, as before; the sign-in door treats it as a failed read (the
+  // row fails to guest and stays out of Start), never as a kick: a kick
+  // there would remove a player nobody blocked.
   function withLanded(b, id, from) {
     if (blockFloor > from) return null;
-    const out = { blocked: [...b.blocked], blockedBy: [...b.blockedBy] };
+    const out = { blocked: [...b.blocked], blockedBy: [...b.blockedBy], doubt: [] };
     for (const e of blockLog) {
       if (e.seq < from) continue;
       if (e.blocker === id) out.blocked.push(e.blocked);
@@ -933,11 +945,11 @@ export function createSocial({
     }
     if (blockThrown.size || thrownAll.size) {
       const t = now();
-      if (thrownFloor >= t) return null;
+      if (thrownFloor >= t) return KEPT;
       for (const [who, u] of thrownAll) {
         if (u < t) continue;
-        if (who === id) return null;
-        out.blockedBy.push(who);
+        if (who === id) return KEPT;
+        out.doubt.push(who);
       }
       for (const e of blockThrown.values()) {
         if (e.until < t) continue;
@@ -951,7 +963,8 @@ export function createSocial({
     const from = blockSeq;
     return withLanded(await store.blockIdsOf(id), id, from);
   }
-  const landedBlocks = async (id) => (await readLanded(id)) || readLanded(id);
+  // One more read ONLY for dropped log entries (null), never for KEPT.
+  const landedBlocks = async (id) => { const r = await readLanded(id); return r === null ? readLanded(id) : r; };
 
   // op -> handler. A NULL PROTOTYPE, and that is not decoration: `op` comes
   // off the wire, and with a plain object literal SQUAD_OPS['constructor'] is
@@ -1342,7 +1355,7 @@ export function createSocial({
       // the client would wait out its twelve seconds for nothing (T6-R1-3).
       if (wireId(ws.userId) !== acct || ws.readyState !== 1) return;
       if (!b) return squadReply(ws, msg, 'join', { error: 'no_such_squad' });
-      hidden = new Set([...b.blocked, ...b.blockedBy]);
+      hidden = new Set([...b.blocked, ...b.blockedBy, ...b.doubt]);
     }
     const from = squadKey(ws);
     const olds = squadsOfCaller(ws, from);
@@ -1946,7 +1959,12 @@ export function createSocial({
       const found = squads.memberOf(row.key);
       if (!found || found.member !== row) return;
       doorOut.delete(row);
-      if (!b) { if (ws.squadAs === id) ws.squadAs = null; doorFailed.set(row, id); return; }
+      // A FAILED READ, AND DOUBT, FAIL TO GUEST (D-BLOCK-3 H; D-BLOCK-6 M): a
+      // member kept whole may have blocked this account or may not, so the
+      // row is neither let in nor removed; it stays out of Start until a
+      // door reads it clear.
+      const fails = !b || (!anyRowOf(found.squad, new Set([...b.blocked, ...b.blockedBy])) && anyRowOf(found.squad, new Set(b.doubt)));
+      if (fails) { if (ws.squadAs === id) ws.squadAs = null; doorFailed.set(row, id); return; }
       // Every row, the account's own included: no account can block itself.
       // Let in: the socket is the account as far as the next hello goes.
       if (!anyRowOf(found.squad, new Set([...b.blocked, ...b.blockedBy]))) {
@@ -2163,7 +2181,8 @@ export function createSocial({
     // log dropped entries the leg needed, and a second miss drops the invite.
     const from = blockSeq;
     const [friendIds, blocks, self, first] = await Promise.all([store.friendIdsOf(me), store.blockIdsOf(me), store.profileById(me), store.blockIdsOf(to)]);
-    const theirs = withLanded(first, to, from) || await readLanded(to);
+    let theirs = withLanded(first, to, from);
+    if (theirs === null) theirs = await readLanded(to);
     if (wireId(ws.userId) !== me) return;
     if (!friendIds.includes(to)) return no('not_friend');
     if (blocks.blocked.includes(to) || blocks.blockedBy.includes(to)) return no('not_friend');
@@ -2183,7 +2202,7 @@ export function createSocial({
     // So the inviter is told "sent" for an invite that went nowhere: the
     // accepted price of never telling anyone about a block between two OTHER
     // players.
-    const dropped = !theirs || anyRowOf(sq, new Set([...theirs.blocked, ...theirs.blockedBy]));
+    const dropped = !theirs || anyRowOf(sq, new Set([...theirs.blocked, ...theirs.blockedBy, ...theirs.doubt]));
     if (live.length) {
       if (!dropped) for (const w of live) safeSend(w, frame);
       return squadReply(ws, msg, 'invite', { ok: true, delivered: 'online' });

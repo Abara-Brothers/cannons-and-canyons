@@ -8274,6 +8274,28 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     else fail('(blk-w) join while addBlock is out: ' + JSON.stringify(bad));
   }
   {
+    // (i b) THE SAME JOIN WITH THE LOG NOT EMPTY (D-BLOCK-6 P). Every world
+    // above starts with nothing logged, so a merge that consulted the
+    // pending pairs only while the log was empty passed them all. Here an
+    // unrelated block, E on NN, has landed and is logged first.
+    const j = await joinWorld6();
+    const we = up6(j.S, E);
+    await j.S.handle(we, { type: 'block', op: 'add', id: NN });
+    const logged = j.st.blocks.has(E + '>' + NN);
+    const h = holdAt6(j.st, 'addBlock', 1);
+    const pb = j.S.handle(j.wa, { type: 'block', op: 'add', id: B });
+    const inside = await within6(h.inside);
+    let r = null;
+    if (inside) {
+      await j.S.handle(j.wb, { type: 'squad', op: 'join', code: j.code, id: 'j' });
+      r = { j: ans6(j.wb, 'j'), stored: j.st.blocks.size };
+    } else h.restore();
+    h.release(); await pb;
+    if (logged && inside && same6(r.j, DEAD6('j')) && r.stored === 1)
+      ok('(blk-w) with an unrelated block already logged, a join while the block is being written is still refused as a dead code');
+    else fail('(blk-w) pending pair with a non-empty log: ' + JSON.stringify({ logged, inside, r }));
+  }
+  {
     // (ii) The sign-in door: a tab with no account stands in A's squad and
     // says hello as B while A's block on B is out (from A's other device, so
     // the leader's own socket is free to press Start). The door removes the
@@ -8783,7 +8805,12 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   };
   const IN6 = { reads: 1, joined: true, dead: false };
   const APART6 = { reads: 1, joined: false, dead: true };
-  const OUT6 = { reads: 2, joined: false, dead: true };
+  // A reader whose OWN account is kept whole, or any reader while every
+  // reader fails safe, is refused on ONE read (D-BLOCK-6 O): nothing a second
+  // read could find would let it in, so it is not asked. (Until the
+  // whole-branch fix wave it read twice.) Only a read whose logged entries
+  // were dropped while it was out reads again.
+  const OUT6 = { reads: 1, joined: false, dead: true };
   const E503 = () => new Error('sb POST 503');
   {
     // (a) A blocks B, and addBlock fails as each of these. B's join into
@@ -8890,10 +8917,12 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     const r2 = await tryJoin6(k, p.e, k.code);
     CLOCK6 = t1 + 32002;
     const r3 = await tryJoin6(k, p.e, k.code);
-    // The other doors count the account kept whole as blocking too: a guest
-    // in its squad who signs in is removed as a kick, and an invite out of
+    // Invite counts the account kept whole as blocking too: an invite out of
     // its squad goes nowhere, its inviter told what a real one is told. From
-    // the next millisecond after its 16 s the invite goes out.
+    // the next millisecond after its 16 s the invite goes out. The sign-in
+    // door does NOT (D-BLOCK-6 M): a guest in its squad who signs in is not
+    // kicked for a block nobody knows was made; that door fails to guest,
+    // and (blk-doubt) follows the row from there.
     const q = await joinWorld6(ROWS_T6);
     const qo = outs6(q.S);
     q.st.friends.add(PAIR6(E, C));
@@ -8916,9 +8945,64 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     const sent = (a) => !!(a && a.ok === true && a.delivered === 'online');
     const doors = { door: got6(wq, 'squad', 'ended'), i1: sent(i1), c1, i2: sent(i2), c2, i3: sent(i3), c3 };
     if (same6(e0, IN6) && same6(r, want) && same6([r1, r2, r3], [OUT6, OUT6, IN6])
-      && same6(doors, { door: [KICKED6], i1: true, c1: 0, i2: true, c2: 0, i3: true, c3: 1 }))
-      ok('(blk-u) one account keeps at most 64 failing pairs: its 65th keeps the account 16 s, so its own join fails safe and nobody joins, signs in or is invited into its squad, while a join elsewhere is let in on one read; its next failure renews that, never shortens it');
+      && same6(doors, { door: [], i1: true, c1: 0, i2: true, c2: 0, i3: true, c3: 1 }))
+      ok('(blk-u) one account keeps at most 64 failing pairs: its 65th keeps the account 16 s, so its own join fails safe on one read and nobody joins or is invited into its squad (a guest there who signs in is not kicked), while a join elsewhere is let in on one read; its next failure renews that, never shortens it');
     else fail('(blk-u) one account\'s share: ' + JSON.stringify({ e0, r, renewed: [r1, r2, r3], doors, i1, i2, i3 }));
+  }
+  {
+    // (blk-doubt) DOUBT AT THE SIGN-IN DOOR IS A FAILED READ, NOT A KICK
+    // (D-BLOCK-6 M). E, kept whole (its 65th failing block had no room),
+    // leads a squad. A tab with no account joins it and signs in as NN, whom
+    // nobody has blocked and who stands in no squad. The row is not removed and D is told nothing; it
+    // stays a nameless guest row, and E's Start refuses it member_offline,
+    // exactly as for a read that failed. Once E's 16 s are up, that refused
+    // Start runs the door again, which lets D in, named.
+    const q = await joinWorld6(ROWS_T6);
+    const qo = outs6(q.S);
+    const qa = failAs6(q.st, E503);
+    const tq = CLOCK6;
+    for (const t of TGT6) await blk6(q.S, qo.e, t);
+    qa();
+    const qc = await create6(q.S, qo.e);
+    const wq = t6ws(null);
+    await join6(q.S, wq, qc, 'Guest');
+    q.st.calls.length = 0;
+    hello6(q.S, wq, NN); await settle6();
+    const read = reads6(q.st);
+    const told = got6(wq, 'squad', 'ended').length;
+    await q.S.handle(qo.e, { type: 'squad', op: 'start', id: 's1' });
+    const s1 = ans6(qo.e, 's1');
+    const nameless = (last6(qo.e, 'squad', 'state') || { members: [] }).members.map((m) => [m.id, m.guest]);
+    CLOCK6 = tq + 16001;
+    await q.S.handle(qo.e, { type: 'squad', op: 'start', id: 's2' });
+    await settle6();
+    await q.S.handle(qo.e, { type: 'squad', op: 'start', id: 's3' });
+    const s3 = ans6(qo.e, 's3');
+    const named = (last6(qo.e, 'squad', 'state') || { members: [] }).members.map((m) => [m.id, m.guest]);
+    CLOCK6 = tq;
+    if (read === 1 && told === 0 && same6(s1, { type: 'squad', op: 'start', error: 'member_offline', at: 1, id: 's1' })
+      && same6(nameless, [[E, false], [null, true]]) && same6(s3, { type: 'squad', op: 'start', error: 'not_ready', id: 's3' }) && same6(named, [[E, false], [NN, false]]))
+      ok('(blk-doubt) a member kept whole is doubt at the sign-in door: the row fails to guest, unkicked and nameless, out of Start, and is let in once the doubt has expired');
+    else fail('(blk-doubt) doubt at the door: ' + JSON.stringify({ read, told, s1, nameless, s3, named }));
+  }
+  {
+    // (blk-kept) AN INVITE TO AN ACCOUNT KEPT WHOLE READS ITS BLOCKS ONCE
+    // (D-BLOCK-6 O). The invitee's answer is KEPT, not dropped log entries,
+    // so no second read is made: two blockIdsOf in all (the inviter's and
+    // the invitee's), and the invite is dropped, answered as delivered.
+    const j = await joinWorld6(ROWS_T6);
+    const o = outs6(j.S);
+    j.st.friends.add(PAIR6(A, E));
+    const restore = failAs6(j.st, E503);
+    for (const t of TGT6) await blk6(j.S, o.e, t);
+    restore();
+    clear6(o.e);
+    j.st.calls.length = 0;
+    await j.S.handle(j.wa, { type: 'squad', op: 'invite', to: E, id: 'ko' });
+    const r = { reads: reads6(j.st), a: ans6(j.wa, 'ko'), got: invited6(o.e).length };
+    if (same6(r, { reads: 2, a: { type: 'squad', op: 'invite', ok: true, delivered: 'online', id: 'ko' }, got: 0 }))
+      ok('(blk-kept) an invite to an account kept whole reads its blocks once, and is dropped, answered as delivered');
+    else fail('(blk-kept) invite to an account kept whole: ' + JSON.stringify(r));
   }
   // 64 accounts, each failing on the same 64 players: 4096 pairs kept.
   const fill6 = async (j, base) => {
