@@ -980,6 +980,48 @@ function sqCopyLink() {
   try { navigator.clipboard.writeText(url).then(() => { if (fn('showToast')) showToast('Squad link copied.'); }, () => prompt('Your squad link:', url)); }
   catch { prompt('Your squad link:', url); }
 }
+// D7: THE LEADER'S BOARDS ARE THE SQUAD'S MODE CONTROL. The box's footer reads
+// the squad's mode and starts it; it never chooses it. A board tap -- and a tee
+// set or seat count changed in Match setup, the only place those change -- arms
+// it on this device exactly as it always has, and, when this socket holds the
+// LEADER's row (sqLive, D-UI-1), puts it to the squad. A member's tap stays
+// theirs: the server would answer 'not_leader' every time, so it is not sent.
+// COALESCED, AND ONLY WHAT DIFFERS. Every squad op spends from one bucket of
+// twenty a minute per socket (server/social.js LIMITS.squad), Start's included,
+// so a leader reading the boards a tap at a time must not spend Start's
+// allowance: the send waits until the taps stop, reads what is armed THEN, and
+// goes only when the squad's own roster says something else. The answer to a
+// mode is the roster the server pushes to everyone; a refusal is said on the
+// box's action line, where the footer beneath it goes on showing the squad's
+// mode, which is the truth. An answer to a send a later one has overtaken says
+// nothing: the later one's answer is the one that matters.
+const SQ_MODE_MS = 250;
+let sqModeT = 0, sqModeSeq = 0;
+function boardMode() {
+  clearTimeout(sqModeT);
+  sqModeT = setTimeout(sqModeSend, SQ_MODE_MS);
+}
+function sqModeSend() {
+  const sn = sq.snap;
+  if (!sqLive(sn) || !sqIsLead(sn, sqMe(sn)) || !wsReady()) return;
+  // THE SERVER'S SHAPE: tees for golf alone, a seat count for the two modes
+  // that take one, null for the rest -- and a count is state()'s number, never
+  // a <select>'s string, which the server refuses as bad_max.
+  const s = state(), mode = s.mode.id;
+  const tees = mode === 'golf' ? s.tees : null;
+  const max = mode === 'ffa' ? s.count : mode === 'golf' ? s.gcount : null;
+  if (mode === sn.mode && tees === (sn.tees == null ? null : sn.tees) && max === (sn.max == null ? null : sn.max)) return;
+  // Written to `mine`, the state that asked, as every squad answer is: an
+  // account switch replaces `sq`, and the old account's refusal is not the
+  // new account's to show.
+  const mine = sq, seq = ++sqModeSeq;
+  if (mine.aerr) { mine.aerr = ''; sqPaint(); }
+  socialTx({ type: 'squad', op: 'mode', mode, tees, max }, 'squad', 'mode', 'squad.mode', (m, err) => {
+    if (seq !== sqModeSeq || !err) return;
+    mine.aerr = err;
+    sqPaint();
+  });
+}
 function sqMine(sn) {
   const ms = Array.isArray(sn.members) ? sn.members : [];
   const stale = !!sq.err;
@@ -1877,6 +1919,15 @@ const SOC_ERR = {
   'squad.create.slow_down':      'Too many tries. Wait a moment.',
   'squad.create.offline':        'Not connected. Try again in a moment.',
   'squad.create._':              'A squad could not be started right now. Try again later.',
+  // A LEADER'S BOARD TAP (D7). bad_max is a seat count the server will not
+  // take -- a client bug far more than anything the player did -- so its
+  // sentence blames nobody.
+  'squad.mode.not_leader':       'Only the squad leader can pick the mode.',
+  'squad.mode.no_squad':         'Your squad has ended.',
+  'squad.mode.bad_max':          'That seat count could not be set for the squad. Try again.',
+  'squad.mode.slow_down':        'Too many tries. Wait a moment.',
+  'squad.mode.offline':          'Not connected. Try again in a moment.',
+  'squad.mode._':                'The squad could not change modes right now. Try again.',
   _:                             'That did not work. Try again.',
 };
 function socErr(kind, code) {
@@ -2817,9 +2868,15 @@ document.addEventListener('click', (e) => {
   }
   if (t.dataset.set) {
     const [k, v] = t.dataset.set.split('=');
-    // A second tap on the mode that is already armed opens its setup.
-    if (k === 'mode' && current === 'home' && t.classList.contains('on')) { go('setup'); return; }
+    // A second tap on the mode that is already armed opens its setup -- and,
+    // for a squad's leader, still puts that board to the squad: a squad starts
+    // on Duel whatever was lit, and this is the only tap the lit board has.
+    // boardMode() sends only what the squad's roster does not already say.
+    if (k === 'mode' && current === 'home' && t.classList.contains('on')) { boardMode(); go('setup'); return; }
     setField(k, v);
+    // The mode, the golf tee set and both seat counts are the squad's when this
+    // player leads it (D7); Match setup is where the last three change.
+    if (k === 'mode' || k === 'tees' || k === 'count' || k === 'gcount') boardMode();
     if (t.dataset.go) go(t.dataset.go); else render(current);
     return;
   }

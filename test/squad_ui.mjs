@@ -2923,6 +2923,131 @@ try {
     if (JSON.stringify(b8.cls) === JSON.stringify(['board on', 'board', 'board', 'board', 'board']) && b8.pills.every((p) => p === null))
       ok(`${V}: a squad that ends takes every dim and pill with it`);
     else fail(`${V}: after the squad ${JSON.stringify(b8)}`);
+
+    // ---- M1. THE LEADER'S BOARDS ARE THE SQUAD'S MODE CONTROL (D7). This page
+    //      leads (you 0, leader ME, held). Golf is tapped, and once the taps
+    //      stop the server is asked ONCE, with the tee set and the seat count --
+    //      a NUMBER, never a string (the server refuses '2' as bad_max).
+    const t11board = (...idx) => ev(`(() => { const b = () => [...document.querySelectorAll('#bay .board')]; for (const i of ${JSON.stringify(idx)}) b()[i].click(); return true; })()`);
+    const t11modes = async () => (await squads()).filter((f) => f.op === 'mode');
+    const t11aerr = () => ev(`(() => { Bay.show('home'); const e = document.querySelector('#sqPane-squad .sqml ~ .sqae'); return e && !e.classList.contains('hidden') ? e.textContent : ''; })()`);
+    const MODE_WAIT = 450;
+    await t11state({ members: [T11YOU(), T11MULE()] });
+    await clearTx();
+    await t11board(4); await sleep(MODE_WAIT);
+    const m1 = await t11modes();
+    if (m1.length === 1 && m1[0].mode === 'golf' && m1[0].tees === 'mens' && m1[0].max === 2 && typeof m1[0].id === 'number')
+      ok(`${V}: the leader arming golf sends one squad mode frame carrying the tee set and the seat count as a number`);
+    else fail(`${V}: leader mode ${JSON.stringify(m1)}`);
+    await reply({ op: 'mode', ok: true });
+    await t11state({ mode: 'golf', tees: 'mens', max: 2, members: [T11YOU(), T11MULE()] });
+    // ---- M2. A RUN OF TAPS IS ONE FRAME, the last one. Every squad op spends
+    //      from one bucket of twenty a minute (server/social.js LIMITS.squad),
+    //      Start's included, so reading the boards must not spend it.
+    await clearTx();
+    await t11board(1, 2, 3); await sleep(MODE_WAIT);
+    const m2 = await t11modes();
+    if (m2.length === 1 && m2[0].mode === 'aliens' && m2[0].tees === null && m2[0].max === null)
+      ok(`${V}: three quick taps send one frame, for the board the leader stopped on, with no tee set and no seat count`);
+    else fail(`${V}: coalesced taps ${JSON.stringify(m2)}`);
+    await reply({ op: 'mode', ok: true });
+    await t11state({ mode: 'aliens', members: [T11YOU(), T11MULE()] });
+    // ---- M3. ONLY WHAT THE SQUAD DOES NOT ALREADY SAY. Away and back to the
+    //      squad's own mode: nothing to ask, so nothing is sent.
+    await clearTx();
+    await t11board(1, 3); await sleep(MODE_WAIT);
+    const m3 = await t11modes();
+    if (m3.length === 0 && (await ev('Bay.state().mode.id')) === 'aliens')
+      ok(`${V}: taps that end on the squad's own mode send nothing`);
+    else fail(`${V}: nothing to send ${JSON.stringify(m3)}`);
+    // ---- M4. THE LIT BOARD STILL SPEAKS FOR THE SQUAD. A second tap on the
+    //      armed board opens Match setup -- and for a leader whose squad is on
+    //      another mode (a squad starts on Duel, whatever was lit), it is the
+    //      only tap there is on that board, so it is sent too.
+    await ev(`(ccMode = 'golf', Bay.show('home'), true)`);
+    await clearTx();
+    await t11board(4); await sleep(MODE_WAIT);
+    const m4 = await t11modes(), m4scr = await ev(`$('bay').dataset.scr`);
+    await ev(`(Bay.show('home'), true)`);
+    if (m4.length === 1 && m4[0].mode === 'golf' && m4[0].tees === 'mens' && m4[0].max === 2 && m4scr === 'setup')
+      ok(`${V}: a second tap on the lit board opens Match setup and puts that board to the squad`);
+    else fail(`${V}: lit board ${JSON.stringify({ m4, m4scr })}`);
+    await reply({ op: 'mode', ok: true });
+    await t11state({ mode: 'golf', tees: 'mens', max: 2, members: [T11YOU(), T11MULE()] });
+    // ---- M5. MATCH SETUP'S TEE SET AND SEAT COUNT ARE THE SQUAD'S TOO, and the
+    //      only place they change: one frame for both.
+    await clearTx();
+    await ev(`(() => { Bay.show('setup'); document.querySelector('#bay [data-set="tees=champ"]').click(); document.querySelector('#bay [data-set="gcount=4"]').click(); return true; })()`);
+    await sleep(MODE_WAIT);
+    const m5 = await t11modes();
+    await ev(`(Bay.show('home'), true)`);
+    if (m5.length === 1 && m5[0].mode === 'golf' && m5[0].tees === 'champ' && m5[0].max === 4)
+      ok(`${V}: the tee set and seat count chosen in Match setup reach the squad in one frame`);
+    else fail(`${V}: setup push ${JSON.stringify(m5)}`);
+    await reply({ op: 'mode', ok: true });
+    await t11state({ mode: 'golf', tees: 'champ', max: 4, members: [T11YOU(), T11MULE()] });
+    // ---- M6. A MEMBER'S BOARDS ARE THEIR OWN. The server would answer
+    //      'not_leader' every time, so the tap is never sent.
+    await t11state({ leader: T11_MULE, members: [T11YOU(), T11MULE()] });
+    await clearTx();
+    await t11board(1); await sleep(MODE_WAIT);
+    const m6 = await t11modes();
+    if (m6.length === 0 && (await ev('Bay.state().mode.id')) === 'ffa')
+      ok(`${V}: a member arming a board changes their own boards and sends the squad nothing`);
+    else fail(`${V}: member mode ${JSON.stringify(m6)}`);
+    // ---- M7. A ROSTER THIS SOCKET DOES NOT SAY IT HOLDS (D-UI-1) commands
+    //      nothing: a frame with no `held` is shown, and its leader's taps stay
+    //      on this device.
+    await ev(`(handle({ type: 'squad', op: 'state', code: 'QK7T', leader: ${JSON.stringify(ME)}, mode: 'duel', tees: null, max: null, you: 0,
+      members: [${JSON.stringify(T11YOU())}, ${JSON.stringify(T11MULE())}], fits: ${JSON.stringify(t11fits(2))} }), true)`);
+    await sleep(80);
+    await clearTx();
+    await t11board(2); await sleep(MODE_WAIT);
+    const m7 = await t11modes();
+    if (m7.length === 0) ok(`${V}: a leader's tap on a roster this socket does not hold sends nothing`);
+    else fail(`${V}: not held ${JSON.stringify(m7)}`);
+    // ---- M8. A REFUSAL IS SAID ON THE BOX'S ACTION LINE, in this project's
+    //      words, and the footer keeps the squad's mode. bad_max is a client
+    //      bug more than a player's, so its sentence blames nobody. An answer
+    //      to an EARLIER send says nothing once a later one is out.
+    await t11state({ members: [T11YOU(), T11MULE({ ready: true })] });
+    const m8 = {};
+    for (const [i, code] of [[4, 'bad_max'], [1, 'slow_down'], [2, 'not_leader'], [3, 'no_such_thing']]) {
+      await clearTx(); await t11board(i); await sleep(MODE_WAIT);
+      await reply({ op: 'mode', error: code });
+      m8[code] = await t11aerr();
+    }
+    const m8foot = await ev(`(document.querySelector('#sqPane-squad .sqft .sqfl') || {}).textContent`);
+    await clearTx(); await t11board(4); await sleep(MODE_WAIT);
+    const first = (await t11modes())[0];
+    await clearTx(); await t11board(1); await sleep(MODE_WAIT);
+    const second = (await t11modes())[0];
+    const m8wait = await t11aerr();
+    await answer(first && first.id, { type: 'squad', op: 'mode', error: 'bad_max' });
+    const m8stale = await t11aerr();
+    await answer(second && second.id, { type: 'squad', op: 'mode', ok: true });
+    const m8ok = await t11aerr();
+    if (m8.bad_max === 'That seat count could not be set for the squad. Try again.'
+        && m8.slow_down === 'Too many tries. Wait a moment.'
+        && m8.not_leader === 'Only the squad leader can pick the mode.'
+        && m8.no_such_thing === 'The squad could not change modes right now. Try again.'
+        && m8foot === 'Duel · 2')
+      ok(`${V}: a refused mode says its own sentence on the action line, and the footer keeps the squad's mode`);
+    else fail(`${V}: mode refusals ${JSON.stringify({ m8, m8foot })}`);
+    if (first && second && first.id !== second.id && m8wait === '' && m8stale === '' && m8ok === '')
+      ok(`${V}: a new send clears the last refusal, and an answer to a send that was overtaken says nothing`);
+    else fail(`${V}: stale mode answer ${JSON.stringify({ first, second, m8wait, m8stale, m8ok })}`);
+    // ---- M9. A TAP WITH THE SOCKET DOWN IS THIS DEVICE'S ALONE, and leaves
+    //      nothing behind: no "Not connected" line waiting under the squad for
+    //      the connection to come back to.
+    await ev(`(ccMode = 'duel', Bay.show('home'), true)`);
+    await up(false);
+    await t11board(2); await sleep(MODE_WAIT);
+    await up(true);
+    const m9 = await t11aerr(), m9armed = await ev('Bay.state().mode.id');
+    if (m9 === '' && m9armed === 'boss') ok(`${V}: a leader's tap with the socket down arms this device and leaves no refusal behind`);
+    else fail(`${V}: offline tap ${JSON.stringify({ m9, m9armed })}`);
+    await ev(`(ccMode = 'duel', ccGolfMax = 2, ccTees = 'mens', Bay.show('home'), true)`);
   }
 } catch (e) {
   fail('squad_ui task 11 stopped: ' + (e && e.message));
