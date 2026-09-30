@@ -331,6 +331,21 @@ const CASES = [
     ok('C6: a tap while the offline stand-in holds S.ws sends it nothing, parks the code, and the real socket\'s flush sends it once');
   } else fail(`C6: offline stand-in — face got ${JSON.stringify(face)}, parked=${JSON.stringify(parked)}, real socket then sent ${JSON.stringify(s)}`);
 }
+{
+  // A HELLO THAT SETTLES FOR A SOCKET THAT HAS SINCE BEEN REPLACED flushes
+  // nothing: the parked code would otherwise go down the NEW socket before that
+  // socket's own hello, and be answered for a guest. The new socket's own hook
+  // flushes it. Driven with the hook's own call, for a socket that is not S.ws.
+  await ev(`(() => { window.__tx = []; pendingSquadJoin = 'ABCD'; flushSquadJoin({ readyState: 1 }); return true; })()`);
+  await sleep(300);
+  const stale = squadJoins(await tx()), still = await ev('pendingSquadJoin');
+  await ev('flushSquadJoin(S.ws); true');
+  await sleep(500);
+  const s = squadJoins(await tx());
+  if (!stale.length && still === 'ABCD' && s.length === 1 && s[0].code === 'ABCD') {
+    ok('C7: a hello settling for a replaced socket leaves the code parked; the live socket\'s own flush sends it once');
+  } else fail(`C7: stale-socket flush — sent ${JSON.stringify(stale)}, parked=${JSON.stringify(still)}, then the live flush sent ${JSON.stringify(s)}`);
+}
 
 console.log(errors.length ? `\n${errors.length} FAILED` : '\nall deeplink checks passed');
 process.exit(errors.length ? 1 : 0);
