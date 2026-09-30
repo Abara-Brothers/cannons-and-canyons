@@ -686,7 +686,8 @@ async function boot(port, env) {
     } else fail(`web invite payload wrong: ${JSON.stringify(webPl)}`);
   }
   // ONE READ: the seam's answer and the sends come from the same subscription
-  // read, which is what lets a dry run cost exactly what a real invite does.
+  // read, which is what lets a dry run cost what a real invite does up to its
+  // answer (only a real one sends afterwards).
   if (readsSince(q) === JSON.stringify([ALICE])) step("the invite made exactly one subscription read, for the invitee's account");
   else fail(`the invite's subscription reads were ${readsSince(q)}`);
 

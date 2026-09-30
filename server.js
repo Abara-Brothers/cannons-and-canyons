@@ -240,9 +240,8 @@ try {
     // alphabet could equal a live room code and the Bay's single "Enter a
     // code" field would have two honest answers and no way to choose. The
     // predicate crosses the same seam in the other direction: the engine asks
-    // the squad container. The squad minter, when there is one, must ask
-    // `rooms` in turn, and roomExists above is the only route from server/ to
-    // it.
+    // the squad container. The squad minter asks `rooms` in turn, and
+    // roomExists above is the only route from server/ to it.
     //
     // WIRED INSIDE THE BLOCK THAT BUILT THE LAYER, so a deploy with no
     // Supabase — where `social` is never built and there are no squads at all

@@ -27,7 +27,8 @@ import { readFileSync } from 'node:fs';
 import { createSquads } from '../server/squads.js';
 // THE REAL ENGINE. This is the one suite in the tree that needs both halves in
 // one process: makeCode's loop is what task 1 changes, and `rooms` is the
-// container the code frame's room arm reads through.
+// container the squad minter's roomExists reads (the code frame reads it too,
+// but in server.js, where only test/code_frame.mjs can reach it).
 import { rooms, handleClientMessage, setCodeTaken, MODE_SEATS, TEE_IDS, validRackFor } from '../public/room-engine.js';
 import { LOADOUT_POOL, loadoutSizeFor } from '../public/game-core.js';
 import { createSocial, createCooldown, SOCIAL_TYPES, SQUAD_ERRORS } from '../server/social.js';
@@ -205,9 +206,22 @@ const now = () => NOW;
 // hand with the same expressions, and test/code_frame.mjs, which boots the
 // real server.js with the layer on and mints rooms through the wired loop.
 {
-  const code = (src) => src.split('\n')
-    .map((l) => l.replace(/\/\*.*?\*\//g, '').replace(/(^|\s)\/\/.*$/, '$1'))
+  // Block comments first, ACROSS lines (the old per-line pass left a
+  // multi-line one standing, and a wiring line inside it passed), then line
+  // comments. server.js has no '/*' inside a string or a regex for this to
+  // misread; the fixture below and (3b)'s positive matches would show it.
+  const code = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').split('\n')
+    .map((l) => l.replace(/(^|\s)\/\/.*$/, '$1'))
     .join('\n');
+  // THE STRIPPER ITSELF, on a fixture: a block comment that spans lines is a
+  // comment too, and a wiring line inside one must not satisfy (3b).
+  {
+    const fixture = 'x();\n/*\n  setCodeTaken(social.hasSquad);\n*/\ny(); /* one */ z(); // tail\n';
+    const out = code(fixture);
+    if (!out.includes('setCodeTaken') && !out.includes('one') && !out.includes('tail') && /x\(\);[\s\S]*y\(\);\s+z\(\);/.test(out))
+      ok('(3b) the comment stripper removes a block comment that spans lines, as well as one-line and trailing comments');
+    else fail('(3b) the comment stripper left ' + JSON.stringify(out));
+  }
   const src = code(read('server.js'));
   if (/if \(SOCIAL_TYPES\.has\(msg\.type\)\) \{/.test(src))
     ok('(3b) server.js still routes on SOCIAL_TYPES alone — membership in that set IS interception');

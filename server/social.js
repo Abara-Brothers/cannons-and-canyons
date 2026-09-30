@@ -298,7 +298,8 @@ const BLOCK_KEY_RE = /^[0-9a-f]{32}$/;
 // every other answer, a throw included, is 'none' (see squadInvite).
 // `dryRun: true` (D-BLOCK-2 E, as the owner revised it) makes THE SAME READ,
 // SENDS NOTHING, and answers what a real call would have: a DROPPED invite
-// asks it, so the inviter's answer, and what it cost, are a real invite's.
+// asks it, so the inviter's answer, and what it cost up to that answer, are
+// a real invite's (after it a real invite sends, and a dropped one does not).
 // `signal` is an AbortSignal aborted when the seam's time is up and the
 // inviter has been answered none (see askPushSeam): a transport must start
 // no send once it is aborted.
