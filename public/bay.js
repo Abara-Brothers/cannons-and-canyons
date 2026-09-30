@@ -383,7 +383,9 @@ function weaponInfo(id) {
 let rack = null;                 // the working copy, initialised from state().picks
 function rackPicks() { if (!rack) rack = state().picks.slice(); return rack; }
 function togglePick(id) {
-  const n = state().mode.draft, r = rackPicks(), at = r.indexOf(id);
+  // The Armoury's own draft: the squad's mode while it fills the squad's rack
+  // (sqArmMode, D-UI-3), the armed mode otherwise.
+  const n = (sqArmMode() || state().mode).draft, r = rackPicks(), at = r.indexOf(id);
   if (at >= 0) r.splice(at, 1); else if (r.length < n) r.push(id);
   try { localStorage.setItem('cc_loadout', JSON.stringify(r)); } catch {}
   // If the game's own draft is open for this size, keep it in step too.
@@ -691,6 +693,25 @@ function sqRack(modeId) {
   if (!picks.length && has('ARM_DEFAULT')) picks = ARM_DEFAULT.slice();
   return picks.slice(0, m.draft);
 }
+// THE SQUAD'S RACK IN THE ARMOURY (D-UI-3). The footer counts the rack against
+// the SQUAD's mode (sqRack), but the Armoury drafts for the mode this device
+// has ARMED -- so a member armed on Duel (five) in a Boss Fight squad (seven)
+// was told "Pick 2 more" by a dead button, and the Armoury would not take a
+// sixth. That button is now the way in: it opens the Armoury for the squad's
+// mode, whose footer goes back to the squad rather than launching a room of
+// the player's own. Only from there. Reached from Match setup or the Bay
+// stations, the Armoury is the launch flow's, for the armed mode, exactly as
+// before; render() drops the flag the moment the Armoury is left.
+let sqArm = false;
+const sqArmMode = () => (sqArm && sqLive(sq.snap) ? modeOf(sq.snap.mode) : null);
+function sqRackOpen() {
+  const sn = sq.snap;
+  if (!sqLive(sn)) return;
+  // The working copy starts as exactly what the footer counted.
+  rack = sqRack(sn.mode).slice();
+  sqArm = true;
+  go('armoury');
+}
 // What a squad action was refused with. Its own line and its own class: the
 // pane's first .sqe is the re-ask's refusal (sqPane), and a second sentence
 // with that class above it would stand in for it.
@@ -781,19 +802,26 @@ function sqFoot(sn, ctl, hide) {
     // leader no way out but joining another squad; the server's leave hands
     // the lead to the earliest signed-in member (squads.js detach), or ends a
     // squad nobody left in it can lead.
+    // A SHORT RACK HAS NO START: its place is the Armoury's door (sqRackDoor).
     return open + '<p class="sqfl">' + line + '</p><div class="sqfb">'
-      + '<button class="go" data-sq="start"' + (off ? ' disabled' : '') + '>'
-      + (short > 0 && sq.busy !== 'start' ? 'Pick ' + short + ' more' : IC.play + 'Start') + '</button>'
+      + (short > 0 && sq.busy !== 'start' ? sqRackDoor(ctl, short, 'go')
+        : '<button class="go" data-sq="start"' + (off ? ' disabled' : '') + '>' + IC.play + 'Start</button>')
       + sqLeaveBtn(ctl) + '</div></div>';
   }
   const ready = !!(me && me.ready && !me.dropped);
   const need = short > 0 && !ready;               // standing DOWN never needs a rack
   return open + '<p class="sqfl">' + esc(m.name) + ' &middot; ' + seats + '</p><div class="sqfb">'
-    + '<button class="go cy' + (ready ? ' on' : '') + '" data-sq="ready" aria-pressed="' + ready + '"'
-    + (!ctl.on || sq.busy || need ? ' disabled' : '') + '>'
-    + (sq.busy === 'ready' ? 'Sending' : need ? 'Pick ' + short + ' more' : (ready ? IC.tick : '') + 'Ready') + '</button>'
+    + (need && sq.busy !== 'ready' ? sqRackDoor(ctl, short, 'go cy')
+      : '<button class="go cy' + (ready ? ' on' : '') + '" data-sq="ready" aria-pressed="' + ready + '"'
+        + (!ctl.on || sq.busy || need ? ' disabled' : '') + '>'
+        + (sq.busy === 'ready' ? 'Sending' : (ready ? IC.tick : '') + 'Ready') + '</button>')
     + sqLeaveBtn(ctl) + '</div></div>';
 }
+// "PICK N MORE" OPENS THE ARMOURY FOR THE SQUAD'S MODE (D-UI-3) and starts,
+// readies and sends nothing. It is a squad control like the rest, so it waits
+// for held === true (D-UI-1) and for no other action to be out.
+const sqRackDoor = (ctl, short, cls) => '<button class="' + cls + ' sqrk" data-sq="rack"' + (ctl.on && !sq.busy ? '' : ' disabled') + '>'
+  + 'Pick ' + short + ' more</button>';
 function sqLeaveBtn(ctl) {
   return '<button class="ghost" data-sq="leave"' + (!ctl.on || sq.busy ? ' disabled' : '') + '>'
     + (sq.busy === 'leave' ? 'Leaving' : 'Leave') + '</button>';
@@ -1216,6 +1244,7 @@ function sqAct(v) {
   if (op === 'link') { sqCopyLink(); return; }
   if (op === 'ready') { sqReady(); return; }
   if (op === 'start') { sqStart(); return; }
+  if (op === 'rack') { if (!sq.busy) sqRackOpen(); return; }
   // The server answers a leave with its own op, `left`.
   if (op === 'leave') { if (sqLive(sq.snap)) sqOne({ type: 'squad', op: 'leave' }, { op: 'left', kind: 'squad.leave', busy: 'leave' }); return; }
   if (op === 'join') { sqJoin(arg); return; }
@@ -2439,7 +2468,10 @@ SCREENS.friends = function () {
 
 // 4 — ARMOURY. Load the rack: n weapons go into the field.
 SCREENS.armoury = function () {
-  const s = state(), n = s.mode.draft, picks = rackPicks().slice(0, n), full = picks.length >= n;
+  // `sm`: the squad's mode, when this Armoury was opened to fill the squad's
+  // rack (sqRackOpen, D-UI-3); otherwise null, and every line below reads
+  // exactly as it always has.
+  const s = state(), sm = sqArmMode(), m = sm || s.mode, n = m.draft, picks = rackPicks().slice(0, n), full = picks.length >= n;
   const pool = has('ARM_POOL') ? ARM_POOL : [];
   const cells = RACK_ORDER.map((id) => {
     const w = weaponInfo(id), on = picks.includes(id), pickable = pool.includes(id);
@@ -2453,7 +2485,7 @@ SCREENS.armoury = function () {
   const body = '<div class="cols">'
     + '<div class="card" style="width:' + u(262) + ';position:relative;overflow:hidden">'
     +   '<div style="position:absolute;left:' + u(12) + ';right:' + u(12) + ';top:' + u(11) + ';z-index:2"><span class="lbl">Rack loadout</span>'
-    +     '<div style="font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:' + u(19) + ';text-transform:uppercase;letter-spacing:.03em;margin-top:' + u(4) + ';color:#eef3ff">' + esc(s.mode.name) + '</div></div>'
+    +     '<div style="font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:' + u(19) + ';text-transform:uppercase;letter-spacing:.03em;margin-top:' + u(4) + ';color:#eef3ff">' + esc(m.name) + '</div></div>'
     +   stage(s.skinId, { cx: 131, cy: 224, w: 164 })
     +   '<div style="position:absolute;left:0;right:0;bottom:' + u(10) + ';padding:0 ' + u(12) + ';z-index:2">'
     +     '<div style="display:flex;align-items:flex-end;justify-content:space-between"><span class="lbl" style="padding-bottom:' + u(3) + '">Loaded</span>'
@@ -2462,9 +2494,15 @@ SCREENS.armoury = function () {
     + '</div>'
     + '<div class="rack">' + cells + info + '</div>'
     + '</div>';
-  const foot = '<span class="hint">Everyone carries the Cannon &middot; the Railgun only drops in crates</span><span class="grow"></span>'
-    + '<button class="go" ' + (full ? 'data-launch' : 'disabled') + '>' + (full ? 'Open the bay doors' + IC.play : 'Pick ' + (n - picks.length) + ' more') + '</button>';
-  return chrome('Armoury', 'Load the rack &mdash; ' + n + ' weapons go into the field', 'Step 3 of 3', body, foot);
+  // The squad's rack goes back to the squad: this is not a room of the
+  // player's own, so it offers no launch. Back is the way home in the header
+  // too (data-back), and the box's Ready or Start is what comes next.
+  const foot = sm
+    ? '<span class="hint">Loading for your squad&rsquo;s ' + esc(m.name) + '</span><span class="grow"></span>'
+      + '<button class="go" ' + (full ? 'data-back' : 'disabled') + '>' + (full ? 'Back to the squad' : 'Pick ' + (n - picks.length) + ' more') + '</button>'
+    : '<span class="hint">Everyone carries the Cannon &middot; the Railgun only drops in crates</span><span class="grow"></span>'
+      + '<button class="go" ' + (full ? 'data-launch' : 'disabled') + '>' + (full ? 'Open the bay doors' + IC.play : 'Pick ' + (n - picks.length) + ' more') + '</button>';
+  return chrome('Armoury', 'Load the rack &mdash; ' + n + ' weapons go into the field', sm ? 'Your squad' : 'Step 3 of 3', body, foot);
 };
 
 // 5 — LOBBY. Fed by the game's own lobby messages (see the wrappers at the
@@ -2766,6 +2804,8 @@ const base = (n) => (n === 'join' ? 'home' : n);     // the join panel is an ove
 function render(name) {
   const host = $('bay'); if (!host) return;
   const next = name in SCREENS ? name : 'home';
+  // The Armoury fills the squad's rack only for the visit sqRackOpen began.
+  if (next !== 'armoury') sqArm = false;
   // Leaving Bay controls closes the field: it belongs to that screen only, the
   // keyboard lift with it, and .stage is rebuilt outright on a screen change.
   // Leaving Bay controls closes the field -- and so does LOSING THE ACCOUNT while

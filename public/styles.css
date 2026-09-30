@@ -2150,6 +2150,9 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .sqfb .go,#bay .sqfb .ghost{flex:1;justify-content:center;height:calc(26 * var(--u));padding:0 calc(8 * var(--u));
      font-size:calc(12 * var(--u));gap:calc(5 * var(--u));box-shadow:none}
   #bay .sqfb .go svg,#bay .sqfb .ghost svg{width:calc(11 * var(--u));height:calc(11 * var(--u))}
+  /* "Pick N more", the Armoury's door (D-UI-3): one line, never "PICK 2 / MORE",
+     with a little of the footer's padding given back so it fits beside Leave. */
+  #bay .sqfb .sqrk{white-space:nowrap;padding:0 calc(5 * var(--u))}
   #bay .sqfb .go.cy.on{background:rgba(84,200,255,.16);color:#8adaff;border:1px solid #54c8ff}
   #bay .sqfb .go.cy.on svg{fill:#54c8ff}
   #bay .sqfb .go.cy[disabled]{background:#1f2740;color:#616e94;border:0}
