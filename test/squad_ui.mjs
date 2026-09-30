@@ -3163,6 +3163,127 @@ try {
       ok(`${V}: an Armoury opened for a squad that then ends draws the armed mode's own Armoury on the next pick`);
     else fail(`${V}: squad armoury after the squad ${JSON.stringify({ r6a: r6a.title, r6 })}`);
     await t11rack(FIVE11);
+    // ---- C1. THE ONE CODE FIELD IS TASK 8's (#sqCode, X8); what it still owed
+    //      is here. ONE CODE AT A TIME (review T8-R1-10): two presses before the
+    //      server has answered are one code frame, the Enter button is held
+    //      while it is out, and every way it can settle frees it again.
+    await ev(`(handle({ type: 'squad', op: 'ended', reason: 'left' }), Bay.show('home'), true)`); await sleep(80);
+    const SQ_NONE11 = 'No squad or game with that code.';
+    const t11code = (v) => ev(`(() => { const i = document.getElementById('sqCode'); if (!i) return false; i.value = ${JSON.stringify(v)}; return true; })()`);
+    // Pressed through the real listener, twice, and with Enter on the field --
+    // a disabled button swallows a click, so the second press is also made on
+    // a button the render never drew, to prove the guard is in the handler.
+    const t11press = () => ev(`(() => { const p = document.getElementById('sqPane-squad'); const b = document.createElement('button');
+      b.setAttribute('data-sq', 'code'); p.appendChild(b); b.click(); b.remove(); return true; })()`);
+    const t11codes = async () => (await tx()).filter((f) => f.type === 'code');
+    const t11joins = async () => (await squads()).filter((f) => f.op === 'join');
+    const t11enter = () => ev(`(() => { Bay.show('home'); const b = document.querySelector('#sqPane-squad [data-sq="code"]'); return b ? b.disabled : null; })()`);
+    const t11cerr = () => ev(`(() => { Bay.show('home'); const r = document.querySelector('#sqPane-squad .sqcr'); const e = r && r.nextElementSibling; return e && e.classList.contains('sqe') && !e.classList.contains('hidden') ? e.textContent : ''; })()`);
+    const t11codeAnswer = async (patch) => { await ev(`(() => { const q = window.__tx.filter((f) => f.type === 'code'); handle(Object.assign({ type: 'code', id: q.length ? q[q.length - 1].id : null }, ${JSON.stringify(patch)})); return true; })()`); await sleep(100); };
+    const c1 = {};
+    await t11code('MNPQ'); await clearTx();
+    await click('#sqPane-squad [data-sq="code"]'); c1.held = await t11enter();
+    await t11press();
+    await ev(`(() => { const i = document.getElementById('sqCode'); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return true; })()`);
+    await sleep(60);
+    c1.out = (await t11codes()).length;
+    await t11codeAnswer({ kind: 'none' });
+    c1.freed = await t11enter(); c1.err = await t11cerr();
+    await clearTx(); await t11press(); await sleep(60);
+    c1.again = (await t11codes()).length;
+    await t11codeAnswer({ kind: 'none' });
+    if (c1.held === true && c1.out === 1 && c1.freed === false && c1.err === SQ_NONE11 && c1.again === 1)
+      ok(`${V}: three presses while a code is out send one code frame, Enter is held until the answer, and the answer frees it`);
+    else fail(`${V}: code busy guard ${JSON.stringify(c1)}`);
+    // ---- C2. THE GUARD SPANS THE SQUAD JOIN: a press between the code's answer
+    //      and the join's sends neither another code nor another join, and the
+    //      join's answer -- a refusal here -- frees it.
+    await t11code('BKPQ'); await clearTx();
+    await t11press(); await sleep(60);
+    await t11codeAnswer({ kind: 'squad' });
+    const c2j = (await t11joins()).length;
+    await t11press(); await sleep(60);
+    const c2 = { joins: (await t11joins()).length, codes: (await t11codes()).length, held: await t11enter() };
+    await reply({ op: 'join', error: 'full' });
+    c2.err = await t11cerr(); c2.freed = await t11enter();
+    await clearTx(); await t11press(); await sleep(60);
+    c2.again = (await t11codes()).length;
+    await t11codeAnswer({ kind: 'none' });
+    if (c2j === 1 && c2.joins === 1 && c2.codes === 1 && c2.held === true && c2.err === 'That squad is full.' && c2.freed === false && c2.again === 1)
+      ok(`${V}: a press while the squad join is out sends nothing, and the join's refusal frees the field`);
+    else fail(`${V}: busy through the join ${JSON.stringify({ c2j, c2 })}`);
+    // ---- C3. A REFUSED CODE FRAME AND THE ROOM BRANCH FREE IT TOO, and a dead
+    //      socket -- answered synchronously by socialTx -- never latches it.
+    const c3 = {};
+    await t11code('MNPQ'); await clearTx(); await t11press(); await sleep(60);
+    await t11codeAnswer({ error: 'unavailable' });
+    await clearTx(); await t11press(); await sleep(60); c3.afterErr = (await t11codes()).length;
+    await t11codeAnswer({ kind: 'room' });
+    await clearTx(); await t11press(); await sleep(60); c3.afterRoom = (await t11codes()).length;
+    await t11codeAnswer({ kind: 'none' });
+    // The press with the socket down repaints the box into its offline state,
+    // which replaces the field (a different child index), so the code is typed
+    // again before the next press.
+    await up(false); await t11press(); await sleep(60); await up(true);
+    await t11code('MNPQ'); await clearTx(); await t11press(); await sleep(60); c3.afterDead = (await t11codes()).length;
+    await t11codeAnswer({ kind: 'none' });
+    if (c3.afterErr === 1 && c3.afterRoom === 1 && c3.afterDead === 1)
+      ok(`${V}: a refused code frame, the room branch and a dead socket each leave the field free for the next code`);
+    else fail(`${V}: busy release ${JSON.stringify(c3)}`);
+    // ---- C4. A ROOM'S REFUSAL IS SAID IN THE FIELD (review T8-R1-16). The room
+    //      join is app.js's own, and its refusal lands in #homeError, inside the
+    //      hidden legacy rack where nobody can see it. It is read back -- and
+    //      WATCHED, not timed: this one arrives 700 ms later, past the join
+    //      panel's old 350 ms guess. Escaped, like every server sentence.
+    await t11code('zz9q'); await clearTx(); await t11press(); await sleep(60);
+    await t11codeAnswer({ kind: 'room' });
+    const c4join = (await tx()).filter((f) => f.type === 'join');
+    await sleep(700);
+    await ev(`(handle({ type: 'joinError', reason: 'That room is full <b id="x11">now</b>.' }), true)`); await sleep(80);
+    const c4 = { err: await t11cerr(), inject: await ev(`!!document.getElementById('x11')`) };
+    // ITS FIRST SENTENCE ONLY: whatever is written there next -- another
+    // flow's line -- is not this join's.
+    await ev(`($('homeError').textContent = 'Something else entirely', true)`); await sleep(80);
+    c4.next = await t11cerr();
+    await ev(`($('homeError').textContent = '', true)`);
+    if (c4join.length === 1 && c4join[0].code === 'ZZ9Q' && c4.err === 'That room is full <b id="x11">now</b>.' && !c4.inject
+        && c4.next === c4.err)
+      ok(`${V}: a room code joins through the legacy rack, and a refusal that arrives 700 ms later is said in the field, as text, and nothing after it`);
+    else fail(`${V}: room refusal ${JSON.stringify({ c4join, c4 })}`);
+    // ---- C5. THE WATCH IS THIS JOIN'S AND NOTHING ELSE'S. A sentence written
+    //      once the lobby is up (the join landed), after another code has been
+    //      entered, or after the watch's window, is not this join's to say.
+    const c5 = {};
+    await ev(`$('homeError').textContent = ''`);
+    await t11code('ZZ9Q'); await clearTx(); await t11press(); await sleep(60);
+    await t11codeAnswer({ kind: 'room' });
+    // Two evaluations, not one: the watch hears a write once the script that
+    // made it has finished, and by then the lobby must still be up.
+    await ev(`(Bay.show('lobby'), $('homeError').textContent = 'Not this join', true)`); await sleep(80);
+    await ev(`(Bay.show('home'), true)`);
+    c5.lobby = await t11cerr();
+    await ev(`$('homeError').textContent = ''`);
+    await t11code('ZZ9Q'); await clearTx(); await t11press(); await sleep(60);
+    await t11codeAnswer({ kind: 'room' });
+    await t11code('QQQQ'); await clearTx(); await t11press(); await sleep(60);
+    await t11codeAnswer({ kind: 'none' });
+    await ev(`(handle({ type: 'joinError', reason: 'The old room' }), true)`); await sleep(80);
+    c5.superseded = await t11cerr();
+    await ev(`$('homeError').textContent = ''`);
+    await ev(`(window.__t11timers = [], window.__st11 = window.setTimeout, window.setTimeout = (f, ms, ...a) => { window.__t11timers.push({ f, ms }); return window.__st11(f, ms, ...a); }, true)`);
+    try {
+      await t11code('ZZ9Q'); await clearTx(); await t11press(); await sleep(60);
+      await t11codeAnswer({ kind: 'room' });
+    } finally { await ev(`(window.setTimeout = window.__st11, true)`); }
+    // The watch's own timer is the one set for SQ_ROOM_MS (15 s); the code
+    // frame's twelve-second waiter is app.js's and is left alone.
+    c5.window = await ev(`(() => { const t = window.__t11timers.filter((x) => x.ms === 15000); t.forEach((x) => x.f()); return t.map((x) => x.ms); })()`);
+    await ev(`(handle({ type: 'joinError', reason: 'Too late' }), true)`); await sleep(80);
+    c5.late = await t11cerr();
+    await ev(`$('homeError').textContent = ''`);
+    if (c5.lobby === '' && c5.superseded === SQ_NONE11 && c5.window.length === 1 && c5.late === '')
+      ok(`${V}: the room watch says nothing written once the lobby is up, after another code, or after its window`);
+    else fail(`${V}: room watch bounds ${JSON.stringify(c5)}`);
   }
 } catch (e) {
   fail('squad_ui task 11 stopped: ' + (e && e.message));

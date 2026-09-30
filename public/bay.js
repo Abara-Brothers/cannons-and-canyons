@@ -500,8 +500,11 @@ const SQ_NONE = 'No squad or game with that code.';
 //   ferr, fnote -- what the last Friends-tab action came back with, a refusal
 //             or the note the inviter is told, said under the row `fat` names.
 //   invited -- friend id -> { snap, until }: Invited until the next roster or 30 s.
+// TASK 11's field:
+//   cbusy  -- a code is out: the code frame, or the squad join it led to. One
+//             code at a time (sqEnter).
 const sqFresh = (tab) => ({
-  tab, known: false, gone: false, err: '', asking: false, cerr: '', via: 0, again: false,
+  tab, known: false, gone: false, err: '', asking: false, cerr: '', cbusy: false, via: 0, again: false,
   busy: '', aerr: '', ierr: '', ignored: '', used: null, kick: null,
   ferr: '', fnote: '', fat: '', invited: new Map(),
   get snap() { return window.CC_SQUAD || null; },
@@ -1379,18 +1382,34 @@ function sqAsk(bare, back) {
 // legacy node means removing every reference in app.js first. The code frame
 // is answered from memory even when the social layer is off, so a room code
 // still joins during a database outage, as it always has.
+//
+// ONE CODE AT A TIME (review T8-R1-10). Two presses before the server has
+// answered -- a double tap, the button and then the Go key -- would each send a
+// code frame and, for a squad code, a join. So `cbusy` is set BEFORE the first
+// socialTx (which answers synchronously when the socket is down: set after, it
+// would latch on for good), a press while it is set does nothing, the Enter
+// button is held meanwhile, and EVERY settle frees it: the code frame's
+// refusal, kind 'none', the room branch (handed to app.js, whose own answer
+// comes later) and the squad join's answer either way. Task 8's Enter key
+// already ignores autorepeat; this covers distinct presses.
 function sqEnter() {
+  const mine = sq;                             // as in sqAsk: answers settle the state that asked
+  if (mine.cbusy) return;
   const el = $('sqCode');
   const code = ((el && el.value) || '').trim().toUpperCase();
-  const mine = sq;                             // as in sqAsk: answers settle the state that asked
   mine.cerr = '';
+  // A NEW CODE OWNS THE LINE: an earlier room join's refusal is no longer the
+  // thing to say.
+  sqRoomStop();
   if (code.length !== 4) { mine.cerr = 'Enter the 4-letter code.'; sqPaint(); return; }
+  mine.cbusy = true;
   sqPaint();
   socialTx({ type: 'code', code }, 'code', null, 'code', (m, msg) => {
-    if (m.error) { mine.cerr = msg; sqPaint(); return; }
+    if (m.error) { mine.cbusy = false; mine.cerr = msg; sqPaint(); return; }
     if (m.kind === 'room') {
-      if ($('codeInput')) $('codeInput').value = code;
-      if ($('joinBtn')) $('joinBtn').onclick();
+      mine.cbusy = false;
+      sqRoomJoin(mine, code);
+      sqPaint();
       return;
     }
     if (m.kind === 'squad') {
@@ -1398,6 +1417,7 @@ function sqEnter() {
       // this frame carried, and Start hands it to the engine (task 4).
       socialTx({ type: 'squad', op: 'join', code, name: has('myName') ? myName() : '', skin: has('mySkin') ? mySkin() : '' },
         'squad', null, 'squad.join', (r, rmsg) => {
+          mine.cbusy = false;
           if (r.error) mine.cerr = rmsg;
           // The roster itself has already reached the slot (app.js answers
           // the roster first), and so has this tab's record of its code
@@ -1408,9 +1428,51 @@ function sqEnter() {
         });
       return;
     }
+    mine.cbusy = false;
     mine.cerr = SQ_NONE;
     sqPaint();
   });
+}
+// THE ROOM BRANCH SAYS WHY A ROOM REFUSED (review T8-R1-16). The room join is
+// app.js's own -- #codeInput and #joinBtn, the legacy rack's real path -- and
+// every refusal it can meet lands in #homeError: its own 'Enter the 4-letter
+// code.', a parked intent's offline line, and the server's joinError (the room
+// filled or started between the code frame and the join). #homeError lives in
+// the hidden legacy rack, where nobody can see it, so the first sentence
+// written there after this join is read back into the field's error line.
+// WATCHED, NOT TIMED: the server's answer can take any time, and the join
+// panel's 350 ms guess lost every slower one. The watch ends at that first
+// sentence, when the lobby is up (the join landed, and what is written next is
+// not this join's), when another code is entered (sqEnter), or after
+// SQ_ROOM_MS. Said through sqErr, so a server's sentence is escaped like any.
+const SQ_ROOM_MS = 15000;
+let sqRoomWatch = null;
+function sqRoomStop() {
+  if (!sqRoomWatch) return;
+  sqRoomWatch.mo.disconnect();
+  clearTimeout(sqRoomWatch.t);
+  sqRoomWatch = null;
+}
+function sqRoomJoin(mine, code) {
+  sqRoomStop();
+  const he = $('homeError');
+  if (he && typeof MutationObserver === 'function') {
+    const w = { mo: null, t: 0 };
+    w.mo = new MutationObserver(() => {
+      if (sqRoomWatch !== w) return;
+      if (current === 'lobby') { sqRoomStop(); return; }
+      const said = (he.textContent || '').trim();
+      if (!said) return;
+      sqRoomStop();
+      mine.cerr = said;
+      sqPaint();
+    });
+    w.mo.observe(he, { childList: true, characterData: true, subtree: true });
+    w.t = setTimeout(() => { if (sqRoomWatch === w) sqRoomStop(); }, SQ_ROOM_MS);
+    sqRoomWatch = w;
+  }
+  if ($('codeInput')) $('codeInput').value = code;
+  if ($('joinBtn')) $('joinBtn').onclick();
 }
 // The one code field (D8). It is a bare INPUT with no `value` attribute on
 // purpose: morphNode syncs attributes and then returns for INPUT, so `disabled`
@@ -1420,7 +1482,7 @@ function sqCodeRow(on) {
     + '<input id="sqCode" class="sqin" maxlength="4" placeholder="CODE" autocomplete="off"'
     +   ' autocapitalize="characters" spellcheck="false" enterkeyhint="go"'
     +   ' aria-label="Squad or game code"' + (on ? '' : ' disabled') + '>'
-    + '<button class="sbtn" data-sq="code"' + (on ? '' : ' disabled') + '>Enter</button></div>'
+    + '<button class="sbtn" data-sq="code"' + (on && !sq.cbusy ? '' : ' disabled') + '>Enter</button></div>'
     + sqErr(on ? sq.cerr : '');
 }
 // D11, in D11's order: what a guest can do NOW, then the door to an account.
