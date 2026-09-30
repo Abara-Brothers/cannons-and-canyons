@@ -2124,6 +2124,38 @@ try {
     if (probe && probe.code === 'RM6Q' && f4e === 'home' && f4 && f4.aerr === 'That match could not be started. Try again.' && f4.start && !f4.start.dis)
       ok(`${V}: the leader's refused Start leaves the dead lobby too, and the box says why`);
     else fail(`${V}: leader dead lobby ${JSON.stringify({ asked: f4q, scr: f4e, aerr: f4 && f4.aerr })}`);
+
+    // ---- G. EVERY PLACE A PLAYER'S NAME REACHES MARKUP, fed markup (design 6.3:
+    //      names are esc()'d everywhere). A member's name in a start refusal and
+    //      in the Remove question, a leader's in the member's sentence, and a
+    //      friend's and a requester's in the Friends tab's rows and in the note
+    //      the inviter is told. The text must read back exactly, and no element
+    //      may appear.
+    const EVIL = '<img src=x onerror=1>';
+    const imgs = () => ev(`document.querySelectorAll('#sqPane-squad img, #sqPane-friends img').length`);
+    const g = {};
+    await t9state({ members: [T9YOU({ ready: true }), T9PIKE({ callsign: EVIL, ready: true })] });
+    await clearTx(); await t9click('#bay [data-sq="start"]'); await sleep(40);
+    await reply({ op: 'start', error: 'member_offline', at: 1 });
+    g.say = [(await t9box()).aerr === EVIL + " isn't ready to start yet.", await imgs()];
+    await t9click('#bay [data-sq="kick:1"]'); await sleep(40);
+    g.ask = [(await t9box()).line === 'Remove ' + EVIL + ' from the squad?', await imgs()];
+    await t9click('#bay [data-sq="kcancel"]'); await sleep(40);
+    await t9state({ leader: T9_PIKE, members: [T9YOU({ ready: true }), T9PIKE({ callsign: EVIL, ready: true })] });
+    g.lead = [(await t9box()).note === EVIL + ' picks the mode and starts. You will be placed in the room together.', await imgs()];
+    await friendsIn({ friends: [{ id: T9_MULE, callsign: EVIL, online: false }], requests: { in: [{ id: T9_NIA, callsign: EVIL }], out: [] },
+      blocked: [], friendCode: 'AB12CD', callsign: null });
+    await t9click('#bay [data-sq="tab:friends"]'); await sleep(40);
+    await clearTx(); await t9click(`#bay [data-sq="invite:${T9_MULE}"]`); await sleep(40);
+    await reply({ op: 'invite', ok: true, delivered: 'online' });
+    const gf = await t9fr();
+    g.rows = [R(gf && gf.fr, 0).name === EVIL && R(gf && gf.req, 0).name === EVIL, await imgs()];
+    g.note = [!!(R(gf && gf.fr, 0).line && R(gf.fr, 0).line.t === 'Invite sent to ' + EVIL + '.'), await imgs()];
+    await friendsIn(FR9);
+    await t9click('#bay [data-sq="tab:squad"]'); await sleep(40);
+    if (Object.values(g).every(([same, n]) => same === true && n === 0))
+      ok(`${V}: a name carrying markup reads back as text in a start refusal, the Remove question, the leader sentence, the friend and request rows and the invite note`);
+    else fail(`${V}: names reaching markup ${JSON.stringify(g)}`);
   }
 } catch (e) {
   fail('squad_ui task 9 stopped: ' + (e && e.message));
