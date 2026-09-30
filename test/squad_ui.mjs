@@ -1396,6 +1396,22 @@ try {
         && (await ev('ccMode')) === 'duel')
       ok(`${V}: a rack short of the squad mode's draft holds Start and says how many more to pick`);
     else fail(`${V}: short rack ${JSON.stringify({ a4: a4 && a4.start, a4b: a4b && a4b.start, armed: await ev('ccMode') })}`);
+    // AND THE OTHER WAY ROUND: seven picks stored, Duel armed on this device, a
+    // Boss Fight squad. The rack is full for the squad's mode, so Start is live
+    // and carries all seven -- read against the armed mode it would be cut to
+    // five, and the leader could never start the mode their squad is in.
+    const SEVEN = ['mortar', 'cluster', 'napalm', 'airstrike', 'volley', 'buster', 'gas'];
+    await t9rack(SEVEN);
+    await t9state({ mode: 'boss', members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
+    const a4c = await t9box();
+    await clearTx(); await t9click('#bay [data-sq="start"]'); await sleep(40);
+    const a4f = await squads();
+    if (a4f.length) await reply({ op: 'start', error: 'capacity' });
+    await t9rack(FIVE);
+    if (a4c && a4c.start && !a4c.start.dis && a4c.start.t === 'Start' && a4f.length === 1 && JSON.stringify(a4f[0].loadout) === JSON.stringify(SEVEN)
+        && (await ev('ccMode')) === 'duel')
+      ok(`${V}: seven picks fill a Boss Fight squad's rack on a device armed on Duel, and Start carries all seven`);
+    else fail(`${V}: full seven-pick rack ${JSON.stringify({ start: a4c && a4c.start, sent: a4f })}`);
 
     // ---- A5. THE MEMBER'S BOX (design 5.1 state 4): no Start, no Seats line,
     //      a cyan Ready toggle that carries its state as aria-pressed, Leave,
@@ -1880,18 +1896,30 @@ try {
     else fail(`${V}: remove refusals ${JSON.stringify(d5bad)}`);
 
     // ---- D6. ONLY THE LEADER, ONLY ANOTHER ROW, ONLY A ROSTER THIS SOCKET HOLDS.
-    //      Each asked through a button the render never drew.
+    //      Each asked through a button the render never drew -- and then its
+    //      Remove, too: the footer draws no question for a member at all, so
+    //      what proves a question was never opened is that a Remove after it
+    //      finds nothing to answer (nothing sent, nothing said).
     const d6 = {};
-    await t9state({ leader: T9_MULE, members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
-    await t9inject('kick:1'); await sleep(40); d6.member = !!(await t9box()).kok;
-    await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
-    await t9inject('kick:0'); await sleep(40); d6.self = !!(await t9box()).kok;
-    await t9inject('kick:7'); await sleep(40); d6.nobody = !!(await t9box()).kok;
-    await ev(`(handle({ type: 'squad', op: 'state', code: 'QK7T', leader: ${JSON.stringify(ME)}, mode: 'duel', tees: null, max: null, you: 0,
-      members: [${JSON.stringify(T9YOU({ ready: true }))}, ${JSON.stringify(T9MULE({ ready: true }))}], fits: ${JSON.stringify(t9fits(2))} }), true)`);
-    await sleep(60);
-    await t9inject('kick:1'); await sleep(40); d6.notHeld = !!(await t9box()).kok;
-    if (Object.values(d6).every((v) => v === false)) ok(`${V}: no question opens for a member, for your own row, for a row that is not there, or on a roster not held`);
+    const CHANGED = 'The squad changed. Check the list and try again.';
+    const askNothing = async (name, setup, v) => {
+      await setup(); await clearTx();
+      await t9inject(v); await sleep(40);
+      const a = await t9box();
+      await t9inject('kok'); await sleep(40);
+      const b = await t9box();
+      d6[name] = { asked: !!(a && a.kok), said: !!(b && b.aerr === CHANGED), sent: (await squads()).length };
+    };
+    await askNothing('member', () => t9state({ leader: T9_MULE, members: [T9YOU({ ready: true }), T9MULE({ ready: true }), T9PIKE({ ready: true })] }), 'kick:2');
+    await askNothing('self', () => t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] }), 'kick:0');
+    await askNothing('nobody', () => t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] }), 'kick:7');
+    await askNothing('notHeld', async () => {
+      await ev(`(handle({ type: 'squad', op: 'state', code: 'QK7T', leader: ${JSON.stringify(ME)}, mode: 'duel', tees: null, max: null, you: 0,
+        members: [${JSON.stringify(T9YOU({ ready: true }))}, ${JSON.stringify(T9MULE({ ready: true }))}], fits: ${JSON.stringify(t9fits(2))} }), true)`);
+      await sleep(60);
+    }, 'kick:1');
+    if (Object.values(d6).every((x) => !x.asked && !x.said && x.sent === 0))
+      ok(`${V}: no question opens for a member, for your own row, for a row that is not there, or on a roster not held`);
     else fail(`${V}: remove gates ${JSON.stringify(d6)}`);
     // ---- THE FRIENDS TAB'S ROWS (C11, design 5.1 "Friends tab states"), under
     //      task 8's count lines: a Request · n section with Accept and a drawn
