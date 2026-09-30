@@ -1639,6 +1639,10 @@ function socialReply(m) {
   if (m.type === 'squad' && !m.error) socialSquad(m);
   // AN INVITE IS ALWAYS A PUSH (task 9): no request is waiting on it.
   if (m.type === 'squad' && m.op === 'invited') { socialInvite(m); return; }
+  // A REFUSED SQUAD START, the leader's answer or a member's push alike, may
+  // have left this client in a lobby whose room is gone (squadLobbyCheck).
+  // Not returned from: the leader's answer still has its waiter to settle.
+  if (m.type === 'squad' && m.op === 'start' && m.error) squadLobbyCheck();
   // PRESENCE IS ALWAYS A PUSH, NEVER A REPLY, and it must not be matched like
   // one: `id` on this frame is the FRIEND's uuid (server/social.js's presence
   // fan-out), which is the very value BINDING resolution 3 puts in `id` on
@@ -1714,6 +1718,28 @@ function socialInvite(m) {
     max: n(m.max, 4),
   };
   document.dispatchEvent(new Event('cc:social'));
+}
+// A SQUAD START REFUSED AFTER THE ENGINE HAD ALREADY SHOWN THIS CLIENT A LOBBY
+// (task 4's client obligation, R6). The seating builds the room seat by seat
+// through the engine's own create and join, and when it fails part-way it tears
+// that room down QUIETLY (abandonRoom): the seats it had filled are sent
+// nothing, so the leader and every member seated so far are left on a lobby for
+// a room that no longer exists, and the squad's refusal is the only word they
+// get. So a client standing in an online room lobby asks the server whether
+// that room still exists -- the code frame, answered from memory with no
+// sign-in -- and leaves only a lobby the server says is gone, by the lobby's
+// own Cancel. A lobby that is still real -- a member's own room the seating
+// never reached, a busy member's game -- is left exactly as it is, and a
+// quick-match search or an offline room is never asked about.
+function squadLobbyCheck() {
+  const code = S.code, bay = $('bay');
+  const inLobby = () => !!(bay && bay.classList.contains('active') && bay.dataset.scr === 'lobby'
+    && $('lobbyCode').style.display !== 'none' && !S.local && S.code === code);
+  if (!code || !inLobby()) return;
+  socialSend({ type: 'code', code }, (r) => {
+    if (!r || r.type !== 'code' || r.kind !== 'none' || !inLobby()) return;
+    $('cancelBtn').onclick();
+  });
 }
 // A friend came online or went. The server sends this INSTEAD of a whole
 // snapshot (one frame per friend per change rather than eight round trips), so

@@ -2065,7 +2065,65 @@ try {
     else fail(`${V}: empty friends ${JSON.stringify({ text: e10 && e10.text, heads: e10 && e10.heads, copy: e10copy })}`);
     await friendsIn(FR9);
     await t9click('#bay [data-sq="tab:squad"]'); await sleep(40);
-    // T9-CHECKS-F
+    // ---- F. A START REFUSED AFTER THE ENGINE HAD SHOWN A LOBBY (task 4's
+    //      client obligation). The seating builds the room seat by seat and,
+    //      failing part-way, tears it down QUIETLY: the leader and every member
+    //      seated so far are left on a lobby for a room that no longer exists,
+    //      and the squad's refusal is the only word they get. On a refusal a
+    //      client standing in an online lobby asks the server whether that room
+    //      still exists (the code frame), and leaves only a lobby the server
+    //      says is gone -- never a real one: a member's own room the seating
+    //      never reached, or a busy member's game.
+    const scr = () => ev(`document.getElementById('bay').dataset.scr`);
+    const lobbyAt = async (code) => { await ev(`(handle({ type: 'created', code: ${JSON.stringify(code)} }), true)`); await sleep(80); };
+    const kinds = async () => (await tx()).filter((f) => f.type === 'code' || f.type === 'leave');
+    // F1. A member's push, the room gone: one question, then out to home.
+    await lobbyAt('RM7Q');
+    const f1s = await scr();
+    await clearTx(); await ev(`(handle({ type: 'squad', op: 'start', error: 'refused' }), true)`); await sleep(60);
+    const f1q = await kinds();
+    await answer(f1q[0] && f1q[0].id, { type: 'code', kind: 'none' });
+    const f1l = await kinds(), f1e = await scr();
+    if (f1s === 'lobby' && f1q.length === 1 && f1q[0].type === 'code' && f1q[0].code === 'RM7Q'
+        && f1l.some((f) => f.type === 'leave') && f1e === 'home')
+      ok(`${V}: a refused start asks whether the lobby's room still exists, and leaves the lobby the server says is gone`);
+    else fail(`${V}: dead lobby ${JSON.stringify({ before: f1s, asked: f1q, then: f1l, after: f1e })}`);
+    // F2. The room is real (a member's own room the seating never reached): stay.
+    await lobbyAt('RM8Q');
+    await clearTx(); await ev(`(handle({ type: 'squad', op: 'start', error: 'member_busy', at: 1 }), true)`); await sleep(60);
+    const f2q = await kinds();
+    await answer(f2q[0] && f2q[0].id, { type: 'code', kind: 'room' });
+    const f2l = await kinds(), f2e = await scr();
+    if (f2q.length === 1 && f2q[0].code === 'RM8Q' && !f2l.some((f) => f.type === 'leave') && f2e === 'lobby')
+      ok(`${V}: a lobby whose room the server still holds is left exactly as it is`);
+    else fail(`${V}: real lobby left ${JSON.stringify({ asked: f2q, then: f2l, after: f2e })}`);
+    await ev(`($('cancelBtn').onclick(), true)`); await sleep(80);
+    // F3. Not in a lobby, or in a quick-match SEARCH (no room shown, whatever
+    //     S.code still holds): nothing is asked.
+    await clearTx(); await ev(`(handle({ type: 'squad', op: 'start', error: 'refused' }), true)`); await sleep(60);
+    const f3a = await kinds();
+    await ev(`(S.code = 'RM9Q', showLobby('search'), true)`); await sleep(80);
+    await clearTx(); await ev(`(handle({ type: 'squad', op: 'start', error: 'refused' }), true)`); await sleep(60);
+    const f3b = await kinds(), f3s = await scr();
+    await ev(`($('cancelBtn').onclick(), true)`); await sleep(80);
+    if (f3a.length === 0 && f3b.length === 0 && f3s === 'lobby')
+      ok(`${V}: a refused start asks nothing from home, or from a quick-match search`);
+    else fail(`${V}: needless lobby check ${JSON.stringify({ home: f3a, search: f3b, scr: f3s })}`);
+    // F4. The LEADER's own refused Start, answered after the engine's create:
+    //     the same question, and the leader lands back on the box with the
+    //     refusal said in it.
+    await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
+    await clearTx(); await t9click('#bay [data-sq="start"]'); await sleep(40);
+    const startId = ((await squads())[0] || {}).id;
+    await lobbyAt('RM6Q');
+    await answer(startId, { type: 'squad', op: 'start', error: 'refused' });
+    const f4q = await kinds();
+    const probe = f4q.find((f) => f.type === 'code');
+    await answer(probe && probe.id, { type: 'code', kind: 'none' });
+    const f4e = await scr(), f4 = await t9box();
+    if (probe && probe.code === 'RM6Q' && f4e === 'home' && f4 && f4.aerr === 'That match could not be started. Try again.' && f4.start && !f4.start.dis)
+      ok(`${V}: the leader's refused Start leaves the dead lobby too, and the box says why`);
+    else fail(`${V}: leader dead lobby ${JSON.stringify({ asked: f4q, scr: f4e, aerr: f4 && f4.aerr })}`);
   }
 } catch (e) {
   fail('squad_ui task 9 stopped: ' + (e && e.message));
