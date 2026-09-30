@@ -1750,7 +1750,117 @@ try {
     if (c8a === 'RM9P' && c8b === null && c8c && !c8c.inv)
       ok(`${V}: a token refresh keeps the invite and a sign-out drops it`);
     else fail(`${V}: invite across accounts ${JSON.stringify({ same: c8a, out: c8b, back: c8c && c8c.inv })}`);
-    // T9-CHECKS-D
+    // (C8 signed the account out and back in: introduce it and answer, so the
+    //  box knows again.)
+    await clearTx(); await ev('sendHello(S.ws).then(() => true)'); await sleep(60);
+    await reply({ op: 'gone' });
+    // A button the render did not draw, pressed through the real listener: the
+    // way to prove a handler refuses what a stale or forged DOM asks of it.
+    const t9inject = (sq9) => ev(`(() => { const f = document.getElementById('sqPane-squad'); const b = document.createElement('button');
+      b.dataset.sq = ${JSON.stringify(sq9)}; f.appendChild(b); b.click(); b.remove(); return true; })()`);
+
+    // ---- D1. THE LEADER'S REMOVE ASKS FIRST (C11): "Remove <name> from the
+    //      squad?" in the footer, with Cancel -- which holds the keyboard, so a
+    //      stray Enter removes nobody -- and Remove. Nothing is sent to ask.
+    await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
+    await clearTx(); await t9click('#bay [data-sq="kick:1"]'); await sleep(60);
+    const d1 = await t9box(), d1f = await squads(), d1focus = await ev(`document.activeElement && document.activeElement.getAttribute('data-sq')`);
+    await t9click('#bay [data-sq="kcancel"]'); await sleep(60);
+    const d1c = await t9box(), d1cf = await squads();
+    if (d1 && d1.line === 'Remove Steel Mule from the squad?' && d1.kok && !d1.kok.dis && d1.kok.t === 'Remove' && d1.kcancel && !d1.start
+        && d1f.length === 0 && d1focus === 'kcancel'
+        && d1c && !d1c.kok && d1c.start && d1c.line === 'Duel · 2' && d1cf.length === 0)
+      ok(`${V}: Remove asks "Remove Steel Mule from the squad?" with the keyboard on Cancel, and Cancel sends nothing`);
+    else fail(`${V}: remove confirm ${JSON.stringify({ d1: d1 && { line: d1.line, kok: d1.kok, kcancel: d1.kcancel, start: d1.start }, sent: d1f, focus: d1focus, after: d1c && { kok: d1c.kok, line: d1c.line }, sent2: d1cf })}`);
+
+    // ---- D2. AN ACCOUNT ROW IS NAMED BY ITS ID, which names one person however
+    //      the roster moves (server/social.js squadTarget). The server answers
+    //      the leader with the roster, and the confirm goes with the row.
+    await clearTx(); await t9click('#bay [data-sq="kick:1"]'); await sleep(40);
+    await t9click('#bay [data-sq="kok"]'); await sleep(60);
+    const d2f = await squads(), d2 = await t9box();
+    await reply({ op: 'state', code: 'QK7T', leader: ME, mode: 'duel', tees: null, max: null, you: 0, held: true,
+      members: [T9YOU({ ready: true })], fits: t9fits(1) });
+    const d2d = await t9box();
+    if (d2f.length === 1 && d2f[0].op === 'kick' && d2f[0].id === T9_MULE && !('i' in d2f[0])
+        && d2 && d2.kok && d2.kok.t === 'Removing' && d2.kok.dis && d2.kcancel && d2.kcancel.dis
+        && d2d && d2d.rows.length === 1 && !d2d.kok && d2d.start && d2d.aerr === '')
+      ok(`${V}: Remove names an account row by its id, reads Removing while out, and the roster that answers it closes the question`);
+    else fail(`${V}: kick by id ${JSON.stringify({ d2f, out: d2 && { kok: d2.kok, kcancel: d2.kcancel }, back: d2d && { rows: d2d.rows.length, kok: d2d.kok, aerr: d2d.aerr } })}`);
+
+    // ---- D3. A GUEST ROW HAS NO ID: the server names it by its INDEX (`i`),
+    //      and the frame's `id` is only the correlation socialSend mints. The
+    //      question never calls it "No callsign".
+    await t9state({ members: [T9YOU({ ready: true }), T9M({ guest: true, ready: true })] });
+    await clearTx(); await t9click('#bay [data-sq="kick:1"]'); await sleep(40);
+    const d3 = await t9box();
+    await t9click('#bay [data-sq="kok"]'); await sleep(60);
+    const d3f = await squads();
+    await reply({ op: 'state', code: 'QK7T', leader: ME, mode: 'duel', tees: null, max: null, you: 0, held: true,
+      members: [T9YOU({ ready: true })], fits: t9fits(1) });
+    if (d3 && d3.line === 'Remove this player from the squad?' && d3f.length === 1 && d3f[0].op === 'kick' && d3f[0].i === 1 && typeof d3f[0].id === 'number')
+      ok(`${V}: a guest row is removed by its index, and the question says "this player"`);
+    else fail(`${V}: kick a guest ${JSON.stringify({ line: d3 && d3.line, d3f })}`);
+
+    // ---- D4. A GUEST'S INDEX IS A GUESS THE MOMENT THE ROSTER MOVES (task 2's
+    //      review: an earlier row leaving shifts every later guest up one, and
+    //      the kick would land on somebody else). The question is withdrawn when
+    //      the roster it was asked on changes, and a Remove that arrives anyway
+    //      sends nothing and says why. An ACCOUNT row keeps its question: its id
+    //      still names the same person.
+    await t9state({ members: [T9YOU({ ready: true }), T9M({ guest: true, ready: true }), T9M({ guest: true, ready: false })] });
+    await clearTx(); await t9click('#bay [data-sq="kick:2"]'); await sleep(40);
+    const d4a = await t9box();
+    await t9state({ members: [T9YOU({ ready: true }), T9M({ guest: true, ready: false })] });   // the first guest left
+    const d4b = await t9box();
+    await t9inject('kok'); await sleep(60);
+    const d4f = await squads(), d4c = await t9box();
+    await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true }), T9PIKE({ ready: true })] });
+    await clearTx(); await t9click('#bay [data-sq="kick:2"]'); await sleep(40);
+    await t9state({ members: [T9YOU({ ready: true }), T9PIKE({ ready: true })] });              // Steel Mule left
+    const d4d = await t9box();
+    await t9click('#bay [data-sq="kok"]'); await sleep(60);
+    const d4g = await squads();
+    await reply({ op: 'state', code: 'QK7T', leader: ME, mode: 'duel', tees: null, max: null, you: 0, held: true,
+      members: [T9YOU({ ready: true })], fits: t9fits(1) });
+    if (d4a && d4a.line === 'Remove this player from the squad?' && d4b && !d4b.kok && d4b.start
+        && d4f.length === 0 && d4c && d4c.aerr === 'The squad changed. Check the list and try again.'
+        && d4d && d4d.line === 'Remove Ridge Pike from the squad?' && d4g.length === 1 && d4g[0].id === T9_PIKE)
+      ok(`${V}: a guest's Remove is withdrawn when the roster moves and a late one sends nothing; an account's survives the move`);
+    else fail(`${V}: stale remove ${JSON.stringify({ asked: d4a && d4a.line, after: d4b && { kok: d4b.kok, start: d4b.start }, sent: d4f, aerr: d4c && d4c.aerr, acct: d4d && d4d.line, acctSent: d4g })}`);
+
+    // ---- D5. EVERY REFUSAL OF A REMOVE SAYS ITS OWN SENTENCE, and the question
+    //      closes. sign_in comes back as the sign-in gate's {type:'social'} frame.
+    const kickSays = [['not_leader', 'Only the squad leader can remove a player.'], ['no_such_member', 'That player is no longer in your squad.'],
+      ['slow_down', 'Too many tries. Wait a moment.'], ['unavailable', 'Squads are not available right now. Try again later.'],
+      ['sign_in', 'Sign in to manage your squad.']];
+    const d5bad = [];
+    for (const [code, line] of kickSays) {
+      await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
+      await clearTx(); await t9click('#bay [data-sq="kick:1"]'); await sleep(40);
+      await t9click('#bay [data-sq="kok"]'); await sleep(40);
+      await reply(code === 'sign_in' ? { type: 'social', error: 'sign_in' } : { op: 'kick', error: code });
+      const bx = await t9box();
+      if (!(bx && bx.aerr === line && !bx.kok && bx.start)) d5bad.push({ code, aerr: bx && bx.aerr, kok: bx && bx.kok });
+    }
+    if (!d5bad.length) ok(`${V}: all ${kickSays.length} refusals of a Remove say their own sentence and close the question`);
+    else fail(`${V}: remove refusals ${JSON.stringify(d5bad)}`);
+
+    // ---- D6. ONLY THE LEADER, ONLY ANOTHER ROW, ONLY A ROSTER THIS SOCKET HOLDS.
+    //      Each asked through a button the render never drew.
+    const d6 = {};
+    await t9state({ leader: T9_MULE, members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
+    await t9inject('kick:1'); await sleep(40); d6.member = !!(await t9box()).kok;
+    await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
+    await t9inject('kick:0'); await sleep(40); d6.self = !!(await t9box()).kok;
+    await t9inject('kick:7'); await sleep(40); d6.nobody = !!(await t9box()).kok;
+    await ev(`(handle({ type: 'squad', op: 'state', code: 'QK7T', leader: ${JSON.stringify(ME)}, mode: 'duel', tees: null, max: null, you: 0,
+      members: [${JSON.stringify(T9YOU({ ready: true }))}, ${JSON.stringify(T9MULE({ ready: true }))}], fits: ${JSON.stringify(t9fits(2))} }), true)`);
+    await sleep(60);
+    await t9inject('kick:1'); await sleep(40); d6.notHeld = !!(await t9box()).kok;
+    if (Object.values(d6).every((v) => v === false)) ok(`${V}: no question opens for a member, for your own row, for a row that is not there, or on a roster not held`);
+    else fail(`${V}: remove gates ${JSON.stringify(d6)}`);
+    // T9-CHECKS-E
   }
 } catch (e) {
   fail('squad_ui task 9 stopped: ' + (e && e.message));

@@ -512,9 +512,10 @@ const SQ_NONE = 'No squad or game with that code.';
 //   ignored -- the ONE squad code whose invite Ignore hid.
 //   used   -- the invite a Join from its row answered (the slot's object),
 //             so it does not come back when the player later leaves.
+//   kick   -- the row the leader's open "Remove ...?" is about (sqKickAsk).
 const sqFresh = (tab) => ({
   tab, known: false, gone: false, err: '', asking: false, cerr: '', via: 0, again: false,
-  busy: '', aerr: '', ierr: '', ignored: '', used: null,
+  busy: '', aerr: '', ierr: '', ignored: '', used: null, kick: null,
   get snap() { return window.CC_SQUAD || null; },
 });
 let sq = sqFresh('squad');
@@ -759,6 +760,13 @@ function sqFoot(sn, ctl, hide) {
   const ms = sn.members || [], me = sqMe(sn), m = modeOf(sn.mode), seats = SQ_SEATS[m.id];
   const open = '<div class="sqft' + (hide ? ' hidden' : '') + '">';
   const short = m.draft - sqRack(m.id).length;
+  // THE LEADER'S OPEN QUESTION TAKES THE FOOTER while it is live (sqKickLive).
+  if (ctl.lead && sq.kick && sqKickLive(sn)) {
+    const k = sq.kick;
+    return open + '<p class="sqfl sqq">Remove ' + (k.anon ? 'this player' : esc(k.name)) + ' from the squad?</p><div class="sqfb">'
+      + '<button class="ghost" data-sq="kcancel"' + (sq.busy ? ' disabled' : '') + '>Cancel</button>'
+      + '<button class="go" data-sq="kok"' + (ctl.on && !sq.busy ? '' : ' disabled') + '>' + (sq.busy === 'kick' ? 'Removing' : 'Remove') + '</button></div></div>';
+  }
   if (ctl.lead) {
     const fit = !!(sn.fits && sn.fits[sn.mode]);
     const waiting = ms.filter((p, i) => i !== sn.you && (!p.ready || p.dropped)).length;
@@ -837,7 +845,7 @@ function sqJoin(code) {
 //   o.say   (m, sentence) -> the sentence to show, when a refusal says more
 //   o.sink  where a refusal is said: 'aerr' (the footer's line, the default)
 //           or 'ierr' (inside the invite row)
-//   o.done  (m, mine) on success
+//   o.done  (m, mine) on success; o.end (mine) after either answer
 function sqOne(frame, o) {
   const mine = sq;
   if (mine.busy) return false;              // one action at a time: the box has one footer
@@ -847,6 +855,7 @@ function sqOne(frame, o) {
     mine.busy = '';
     if (err) mine[o.sink || 'aerr'] = o.say ? o.say(m, err) : err;
     else if (o.done) o.done(m, mine);
+    if (o.end) o.end(mine);
     sqPaint();
   });
   sqPaint();
@@ -892,6 +901,47 @@ function sqStart() {
   // The leader's rack rides on the frame: the server takes it as the leader's
   // Ready for this start only (squadStart).
   sqOne({ type: 'squad', op: 'start', loadout: picks }, { op: 'start', kind: 'squad.start', busy: 'start', say: sqStartSay });
+}
+// THE LEADER'S REMOVE ASKS FIRST (C11): "Remove <name> from the squad?", with
+// Cancel and Remove, in the footer. WHAT IT ASKS ABOUT IS PINNED when it opens:
+// an account row by its id, which names one person however the roster moves;
+// a guest -- who has no id -- by its INDEX, the only handle the server takes
+// for a guest (server/social.js squadTarget). An index is a guess the moment
+// the roster changes shape: an earlier row leaving shifts every later guest up
+// one, and the Remove would land on somebody else (task 2's review). So a
+// guest's question lives only while the roster it was asked on is unchanged,
+// and a Remove that arrives after that sends nothing. What is left is the
+// flight time of the frame itself -- a leave the server handles between this
+// send and its arrival; only a per-row handle in the roster can close that,
+// and it is the server's to add.
+const sqSig = (sn) => JSON.stringify(((sn && sn.members) || []).map((p) => [p.id, !!p.guest]));
+function sqKickLive(sn) {
+  const k = sq.kick;
+  if (!k || !sn || sn.code !== k.code) return false;
+  if (k.id) return (sn.members || []).some((p) => p.id === k.id);
+  return sqSig(sn) === k.sig;
+}
+function sqKickAsk(i) {
+  const sn = sq.snap, p = sn && Number.isInteger(i) ? (sn.members || [])[i] : null;
+  if (!sqLive(sn) || !sqIsLead(sn, sqMe(sn)) || sq.busy || !p || i === sn.you || sqIsLead(sn, p) || (p.id == null && !p.guest)) return;
+  sq.kick = { i, id: p.id || null, code: sn.code, sig: sqSig(sn), name: nameOf(p), anon: !named(p) };
+  sq.aerr = '';
+  sqPaint();
+  // THE KEYBOARD GOES TO CANCEL, so a stray Enter removes nobody.
+  const c = document.querySelector('#bay [data-sq="kcancel"]');
+  if (c) c.focus();
+}
+function sqKickGo() {
+  const sn = sq.snap, k = sq.kick;
+  if (!k || sq.busy) return;
+  if (!sqLive(sn) || !sqIsLead(sn, sqMe(sn)) || !sqKickLive(sn)) {
+    sq.kick = null; sq.aerr = 'The squad changed. Check the list and try again.'; sqPaint(); return;
+  }
+  // The server answers the leader with the roster itself (`op:'state'`).
+  sqOne(k.id ? { type: 'squad', op: 'kick', id: k.id } : { type: 'squad', op: 'kick', i: k.i },
+    { op: null, kind: 'squad.kick', busy: 'kick',
+      done: (m, mine) => { if (m.op !== 'state') mine.aerr = socErr('squad.kick', 'unavailable'); },
+      end: (mine) => { mine.kick = null; } });
 }
 // COPY THE LINK, NOT THE CODE (design 4.4 and 5.7): /?squad=<code> is what the
 // invite push opens, so the two ways in are one URL.
@@ -965,6 +1015,10 @@ function sqAct(v) {
   // The server answers a leave with its own op, `left`.
   if (op === 'leave') { if (sqLive(sq.snap)) sqOne({ type: 'squad', op: 'leave' }, { op: 'left', kind: 'squad.leave', busy: 'leave' }); return; }
   if (op === 'join') { sqJoin(arg); return; }
+  // The row's index, as the render drew it: `kick:<i>`.
+  if (op === 'kick') { if (/^\d{1,2}$/.test(arg)) sqKickAsk(Number(arg)); return; }
+  if (op === 'kcancel') { if (!sq.busy) { sq.kick = null; sqPaint(); } return; }
+  if (op === 'kok') { sqKickGo(); return; }
   // IGNORE sends nothing: the inviter is not told (design 5.1 state 5).
   if (op === 'ignore') { if (sq.busy !== 'join') { sq.ignored = arg; sq.ierr = ''; sqPaint(); } return; }
 }
@@ -1632,6 +1686,14 @@ const SOC_ERR = {
   'squad.start.slow_down':       'Too many tries. Wait a moment.',
   'squad.start.offline':         'Not connected. Try again in a moment.',
   'squad.start._':               'That match could not be started. Try again.',
+  // The leader's Remove (squadKick). sign_in comes from the per-op sign-in
+  // gate, which answers {type:'social'}: a guest can never lead.
+  'squad.kick.not_leader':       'Only the squad leader can remove a player.',
+  'squad.kick.no_such_member':   'That player is no longer in your squad.',
+  'squad.kick.sign_in':          'Sign in to manage your squad.',
+  'squad.kick.slow_down':        'Too many tries. Wait a moment.',
+  'squad.kick.offline':          'Not connected. Try again in a moment.',
+  'squad.kick._':                'Squads are not available right now. Try again later.',
   _:                             'That did not work. Try again.',
 };
 function socErr(kind, code) {
