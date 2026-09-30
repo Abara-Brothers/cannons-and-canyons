@@ -250,6 +250,12 @@ const PROBE = (screen) => `(() => {
       boards:   r('#bay .boards'),
       lbar:     r('#bay .lbar'),
       pnl:      r('#bay .pnl:not(.hidden)'),
+      // (No backticks in here: this is inside a template literal.) 'pnl'
+      // finds the FIRST visible panel, which on home has been the Squad box
+      // since it took Recent sorties' slot -- until then the sorties panel was
+      // hidden (headless has no rows) and 'pnl' was Bay stations. So the
+      // right-hand panel gets its own key, or nothing would measure it.
+      pnlR:     r('#bay .pnl:not(.hidden):not(.sqx)'),
       tankw:    r('#bay .tankw'),
       launch:   r('#bay .launch, #bay [data-launch]'),   // home's Launch, or the armoury's bay-doors button
     },

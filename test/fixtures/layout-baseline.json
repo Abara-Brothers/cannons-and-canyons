@@ -54,6 +54,12 @@
             196,
             192
           ],
+          "pnlR": [
+            718,
+            174,
+            196,
+            192
+          ],
           "tankw": [
             364,
             150,
@@ -111,6 +117,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -158,6 +165,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             68,
             156,
@@ -215,6 +223,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -262,6 +271,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             183,
             106,
@@ -314,6 +324,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -447,6 +458,12 @@
             177,
             174
           ],
+          "pnlR": [
+            650,
+            158,
+            177,
+            174
+          ],
           "tankw": [
             330,
             136,
@@ -504,6 +521,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -551,6 +569,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             62,
             142,
@@ -608,6 +627,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -655,6 +675,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             166,
             96,
@@ -707,6 +728,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -840,6 +862,12 @@
             140,
             137
           ],
+          "pnlR": [
+            514,
+            158,
+            140,
+            137
+          ],
           "tankw": [
             261,
             141,
@@ -897,6 +925,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -944,6 +973,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             49,
             146,
@@ -1001,6 +1031,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -1048,6 +1079,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             131,
             109,
@@ -1100,6 +1132,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -1233,6 +1266,12 @@
             119,
             117
           ],
+          "pnlR": [
+            438,
+            135,
+            119,
+            117
+          ],
           "tankw": [
             222,
             120,
@@ -1290,6 +1329,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -1337,6 +1377,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             42,
             124,
@@ -1394,6 +1435,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -1441,6 +1483,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             112,
             94,
@@ -1493,6 +1536,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -1626,6 +1670,12 @@
             174,
             177
           ],
+          "pnlR": [
+            58,
+            650,
+            174,
+            177
+          ],
           "tankw": [
             254,
             330,
@@ -1683,6 +1733,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -1730,6 +1781,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             248,
             62,
@@ -1787,6 +1839,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -1834,6 +1887,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             294,
             166,
@@ -1886,6 +1940,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -2019,6 +2074,12 @@
             196,
             201
           ],
+          "pnlR": [
+            66,
+            736,
+            196,
+            201
+          ],
           "tankw": [
             287,
             374,
@@ -2076,6 +2137,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -2123,6 +2185,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             280,
             71,
@@ -2180,6 +2243,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -2227,6 +2291,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             332,
             188,
@@ -2279,6 +2344,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -2412,6 +2478,12 @@
             175,
             172
           ],
+          "pnlR": [
+            643,
+            560,
+            175,
+            172
+          ],
           "tankw": [
             326,
             539,
@@ -2469,6 +2541,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -2516,6 +2589,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             61,
             544,
@@ -2573,6 +2647,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -2620,6 +2695,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             164,
             499,
@@ -2672,6 +2748,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -2810,6 +2887,12 @@
             251,
             246
           ],
+          "pnlR": [
+            920,
+            364,
+            251,
+            246
+          ],
           "tankw": [
             466,
             334,
@@ -2867,6 +2950,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -2914,6 +2998,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             87,
             341,
@@ -2971,6 +3056,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -3018,6 +3104,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             234,
             277,
@@ -3070,6 +3157,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -3208,6 +3296,12 @@
             215,
             211
           ],
+          "pnlR": [
+            789,
+            638,
+            215,
+            211
+          ],
           "tankw": [
             400,
             612,
@@ -3265,6 +3359,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -3312,6 +3407,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             75,
             618,
@@ -3369,6 +3465,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -3416,6 +3513,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             201,
             563,
@@ -3468,6 +3566,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -3606,6 +3705,12 @@
             172,
             169
           ],
+          "pnlR": [
+            632,
+            554,
+            172,
+            169
+          ],
           "tankw": [
             320,
             533,
@@ -3663,6 +3768,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -3710,6 +3816,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             60,
             538,
@@ -3767,6 +3874,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -3814,6 +3922,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             161,
             494,
@@ -3866,6 +3975,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -4004,6 +4114,12 @@
             156,
             153
           ],
+          "pnlR": [
+            573,
+            534,
+            156,
+            153
+          ],
           "tankw": [
             291,
             515,
@@ -4061,6 +4177,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -4108,6 +4225,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             54,
             520,
@@ -4165,6 +4283,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -4212,6 +4331,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             146,
             479,
@@ -4264,6 +4384,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -4402,6 +4523,12 @@
             107,
             104
           ],
+          "pnlR": [
+            391,
+            575,
+            107,
+            104
+          ],
           "tankw": [
             198,
             562,
@@ -4459,6 +4586,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -4506,6 +4634,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             37,
             565,
@@ -4563,6 +4692,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -4610,6 +4740,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             100,
             538,
@@ -4662,6 +4793,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -4800,6 +4932,12 @@
             143,
             146
           ],
+          "pnlR": [
+            48,
+            785,
+            143,
+            146
+          ],
           "tankw": [
             208,
             521,
@@ -4857,6 +4995,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -4904,6 +5043,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             204,
             301,
@@ -4961,6 +5101,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -5008,6 +5149,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             241,
             386,
@@ -5060,6 +5202,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -5193,6 +5336,12 @@
             113,
             116
           ],
+          "pnlR": [
+            136,
+            424,
+            113,
+            116
+          ],
           "tankw": [
             263,
             215,
@@ -5250,6 +5399,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -5297,6 +5447,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             259,
             41,
@@ -5354,6 +5505,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
@@ -5401,6 +5553,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": [
             289,
             108,
@@ -5453,6 +5606,7 @@
           "boards": null,
           "lbar": null,
           "pnl": null,
+          "pnlR": null,
           "tankw": null,
           "launch": null
         },
