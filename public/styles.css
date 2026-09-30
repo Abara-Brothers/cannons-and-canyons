@@ -1998,10 +1998,12 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
      text-transform:uppercase;color:#8d9cc0;transition:.15s}
   /* THE TAB IS EASIER TO HIT THAN IT LOOKS (review T8-R1-17). The bar keeps
      the mockup's 22u, which is only 12-16 CSS px on a phone in landscape, and
-     each tab reaches 8u further DOWN, over the pane's own top padding and its
-     first line's margin (11u at least, so no control sits under it). Down only:
-     the tab bar is the panel's top edge and the panel clips its overflow. */
-  #bay .sqtb::after{content:'';position:absolute;left:0;right:0;top:0;bottom:calc(-8 * var(--u))}
+     each tab reaches 6u further DOWN, over the strip .sqb keeps above the
+     panes. That strip never scrolls -- the pane that scrolls starts below it --
+     so no content ever passes under the wider target, and a tap on content is
+     the content's (review T8-R1-15). Down only: the tab bar is the panel's top
+     edge and the panel clips its overflow. */
+  #bay .sqtb::after{content:'';position:absolute;left:0;right:0;top:0;bottom:calc(-6 * var(--u))}
   #bay .sqtb:hover{color:#eef3ff}
   #bay .sqtb.on{color:#ffb46b;box-shadow:inset 0 calc(-2 * var(--u)) 0 #ffb46b}
   #bay .sqc{display:inline-flex;align-items:center;gap:calc(3 * var(--u));font-family:"JetBrains Mono",monospace;
@@ -2014,8 +2016,11 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
      test/house-rules.mjs rejects whole. Same reason IC.dot exists. */
   #bay .sqd{position:absolute;top:calc(2 * var(--u));right:calc(4 * var(--u));width:calc(5 * var(--u));
      height:calc(5 * var(--u));border-radius:50%;background:#ffb46b}
-  #bay .sqb{flex:1;min-height:0;display:flex}
-  #bay .sqp{flex:1;min-width:0;min-height:0;overflow-y:auto;padding-top:calc(6 * var(--u))}
+  /* The 6u above the panes was each pane's own top padding, which scrolled
+     away under the tabs' wider target. As .sqb's padding it stays put, and at
+     rest every line sits exactly where it did. */
+  #bay .sqb{flex:1;min-height:0;display:flex;padding-top:calc(6 * var(--u))}
+  #bay .sqp{flex:1;min-width:0;min-height:0;overflow-y:auto}
   #bay .sqn{font-family:Rajdhani,system-ui,sans-serif;font-size:calc(10 * var(--u));line-height:1.25;
      font-weight:500;color:#9dadd0;margin-top:calc(6 * var(--u))}
   #bay .sqe{min-height:calc(12 * var(--u));margin-top:calc(5 * var(--u));font-size:calc(10 * var(--u));
