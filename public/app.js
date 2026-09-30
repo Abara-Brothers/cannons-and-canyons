@@ -1707,16 +1707,50 @@ function socialSquad(m) {
 // server could not vouch for arrives null and stays null, so the box renders
 // its no-name wording instead of the string "null".
 const SQUAD_INVITE_CODE = /^[A-Z0-9]{1,8}$/;
+// A RECEIVED INVITE LASTS TEN MINUTES (D-UI-4, review T9-R1-4). Squad codes are
+// four characters and are minted again once free (server/squads.js mintCode),
+// so an invite kept for the life of the page could put a player into a
+// stranger's squad under a friend's name, hours after that friend's squad
+// ended. It is stamped on arrival, `at`, and a timer empties the slot when its
+// time is up; bay.js also reads the age itself (socialInviteFresh) before it
+// shows the row, lights the tab or sends a Join, because a timer in a
+// background tab can fire late. The clock is the wall clock, which counts a
+// phone's sleep, and an age below zero -- the clock set back -- is NOT fresh:
+// an invite whose age cannot be told is not offered.
+const SQUAD_INVITE_MS = 10 * 60 * 1000;
+function socialInviteFresh(inv) {
+  const age = inv && Number.isFinite(inv.at) ? Date.now() - inv.at : NaN;
+  return age >= 0 && age < SQUAD_INVITE_MS;
+}
 function socialInvite(m) {
   if (!m || typeof m.code !== 'string' || !SQUAD_INVITE_CODE.test(m.code)) return;
+  // NOT FOR A PAGE WITH NO LINKED ACCOUNT ON IT (review T9-R1-5). The server
+  // goes on treating this socket as the old account until the sign-out's
+  // `hello` reaches it, so an invite sent to that account can land AFTER the
+  // account event below has emptied the slot, and be offered to whoever uses
+  // the device next. A guest can be neither invited nor the one an invite
+  // was for (the server's invite needs a friend, and only a linked account
+  // has friends), so an invite reaching a page that is not signed in is
+  // always the old account's. At boot, before the page has read its own
+  // account, one is dropped here too -- which is what the boot's first
+  // account event would do to it anyway.
+  if (!socialSignedIn()) return;
   const f = m.from && typeof m.from === 'object' ? m.from : {};
   const n = (v, d) => (Number.isInteger(v) && v >= 1 && v <= 4 ? v : d);
-  window.CC_SQUAD_INVITE = {
+  const inv = window.CC_SQUAD_INVITE = {
     code: m.code,
     from: { callsign: typeof f.callsign === 'string' && f.callsign ? f.callsign : null },
     size: n(m.size, 1),
     max: n(m.max, 4),
+    at: Date.now(),
   };
+  // Only THIS invite is taken: a newer one, a Join or an account change may
+  // have replaced it by then.
+  setTimeout(() => {
+    if (window.CC_SQUAD_INVITE !== inv) return;
+    window.CC_SQUAD_INVITE = null;
+    document.dispatchEvent(new Event('cc:social'));
+  }, SQUAD_INVITE_MS + 50);
   document.dispatchEvent(new Event('cc:social'));
 }
 // A SQUAD START REFUSED AFTER THE ENGINE HAD ALREADY SHOWN THIS CLIENT A LOBBY

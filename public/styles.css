@@ -2042,20 +2042,48 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   /* Task 9's classes, none of them Task 8's (.sqb .sqn .sqc .sqf are taken).
      A row keeps every fixed part flex:none and lets only the name shrink, so
      no row is ever wider than the box however long the callsign. */
-  #bay .sqm{display:flex;align-items:center;gap:calc(5 * var(--u));height:calc(26 * var(--u));padding:0 calc(4 * var(--u)) 0 calc(6 * var(--u));
-     border-radius:calc(4 * var(--u));border:1px solid rgba(140,168,214,.22);background:rgba(16,21,31,.6);margin-top:calc(4 * var(--u))}
+  #bay .sqm{display:flex;align-items:center;gap:calc(5 * var(--u));height:calc(30 * var(--u));padding:0 calc(8 * var(--u)) 0 calc(6 * var(--u));
+     border-radius:calc(4 * var(--u));border:1px solid rgba(140,168,214,.22);background:rgba(16,21,31,.6);margin-top:calc(6 * var(--u))}
   #bay .sqm .pdot{width:calc(11 * var(--u));height:calc(11 * var(--u))}
   #bay .sqmn{flex:1;min-width:0;display:flex;align-items:baseline;gap:calc(3 * var(--u))}
   #bay .sqmt{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:Rajdhani,system-ui,sans-serif;
      font-weight:600;font-size:calc(12.5 * var(--u));line-height:1.1;color:#e6ecfb}
   #bay .sqmy{flex:none;font-family:Rajdhani,system-ui,sans-serif;font-weight:500;font-size:calc(10.5 * var(--u));color:#7f8fb5}
-  #bay .sql{flex:none;font-family:"JetBrains Mono",monospace;font-size:calc(6.5 * var(--u));font-weight:700;letter-spacing:.08em;
+  /* The status words -- Leader, Not ready, Reconnecting, In your squad -- are
+     8u (review T9-R1-10): at 6.5u they were under 5 px on a 667x375 phone, and
+     the name beside them is the part that gives way. */
+  #bay .sql{flex:none;font-family:"JetBrains Mono",monospace;font-size:calc(8 * var(--u));font-weight:700;letter-spacing:.08em;
      text-transform:uppercase;color:#ffb46b}
-  #bay .sqr{flex:none;display:inline-flex;align-items:center;font-family:"JetBrains Mono",monospace;font-size:calc(6.5 * var(--u));
+  #bay .sqr{flex:none;display:inline-flex;align-items:center;font-family:"JetBrains Mono",monospace;font-size:calc(8 * var(--u));
      font-weight:500;letter-spacing:.03em;text-transform:uppercase;color:#7f8fb5}
   #bay .sqr.on svg{width:calc(12 * var(--u));height:calc(12 * var(--u));fill:#3ce88f;display:block}
   #bay .sqr.dr{color:#ffb46b}
   #bay .sqm .pmb,#bay .sqic{width:calc(18 * var(--u));height:calc(18 * var(--u));border-radius:calc(3 * var(--u))}
+  /* EACH SMALL CONTROL TAKES A TAP ACROSS 34u (review T9-R1-11): 24.3 CSS px on
+     a 667x375 phone, where the 18u square it draws is 13 px. The square it
+     draws is unchanged; a transparent layer reaching 8u past its edge all
+     round is the target. (Remove and Decline carry a 1px border and the layer
+     is placed from inside it, so theirs adds the 1px back; the menu has none:
+     #bay button sets border:0.) The row is 30u and rows stand 6u apart, so a
+     target reaches 2u past its row and stands 2u clear of the next row's --
+     clear, not merely touching: Chrome's hit test was measured reaching about
+     a pixel past a layer's edge. The row's 8u right padding keeps the last
+     control's layer inside the row.
+     A MEMBER ROW'S MENU reaches LEFT only, 16u, over the status words, which
+     take no tap: the leader's Remove then stands 10u beside it, the two
+     targets 2u clear of each other, and the name keeps that width.
+     DECLINE HAS THE LARGER GAP rather than a question (the Friends screen's
+     own Decline is one tap, and the box's sends the same frame): it stands 16u
+     from Accept and 24u from the menu, so between its target and each
+     neighbour's there is 8u of ground that takes no tap at all. */
+  #bay .sqm .pmb,#bay .sqic{position:relative}
+  #bay .sqm .pmb::before,#bay .sqic::before{content:'';position:absolute;inset:calc(-8 * var(--u))}
+  #bay .sqic::before{inset:calc(-8 * var(--u) - 1px)}
+  #bay .sqml .sqm .pmb::before{inset:calc(-8 * var(--u)) 0 calc(-8 * var(--u)) calc(-16 * var(--u))}
+  #bay .sqml .sqm .pmb + .sqic{margin-left:calc(5 * var(--u))}
+  #bay .sqm .sbtn + .sqic{margin-left:calc(11 * var(--u))}
+  #bay .sqm .sqic + .pmb{margin-left:calc(19 * var(--u))}
+  #bay .sqm .sbtn + .pmb{margin-left:calc(3 * var(--u))}
   #bay .sqm .pmb svg{width:calc(11 * var(--u));height:calc(11 * var(--u))}
   #bay .sqic{flex:none;display:grid;place-items:center;border:1px solid rgba(140,168,214,.26);color:#8798bd;transition:.15s}
   #bay .sqic svg{width:calc(9 * var(--u));height:calc(9 * var(--u));display:block}
@@ -2116,7 +2144,7 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   /* Two classes deep: #bay .sbtn is later in this file at one class. */
   #bay .sqm .sbtn,#bay .sqfc .sbtn{flex:none;height:calc(18 * var(--u));padding:0 calc(7 * var(--u));font-size:calc(9.5 * var(--u));letter-spacing:.06em}
   #bay .sqy{flex:none;display:inline-flex;align-items:center;gap:calc(3 * var(--u));font-family:"JetBrains Mono",monospace;
-     font-size:calc(6.5 * var(--u));font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#3ce88f}
+     font-size:calc(8 * var(--u));font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#3ce88f}
   #bay .sqy svg{width:calc(11 * var(--u));height:calc(11 * var(--u));fill:currentColor;flex:none}
   #bay .sqnt{margin-top:calc(4 * var(--u));font-size:calc(10 * var(--u));line-height:1.25;font-weight:500;color:#9dadd0}
   #bay .sqfc{display:flex;align-items:center;gap:calc(6 * var(--u));margin-top:calc(6 * var(--u));font-family:Rajdhani,system-ui,sans-serif;

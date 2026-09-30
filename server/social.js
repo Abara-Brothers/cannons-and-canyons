@@ -40,8 +40,9 @@ import { createSquads } from './squads.js';
 // nothing a client can keep. See blockKey below. randomBytes/createHmac are
 // synchronous, need no wiring and are not mockable state, so the "everything is
 // injected" rule this module is built on is untouched — there is still no
-// Supabase, no socket and no real clock here.
-import { createHmac, randomBytes } from 'node:crypto';
+// Supabase, no socket and no real clock here. createCipheriv mints a squad
+// row's handle (rowRid below) and is the same kind of pure computation.
+import { createCipheriv, createHmac, randomBytes } from 'node:crypto';
 
 // The frame types that belong here and never reach the engine. server.js
 // imports this set to decide what to intercept; keep it in step with the
@@ -1086,6 +1087,42 @@ export function createSocial({
     return f;
   };
 
+  // A ROW'S OWN HANDLE, `rid` (D-UI-3). A kick has to name ONE ROW, and
+  // nothing else in the frame can: an index names whoever stands at that
+  // place when the frame lands — somebody else, once an earlier row has
+  // left — and a guest's `id` is null by the frame's own rule. So every row
+  // carries a handle of its own, and squadTarget takes nothing else.
+  //
+  // MINTED THE FIRST TIME THE ROW IS SHOWN OR AIMED AT, KEPT WHILE IT STANDS.
+  // The key is the row OBJECT, in a WeakMap: the machine never replaces a
+  // row it keeps — a Ready, a drop and a resume write fields on it, and a
+  // guest row adopted at sign-in (squads.adoptGuest) is the same object
+  // under a new key — so each of those keeps its handle, and a row that has
+  // gone takes its entry with it. Nothing is added to the machine's shape,
+  // and no seat path ever sees it.
+  //
+  // NEVER GIVEN TO ANOTHER ROW, BY CONSTRUCTION RATHER THAN BY LUCK. Each
+  // handle is this process's next count run through AES-128 under a key
+  // minted at start-up. A block cipher is a permutation, so two counts can
+  // never give one handle — in this squad or any other, for the life of the
+  // process — and without the key the output is indistinguishable from
+  // random bytes: it says nothing about who joined when, how many rows the
+  // server has made, or whose row it is. It is never an account id.
+  const RID_KEY = randomBytes(16);
+  const rids = new WeakMap();
+  let ridCount = 0n;
+  function rowRid(m) {
+    let r = rids.get(m);
+    if (r) return r;
+    const block = Buffer.alloc(16);
+    block.writeBigUInt64BE((ridCount += 1n), 8);
+    const c = createCipheriv('aes-128-ecb', RID_KEY, null);
+    c.setAutoPadding(false);
+    r = Buffer.concat([c.update(block), c.final()]).toString('hex');
+    rids.set(m, r);
+    return r;
+  }
+
   // THE FRAME, WITHOUT `you` AND `held` — the fields that differ per
   // destination.
   //
@@ -1129,6 +1166,7 @@ export function createSocial({
       mode: sq.mode, tees: sq.tees, max: sq.max,
       members: sq.members.map((m) => ({
         id: m.userId,
+        rid: rowRid(m),
         callsign: m.userId ? displayName(names.get(m.userId)) : null,
         guest: m.guest,
         online: m.userId ? isOnline(m.userId) : !!(m.ws && m.ws.readyState === 1),
@@ -1206,29 +1244,21 @@ export function createSocial({
   const heldElsewhere = (ws, keys) => [...new Set(keys)].map((k) => [k, rowSocketOf(k)]).filter(([, w]) => w && w !== ws);
   const tellMoved = (held) => { for (const [k, w] of held) if (rowSocketOf(k) !== w) endedElsewhere(w); };
 
-  // WHO A KICK IS AIMED AT. Two forms, and — the rule targetId below applies
-  // to `handle` — ONE FORM, NEVER EITHER:
-  //   `i`  — the row's index in the last snapshot, and the ONLY way to name a
-  //          GUEST, whose row carries `id: null` by the frame's own rule.
-  //          When `i` is present IT is the target, and `id` goes back to being
-  //          the pure correlation echo it is on every other frame — which
-  //          matters, because public/app.js's socialSend mints a numeric `id`
-  //          onto every frame that carries none. Read `id` first and every
-  //          index kick from the real client would miss.
-  //   `id` — an account id the SERVER put in this squad's own roster. The
-  //          ordinary case, and it names one person however the roster moves.
-  // The index is accepted for a guest row and for nothing else, so a stale
-  // index can MISS and be refused but can never land on a signed-in member
-  // the leader did not aim at.
-  const squadTarget = (sq, msg) => {
-    if (msg.i !== undefined) {
-      if (!Number.isInteger(msg.i)) return null;
-      const m = sq.members[msg.i];
-      return m && m.guest ? m : null;
-    }
-    const id = wireId(msg.id);
-    return (id && sq.members.find((m) => m.userId === id)) || null;
-  };
+  // WHO A KICK IS AIMED AT: THE ROW WHOSE HANDLE IS `rid`, AND NOTHING ELSE
+  // NAMES ONE (D-UI-3). The leader's box read that handle off the roster on
+  // its screen, and the frame spends time on the wire while other players
+  // come and go, so it lands on the row it was aimed at wherever that row
+  // now stands — or, when that row has gone, on nobody: a handle is never
+  // given to another row (rowRid), so a stale one can miss and be refused
+  // but can never land on a player the leader did not aim at. That is what
+  // the two forms this replaced could not promise: an index named whoever
+  // stood at that place by then, and an account id named a member who had
+  // left and come straight back. `id` is the pure correlation echo it is on
+  // every other frame (public/app.js's socialSend mints a numeric one onto
+  // every frame that carries none).
+  // STRICT EQUALITY AGAINST A HANDLE rowRid MINTED, so a rid that is absent,
+  // not a string, or not one of this squad's rows matches no row at all.
+  const squadTarget = (sq, msg) => sq.members.find((m) => rowRid(m) === msg.rid) || null;
 
   async function squadCreate(ws, msg) {
     const from = squadKey(ws);

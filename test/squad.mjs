@@ -48,6 +48,22 @@ const mkws = (userId = null, isGuest = false) => ({ readyState: 1, userId, isGue
 const frames = (ws, t) => ws._rx.filter((m) => m.type === t);
 const last = (ws) => ws._rx[ws._rx.length - 1];
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+// D-UI-3: EVERY ROSTER ROW CARRIES `rid`, a handle the server mints per row,
+// so no expected literal can spell it. `norid` takes out that one field and
+// nothing else -- any other field a row carried would still fail the
+// comparison -- and (rid) holds the handle itself to its rules.
+const norid = (r) => { if (!r || typeof r !== 'object' || !('rid' in r)) return r; const { rid, ...rest } = r; return rest; };
+const RID32 = /^[0-9a-f]{32}$/;
+// THE HANDLE OF A ROW, read off the LAST roster `w` was sent -- the way the
+// leader's box reads it -- by account id, or by index for a guest row. It
+// THROWS when there is no such row, so a kick is never sent as
+// `rid: undefined` and left to pass for a refusal it did not earn.
+const ridOf = (w, who) => {
+  const f = [...w.rx].reverse().find((m) => m && m.type === 'squad' && m.op === 'state');
+  const r = f && (typeof who === 'number' ? f.members[who] : f.members.find((m) => m.id === who));
+  if (!r || typeof r.rid !== 'string') throw new Error('no rid for ' + JSON.stringify(who) + ' in the last roster ' + JSON.stringify(f && f.members));
+  return r.rid;
+};
 const FIVE = ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'];   // a duel's draft size
 // The engine's send(), the spelling test/social.mjs uses.
 const send = (ws, m) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); };
@@ -829,10 +845,10 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
     ok('(h1) the snapshot is the frame the plan fixes, with `you` per destination');
   else fail('(h1) frame: ' + JSON.stringify(seen));
   const rows = seen && seen.members;
-  if (rows && rows.length === 3
-    && JSON.stringify(rows[0]) === JSON.stringify({ id: SQA, callsign: 'Anvil Six', guest: false, online: true, ready: false, dropped: false })
-    && JSON.stringify(rows[1]) === JSON.stringify({ id: SQD, callsign: null, guest: false, online: true, ready: false, dropped: false })
-    && JSON.stringify(rows[2]) === JSON.stringify({ id: null, callsign: null, guest: true, online: true, ready: false, dropped: false }))
+  if (rows && rows.length === 3 && rows.every((r) => RID32.test(r.rid))
+    && JSON.stringify(norid(rows[0])) === JSON.stringify({ id: SQA, callsign: 'Anvil Six', guest: false, online: true, ready: false, dropped: false })
+    && JSON.stringify(norid(rows[1])) === JSON.stringify({ id: SQD, callsign: null, guest: false, online: true, ready: false, dropped: false })
+    && JSON.stringify(norid(rows[2])) === JSON.stringify({ id: null, callsign: null, guest: true, online: true, ready: false, dropped: false }))
     ok('(h1) a proved name is shown, an unprovable one keeps its row as null, and a guest row is null and flagged');
   else fail('(h1) rows: ' + JSON.stringify(rows));
   // THE NAME THE GUEST SENT NEVER LEAVES THE SERVER. It arrived off the wire
@@ -963,7 +979,10 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
   else fail('(h4) guest after end: ' + JSON.stringify(g1.rx));
 }
 
-// ---- (h5) kick: by id, by index for a guest, and never by a member --------
+// ---- (h5) kick: by the row's handle, a guest's included, and never by a member
+// CHANGED BY TASK 9's FIX PASS (D-UI-3): a kick names its row by `rid` and by
+// nothing else. The index form and the account-id form went with it; (rid-k)
+// below proves each of them now kicks nobody.
 {
   const st = sqstore(); const S = sqSocial(st);
   const wa = sqUp(S, sqws(SQA)), wb = sqUp(S, sqws(SQB)), g = sqws(null);
@@ -971,61 +990,238 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
   const code = (sqlast(wa, 'state') || {}).code;
   await S.handle(wb, { type: 'squad', op: 'join', code });
   await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
-  // A SIGNED-IN SOCKET IN NO SQUAD leads nothing.
+  const ridA = ridOf(wa, SQA), ridB = ridOf(wa, SQB), ridG = ridOf(wa, 2);
+  // A SIGNED-IN SOCKET IN NO SQUAD leads nothing, whatever handle it holds.
   const wz = sqUp(S, sqws(SQE));
-  await S.handle(wz, { type: 'squad', op: 'kick', id: SQB });
+  await S.handle(wz, { type: 'squad', op: 'kick', rid: ridB });
   if (wz.rx.length === 1 && sqat(wz).op === 'kick' && sqat(wz).error === 'not_leader') ok('(h5) a kick from a player in no squad is answered not_leader');
   else fail('(h5) kick from outside: ' + JSON.stringify(wz.rx));
   wb.rx.length = 0;
-  await S.handle(wb, { type: 'squad', op: 'kick', id: SQA });
+  await S.handle(wb, { type: 'squad', op: 'kick', rid: ridA, id: 'k1' });
   const refused = sqlast(wb);
-  if (refused && refused.op === 'kick' && refused.error === 'not_leader' && refused.id === SQA) ok('(h5) a member who is not the leader is answered not_leader');
+  if (refused && refused.op === 'kick' && refused.error === 'not_leader' && refused.id === 'k1') ok('(h5) a member who is not the leader is answered not_leader');
   else fail('(h5) member kick: ' + JSON.stringify(refused));
-  // THE INDEX FORM CARRIES A CORRELATION id, because public/app.js's
-  // socialSend mints a numeric one onto every frame that has none. With `i`
-  // present, `id` is the echo and nothing else.
+  // A STRANGER: a row of ANOTHER squad, named by its own real handle. It is
+  // no row of this one, that squad is not touched, and -- asked while this
+  // squad still has members a wrong answer could land on -- nobody here is.
+  await S.handle(wz, { type: 'squad', op: 'create' });
+  const ridZ = ridOf(wz, SQE);
+  wz.rx.length = 0; wb.rx.length = 0; g.rx.length = 0;
+  await S.handle(wa, { type: 'squad', op: 'kick', rid: ridZ, id: 'k3' });
+  if (sqat(wa).op === 'kick' && sqat(wa).error === 'no_such_member' && sqat(wa).id === 'k3' && wz.rx.length === 0 && wb.rx.length === 0 && g.rx.length === 0)
+    ok('(h5) kicking a stranger answers no_such_member');
+  else fail('(h5) stranger kick: ' + JSON.stringify(sqlast(wa)) + ' stranger got ' + JSON.stringify(wz.rx) + ' members got ' + JSON.stringify([wb.rx, g.rx]));
+  await S.handle(wa, { type: 'squad', op: 'kick', rid: ridA, id: 'k4' });
+  if (sqat(wa).op === 'kick' && sqat(wa).error === 'no_such_member' && sqat(wa).id === 'k4' && wb.rx.length === 0 && g.rx.length === 0)
+    ok('(h5) the leader naming themselves answers no_such_member and they stay');
+  else fail('(h5) self kick: ' + JSON.stringify(sqlast(wa)));
+  // THE FRAME CARRIES A CORRELATION id, because public/app.js's socialSend
+  // mints a numeric one onto every frame that has none. `rid` is the target;
+  // `id` is the echo and nothing else.
   wa.rx.length = 0; g.rx.length = 0;
-  await S.handle(wa, { type: 'squad', op: 'kick', i: 2, id: 7 });
+  await S.handle(wa, { type: 'squad', op: 'kick', rid: ridG, id: 7 });
   const seen = sqlast(wa, 'state'), told = sqlast(g);
   if (seen && seen.id === 7 && seen.members.length === 2 && told && told.op === 'ended' && told.reason === 'kicked' && told.id === undefined)
-    ok('(h5) a guest row is kicked by its index, with the client\'s numeric id on the frame, and the guest is told');
+    ok('(h5) a guest row is kicked by its rid, with the client\'s numeric id on the frame, and the guest is told');
   else fail('(h5) guest kick: ' + JSON.stringify(seen) + ' told ' + JSON.stringify(told));
-  // THE INDEX FORM IS FOR GUEST ROWS ONLY. A stale index can miss; it can
-  // never land on a signed-in member the leader did not aim at.
-  wa.rx.length = 0;
-  await S.handle(wa, { type: 'squad', op: 'kick', i: 1, id: 'k2' });
-  const miss = sqlast(wa);
-  if (miss && miss.op === 'kick' && miss.error === 'no_such_member' && miss.id === 'k2' && sqf(wb, 'ended').length === 0)
-    ok('(h5) an index aimed at a signed-in row is refused, and that member stays put');
-  else fail('(h5) index at a signed-in row: ' + JSON.stringify(miss));
-  const junk = [];
-  for (const i of [-1, 9, 1.5, '2', null]) {
-    wa.rx.length = 0;
-    await S.handle(wa, { type: 'squad', op: 'kick', i, id: 'kj' });
-    const r = sqlast(wa);
-    if (!(r && r.op === 'kick' && r.error === 'no_such_member')) junk.push([i, r]);
-  }
-  if (!junk.length) ok('(h5) an index that is not a row — negative, past the end, fractional, a string, null — kicks nobody');
-  else fail('(h5) junk indexes answered ' + JSON.stringify(junk));
-  // BY ACCOUNT ID: `id` is the target, and the echo is that same uuid
-  // (BINDING resolution 3's shape, the way friend remove spells it).
+  // A SIGNED-IN MEMBER BY THEIR ROW'S rid TOO, and the echo is the frame's id.
   wa.rx.length = 0; wb.rx.length = 0;
-  await S.handle(wa, { type: 'squad', op: 'kick', id: SQB.toUpperCase() });
-  const byId = sqlast(wa, 'state');
-  if (byId && byId.members.length === 1 && byId.id === SQB.toUpperCase() && sqlast(wb) && sqat(wb).op === 'ended' && sqat(wb).reason === 'kicked')
-    ok('(h5) a signed-in member is kicked by account id, in any case');
-  else fail('(h5) id kick: ' + JSON.stringify(byId) + ' ' + JSON.stringify(sqlast(wb)));
-  await S.handle(wa, { type: 'squad', op: 'kick', id: SQE });
-  if (sqat(wa).op === 'kick' && sqat(wa).error === 'no_such_member') ok('(h5) kicking a stranger answers no_such_member');
-  else fail('(h5) stranger kick: ' + JSON.stringify(sqlast(wa)));
-  await S.handle(wa, { type: 'squad', op: 'kick', id: SQA });
-  if (sqat(wa).op === 'kick' && sqat(wa).error === 'no_such_member' && sqat(wa).id === SQA) ok('(h5) the leader naming themselves answers no_such_member and they stay');
-  else fail('(h5) self kick: ' + JSON.stringify(sqlast(wa)));
+  await S.handle(wa, { type: 'squad', op: 'kick', rid: ridB, id: 'k2' });
+  const byRid = sqlast(wa, 'state');
+  if (byRid && byRid.members.length === 1 && byRid.id === 'k2' && sqlast(wb) && sqat(wb).op === 'ended' && sqat(wb).reason === 'kicked')
+    ok('(h5) a signed-in member is kicked by their row\'s rid');
+  else fail('(h5) rid kick: ' + JSON.stringify(byRid) + ' ' + JSON.stringify(sqlast(wb)));
   // THE KICKED PLAYER IS OUT OF IT: a join elsewhere is not a move out of it.
   wb.rx.length = 0;
   await S.handle(wb, { type: 'squad', op: 'leave' });
   if (wb.rx.length === 1 && sqat(wb).op === 'left') ok('(h5) a kicked member is in no squad afterwards');
   else fail('(h5) kicked member after: ' + JSON.stringify(wb.rx));
+}
+
+// ---- (rid) D-UI-3: EVERY ROW CARRIES ITS OWN HANDLE, AND A KICK AIMS AT IT --
+// A kick must name ONE ROW, and nothing else in the frame can. An index names
+// whoever stands at that place when the frame lands, which after an earlier
+// row has left is somebody else (task 2's review); a guest's `id` is null by
+// the frame's own rule. So every row of every state frame carries `rid`:
+// opaque, never an account id, minted per row, the same for as long as that
+// row stands, and never given to another row of the squad -- and a kick names
+// a row by it and by nothing else, so a kick that was aimed before the roster
+// moved lands on the row it was aimed at or on nobody.
+{
+  const HEX32 = /^[0-9a-f]{32}$/;
+  const rows = (w) => (sqat(w, 'state').members || []);
+  // A rid read off a socket's LAST roster, the way the leader's box reads it.
+  // THROWS when the row is not there, so a kick below can never be sent with
+  // `rid: undefined` and pass for a refusal it did not earn.
+  const ridAt = (w, i) => { const r = rows(w)[i]; if (!r || typeof r.rid !== 'string') throw new Error('(rid) no rid at row ' + i + ' of ' + JSON.stringify(rows(w))); return r.rid; };
+  const shape = (w) => rows(w).map((m) => m.id || 'guest');
+  const st = sqstore(); const S = sqSocial(st);
+  const wa = sqUp(S, sqws(SQA)), wb = sqUp(S, sqws(SQB)), g = sqws(null), h = sqws(null);
+  await S.handle(wa, { type: 'squad', op: 'create' });
+  const code = sqat(wa, 'state').code;
+  await S.handle(wb, { type: 'squad', op: 'join', code, name: 'B', skin: 'olive' });
+  await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+  // EVERY ROW, IN EVERY FRAME, TO EVERY SOCKET: a string of 32 hex digits,
+  // distinct within its frame, and none of them an account id or carrying one.
+  const all = [wa, wb, g].flatMap((w) => sqf(w, 'state'));
+  const flat = (id) => id.replace(/-/g, '').toLowerCase();
+  const badShape = all.filter((f) => !f.members.every((m) => typeof m.rid === 'string' && HEX32.test(m.rid))
+    || new Set(f.members.map((m) => m.rid)).size !== f.members.length);
+  const leaks = all.flatMap((f) => f.members.map((m) => m.rid)).filter((r) => typeof r === 'string' && [SQA, SQB].some((id) => r === id || r.includes(flat(id))));
+  if (all.length >= 6 && !badShape.length && !leaks.length)
+    ok('(rid) every row of every state frame, a guest\'s included, carries a 32-hex-digit rid, distinct within the frame and never an account id');
+  else fail('(rid) rid shape: ' + JSON.stringify({ frames: all.length, badShape, leaks }));
+  // EVERY SOCKET IS TOLD THE SAME HANDLE FOR THE SAME ROW.
+  const views = [wa, wb, g].map((w) => rows(w).map((m) => m.rid));
+  if (views[0].length === 3 && views[0].every((r) => typeof r === 'string') && views.every((v) => same(v, views[0])))
+    ok('(rid) the leader, a member and a guest are told the same rid for each row');
+  else fail('(rid) views disagree: ' + JSON.stringify(views));
+
+  // STABLE WHILE THE ROW STANDS: through a Ready, a mode change, and a row
+  // above it arriving and leaving again.
+  const before = views[0];
+  await S.handle(wb, { type: 'squad', op: 'ready', ready: true, loadout: FIVE });
+  await S.handle(wa, { type: 'squad', op: 'mode', mode: 'ffa' });
+  await S.handle(h, { type: 'squad', op: 'join', code, name: 'H', skin: 'gold' });
+  const withH = rows(wa).map((m) => m.rid);
+  await S.handle(h, { type: 'squad', op: 'leave' });
+  const after = rows(wa).map((m) => m.rid);
+  if (before.every((r) => typeof r === 'string') && typeof withH[3] === 'string'
+    && same(after, before) && same(withH.slice(0, 3), before) && withH.length === 4 && !before.includes(withH[3]))
+    ok('(rid) a row keeps its rid through a Ready, a mode change and another row joining and leaving');
+  else fail('(rid) not stable: ' + JSON.stringify({ before, withH, after }));
+
+  // A KICK BY rid removes exactly that row, answers the leader the roster
+  // with the correlation id the client minted, and tells the removed player.
+  // (Each check that reads a rid off a roster is wrapped: a roster with no
+  // rid makes ridAt throw, and that is this check failing, not the file.)
+  try {
+  const gRid = ridAt(wa, 2);
+  wa.rx.length = 0; wb.rx.length = 0; g.rx.length = 0;
+  await S.handle(wa, { type: 'squad', op: 'kick', rid: gRid, id: 7 });
+  const kr = sqlast(wa, 'state');
+  if (kr && kr.id === 7 && same(shape(wa), [SQA, SQB]) && same(kr.members.map((m) => m.rid), before.slice(0, 2))
+    && same(sqf(g), [{ type: 'squad', op: 'ended', reason: 'kicked' }]) && sqf(wb, 'ended').length === 0)
+    ok('(rid) a kick by rid removes that row, answers the leader the roster with its numeric id, and tells the removed guest');
+  else fail('(rid) kick by rid: ' + JSON.stringify({ leader: wa.rx, guest: g.rx }));
+
+  // NEVER GIVEN TO ANOTHER ROW. The same account out and back in is a NEW
+  // row with a new rid; a new guest standing where the old one stood too.
+  const bOld = ridAt(wa, 1);
+  await S.handle(wb, { type: 'squad', op: 'leave' });
+  await S.handle(wb, { type: 'squad', op: 'join', code, name: 'B', skin: 'olive' });
+  const g2 = sqws(null);
+  await S.handle(g2, { type: 'squad', op: 'join', code, name: 'G2', skin: 'gold' });
+  const seen = [...new Set([wa, wb, g, g2, h].flatMap((w) => sqf(w, 'state')).flatMap((f) => f.members.map((m) => m.rid)).concat(before, withH))];
+  if (same(shape(wa), [SQA, SQB, 'guest']) && ridAt(wa, 1) !== bOld && ridAt(wa, 2) !== gRid && seen.length === 6)
+    ok('(rid) a rid is never reused: the same account rejoining, and a new guest in the old guest\'s place, each get a new one -- six rows, six rids');
+  else fail('(rid) reused: ' + JSON.stringify({ shape: shape(wa), bOld, bNew: rows(wa)[1], gRid, g2: rows(wa)[2], seen }));
+  } catch (e) { fail('(rid) kick by rid and reuse: ' + e.message); }
+}
+
+// ---- (rid-k) A KICK AIMED BEFORE THE ROSTER MOVED REMOVES NOBODY WRONGLY -----
+// The leader's box reads a rid off the roster on screen and the frame is on
+// the wire while other players come and go. It lands on the row it was aimed
+// at wherever that row now stands, or on nobody.
+{
+  const rows = (w) => (sqat(w, 'state').members || []);
+  const ridAt = (w, i) => { const r = rows(w)[i]; if (!r || typeof r.rid !== 'string') throw new Error('(rid-k) no rid at row ' + i + ' of ' + JSON.stringify(rows(w))); return r.rid; };
+  const shape = (w) => rows(w).map((m) => m.id || 'guest');
+  const three = async () => {
+    const S = sqSocial(sqstore());
+    const wa = sqUp(S, sqws(SQA)), g1 = sqws(null), g2 = sqws(null);
+    await S.handle(wa, { type: 'squad', op: 'create' });
+    const code = sqat(wa, 'state').code;
+    await S.handle(g1, { type: 'squad', op: 'join', code, name: 'G1', skin: 'gold' });
+    await S.handle(g2, { type: 'squad', op: 'join', code, name: 'G2', skin: 'gold' });
+    return { S, wa, g1, g2, code };
+  };
+  // (i) Aimed at row 2; row 1 leaves first. The kick still lands on the guest
+  //     it was aimed at, who now stands at row 1.
+  try {
+    const { S, wa, g1, g2 } = await three();
+    const aim = ridAt(wa, 2);
+    await S.handle(g1, { type: 'squad', op: 'leave' });
+    g2.rx.length = 0;
+    await S.handle(wa, { type: 'squad', op: 'kick', rid: aim, id: 'k1' });
+    const r = sqlast(wa, 'state');
+    if (r && r.id === 'k1' && same(shape(wa), [SQA]) && same(sqf(g2), [{ type: 'squad', op: 'ended', reason: 'kicked' }]))
+      ok('(rid-k) a kick aimed at a guest lands on that guest after a row above them has left');
+    else fail('(rid-k) moved target: ' + JSON.stringify({ leader: wa.rx.slice(-2), g2: g2.rx }));
+  } catch (e) { fail('(rid-k) moved target: ' + e.message); }
+  // (ii) Aimed at row 2; that guest leaves and ANOTHER guest joins into the
+  //      same place, so the roster has the same shape as when it was aimed.
+  //      The old handle names nobody now: refused, and the new guest stays.
+  try {
+    const { S, wa, g2, code } = await three();
+    const aim = ridAt(wa, 2);
+    await S.handle(g2, { type: 'squad', op: 'leave' });
+    const g3 = sqws(null);
+    await S.handle(g3, { type: 'squad', op: 'join', code, name: 'G3', skin: 'gold' });
+    const shaped = shape(wa);
+    wa.rx.length = 0; g3.rx.length = 0;
+    await S.handle(wa, { type: 'squad', op: 'kick', rid: aim, id: 'k2' });
+    const r = sqlast(wa);
+    if (same(shaped, [SQA, 'guest', 'guest']) && r && r.op === 'kick' && r.error === 'no_such_member' && r.id === 'k2'
+      && wa.rx.length === 1 && g3.rx.length === 0 && S.hasSquad(code))
+      ok('(rid-k) a kick aimed at a guest who has since left is refused no_such_member, and the guest now standing in that place stays');
+    else fail('(rid-k) stale guest aim: ' + JSON.stringify({ shaped, leader: wa.rx, g3: g3.rx }));
+  } catch (e) { fail('(rid-k) stale guest aim: ' + e.message); }
+  // (iii) The same for an ACCOUNT row: the member leaves and comes straight
+  //       back, which is a new row. The aim was at the row that left.
+  try {
+    const S = sqSocial(sqstore());
+    const wa = sqUp(S, sqws(SQA)), wb = sqUp(S, sqws(SQB));
+    await S.handle(wa, { type: 'squad', op: 'create' });
+    const code = sqat(wa, 'state').code;
+    await S.handle(wb, { type: 'squad', op: 'join', code, name: 'B', skin: 'olive' });
+    const aim = ridAt(wa, 1);
+    await S.handle(wb, { type: 'squad', op: 'leave' });
+    await S.handle(wb, { type: 'squad', op: 'join', code, name: 'B', skin: 'olive' });
+    wa.rx.length = 0; wb.rx.length = 0;
+    await S.handle(wa, { type: 'squad', op: 'kick', rid: aim, id: 'k3' });
+    const r = sqlast(wa);
+    if (r && r.op === 'kick' && r.error === 'no_such_member' && r.id === 'k3' && wa.rx.length === 1 && wb.rx.length === 0)
+      ok('(rid-k) a kick aimed at a member who has since left and rejoined is refused, and they stay');
+    else fail('(rid-k) stale account aim: ' + JSON.stringify({ leader: wa.rx, member: wb.rx }));
+  } catch (e) { fail('(rid-k) stale account aim: ' + e.message); }
+  // NOTHING ELSE NAMES A ROW. No handle, a handle that is not a string or not
+  // one of this squad's, the leader's own, one from another squad -- and the
+  // two forms a kick used to take, an index and an account id -- all kick
+  // nobody, and each answer carries the frame's correlation id.
+  try {
+    const { S, wa, g1, g2, code } = await three();
+    const wb = sqUp(S, sqws(SQB));
+    await S.handle(wb, { type: 'squad', op: 'join', code, name: 'B', skin: 'olive' });
+    const wz = sqUp(S, sqws(SQE));
+    await S.handle(wz, { type: 'squad', op: 'create' });
+    const other = ridAt(wz, 0), mine = ridAt(wa, 0), real = ridAt(wa, 3), g1Rid = ridAt(wa, 1);
+    const junk = [{}, { rid: '' }, { rid: 'x' }, { rid: 0 }, { rid: 42 }, { rid: null }, { rid: {} }, { rid: [real] }, { rid: true },
+      { rid: 'constructor' }, { rid: '__proto__' }, { rid: 'toString' }, { rid: real.toUpperCase() }, { rid: real + ' ' },
+      { rid: mine }, { rid: other }, { i: 1 }, { i: 2 }, { id: SQB }];
+    const missed = [];
+    for (const [n, j] of junk.entries()) {
+      SQCLOCK += 3000;                  // one squad token back per kick: the bucket is 20 a minute
+      wa.rx.length = 0;
+      const frame = Object.assign({ type: 'squad', op: 'kick' }, j, 'id' in j ? {} : { id: 'j' + n });
+      await S.handle(wa, frame);
+      const r = sqlast(wa);
+      if (!(wa.rx.length === 1 && r.op === 'kick' && r.error === 'no_such_member' && r.id === frame.id)) missed.push([j, wa.rx]);
+    }
+    // The roster as it stands now, asked for: a refusal pushes none.
+    wa.rx.length = 0;
+    await S.handle(wa, { type: 'squad', op: 'resume', id: 'now' });
+    if (!missed.length && same(shape(wa), [SQA, 'guest', 'guest', SQB]) && sqf(g1, 'ended').length === 0 && sqf(g2, 'ended').length === 0 && sqf(wb, 'ended').length === 0)
+      ok('(rid-k) no rid, a junk one, the leader\'s own, another squad\'s, an index or an account id: every such kick is refused no_such_member and removes nobody');
+    else fail('(rid-k) junk targets: ' + JSON.stringify({ missed, shape: shape(wa), rx: wa.rx }));
+    SQCLOCK += 60000;
+    // A REAL HANDLE DOES NOT MAKE A MEMBER A LEADER.
+    wb.rx.length = 0;
+    await S.handle(wb, { type: 'squad', op: 'kick', rid: g1Rid, id: 'm' });
+    if (wb.rx.length === 1 && sqat(wb).error === 'not_leader' && sqat(wb).id === 'm' && sqf(g1, 'ended').length === 0 && rows(wa).length === 4)
+      ok('(rid-k) a member sending a real rid is answered not_leader, and nobody is removed');
+    else fail('(rid-k) member with a real rid: ' + JSON.stringify(wb.rx));
+  } catch (e) { fail('(rid-k) junk targets and a member\'s kick: ' + e.message); }
 }
 
 // ---- (h6) the per-op gate (R3), one op at a time, and the bucket -----------
@@ -1064,7 +1260,8 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
   await S.handle(anon, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold', id: 'a' });
   const arow = sqlast(anon, 'state');
   const seenBy = JSON.stringify(host.rx) + JSON.stringify(anon.rx);
-  if (arow && arow.id === 'a' && arow.you === 1 && JSON.stringify(arow.members[1]) === JSON.stringify({ id: null, callsign: null, guest: true, online: true, ready: false, dropped: false })
+  if (arow && arow.id === 'a' && arow.you === 1 && RID32.test(arow.members[1].rid)
+    && JSON.stringify(norid(arow.members[1])) === JSON.stringify({ id: null, callsign: null, guest: true, online: true, ready: false, dropped: false })
     && !seenBy.includes('a00000000001'))
     ok('(h6) an anonymous account joins as a guest row — id null — and its account id reaches no screen');
   else fail('(h6) anonymous join: ' + JSON.stringify(arow));
@@ -1117,8 +1314,9 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
   if (dj && dj.id === 'd1' && dj.you === 0 && dj.members.length === 3 && wa2.rx.length === 1)
     ok('(h7) a join from a second device of a member is answered, with that member\'s row as `you`');
   else fail('(h7) second-device join got ' + JSON.stringify(wa2.rx));
+  const gRid = ridOf(wa2, 2);
   wa2.rx.length = 0;
-  await S.handle(wa2, { type: 'squad', op: 'kick', i: 2, id: 'd2' });
+  await S.handle(wa2, { type: 'squad', op: 'kick', rid: gRid, id: 'd2' });
   const dk = sqlast(wa2, 'state');
   if (dk && dk.id === 'd2' && dk.members.length === 2 && sqlast(g) && sqat(g).op === 'ended')
     ok('(h7) the leader kicking from a second device is answered too');
@@ -1179,7 +1377,7 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
     await S.handle(wa, { type: 'squad', op: 'create', id: 'c' });
     const r = wa.rx[0] || {};
     if (wa.rx.length === 1 && r.op === 'state' && r.id === 'c' && SQCODE_RE.test(r.code) && r.you === 0
-      && JSON.stringify(r.members) === JSON.stringify([{ id: SQA, callsign: null, guest: false, online: true, ready: false, dropped: false }]))
+      && JSON.stringify(r.members.map(norid)) === JSON.stringify([{ id: SQA, callsign: null, guest: false, online: true, ready: false, dropped: false }]))
       ok('(h8) a create whose name read fails is answered with the real squad, the row kept and the name null');
     else fail('(h8) create over a failing name read got ' + JSON.stringify(wa.rx));
   }
@@ -1200,8 +1398,8 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
     const nulls = [{ id: SQC, callsign: null, guest: false, online: true, ready: false, dropped: false },
       { id: SQB, callsign: null, guest: false, online: true, ready: false, dropped: false }];
     if (wb.rx.length === 1 && mine.op === 'state' && mine.id === 'j' && mine.code === other && mine.you === 1
-      && JSON.stringify(mine.members) === JSON.stringify(nulls)
-      && host.code === other && host.you === 0 && JSON.stringify(host.members) === JSON.stringify(nulls)
+      && JSON.stringify((mine.members || []).map(norid)) === JSON.stringify(nulls)
+      && host.code === other && host.you === 0 && JSON.stringify((host.members || []).map(norid)) === JSON.stringify(nulls)
       && same(host.fits, { duel: true, ffa: true, boss: true, aliens: true, golf: true })
       && left.code === code && left.members.length === 1 && left.members[0].callsign === 'Anvil Six')
       ok('(h8) a join whose name read fails tells the joiner, every member of the new squad and the squad left behind');
@@ -1224,10 +1422,11 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
       && seen.members && seen.members.length === 2 && seen.members.every((m) => m.callsign === null) && seen.you === 1)
       ok('(h8) a leave is answered once and the members left behind get their roster, rows kept, names null');
     else fail('(h8) leave over a failing name read: leaver ' + JSON.stringify(wc.rx) + ' seen ' + JSON.stringify(seen));
+    const bRid = ridOf(wa, SQB);
     wa.rx.length = 0; wb.rx.length = 0;
-    await S.handle(wa, { type: 'squad', op: 'kick', id: SQB });
+    await S.handle(wa, { type: 'squad', op: 'kick', rid: bRid, id: 'k' });
     const k = wa.rx[0] || {};
-    if (wa.rx.length === 1 && k.op === 'state' && k.id === SQB && k.members.length === 1 && k.members[0].callsign === null
+    if (wa.rx.length === 1 && k.op === 'state' && k.id === 'k' && k.members.length === 1 && k.members[0].callsign === null
       && sqat(wb).op === 'ended' && sqat(wb).reason === 'kicked')
       ok('(h8) a kick whose name read fails is answered with the real roster, and the kicked member is told');
     else fail('(h8) kick over a failing name read: leader ' + JSON.stringify(wa.rx) + ' kicked ' + JSON.stringify(wb.rx));
@@ -1351,10 +1550,11 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
     const code = sqat(wa, 'state').code;
     await S.handle(wb, { type: 'squad', op: 'join', code });
     await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+    const gRid = ridOf(wa, 2), bRid = ridOf(wa, SQB);
     wa.userId = SQE; wa.isGuest = false; S.onAuth(wa);
     wa.rx.length = 0; g.rx.length = 0;
-    await S.handle(wa, { type: 'squad', op: 'kick', i: 2, id: 'k' });
-    await S.handle(wa, { type: 'squad', op: 'kick', id: SQB });
+    await S.handle(wa, { type: 'squad', op: 'kick', rid: gRid, id: 'k' });
+    await S.handle(wa, { type: 'squad', op: 'kick', rid: bRid, id: 'k2' });
     if (wa.rx.length === 2 && wa.rx.every((f) => f.op === 'kick' && f.error === 'not_leader') && g.rx.length === 0 && sqf(wb, 'ended').length === 0)
       ok('(h9) a socket now signed in as someone else cannot kick from the leader\'s row it still holds');
     else fail('(h9) kick after an account switch: ' + JSON.stringify(wa.rx));
@@ -1372,9 +1572,10 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
     await S.handle(wb, { type: 'squad', op: 'create' });
     const two = sqat(wb, 'state').code;
     await S.handle(h, { type: 'squad', op: 'join', code: two, name: 'H', skin: 'gold' });
+    const hRid = ridOf(wb, 1);                          // h's row, as squad two's leader sees it
     g.userId = SQB; g.isGuest = false; S.onAuth(g);   // g's account now leads squad two, elsewhere
     g.rx.length = 0; h.rx.length = 0;
-    await S.handle(g, { type: 'squad', op: 'kick', i: 1, id: 'k' });
+    await S.handle(g, { type: 'squad', op: 'kick', rid: hRid, id: 'k' });
     if (g.rx.length === 1 && g.rx[0].op === 'kick' && g.rx[0].error === 'not_leader' && h.rx.length === 0)
       ok('(h9) a socket holding a guest row cannot kick in the squad its account leads from another device');
     else fail('(h9) cross-squad kick: ' + JSON.stringify(g.rx) + ' guest in squad two got ' + JSON.stringify(h.rx));
@@ -1432,11 +1633,11 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
     const code = sqat(wa, 'state').code;
     await S.handle(wc, { type: 'squad', op: 'join', code });
     await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
-    const ra = wa.rx;
+    const ra = wa.rx, gRid = ridOf(wa, 2);
     Object.assign(wa, { rx: { push() { throw new Error('half-closed'); } } });
     wc.rx.length = 0;
     let threw = null;
-    try { await S.handle(wa, { type: 'squad', op: 'kick', i: 2, id: 'k' }); } catch (e) { threw = e; }
+    try { await S.handle(wa, { type: 'squad', op: 'kick', rid: gRid, id: 'k' }); } catch (e) { threw = e; }
     wa.rx = ra;
     const seen = sqat(wc, 'state');
     if (!threw && seen.members && seen.members.length === 2 && sqat(g).op === 'ended')
@@ -3010,8 +3211,11 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     const code = (last5(wl, 'state') || {}).code;
     CLOCK5 += 1;
     await S.handle(wm, { type: 'squad', op: 'join', code, name: 'Bee', skin: 'olive' });
+    // Each row's handle (D-UI-3), read before the frames are cleared, for a
+    // check that kicks: account id -> rid.
+    const rids = Object.fromEntries(((last5(wl, 'state') || {}).members || []).map((r) => [r.id, r.rid]));
     wl.rx.length = 0; wm.rx.length = 0;
-    return { wl, wm, code };
+    return { wl, wm, code, rids };
   };
   const ids5 = (f) => (f && f.members ? f.members.map((r) => r.id || 'guest') : null);
 
@@ -3131,7 +3335,7 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     const t0 = CLOCK5;
     close5(S, wm);
     await flush5();
-    await S.handle(wl, { type: 'squad', op: 'kick', id: MEM });      // removed while dropped
+    await S.handle(wl, { type: 'squad', op: 'kick', rid: ridOf(wl, MEM) });      // removed while dropped
     CLOCK5 = t0 + 30000;
     const wm2 = up5(S, mkws5(MEM));
     await S.handle(wm2, { type: 'squad', op: 'join', code });
@@ -3244,7 +3448,7 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     const stranded = f && f.members[1];
     await S.handle(wl, { type: 'squad', op: 'start', loadout: RACK5, id: 's' });
     const refused = wl.rx.find((x) => x.id === 's');
-    await S.handle(wl, { type: 'squad', op: 'kick', id: THIRD });
+    await S.handle(wl, { type: 'squad', op: 'kick', rid: ridOf(wl, THIRD) });
     const cleared = last5(wl, 'state');
     if (stranded && stranded.online === false && stranded.dropped === false
       && same(refused, { type: 'squad', op: 'start', error: 'member_offline', at: 1, id: 's' }) && cleared && same(ids5(cleared), [LEAD]))
@@ -3723,7 +3927,7 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     const release = st.hold();
     const p = S.handle(wm2, { type: 'squad', op: 'resume', code, id: 'h5' });
     await st.entered;
-    await S.handle(wl, { type: 'squad', op: 'kick', id: MEM });
+    await S.handle(wl, { type: 'squad', op: 'kick', rid: ridOf(wl, MEM) });
     wl.rx.length = 0;
     release();
     await p;
@@ -3763,11 +3967,12 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     // is answered gone rather than handed the roster it was just removed from.
     const st = store5();
     const S = social5(st, { cw: mkClockwork() });
-    const { wl, wm, code } = await pair5(S);
+    const { wl, wm, code, rids } = await pair5(S);
+    if (typeof rids[MEM] !== 'string') throw new Error('(d13) no rid for the member: ' + JSON.stringify(rids));
     const release = st.hold();
     const p = S.handle(wm, { type: 'squad', op: 'resume', code, id: 'r8' });
     const inside = await within5(st.entered);
-    const k = S.handle(wl, { type: 'squad', op: 'kick', id: MEM });
+    const k = S.handle(wl, { type: 'squad', op: 'kick', rid: rids[MEM] });
     release();
     await p; await k;
     await flush5();
@@ -3869,9 +4074,10 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     // A KICK ALREADY TELLS THE ROW'S SOCKET, from whichever device of the
     // leader sends it (task 2 holds the victim's socket before the removal).
     const S = social5(store5(), { cw: mkClockwork() });
-    const { wm } = await pair5(S);
+    const { wm, rids } = await pair5(S);
+    if (typeof rids[MEM] !== 'string') throw new Error('(d15) no rid for the member: ' + JSON.stringify(rids));
     const wl2 = up5(S, mkws5(LEAD));
-    await S.handle(wl2, { type: 'squad', op: 'kick', id: MEM });
+    await S.handle(wl2, { type: 'squad', op: 'kick', rid: rids[MEM] });
     if (same(wm.rx, [{ type: 'squad', op: 'ended', reason: 'kicked' }]))
       ok('(d15) a kick sent from the leader\'s second device tells the member on the row: ended, kicked');
     else fail('(d15) kick from a second device: ' + JSON.stringify(wm.rx));
@@ -4082,20 +4288,44 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   {
     // WHAT A SIGNED-IN GUEST ROW BECOMES. With no other row for the account
     // anywhere, the row the socket holds becomes the ACCOUNT's: shown by its
-    // proved callsign, and addressable by the account id like anyone else's.
+    // proved callsign. CHANGED BY TASK 9's FIX PASS (D-UI-3): it is the SAME
+    // ROW, so it keeps the handle it had as a guest, and a kick the leader
+    // aimed at the guest row before the sign-in still lands on it.
     const S = social5(store5(), { cw: mkClockwork() });
     const { wl, code } = await pair5(S);
     const g = mkws5(null);
     await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
+    const asGuest = ridOf(wl, 2);
     switch5(S, g, THIRD);
     await flush5();
     const shown = last5(wl, 'state') || {};
     g.rx.length = 0;
-    await S.handle(wl, { type: 'squad', op: 'kick', id: THIRD });
+    await S.handle(wl, { type: 'squad', op: 'kick', rid: asGuest });
     if (shown.members && shown.members[2] && shown.members[2].id === THIRD && shown.members[2].callsign === 'Crater Two'
-      && shown.members[2].guest === false && same(sq5(g, 'ended'), [{ type: 'squad', op: 'ended', reason: 'kicked' }]))
-      ok('(d18) a guest who signs in with no row elsewhere becomes that account\'s row: its callsign is shown and it answers to the account id');
-    else fail('(d18) adopted row: ' + JSON.stringify({ shown: shown.members, g: g.rx }));
+      && shown.members[2].guest === false && shown.members[2].rid === asGuest
+      && same(sq5(g, 'ended'), [{ type: 'squad', op: 'ended', reason: 'kicked' }]))
+      ok('(d18) a guest who signs in with no row elsewhere becomes that account\'s row: its callsign is shown, it keeps the rid it had as a guest, and a kick by that rid lands');
+    else fail('(d18) adopted row: ' + JSON.stringify({ asGuest, shown: shown.members, g: g.rx }));
+  }
+  {
+    // (rid-d) D-UI-3: A DROP AND A RESUME ARE THE SAME ROW. The handle the
+    // squad knew the member by is the one shown while they are dropped and the
+    // one shown once a new socket of theirs takes the row back -- to the
+    // leader and to the member's own new socket alike.
+    const S = social5(store5(), { cw: mkClockwork() });
+    const { wl, wm, code, rids } = await pair5(S);
+    const mem = (w) => { const f = last5(w, 'state'); return (f && f.members.find((r) => r.id === MEM)) || null; };
+    close5(S, wm);
+    await flush5();
+    const dropped = mem(wl);
+    const wm2 = up5(S, mkws5(MEM));
+    await S.handle(wm2, { type: 'squad', op: 'resume', code, id: 'back' });
+    await flush5();
+    const back = mem(wl), own = mem(wm2);
+    if (RID32.test(rids[MEM] || '') && dropped && dropped.dropped === true && dropped.rid === rids[MEM]
+      && back && back.dropped === false && back.rid === rids[MEM] && own && own.rid === rids[MEM])
+      ok('(rid-d) a member keeps their rid while dropped and after a new socket of theirs resumes the row');
+    else fail('(rid-d) drop and resume: ' + JSON.stringify({ first: rids[MEM], dropped, back, own }));
   }
   {
     // THE VARIANT TASK 2 ACCEPTED is left as it is: g holds a guest row in X
@@ -4751,16 +4981,34 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     const w = { [lead]: up6(S, lead) };
     const code = await create6(S, w[lead]);
     for (const id of others) { w[id] = up6(S, id); await join6(S, w[id], code, 'Member'); }
+    // Each row's handle (D-UI-3), read off the leader's last roster before the
+    // frames are cleared, for a twin that kicks: account id -> rid.
+    const rids = Object.fromEntries(((last6(w[lead], 'squad', 'state') || {}).members || []).map((r) => [r.id, r.rid]));
     clear6(...Object.values(w));
-    return { st, S, w, code, mark: TRACE6.length };
+    return { st, S, w, code, rids, mark: TRACE6.length };
+  };
+  // A twin's kick, by the handle world6 read. THROWS when there is none, so a
+  // twin never sends `rid: undefined` and passes for a refusal.
+  const kick6 = (t, by, id) => {
+    if (typeof t.rids[id] !== 'string') throw new Error('no rid for ' + id + ' in ' + JSON.stringify(t.rids));
+    return t.S.handle(t.w[by], { type: 'squad', op: 'kick', rid: t.rids[id] });
   };
   // A frame with its squad code blanked, so two worlds can be compared. ONLY
   // A CODE THE FRAME CARRIES is blanked: a frame without one is compared as
   // it is, so a code that appears where it should not is a difference.
-  const blank6 = (f) => ('code' in f ? { ...f, code: '-' } : f);
+  // AND EACH ROW'S `rid` (D-UI-3, task 9's fix pass): one row's handle in
+  // ONE world, so it differs between twins exactly as the code does. It is
+  // not blanked to nothing: each handle becomes the order in which it first
+  // appears in what is being compared, so twins whose rows keep -- or change
+  // -- their handles differently still differ.
+  const ridTok6 = (seen, r) => { if (!seen.has(r)) seen.set(r, 'rid' + seen.size); return seen.get(r); };
+  const blank6 = (f, seen = new Map()) => {
+    const g = 'code' in f ? { ...f, code: '-' } : f;
+    return Array.isArray(g.members) ? { ...g, members: g.members.map((m) => (m && 'rid' in m ? { ...m, rid: ridTok6(seen, m.rid) } : m)) } : g;
+  };
   // What `socks` received from `mark` on, in the order it was sent, each
   // frame tagged with its socket's place in the list and its code blanked.
-  const seq6 = (mark, socks) => TRACE6.slice(mark).filter(([w]) => socks.includes(w)).map(([w, f]) => socks.indexOf(w) + ':' + JSON.stringify(blank6(f)));
+  const seq6 = (mark, socks) => { const seen = new Map(); return TRACE6.slice(mark).filter(([w]) => socks.includes(w)).map(([w, f]) => socks.indexOf(w) + ':' + JSON.stringify(blank6(f, seen))); };
   const bare6 = (f) => (f ? JSON.stringify(blank6(f)) : null);
 
   // ---- (blk-a) the blocker LEADS: the blocked party leaves the squad -------
@@ -4794,7 +5042,7 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     // byte for byte but for the code. No frame names the block; that is the
     // bar, and probing can still infer one (D-BLOCK-2 A, accepted).
     const t = await world6(A, [B, C]);
-    await t.S.handle(t.w[A], { type: 'squad', op: 'kick', id: B });
+    await kick6(t, A, B);
     await t.S.handle(t.w[A], { type: 'friend', op: 'remove', id: B });
     const mine6 = seq6(mark, [w[B], w[C]]), twin6 = seq6(t.mark, [t.w[B], t.w[C]]);
     if (mine6.length === 3 && same6(mine6, twin6))
@@ -5424,7 +5672,7 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     await S.handle(w[A], { type: 'block', op: 'add', id: B });
     const t = await world6(A, [B, C]);
     const tb2 = up6(t.S, B);
-    await t.S.handle(t.w[A], { type: 'squad', op: 'kick', id: B });
+    await kick6(t, A, B);
     await t.S.handle(t.w[A], { type: 'friend', op: 'remove', id: B });
     const mine6 = seq6(mark, [w[B], wb2, w[C]]), twin6 = seq6(t.mark, [t.w[B], tb2, t.w[C]]);
     if (!got6(wb2, 'squad').length && same6(mine6, twin6))
@@ -5640,13 +5888,14 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     // (i) The blocker LEADS, and the blocked member's socket is down. B's
     // second device, holding no row, is live throughout.
     const run = async (act) => {
-      const { S, w, code } = await world6(A, [B, C]);
+      const t = await world6(A, [B, C]);
+      const { S, w, code } = t;
       const wb2 = up6(S, B);
       w[B].readyState = 3; S.onClose(w[B]);
       await settle6();
       clear6(w[A], w[C], wb2);
       const m = TRACE6.length;
-      await act(S, w);
+      await act(S, w, t);
       const seq = seq6(m, [w[B], wb2, w[C]]);
       const wb3 = up6(S, B);
       await S.handle(wb3, { type: 'squad', op: 'resume', code, id: 'rs' });
@@ -5654,7 +5903,7 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
       return { wb2, seq, gone: ans6(wb3, 'rs'), roster: ans6(w[C], 'rc') };
     };
     const blk = await run((S, w) => S.handle(w[A], { type: 'block', op: 'add', id: B }));
-    const kick = await run(async (S, w) => { await S.handle(w[A], { type: 'squad', op: 'kick', id: B }); await S.handle(w[A], { type: 'friend', op: 'remove', id: B }); });
+    const kick = await run(async (S, w, t) => { await kick6(t, A, B); await S.handle(w[A], { type: 'friend', op: 'remove', id: B }); });
     if (same6(ids6(blk.roster), [A, C]) && same6(blk.gone, { type: 'squad', op: 'gone', id: 'rs' }) && !got6(blk.wb2, 'squad').length)
       ok('(blk-o) the leader blocks a member whose socket is down: the dropped row goes, no squad frame reaches any of their sockets, and a resume answers exactly gone');
     else fail('(blk-o) blocked while dropped: ' + JSON.stringify({ roster: blk.roster, gone: blk.gone, b2: blk.wb2.rx }));
@@ -5893,7 +6142,7 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     const tn = t6ws(null);
     await join6(t.S, tn, t.code, 'Bunker');
     const tm = TRACE6.length;
-    await t.S.handle(t.wa, { type: 'squad', op: 'kick', i: 2 });
+    await t.S.handle(t.wa, { type: 'squad', op: 'kick', rid: ridOf(t.wa, 2) });
     const mine = seq6(m, [wn, g.wc]), twin = seq6(tm, [tn, t.wc]);
     if (mine.length === 2 && same6(mine, twin))
       ok('(sg-a) and what the signed-in player and the squad receive is exactly a kick of the row as it stood, nameless, in the same order');
@@ -6678,7 +6927,7 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     const after = last6(wc, 'squad', 'state');
     await S.handle(wa, { type: 'squad', op: 'start', loadout: RACK5, id: 's2' });
     if (inside && same6(during, { type: 'squad', op: 'start', error: 'member_offline', at: 2, id: 's1' }) && !named
-      && roster && same6(roster.members[2], { id: null, callsign: null, guest: true, online: true, ready: true, dropped: false })
+      && roster && RID32.test(roster.members[2].rid) && same6(norid(roster.members[2]), { id: null, callsign: null, guest: true, online: true, ready: true, dropped: false })
       && after && same6(ids6(after), [A, C, B]) && after.members[2].callsign === 'Bunker Nine'
       && same6(ans6(wa, 's2'), { type: 'squad', op: 'start', ok: true, code: 'RM6F', id: 's2' }) && same6(seated, [3]))
       ok('(sg-h) while the door reads, the row stays a nameless guest row and Start answers member_offline for it; once B is let in the row is B\'s by name and Start seats it');
@@ -6833,9 +7082,11 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     await S.handle(wc, { type: 'squad', op: 'ready', ready: true, loadout: RACK5 });
     await S.handle(wn, { type: 'squad', op: 'ready', ready: true, loadout: RACK5 });
     if (sign) { st.boom.add('blockIdsOf'); hello6(S, wn, B); await settle6(); }
+    // Each row's handle (D-UI-3), by index, read before the frames are cleared.
+    const rids = ((last6(wa, 'squad', 'state') || {}).members || []).map((r) => r.rid);
     clear6(wa, wc, wn);
     st.calls.length = 0;
-    return { st, S, wa, wc, wn, code, seated };
+    return { st, S, wa, wc, wn, code, seated, rids };
   };
   const start6 = async (g, id) => { await g.S.handle(g.wa, { type: 'squad', op: 'start', loadout: RACK5, id }); return ans6(g.wa, id); };
   const OFF6 = (id) => ({ type: 'squad', op: 'start', error: 'member_offline', at: 2, id });
@@ -6870,7 +7121,8 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     const s4 = await start6(g, 's4');
     const t = await failWorld6(null, false);
     const tm = TRACE6.length;
-    await t.S.handle(t.wa, { type: 'squad', op: 'kick', i: 2 });
+    if (typeof t.rids[2] !== 'string') throw new Error('(sg-i) no rid for row 2: ' + JSON.stringify(t.rids));
+    await t.S.handle(t.wa, { type: 'squad', op: 'kick', rid: t.rids[2] });
     const twin = seq6(tm, [t.wn, t.wc]);
     if (same6(s3, OFF6('s3')) && mine.length === 2 && same6(mine, twin)
       && same6(s4, OK6('s4')) && g.seated.length === 1 && same6(g.seated[0].map((w) => [g.wa, g.wc].indexOf(w)), [0, 1]))
@@ -7124,7 +7376,7 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     }
     h.release(); await pb;
     const t = await world6(A, [B, C]);
-    await t.S.handle(t.w[A], { type: 'squad', op: 'kick', id: B });
+    await kick6(t, A, B);
     await t.S.handle(t.w[B], { type: 'squad', op: 'resume', id: 'rb' });
     await t.S.handle(t.w[A], { type: 'friend', op: 'remove', id: B });
     const mine6 = seq6(mark, [w[B], w[C]]), twin6 = seq6(t.mark, [t.w[B], t.w[C]]);
@@ -7529,7 +7781,7 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
       h.release(); await pb;
       await S.handle(wc, { type: 'squad', op: 'resume', id: 'y1' });
       const t = await world6(A, [B]);
-      await t.S.handle(t.w[A], { type: 'squad', op: 'kick', id: B });
+      await kick6(t, A, B);
       await t.S.handle(t.w[B], { type: 'squad', op: 'resume', id: 'rb' });
       await t.S.handle(t.w[A], { type: 'friend', op: 'remove', id: B });
       const mine = seq6(mark, [wb]), twin = seq6(t.mark, [t.w[B]]);
@@ -7858,7 +8110,7 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
       await g.S.handle(g.w[A], { type: 'block', op: 'add', id: B });
       const t = await world6(lead, others, []);
       const t2 = up6(t.S, B);
-      await t.S.handle(t.w[A], how === 'kick' ? { type: 'squad', op: 'kick', id: B } : { type: 'squad', op: 'leave' });
+      await (how === 'kick' ? kick6(t, A, B) : t.S.handle(t.w[A], { type: 'squad', op: 'leave' }));
       const mine = seq6(g.mark, [g.w[B], g2, g.w[C]]), twin = seq6(t.mark, [t.w[B], t2, t.w[C]]);
       if (!(same6(ans6(g.w[A], B), BLOCKED6) && mine.length === 2 && same6(mine, twin) && !g2.rx.length))
         bad.push({ lead, block: mine, [how]: twin, b2: g2.rx });
@@ -7898,7 +8150,7 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
       const t = await world6(A, [B, C], []);
       await t.st.addRequest(B, A);
       const t2 = up6(t.S, B);
-      await t.S.handle(t.w[A], { type: 'squad', op: 'kick', id: B });
+      await kick6(t, A, B);
       await t.S.handle(t.w[A], { type: 'friend', op: 'decline', from: B });
       const mine = seq6(g.mark, [g.w[B], g2, g.w[C]]), twin = seq6(t.mark, [t.w[B], t2, t.w[C]]);
       if (!(mine.length === 4 && same6(mine, twin) && same6((last6(g2, 'friends') || {}).requests, { in: [], out: [] })))

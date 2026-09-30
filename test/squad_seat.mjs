@@ -1027,11 +1027,12 @@ async function sectionB() {
         // ready again: the Readies were spent by the first start.
         const c = await pilot(R.port, 3);
         const j = await ask(c, { op: 'join', code: s.code, name: 'Pilot3', skin: 'olive' });
-        // A kick names its target by `id` (Task 2's frame), which is also the
-        // field a reply echoes — so it is sent as is, and its answer is the
-        // roster that comes back carrying that id.
-        put(a, { type: 'squad', op: 'kick', id: ID(2) });
-        const k = await wait(a, (m) => m.type === 'squad' && m.id === ID(2));
+        // A kick names its target by the row's `rid` (D-UI-3, task 9's fix
+        // pass), read off the last roster the leader was shown with that
+        // member in it; its answer is the roster, carrying the frame's id.
+        const seen = a._rx.filter((m) => m.type === 'squad' && m.op === 'state' && (m.members || []).some((r) => r.id === ID(2)));
+        const row2 = seen.length ? seen[seen.length - 1].members.find((r) => r.id === ID(2)) : null;
+        const k = row2 && typeof row2.rid === 'string' ? await ask(a, { op: 'kick', rid: row2.rid }) : null;
         const ra = await ask(a, { op: 'ready', ready: true, loadout: RACK(0) });
         const rc = await ask(c, { op: 'ready', ready: true, loadout: RACK(2) });
         const from = a._rx.length;

@@ -558,8 +558,14 @@ function sqTabs() {
   // Friends tab says both in words.
   const fName = 'Friends' + (sn ? ', ' + onN + ' online' : '')
     + (inN > 0 ? ', ' + inN + ' request' + (inN === 1 ? '' : 's') + ' waiting' : '');
+  // A PENDING INVITE LIGHTS THE SQUAD TAB (D-UI-4, review T9-R1-6), seen from
+  // the Friends tab too -- where a player building a squad is looking -- and
+  // exactly while the Squad pane draws its row (sqInvShown). The dot is
+  // aria-hidden, so the tab's name says it in words.
+  const invUp = sqInvShown();
+  const sName = invUp ? 'Squad' + (count >= 0 ? ', ' + count + ' of ' + SQ_MAX : '') + ', invite waiting' : '';
   return '<div class="sqt" role="tablist">'
-    + sqTab('squad', 'Squad', count < 0 ? '' : count + ' / ' + SQ_MAX, count >= 0, false, false)
+    + sqTab('squad', 'Squad', count < 0 ? '' : count + ' / ' + SQ_MAX, count >= 0, invUp, false, sName)
     + sqTab('friends', 'Friends', sn ? String(onN) : '', !!sn, inN > 0, true, fName)
     + '</div>';
 }
@@ -713,21 +719,25 @@ const sqAErr = (s) => '<p class="sqae' + (s ? '' : ' hidden') + '">' + esc(s || 
 // refuses it all the same (task 5), so it is never shown a tick. The menu is on
 // every row but your own (report.self and block.self can only fail) and a
 // guest's (a guest has no id to report); the leader's Remove is on every row
-// but their own, a guest's included -- the server names a guest by its index.
+// but their own, a guest's included, and names the row by its handle, `rid`
+// (D-UI-3): a row the server gave no handle is a row no kick can name.
+const sqRid = (p) => (p && typeof p.rid === 'string' && p.rid ? p.rid : '');
 function sqRow(p, i, sn, ctl) {
   const you = i === sn.you, name = nameOf(p), lead = sqIsLead(sn, p);
   const lit = !!p.online && !p.dropped;
   const st = p.dropped ? '<span class="sqr dr">Reconnecting</span>'
     : p.ready ? '<span class="sqr on" role="img" aria-label="Ready" title="Ready">' + IC.tick + '</span>'
     : '<span class="sqr">Not ready</span>';
-  const kick = ctl.lead && !you && !lead && (p.id != null || p.guest);
+  const kick = ctl.lead && !you && !lead && !!sqRid(p);
   return '<div class="sqm">'
     + '<span class="pdot' + (lit ? ' on' : '') + '" title="' + (p.dropped ? 'Reconnecting' : lit ? 'Online' : 'Offline') + '">' + IC.dot + '</span>'
     + '<span class="sqmn"><span class="sqmt">' + esc(name) + '</span>' + (you ? '<span class="sqmy">(you)</span>' : '') + '</span>'
     + (lead ? '<span class="sql">Leader</span>' : '') + st
     + (you || p.id == null ? '' : menuBtn(p.id, 'id', name, false, !named(p)))
-    + (kick ? '<button class="sqic" data-sq="kick:' + i + '" title="Remove from the squad" aria-label="Remove '
-      + esc(name) + ' from the squad"' + (ctl.on ? '' : ' disabled') + '>' + IC.cross + '</button>' : '')
+    // Never "Remove No callsign" to a screen reader (review T9-R1-12): the
+    // question in the footer says "this player", and so does the label.
+    + (kick ? '<button class="sqic" data-sq="kick:' + esc(sqRid(p)) + '" title="Remove from the squad" aria-label="Remove '
+      + (named(p) ? esc(p.callsign) : 'this player') + ' from the squad"' + (ctl.on ? '' : ' disabled') + '>' + IC.cross + '</button>' : '')
     + '</div>';
 }
 // THE DASHED ROW, while the squad has room: the row opens the Friends tab
@@ -764,10 +774,12 @@ function sqFoot(sn, ctl, hide) {
   const ms = sn.members || [], me = sqMe(sn), m = modeOf(sn.mode), seats = SQ_SEATS[m.id];
   const open = '<div class="sqft' + (hide ? ' hidden' : '') + '">';
   const short = m.draft - sqRack(m.id).length;
-  // THE LEADER'S OPEN QUESTION TAKES THE FOOTER while it is live (sqKickLive).
+  // THE LEADER'S OPEN QUESTION TAKES THE FOOTER while it is live (sqKickLive),
+  // and names the row as it stands NOW: the handle is the row's, and a guest
+  // who signed in since the question opened is shown by the name they have.
   if (ctl.lead && sq.kick && sqKickLive(sn)) {
-    const k = sq.kick;
-    return open + '<p class="sqfl sqq">Remove ' + (k.anon ? 'this player' : esc(k.name)) + ' from the squad?</p><div class="sqfb">'
+    const k = sqKickRow(sn);
+    return open + '<p class="sqfl sqq">Remove ' + (named(k) ? esc(k.callsign) : 'this player') + ' from the squad?</p><div class="sqfb">'
       + '<button class="ghost" data-sq="kcancel"' + (sq.busy ? ' disabled' : '') + '>Cancel</button>'
       + '<button class="go" data-sq="kok"' + (ctl.on && !sq.busy ? '' : ' disabled') + '>' + (sq.busy === 'kick' ? 'Removing' : 'Remove') + '</button></div></div>';
   }
@@ -779,9 +791,14 @@ function sqFoot(sn, ctl, hide) {
       : waiting ? 'Waiting for ' + waiting
       : esc(m.name) + ' &middot; ' + seats;
     const off = !ctl.on || !!sq.busy || !fit || waiting > 0 || short > 0;
+    // THE LEADER LEAVES TOO (D-UI-3). The design's Start-only footer left a
+    // leader no way out but joining another squad; the server's leave hands
+    // the lead to the earliest signed-in member (squads.js detach), or ends a
+    // squad nobody left in it can lead.
     return open + '<p class="sqfl">' + line + '</p><div class="sqfb">'
       + '<button class="go" data-sq="start"' + (off ? ' disabled' : '') + '>'
-      + (short > 0 && sq.busy !== 'start' ? 'Pick ' + short + ' more' : IC.play + 'Start') + '</button></div></div>';
+      + (short > 0 && sq.busy !== 'start' ? 'Pick ' + short + ' more' : IC.play + 'Start') + '</button>'
+      + sqLeaveBtn(ctl) + '</div></div>';
   }
   const ready = !!(me && me.ready && !me.dropped);
   const need = short > 0 && !ready;               // standing DOWN never needs a rack
@@ -789,8 +806,11 @@ function sqFoot(sn, ctl, hide) {
     + '<button class="go cy' + (ready ? ' on' : '') + '" data-sq="ready" aria-pressed="' + ready + '"'
     + (!ctl.on || sq.busy || need ? ' disabled' : '') + '>'
     + (sq.busy === 'ready' ? 'Sending' : need ? 'Pick ' + short + ' more' : (ready ? IC.tick : '') + 'Ready') + '</button>'
-    + '<button class="ghost" data-sq="leave"' + (!ctl.on || sq.busy ? ' disabled' : '') + '>'
-    + (sq.busy === 'leave' ? 'Leaving' : 'Leave') + '</button></div></div>';
+    + sqLeaveBtn(ctl) + '</div></div>';
+}
+function sqLeaveBtn(ctl) {
+  return '<button class="ghost" data-sq="leave"' + (!ctl.on || sq.busy ? ' disabled' : '') + '>'
+    + (sq.busy === 'leave' ? 'Leaving' : 'Leave') + '</button>';
 }
 // DESIGN 5.1 STATE 5: THE INVITE THIS PLAYER JUST RECEIVED (app.js's
 // CC_SQUAD_INVITE). It sits ABOVE whatever the pane shows -- no squad, an ended
@@ -800,12 +820,28 @@ function sqFoot(sn, ctl, hide) {
 // NOT SHOWN: an invite to the squad the player is standing in; the squad whose
 // invite Ignore hid ("for this invite only": that squad's, not every invite);
 // and the invite a Join from this row has already answered.
-function sqInvRow(sn) {
+// AND NOT ONE OLDER THAN TEN MINUTES (D-UI-4): app.js stamps it on arrival and
+// times it out, and the age is read here as well, because a timer in a
+// background tab can fire late. Without app.js's reader, nothing is fresh.
+const sqInvFresh = (inv) => !!(fn('socialInviteFresh') && socialInviteFresh(inv));
+// The invite the Squad pane shows, or null: ONE reader, for the row, the Join
+// and the tab's dot, so the three can never disagree.
+function sqInvOf(sn) {
   const inv = window.CC_SQUAD_INVITE;
   if (!inv || typeof inv.code !== 'string' || !inv.code || inv === sq.used || inv.code === sq.ignored
-      || (sn && sn.code === inv.code)) return '<div class="sqiw"></div>';
+      || (sn && sn.code === inv.code) || !sqInvFresh(inv)) return null;
+  return inv;
+}
+// Where sqPane draws the invite row: with a connection, and a squad in hand or a
+// signed-in account (a guest's no-squad states and the offline state draw none).
+const sqInvShown = () => wsReady() && (!!sq.snap || acctState() === 'in') && !!sqInvOf(sq.snap);
+// THE WRAPPER IS A STATUS REGION (D-UI-4): it is always in the tree, empty when
+// there is nothing to show, so a screen reader hears an invite arrive in it.
+function sqInvRow(sn) {
+  const inv = sqInvOf(sn);
+  if (!inv) return '<div class="sqiw" role="status"></div>';
   const f = inv.from || {}, joining = sq.busy === 'join';
-  return '<div class="sqiw"><div class="sqi">'
+  return '<div class="sqiw" role="status"><div class="sqi">'
     + '<p class="sqit">' + (named(f) ? esc(f.callsign) : 'A friend') + ' invites you to their squad &middot; '
     +   esc(inv.size) + ' / ' + esc(inv.max) + '</p>'
     + '<div class="sqib"><button class="sbtn on" data-sq="join:' + esc(inv.code) + '"' + (wsReady() && !sq.busy ? '' : ' disabled') + '>'
@@ -822,6 +858,9 @@ function sqInvRow(sn) {
 function sqJoin(code) {
   const inv = window.CC_SQUAD_INVITE;
   if (!inv || inv.code !== code || inv === sq.used || inv.code === sq.ignored) return;
+  // PAST ITS TEN MINUTES IT JOINS NOTHING (D-UI-4), however its button is
+  // pressed: the row goes instead.
+  if (!sqInvFresh(inv)) { sqPaint(); return; }
   sqOne({ type: 'squad', op: 'join', code: inv.code, name: has('myName') ? myName() : '', skin: has('mySkin') ? mySkin() : '' },
     { op: null, kind: 'squad.join', busy: 'join', sink: 'ierr', done: (m, mine) => {
       // fits() proves the type; the op is this callback's to prove.
@@ -908,30 +947,26 @@ function sqStart() {
   sqOne({ type: 'squad', op: 'start', loadout: picks }, { op: 'start', kind: 'squad.start', busy: 'start', say: sqStartSay });
 }
 // THE LEADER'S REMOVE ASKS FIRST (C11): "Remove <name> from the squad?", with
-// Cancel and Remove, in the footer. WHAT IT ASKS ABOUT IS PINNED when it opens:
-// an account row by its id, which names one person however the roster moves;
-// a guest -- who has no id -- by its INDEX, the only handle the server takes
-// for a guest (server/social.js squadTarget). An index is a guess the moment
-// the roster changes shape: an earlier row leaving shifts every later guest up
-// one, and the Remove would land on somebody else (task 2's review). So a
-// guest's question lives only while the roster FRAME it was asked on is the
-// one in the slot: any new roster withdraws it for good. Not the roster's
-// shape: guests all look alike on the wire (id null), so a roster can come
-// back to the same shape with a different guest in the row -- one leaves and
-// another joins. A Remove that arrives after that sends nothing. What is
-// left is the flight time of the frame itself -- a leave the server handles
-// between this send and its arrival; only a per-row handle in the roster can
-// close that, and it is the server's to add.
-function sqKickLive(sn) {
+// Cancel and Remove, in the footer. WHAT IT ASKS ABOUT IS PINNED when it opens,
+// to the row's HANDLE, `rid` (D-UI-3): the server mints one per row, keeps it
+// while that row stands and never gives it to another, and a kick names a row
+// by it and by nothing else (server/social.js squadTarget). So the question
+// follows its row wherever the roster moves it -- an earlier row leaving
+// shifts it up one, a guest signing in names it -- and is withdrawn for good
+// the moment that row is gone, even when another row, a guest who looks the
+// same on the wire, has since taken its place. A Remove that arrives after
+// that sends nothing, and says why. And a frame already on the wire when the
+// row leaves lands on nobody: the server answers no_such_member.
+const sqKickRow = (sn) => {
   const k = sq.kick;
-  if (!k || !sn || sn.code !== k.code) return false;
-  if (k.id) return (sn.members || []).some((p) => p.id === k.id);
-  return sn === k.snap;
-}
-function sqKickAsk(i) {
-  const sn = sq.snap, p = sn && Number.isInteger(i) ? (sn.members || [])[i] : null;
-  if (!sqLive(sn) || !sqIsLead(sn, sqMe(sn)) || sq.busy || !p || i === sn.you || sqIsLead(sn, p) || (p.id == null && !p.guest)) return;
-  sq.kick = { i, id: p.id || null, code: sn.code, snap: sn, name: nameOf(p), anon: !named(p) };
+  return k && sn && sn.code === k.code ? (sn.members || []).find((p) => sqRid(p) === k.rid) || null : null;
+};
+const sqKickLive = (sn) => !!sqKickRow(sn);
+function sqKickAsk(rid) {
+  const sn = sq.snap, ms = (sn && sn.members) || [];
+  const i = rid ? ms.findIndex((p) => sqRid(p) === rid) : -1, p = i < 0 ? null : ms[i];
+  if (!sqLive(sn) || !sqIsLead(sn, sqMe(sn)) || sq.busy || !p || i === sn.you || sqIsLead(sn, p)) return;
+  sq.kick = { rid, code: sn.code };
   sq.aerr = '';
   sqPaint();
   // THE KEYBOARD GOES TO CANCEL, so a stray Enter removes nobody.
@@ -945,7 +980,7 @@ function sqKickGo() {
     sq.kick = null; sq.aerr = 'The squad changed. Check the list and try again.'; sqPaint(); return;
   }
   // The server answers the leader with the roster itself (`op:'state'`).
-  sqOne(k.id ? { type: 'squad', op: 'kick', id: k.id } : { type: 'squad', op: 'kick', i: k.i },
+  sqOne({ type: 'squad', op: 'kick', rid: k.rid },
     { op: null, kind: 'squad.kick', busy: 'kick',
       done: (m, mine) => { if (m.op !== 'state') mine.aerr = socErr('squad.kick', 'unavailable'); },
       end: (mine) => { mine.kick = null; } });
@@ -1030,22 +1065,38 @@ const sqInvited = (id) => { const v = sq.invited.get(id); return !!(v && v.snap 
 // The line under the row an action was pressed on: red for a refusal, plain for
 // what the owner asked the inviter be told.
 const sqLineAt = (key) => (sq.fat !== key ? '' : sq.ferr ? sqAErr(sq.ferr) : sq.fnote ? '<p class="sqnt">' + esc(sq.fnote) + '</p>' : '');
+// WHY NO INVITE IS LIVE, said in one line above the rows (review T9-R1-13): a
+// title is never shown on a touch screen, and a column of dead buttons with no
+// word beside them reads as a broken feature. The lasting states sqCanInvite
+// refuses, in its order. Another action being out is not one of them: it is a
+// moment, the control that is out says its own word, and it says nothing here.
+// (No connection and not signed in never reach this: sqFriends says so in
+// place of the rows.)
+function sqInviteWhy() {
+  const sn = sq.snap;
+  if (sq.err) return 'Your squad could not be checked. Retry on the Squad tab.';
+  if (sn) return sn.held !== true ? SQ_OPEN : (sn.members || []).length >= SQ_MAX ? 'Your squad is full.' : '';
+  if (sqAway()) return window.CC_SQUAD_END === 'open' ? SQ_OPEN : SQ_ELSEWHERE;
+  return sq.known ? '' : 'Your squad has not loaded yet.';
+}
 function sqFriendRows(sn) {
   const fs = sn.friends || [], rin = (sn.requests && sn.requests.in) || [];
   const on = wsReady() && !sq.busy, can = sqCanInvite();
+  const why = !can && fs.length ? sqInviteWhy() : '';
   const full = !!(sq.snap && (sq.snap.members || []).length >= SQ_MAX);
   const req = rin.filter((p) => p && p.id).map((p) => {
     const name = nameOf(p), key = 'r:' + p.id;
     return '<div class="sqm sqfr" data-row="' + esc(key) + '"><span class="sqmn"><span class="sqmt">' + esc(name) + '</span></span>'
       + '<button class="sbtn" data-sq="accept:' + esc(p.id) + '"' + (on ? '' : ' disabled') + '>Accept</button>'
-      + '<button class="sqic" data-sq="decline:' + esc(p.id) + '" title="Decline" aria-label="Decline ' + esc(name) + '"' + (on ? '' : ' disabled') + '>' + IC.cross + '</button>'
+      + '<button class="sqic" data-sq="decline:' + esc(p.id) + '" title="Decline" aria-label="Decline ' + (named(p) ? esc(p.callsign) : 'this player') + '"' + (on ? '' : ' disabled') + '>' + IC.cross + '</button>'
       + menuBtn(p.id, 'id', name, false, !named(p)) + '</div>' + sqLineAt(key);
   }).join('');
   const rows = fs.filter((p) => p && p.id).map((p) => {
     const name = nameOf(p), key = 'f:' + p.id;
     const act = sqHas(p.id) ? '<span class="sqy">' + IC.tick + 'In your squad</span>'
       : sqInvited(p.id) ? '<button class="sbtn" data-sq="invite:' + esc(p.id) + '" disabled>Invited</button>'
-      : '<button class="sbtn" data-sq="invite:' + esc(p.id) + '"' + (full ? ' title="Your squad is full."' : '') + (can ? '' : ' disabled') + '>'
+      : '<button class="sbtn" data-sq="invite:' + esc(p.id) + '"' + (full ? ' title="Your squad is full."' : '') + (can ? '' : ' disabled')
+        + (why ? ' aria-describedby="sqInvWhy"' : '') + '>'
         + (sq.busy === 'invite' && sq.fat === key ? 'Inviting' : 'Invite') + '</button>';
     return '<div class="sqm sqfr" data-row="' + esc(key) + '"><span class="pdot' + (p.online ? ' on' : '') + '" title="' + (p.online ? 'Online' : 'Offline') + '">' + IC.dot + '</span>'
       + '<span class="sqmn"><span class="sqmt">' + esc(name) + '</span></span>' + act
@@ -1058,6 +1109,9 @@ function sqFriendRows(sn) {
   return '<div class="sqfw">'
     + (req ? '<p class="sqh">Requests &middot; ' + rin.length + '</p>' + req : '')
     + '<p class="sqh">Friends &middot; ' + fs.length + '</p>'
+    // Always in the tree, empty and hidden when there is nothing to say, so the
+    // rows beneath it keep their places (morphChildren is positional).
+    + '<p class="sqnt' + (why ? '' : ' hidden') + '" id="sqInvWhy">' + esc(why) + '</p>'
     + (rows || '<p class="sqnote">No friends yet. Share your friend code, or add a friend by theirs or by callsign.</p>'
       + (code ? '<div class="sqfc"><span>' + esc(code) + '</span><button class="sbtn" data-fr="copy">Copy</button></div>' : ''))
     + (orphan ? sqLineAt(sq.fat) : '')
@@ -1092,7 +1146,12 @@ function sqInviteFriend(id) {
   };
   if (sq.snap) return invite();
   sq.fat = key;
-  sqOne({ type: 'squad', op: 'create' }, { op: null, kind: 'squad.create', busy: 'invite', sink: 'ferr',
+  // THE CREATE CARRIES THIS DEVICE'S NAME AND PAINT, as a join does (review
+  // T9-R1-1): the server builds the leader's row from this frame and nothing
+  // refreshes it, so a create without them seats the leader under the one
+  // callsign an empty name rolls to, in the default paint.
+  sqOne({ type: 'squad', op: 'create', name: has('myName') ? myName() : '', skin: has('mySkin') ? mySkin() : '' },
+    { op: null, kind: 'squad.create', busy: 'invite', sink: 'ferr',
     done: (m, mine) => {
       if (m.op !== 'state') { mine.ferr = socErr('squad.create', 'unavailable'); return; }
       mine.known = true; mine.gone = false; mine.err = '';
@@ -1130,8 +1189,9 @@ function sqAct(v) {
   // The server answers a leave with its own op, `left`.
   if (op === 'leave') { if (sqLive(sq.snap)) sqOne({ type: 'squad', op: 'leave' }, { op: 'left', kind: 'squad.leave', busy: 'leave' }); return; }
   if (op === 'join') { sqJoin(arg); return; }
-  // The row's index, as the render drew it: `kick:<i>`.
-  if (op === 'kick') { if (/^\d{1,2}$/.test(arg)) sqKickAsk(Number(arg)); return; }
+  // The row's handle, as the render drew it: `kick:<rid>`. sqKickAsk opens a
+  // question only for a row of the roster on screen that carries it.
+  if (op === 'kick') { sqKickAsk(arg); return; }
   if (op === 'kcancel') { if (!sq.busy) { sq.kick = null; sqPaint(); } return; }
   if (op === 'kok') { sqKickGo(); return; }
   // The Friends tab's rows.
