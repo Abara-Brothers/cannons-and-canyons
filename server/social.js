@@ -43,8 +43,9 @@ import { createSquads } from './squads.js';
 // synchronous, need no wiring and are not mockable state, so the "everything is
 // injected" rule this module is built on is untouched — there is still no
 // Supabase, no socket and no real clock here. createCipheriv mints a squad
-// row's handle (rowRid below) and is the same kind of pure computation.
-import { createCipheriv, createHmac, randomBytes } from 'node:crypto';
+// row's handle (rowRid below), randomBytes a guest row's resume secret, and
+// timingSafeEqual compares one: the same kind of pure computation.
+import { createCipheriv, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 // The frame types that belong here and never reach the engine. server.js
 // imports this set to decide what to intercept; keep it in step with the
@@ -1222,14 +1223,49 @@ export function createSocial({
     };
   }
 
-  // THE FRAME AS ONE SOCKET MUST SEE IT (plan X4): the snapshot plus `you`
-  // and `held`, the mirror of forSocket above. For a caller that answers ONE
-  // socket — task 5's resume. A fan-out uses pushSquad, which builds the
-  // snapshot once and applies the same youIn and holds to every destination.
-  async function squadFrame(sq, ws) {
-    const base = await squadSnapshot(sq);
-    return { ...base, you: youIn(sq, ws), held: holds(sq, ws) };
+  // A GUEST ROW'S RESUME SECRET, `gk` (E1, the whole-branch fix wave). A
+  // guest's squad identity is its socket, so a guest whose tab reloaded
+  // (Back to menu after a match does) came back on a socket no row knew and
+  // fell out of the squad. So each guest row has a secret: 128 random bits,
+  // minted the first time the row is shown to its own socket and kept while
+  // the row stands (the row OBJECT is the key, as for rids, so a rekey or a
+  // drop keeps it and a row that has gone takes it with it). It is sent ONLY
+  // to the socket holding that row, on that socket's own state frames
+  // (ownFields), NEVER on another member's frame and never in the shared
+  // snapshot, and it is no account id. The tab keeps it and presents it with
+  // the code in `resume` (squadResume). A row adopted by an account at
+  // sign-in is no guest row: its secret is neither sent nor accepted again.
+  const gks = new WeakMap();
+  const GK_RE = /^[0-9a-f]{32}$/;
+  function rowGk(m) {
+    let k = gks.get(m);
+    if (!k) { k = randomBytes(16).toString('hex'); gks.set(m, k); }
+    return k;
   }
+  // The guest row of squad `code` whose secret is `gk`, or null: a secret of
+  // the wrong shape, a dead code, or no row with it all answer null.
+  function guestBySecret(code, gk) {
+    if (typeof gk !== 'string' || !GK_RE.test(gk)) return null;
+    const sq = squads.get(codeOf(code));
+    if (!sq) return null;
+    const want = Buffer.from(gk, 'hex');
+    const member = sq.members.find((m) => m.guest && gks.has(m) && timingSafeEqual(Buffer.from(gks.get(m), 'hex'), want));
+    return member ? { squad: sq, member } : null;
+  }
+
+  // THE FIELDS OF A STATE FRAME THAT ARE THIS DESTINATION'S OWN (plan X4,
+  // the mirror of forSocket above): `you`, `held` and, for the socket on a
+  // guest row, that row's `gk`. Every state frame — pushSquad's fan-out and
+  // task 5's resume — is the shared snapshot plus these, built per
+  // destination; nothing may be copied from one destination's frame to
+  // another's.
+  function ownFields(sq, w) {
+    const f = { you: youIn(sq, w), held: holds(sq, w) };
+    const row = sq.members.find((m) => m.ws === w);
+    if (row && row.guest) f.gk = rowGk(row);
+    return f;
+  }
+
 
   // THE FAN-OUT GOES DOWN THE SQUAD'S OWN SOCKETS, NOT socketsOf(). A guest
   // has no presence at all — onAuth returns early for one, so `online` never
@@ -1255,9 +1291,9 @@ export function createSocial({
   async function pushSquad(sq, actor, msg) {
     const base = await squadSnapshot(sq);
     for (const m of sq.members) {
-      if (m.ws && m.ws !== actor) safeSend(m.ws, { ...base, you: youIn(sq, m.ws), held: holds(sq, m.ws) });
+      if (m.ws && m.ws !== actor) safeSend(m.ws, { ...base, ...ownFields(sq, m.ws) });
     }
-    if (actor) reply(actor, msg, { ...base, you: youIn(sq, actor), held: holds(sq, actor) });
+    if (actor) reply(actor, msg, { ...base, ...ownFields(sq, actor) });
   }
 
   // A SQUAD SOMEBODY HAS JUST LEFT. `has` is the test, because the machine
@@ -1993,9 +2029,9 @@ export function createSocial({
   }
 
   // ---- squad resume (task 5; design 4.3 and 5.4) ----------------------------
-  // THE WIRE: the `state` snapshot as this socket must see it (squadFrame —
-  // `you` is its row, `held` false when it only LOOKED, D-UI-1), with the
-  // request's id, or EXACTLY
+  // THE WIRE: the `state` snapshot as this socket must see it (ownFields —
+  // `you` is its row, `held` false when it only LOOKED, D-UI-1, and `gk`
+  // when its row is a guest's, E1), with the request's id, or EXACTLY
   // { type:'squad', op:'gone', id } and nothing else. `gone` IS CAUSE-NEUTRAL
   // and the box says only "Your squad has ended.": a restart (squads are
   // memory by design), a kick, a drop-window sweep and a block's removal all
@@ -2030,11 +2066,38 @@ export function createSocial({
   async function squadResume(ws, msg) {
     const own = squads.keyOfSocket(ws);
     const key = own != null ? own : identityKey(ws);
-    const found = squads.memberOf(key);
+    let found = squads.memberOf(key);
+    let back = false, bySecret = false;
+    // A GUEST ROW BY ITS SECRET (E1). Only for a socket that holds no row
+    // and whose own identity finds none — so every answer above is what it
+    // always was — and only with the row's squad's code and its exact
+    // secret; anything else falls through to gone, the answer no secret
+    // gets. The row MOVES to this socket even from a socket that still looks
+    // live, as the engine's seat token moves a seat and as a code-named
+    // resume moves an account's row: a page load can reach the server before
+    // the old socket's close does. The socket it left is told.
+    //
+    // A SOCKET THAT IS AN ACCOUNT ALREADY (its hello came first) now holds a
+    // guest row it did not hold when that hello's door ran, so the row meets
+    // the sign-in door here (D-BLOCK-2 B): the secret is a bearer's, and the
+    // account presenting it need not be the one the row was vetted for.
+    if (!found && own == null) {
+      const g = guestBySecret(msg.code, msg.gk);
+      if (g) {
+        const was = g.member.ws, dropped = g.member.dropAt !== null, old = g.member.key;
+        if (squads.resumeGuest(old, ws)) {
+          clearDropSweep(old);
+          back = dropped;
+          bySecret = true;
+          found = g;
+          if (was && was !== ws) endedElsewhere(was);
+          signInDoor(ws);
+        }
+      }
+    }
     if (!found) return squadReply(ws, msg, 'gone', {});
     const { squad: sq, member: m } = found;
-    let back = false;
-    if (own == null) {
+    if (own == null && !bySecret) {
       const held = m.ws && m.ws.readyState === 1;
       if (!held || codeOf(msg.code) === sq.code) {
         const was = m.ws, dropped = m.dropAt !== null;
@@ -2054,17 +2117,20 @@ export function createSocial({
     // that leaves it the same account (a rotated token, or one that never
     // verifies) still bumps the generation, and must still be answered.
     const who = wireId(ws.userId);
-    const frame = await squadFrame(sq, ws);
+    const base = await squadSnapshot(sq);
+    const frame = { ...base, ...ownFields(sq, ws) };
     const live = squads.has(sq.code);
     // A MEMBER WHO WAS DROPPED IS BACK, and the dot beside them has to come
     // back on every other screen — whatever becomes of this socket's own
     // answer, because the re-attach has already happened. From the same
     // snapshot: one name read for the whole resume. Everyone else first; the
     // answer, the one send here that can throw, last (pushSquad's order).
-    // `you` AND `held` ARE EACH DESTINATION'S OWN, never the resumer's: the
-    // resumer can lose its row inside the names read (a kick), and its frame
-    // then says held:false to a squad that still holds theirs.
-    if (back && live) for (const x of sq.members) if (x.ws && x.ws !== ws) safeSend(x.ws, { ...frame, you: youIn(sq, x.ws), held: holds(sq, x.ws) });
+    // `you`, `held` AND `gk` ARE EACH DESTINATION'S OWN, never the
+    // resumer's: built from the shared snapshot, never from the resumer's
+    // frame, which carries the resumer's secret. The resumer can also lose
+    // its row inside the names read (a kick), and its frame then says
+    // held:false to a squad that still holds theirs.
+    if (back && live) for (const x of sq.members) if (x.ws && x.ws !== ws) safeSend(x.ws, { ...base, ...ownFields(sq, x.ws) });
     if (wireId(ws.userId) !== who) return;
     // NO ROW OF THIS SQUAD IS THIS SOCKET'S ANY MORE — kicked, or the squad
     // ended, while the names were read. The roster it has just been removed

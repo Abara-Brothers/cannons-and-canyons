@@ -3697,7 +3697,7 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
 
   // ---- (d12) resume ---------------------------------------------------------
   // THE WIRE CONTRACT: a live squad answers the `state` snapshot as this
-  // socket must see it (squadFrame: `you` is its row), with the request's id;
+  // socket must see it (ownFields: `you` is its row), with the request's id;
   // anything else answers exactly { type:'squad', op:'gone', id } and carries
   // nothing. Not in SQUAD_LINKED: a guest is answered, never told to sign in.
   const GONE = (id) => ({ type: 'squad', op: 'gone', id });
@@ -3990,7 +3990,7 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   }
   {
     // A KICK INSIDE THE READ (no sign-out): the socket is in no row of this
-    // squad by the time the frame is built — squadFrame's `you` of -1 — and
+    // squad by the time the frame is built — ownFields' `you` of -1 — and
     // is answered gone rather than handed the roster it was just removed from.
     const st = store5();
     const S = social5(st, { cw: mkClockwork() });
@@ -4407,6 +4407,128 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
         ok(`(d18) Start refuses one account on two rows (${mode}): duplicate_member, naming the second row, and nobody is seated`);
       else fail(`(d18) defence on ${mode}: ` + JSON.stringify({ a, seated: seat.calls }));
     }
+  }
+
+  // ---- (gk) a guest row's resume secret (E1, the whole-branch fix wave) ------
+  // A guest's squad identity is its socket, so a guest who left a match by a
+  // page load (Back to menu) came back on a new socket that matched no row,
+  // and fell out of the squad on every match. Now each guest row has a random
+  // secret, `gk`, sent ONLY to the socket that holds that row, in its own
+  // state frames; the tab keeps it (sessionStorage) and presents it with the
+  // code in `resume`. That re-attaches the row to the new socket within the
+  // drop window: the same row (same rid), the window's sweep cancelled, the
+  // members told it is back. The secret is never on any other member's
+  // frame and is never an account id; a wrong one answers what no secret
+  // answers.
+  {
+    // THE MACHINE'S HALF, resumeGuest: only a guest row, keyed by a socket,
+    // moves, and never onto a socket that already holds or keys a row.
+    const M = createSquads({ now: now5 });
+    const s1 = mkws5(null), s2 = mkws5(null), s3 = mkws5(null), lead = mkws5(LEAD);
+    const sq = M.create(mem5(LEAD, lead));
+    M.join(sq.code, mem5(null, s1));
+    M.join(sq.code, mem5(null, s2));
+    const r = [
+      M.resumeGuest(LEAD, s3),                     // an account key: null
+      M.resumeGuest(s1, s2),                       // onto a socket holding a row: null
+      M.resumeGuest(s1, null),                     // no socket: null
+    ];
+    const kept = sq.members.map((m) => m.ws);
+    const moved = M.resumeGuest(s1, s3);
+    const row = sq.members[1];
+    if (same(r, [null, null, null]) && kept[1] === s1 && kept[2] === s2 && moved === sq && row.key === s3 && row.ws === s3 && M.keyOfSocket(s3) === s3 && M.memberOf(s1) === null && M.memberOf(s3).member === row)
+      ok('(gk) resumeGuest moves only a guest row, rekeyed to its new socket, and never onto a socket that already holds one');
+    else fail('(gk) resumeGuest: ' + JSON.stringify({ r, moved: moved === sq, key: row.key === s3 }));
+  }
+  {
+    const GK = /^[0-9a-f]{32}$/;
+    const cw = mkClockwork();
+    const S = social5(store5(), { cw });
+    const { wl, wm, code } = await pair5(S);
+    const g = mkws5(null);
+    await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold', id: 'j' });
+    const mine = g.rx.find((f) => f.id === 'j') || {};
+    const gk = mine.gk;
+    await S.handle(wl, { type: 'squad', op: 'mode', mode: 'ffa' });           // a push: everybody's frames
+    const others = JSON.stringify([...wl.rx, ...wm.rx]);
+    const ownPush = last5(g, 'state') || {};
+    const rid = (mine.members || [])[2] && mine.members[2].rid;
+    if (typeof gk === 'string' && GK.test(gk) && ownPush.gk === gk && !others.includes(gk) && !/"gk"/.test(others)
+      && ![LEAD, MEM, THIRD].includes(gk) && !/^[0-9a-f-]{36}$/.test(gk))
+      ok('(gk) a guest row\'s secret reaches only the socket on that row, in its own state frames — no other member\'s frame carries it or a gk field at all — and it is no account id');
+    else fail('(gk) the secret: ' + JSON.stringify({ gk, ownPush: ownPush.gk, leaked: others.includes(gk), field: /"gk"/.test(others) }));
+
+    // THE ROUND TRIP: the tab's socket goes (a page load), and a new socket,
+    // with no account, presents the code and the secret.
+    close5(S, g);
+    await flush5();
+    const g2 = mkws5(null);
+    wl.rx.length = 0; wm.rx.length = 0;
+    const armedBefore = cw.pending().length;
+    await S.handle(g2, { type: 'squad', op: 'resume', code, gk, id: 'back' });
+    await flush5();
+    const armedAfter = cw.pending().length;
+    const back = g2.rx.find((f) => f.id === 'back') || {};
+    const row = (back.members || [])[2] || {};
+    const seen = last5(wl, 'state') || { members: [] };
+    const seenRow = seen.members[2] || {};
+    if (back.op === 'state' && back.code === code && back.you === 2 && back.held === true && back.gk === gk && row.rid === rid && row.dropped === false
+      && seenRow.rid === rid && seenRow.dropped === false && !JSON.stringify([...wl.rx, ...wm.rx]).includes(gk))
+      ok('(gk) a new socket presenting the code and the secret gets the same row back: held, the same rid, no longer dropped, and every member is shown it back');
+    else fail('(gk) resume by secret: ' + JSON.stringify({ back, seen: seen.members }));
+    // THE WINDOW'S SWEEP WAS CANCELLED: past DROP_MS the row is still there.
+    CLOCK5 += 60000;
+    cw.fire();
+    await flush5();
+    await S.handle(wl, { type: 'squad', op: 'resume', id: 'after' });
+    const after = wl.rx.find((f) => f.id === 'after') || {};
+    if ((after.members || []).length === 3 && after.members[2].rid === rid && armedBefore === 1 && armedAfter === 0)
+      ok('(gk) and the drop window armed for the old socket is stood down: no timer is left for it, and the row is not swept');
+    else fail('(gk) the row after the window: ' + JSON.stringify({ members: after.members, armedBefore, armedAfter }));
+
+    // A WRONG SECRET, OR NONE, OR ONE FOR ANOTHER CODE: exactly gone.
+    const probe = async (frame) => { const w = mkws5(null); await S.handle(w, { type: 'squad', ...frame }); return w.rx; };
+    const GONE = (id) => [{ type: 'squad', op: 'gone', id }];
+    const wrong = await probe({ op: 'resume', code, gk: gk.replace(/./, (c) => (c === 'a' ? 'b' : 'a')), id: 'x' });
+    const none = await probe({ op: 'resume', code, id: 'x' });
+    const junk = await probe({ op: 'resume', code, gk: [gk], id: 'x' });
+    const elsewhere = await probe({ op: 'resume', code: 'ZZZZ', gk, id: 'x' });
+    if (same(wrong, GONE('x')) && same(none, GONE('x')) && same(junk, GONE('x')) && same(elsewhere, GONE('x')))
+      ok('(gk) a wrong secret, no secret, a secret that is not a string, or the secret with another code, all answer exactly gone');
+    else fail('(gk) misses: ' + JSON.stringify({ wrong, none, junk, elsewhere }));
+
+    // A LIVE ROW IS TAKEN OVER, as a seat token takes a seat: a page load can
+    // reach the server before the old socket's close does.
+    const g3 = mkws5(null);
+    await S.handle(g3, { type: 'squad', op: 'resume', code, gk, id: 'take' });
+    const took = g3.rx.find((f) => f.id === 'take') || {};
+    if (took.you === 2 && took.held === true && same(sq5(g2).slice(-1), [{ type: 'squad', op: 'ended', reason: 'elsewhere' }]))
+      ok('(gk) a secret presented while the row\'s socket still looks live takes the row over, and that socket is told ended:elsewhere');
+    else fail('(gk) takeover: ' + JSON.stringify({ took, g2: sq5(g2).slice(-2) }));
+
+    // A SOCKET THAT ALREADY HOLDS A ROW keeps it: one socket, one row.
+    const w4 = mkws5(null);
+    await S.handle(wm, { type: 'squad', op: 'create' });                       // MEM moves to a squad of their own
+    const other = last5(wm, 'state').code;
+    await S.handle(w4, { type: 'squad', op: 'join', code: other, name: 'H', skin: 'gold' });
+    w4.rx.length = 0;
+    await S.handle(w4, { type: 'squad', op: 'resume', code, gk, id: 'own' });
+    const kept = w4.rx.find((f) => f.id === 'own') || {};
+    await S.handle(wl, { type: 'squad', op: 'resume', id: 'still' });
+    const still = wl.rx.find((f) => f.id === 'still') || {};
+    if (kept.code === other && (still.members || []).length === 2 && still.members[1].rid === rid && sq5(g3).every((f) => f.op !== 'ended'))
+      ok('(gk) a socket that already holds a row is answered its own squad, and the secret moves nothing');
+    else fail('(gk) a socket with a row of its own: ' + JSON.stringify({ kept: kept.code, other, still: still.members }));
+
+    // PAST THE WINDOW the row is gone, and so is the secret's use.
+    close5(S, g3);
+    await flush5();
+    CLOCK5 += 60000;
+    cw.fire();
+    await flush5();
+    const late = await probe({ op: 'resume', code, gk, id: 'x' });
+    if (same(late, GONE('x'))) ok('(gk) once the window has swept the row, the secret answers gone');
+    else fail('(gk) after the sweep: ' + JSON.stringify(late));
   }
 
   // ---- (end of task 5) ----
@@ -9194,6 +9316,57 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     }
     if (!bad.length) ok('(sg-k) after a failed door, a refused join (a dead code, a full squad, a block, already_in) leaves the door open: the next same-account hello reads once, and Start seats the row');
     else fail('(sg-k) refused join after a failed door: ' + JSON.stringify(bad));
+  }
+
+  // ---- (gk-door) a guest row resumed by its secret meets the sign-in door --
+  // The secret is a bearer's: whoever presents it takes the row. When the
+  // socket presenting it has already said hello as an account, that socket
+  // BECOMES the row's occupant as an account without a hello to open the
+  // door (E1 with D-BLOCK-2 B), so the resume opens it. A leads with C; a
+  // tab with no account joins, its socket goes, and a new socket, signed in
+  // as B, presents the secret. Blocked by A: the row goes as a kick. Not
+  // blocked: B is let in and the row becomes B's, and no secret is sent on
+  // it any more.
+  {
+    const bad = [];
+    for (const blocked of [true, false]) {
+      const st = t6store(ROWS6);
+      const S = mkSocial6(st);
+      const wa = up6(S, A), wc = up6(S, C);
+      const code = await create6(S, wa);
+      await join6(S, wc, code, 'Crater Two');
+      const g = t6ws(null);
+      await S.handle(g, { type: 'squad', op: 'join', code, name: 'Tab', skin: 'gold', id: 'j' });
+      const gk = (ans6(g, 'j') || {}).gk;
+      g.readyState = 3; S.onClose(g);
+      if (blocked) await st.addBlock(A, B);
+      const wb = up6(S, B);
+      clear6(wa, wc, wb);
+      st.calls.length = 0;
+      await S.handle(wb, { type: 'squad', op: 'resume', code, gk, id: 'r' });
+      await settle6();
+      const answer = ans6(wb, 'r') || {};
+      await S.handle(wc, { type: 'squad', op: 'resume', id: 'c' });
+      // The LAST roster this socket was pushed: once B is let in, the row is
+      // B's by name, and no secret rides on it.
+      const lastState = last6(wb, 'squad', 'state');
+      // And the secret is spent: the row is B's (or gone), so a new socket
+      // with no account presenting it again is answered gone.
+      const w2 = t6ws(null);
+      await S.handle(w2, { type: 'squad', op: 'resume', code, gk, id: 'again' });
+      const r = {
+        read: reads6(st), answer: [answer.op, answer.you, typeof answer.gk], told: got6(wb, 'squad', 'ended'), x: ids6(ans6(wc, 'c')),
+        last: blocked ? null : lastState && ['gk' in lastState, lastState.members[2] && lastState.members[2].id],
+        again: w2.rx,
+      };
+      const GONE = [{ type: 'squad', op: 'gone', id: 'again' }];
+      const want = blocked
+        ? { read: 1, answer: ['state', 2, 'string'], told: [KICKED6], x: [A, C], last: null, again: GONE }
+        : { read: 1, answer: ['state', 2, 'string'], told: [], x: [A, C, B], last: [false, B], again: GONE };
+      if (!same6(r, want)) bad.push({ blocked, r });
+    }
+    if (!bad.length) ok('(gk-door) a socket already signed in that resumes a guest row by its secret goes through the sign-in door: a blocked account is removed as a kick, any other is let in and named, and its frames carry no secret after');
+    else fail('(gk-door) resume by secret on a signed-in socket: ' + JSON.stringify(bad));
   }
 
   // ---- (one) ONE SQUAD PER PLAYER, at the sign-in door (E8) ---------------

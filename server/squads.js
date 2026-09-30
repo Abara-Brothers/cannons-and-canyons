@@ -484,9 +484,10 @@ export function createSquads({ now, capacity = 4, codeTaken = () => false } = {}
   // 4.3 resets every Ready on room creation anyway. They say so again.
   function markResumed(key, ws) {
     // BY ACCOUNT ONLY (design 4.3: "by userId"). A guest's key is the socket
-    // that went, and a new socket is a new key, so a guest row can never be
-    // resumed — the one spelling that could reach it is the OLD socket object,
-    // which no client can present, and this refuses it anyway.
+    // that went, and a new socket is a new key: the one spelling that could
+    // reach a guest row here is the OLD socket object, which no client can
+    // present, and this refuses it anyway. A guest row comes back by its
+    // resume secret instead, through resumeGuest below (E1).
     if (typeof key !== 'string' || !ws) return null;
     const found = memberOf(key);
     if (!found) return null;
@@ -497,6 +498,28 @@ export function createSquads({ now, capacity = 4, codeTaken = () => false } = {}
     if (held !== null && held !== key) return null;
     found.member.ws = ws;
     found.member.dropAt = null;
+    return found.squad;
+  }
+
+  // A GUEST ROW RE-ATTACHED TO A NEW SOCKET (E1, the whole-branch fix wave).
+  // Which row, and whether the caller may have it, is server/social.js's
+  // (the row's resume secret); this is the machine's half. A guest row is
+  // keyed by its socket, so the row is REKEYED to the socket it moves to —
+  // the same row object, so its place, rack and handle stay — and dropAt is
+  // cleared, as markResumed clears it. -> the squad, or null when nothing
+  // moves: `key` holds no guest row, or `ws` already holds or keys a row
+  // (one socket, one row).
+  function resumeGuest(key, ws) {
+    if (!ws || typeof key === 'string') return null;
+    const found = memberOf(key);
+    if (!found || !found.member.guest) return null;
+    if (keyOfSocket(ws) !== null || byKey.has(ws)) return null;
+    const m = found.member;
+    byKey.delete(key);
+    m.key = ws;
+    m.ws = ws;
+    m.dropAt = null;
+    byKey.set(ws, found.squad);
     return found.squad;
   }
 
@@ -537,7 +560,7 @@ export function createSquads({ now, capacity = 4, codeTaken = () => false } = {}
 
   return {
     has, get, ofUser, keyOfSocket, create, join, leave, kick, removeMember, setReady, setMode, clearReady,
-    markDropped, markResumed, sweepDropped,
+    markDropped, markResumed, resumeGuest, sweepDropped,
     memberOf, adoptGuest, all,
   };
 }
