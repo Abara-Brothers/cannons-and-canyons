@@ -19,9 +19,15 @@ const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8');
 // and they were simply never added (audit 2026-09-21, M14b). public/sw.js for
 // the same reason: its fallback title and body are what a notification shows
 // when a push carries none, on the player's lock screen (Task 7 review).
+// public/config.js and every server module for the same reason as server.js
+// (the whole-branch fix wave): server/social.js builds every squad and friend
+// frame the client renders, and a string any of them sends can reach a
+// player's screen. The server modules are WALKED, as rule 14 walks them, so a
+// new one is covered the day it is added.
 const UI_FILES = ['public/index.html', 'public/app.js', 'public/bay.js', 'public/styles.css', 'server.js',
   'public/game-core.js', 'public/room-engine.js', 'public/cloud.js', 'public/errors.js',
-  'public/privacy.html', 'public/delete-account.html', 'public/sw.js'];
+  'public/privacy.html', 'public/delete-account.html', 'public/sw.js', 'public/config.js',
+  ...readdirSync(path.join(ROOT, 'server')).filter((f) => f.endsWith('.js')).sort().map((f) => `server/${f}`)];
 
 // ---- 1. NO EMOJI ANYWHERE IN THE UI -----------------------------------------
 // Every glyph is hand-drawn inline SVG or canvas art. Both forms must be
