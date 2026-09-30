@@ -638,7 +638,13 @@ function createRoom(hostWs, name, skin, opts = {}) {
   // raids 2. A mode with no choice is seated at its max, so the table's max
   // is the number the join path below refuses past.
   const lim = MODE_SEATS[mode];
-  const max = lim.pick ? Math.max(lim.min, Math.min(lim.max, (opts.max | 0) || lim.def)) : lim.max;
+  // A COUNT IS AN INTEGER OR IT IS NO CHOICE. `| 0` coerced, so '3', [3] and
+  // 3.5 all seated three, and 2^32+3 wrapped round to three. The squad's mode
+  // op refuses such a count outright; a room has no refusal to give here, so
+  // anything that is not an integer seats the mode's own default. Integers
+  // keep the clamp they always had (0 is still the default).
+  const asked = Number.isInteger(opts.max) ? opts.max : 0;
+  const max = lim.pick ? Math.max(lim.min, Math.min(lim.max, asked || lim.def)) : lim.max;
   const room = {
     code, mode, max, hostSeat: 0,
     players: [

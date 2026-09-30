@@ -1742,14 +1742,20 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
 
 // ---- (s3a) createRoom seats exactly what the ternary seated ----------------
 // opts.max as a client can send it: absent, zero, in range, past the top,
-// negative, and a numeric string (createRoom has always coerced with `| 0`).
-const SEAT_ASKED = [undefined, 0, 1, 2, 3, 4, 5, 6, -1, '3'];
+// negative, and then values that are NOT integers — a numeric string, an
+// array, a fraction, a boolean — plus an integer past 2^32. Until the
+// whole-branch fix wave createRoom coerced with `| 0`, so '3' and [3] seated
+// three, 3.5 seated three and 2^32+3 wrapped round to three. Now it reads a
+// count the way the squad's mode op does (NEVER COERCED): anything that is
+// not an integer is no choice at all and seats the mode's own default. The
+// integers keep their old clamp, so no honest client's room changes.
+const SEAT_ASKED = [undefined, 0, 1, 2, 3, 4, 5, 6, -1, '3', [3], 3.5, true, 2 ** 32 + 3];
 const SEAT_MATRIX = [
-  ['duel',   [2, 2, 2, 2, 2, 2, 2, 2, 2, 2]],
-  ['ffa',    [4, 4, 2, 2, 3, 4, 4, 4, 2, 3]],
-  ['boss',   [2, 2, 2, 2, 2, 2, 2, 2, 2, 2]],
-  ['aliens', [2, 2, 2, 2, 2, 2, 2, 2, 2, 2]],
-  ['golf',   [2, 2, 1, 2, 3, 4, 4, 4, 1, 3]],
+  ['duel',   [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]],
+  ['ffa',    [4, 4, 2, 2, 3, 4, 4, 4, 2, 4, 4, 4, 4, 4]],
+  ['boss',   [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]],
+  ['aliens', [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]],
+  ['golf',   [2, 2, 1, 2, 3, 4, 4, 4, 1, 2, 2, 2, 2, 4]],
 ];
 {
   const before = rooms.size;
@@ -1761,12 +1767,12 @@ const SEAT_MATRIX = [
       const cr = frames(w, 'created')[0];
       const r = cr ? rooms.get(cr.code) : null;
       if (!r || r.mode !== mode || r.max !== wants[i] || cr.max !== wants[i]) {
-        bad++; fail(`(s3a) ${mode} max=${JSON.stringify(mx)} seated ${r && r.mode}/${r && r.max}, the ternary seated ${mode}/${wants[i]}`);
+        bad++; fail(`(s3a) ${mode} max=${JSON.stringify(mx)} seated ${r && r.mode}/${r && r.max}, wanted ${mode}/${wants[i]}`);
       }
       handleClientMessage(w, { type: 'leave' });
     });
   }
-  if (!bad) ok('(s3a) createRoom seats exactly what the ternary seated — 5 modes x 10 requested counts');
+  if (!bad) ok(`(s3a) createRoom seats exactly what the ternary seated for an integer, and the mode's default for anything else — 5 modes x ${SEAT_ASKED.length} requested counts`);
   // A MODE OFF THE WIRE THAT NAMES A PROTOTYPE KEY IS NOT A MODE. The lookup
   // is an object now where it was an array, and `in` or a bare index would
   // find Object.prototype's `constructor` and seat a room in mode
