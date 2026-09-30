@@ -513,9 +513,13 @@ const SQ_NONE = 'No squad or game with that code.';
 //   used   -- the invite a Join from its row answered (the slot's object),
 //             so it does not come back when the player later leaves.
 //   kick   -- the row the leader's open "Remove ...?" is about (sqKickAsk).
+//   ferr, fnote -- what the last Friends-tab action came back with, a refusal
+//             or the note the inviter is told, said under the row `fat` names.
+//   invited -- friend id -> { snap, until }: Invited until the next roster or 30 s.
 const sqFresh = (tab) => ({
   tab, known: false, gone: false, err: '', asking: false, cerr: '', via: 0, again: false,
   busy: '', aerr: '', ierr: '', ignored: '', used: null, kick: null,
+  ferr: '', fnote: '', fat: '', invited: new Map(),
   get snap() { return window.CC_SQUAD || null; },
 });
 let sq = sqFresh('squad');
@@ -843,17 +847,18 @@ function sqJoin(code) {
 //           create or a kick is answered with the roster, `op:'state'`)
 //   o.kind  the SOC_ERR group; o.busy the word for sq.busy
 //   o.say   (m, sentence) -> the sentence to show, when a refusal says more
-//   o.sink  where a refusal is said: 'aerr' (the footer's line, the default)
-//           or 'ierr' (inside the invite row)
+//   o.sink  where a refusal is said: 'aerr' (the footer's line, the default),
+//           'ierr' (inside the invite row) or 'ferr' (the Friends tab);
+//           o.fail (m, sentence, mine) says it somewhere else instead
 //   o.done  (m, mine) on success; o.end (mine) after either answer
 function sqOne(frame, o) {
   const mine = sq;
   if (mine.busy) return false;              // one action at a time: the box has one footer
-  mine.aerr = ''; mine.ierr = '';
+  mine.aerr = ''; mine.ierr = ''; mine.ferr = ''; mine.fnote = '';
   mine.busy = o.busy;
   socialTx(frame, o.type || 'squad', o.op, o.kind, (m, err) => {
     mine.busy = '';
-    if (err) mine[o.sink || 'aerr'] = o.say ? o.say(m, err) : err;
+    if (err) { const s = o.say ? o.say(m, err) : err; if (o.fail) o.fail(m, s, mine); else mine[o.sink || 'aerr'] = s; }
     else if (o.done) o.done(m, mine);
     if (o.end) o.end(mine);
     sqPaint();
@@ -991,7 +996,115 @@ function sqFriends() {
     + '<p class="sqn' + (rin.length ? '' : ' hidden') + '">'
     +   (rin.length ? rin.length + ' request' + (rin.length === 1 ? '' : 's') + ' waiting for an answer.' : '')
     + '</p>'
+    + sqFriendRows(sn)
     + sqAdd(true);
+}
+// THE FRIENDS TAB'S ROWS (task 9; C11, design 5.1 "Friends tab states"), ONE
+// node under the count lines: a Requests section with Accept and a drawn
+// Decline, then a Friends section, one row per friend -- the lamp, the callsign
+// and either "In your squad" or Invite -- each with the player menu (design 5.5:
+// Report and Block wherever a player is shown). What an action came back with
+// is said on one line under the row it was pressed on.
+const SQ_INVITED_MS = 30000;
+// WHO IS "IN YOUR SQUAD": a roster row carrying this friend's account id. A
+// friend whose row is still id-less while the server reads their blocks after
+// a sign-in is not matched -- never by callsign -- so their Invite stays, and
+// pressing it answers `already`, which is true, and is said as a note (task 6).
+const sqHas = (id) => !!(sq.snap && (sq.snap.members || []).some((p) => p && p.id && p.id === id));
+// WHETHER AN INVITE MAY GO FROM HERE. With a squad: a roster this socket holds
+// (D-UI-1) and a seat free. With none, the Invite creates one first -- and only
+// once this socket's question has been answered, since a create leaves whatever
+// squad the account is in, and never while that squad is open on another tab or
+// device ('elsewhere', 'open'): a create from here would pull the account out
+// of it there. The server re-checks all of it.
+function sqCanInvite() {
+  if (!wsReady() || sq.busy || acctState() !== 'in') return false;
+  const sn = sq.snap;
+  if (sn) return sqLive(sn) && (sn.members || []).length < SQ_MAX;
+  return sq.known && !sq.err && !sqAway();
+}
+// Invited, until the next roster reaches the slot or thirty seconds pass.
+const sqInvited = (id) => { const v = sq.invited.get(id); return !!(v && v.snap === sq.snap && Date.now() < v.until); };
+// The line under the row an action was pressed on: red for a refusal, plain for
+// what the owner asked the inviter be told.
+const sqLineAt = (key) => (sq.fat !== key ? '' : sq.ferr ? sqAErr(sq.ferr) : sq.fnote ? '<p class="sqnt">' + esc(sq.fnote) + '</p>' : '');
+function sqFriendRows(sn) {
+  const fs = sn.friends || [], rin = (sn.requests && sn.requests.in) || [];
+  const on = wsReady() && !sq.busy, can = sqCanInvite();
+  const full = !!(sq.snap && (sq.snap.members || []).length >= SQ_MAX);
+  const req = rin.filter((p) => p && p.id).map((p) => {
+    const name = nameOf(p), key = 'r:' + p.id;
+    return '<div class="sqm sqfr" data-row="' + esc(key) + '"><span class="sqmn"><span class="sqmt">' + esc(name) + '</span></span>'
+      + '<button class="sbtn" data-sq="accept:' + esc(p.id) + '"' + (on ? '' : ' disabled') + '>Accept</button>'
+      + '<button class="sqic" data-sq="decline:' + esc(p.id) + '" title="Decline" aria-label="Decline ' + esc(name) + '"' + (on ? '' : ' disabled') + '>' + IC.cross + '</button>'
+      + menuBtn(p.id, 'id', name, false, !named(p)) + '</div>' + sqLineAt(key);
+  }).join('');
+  const rows = fs.filter((p) => p && p.id).map((p) => {
+    const name = nameOf(p), key = 'f:' + p.id;
+    const act = sqHas(p.id) ? '<span class="sqy">' + IC.tick + 'In your squad</span>'
+      : sqInvited(p.id) ? '<button class="sbtn" data-sq="invite:' + esc(p.id) + '" disabled>Invited</button>'
+      : '<button class="sbtn" data-sq="invite:' + esc(p.id) + '"' + (full ? ' title="Your squad is full."' : '') + (can ? '' : ' disabled') + '>'
+        + (sq.busy === 'invite' && sq.fat === key ? 'Inviting' : 'Invite') + '</button>';
+    return '<div class="sqm sqfr" data-row="' + esc(key) + '"><span class="pdot' + (p.online ? ' on' : '') + '" title="' + (p.online ? 'Online' : 'Offline') + '">' + IC.dot + '</span>'
+      + '<span class="sqmn"><span class="sqmt">' + esc(name) + '</span></span>' + act
+      + menuBtn(p.id, 'id', name, false, !named(p)) + '</div>' + sqLineAt(key);
+  }).join('');
+  // A line whose row has gone -- a request answered, a friend removed -- is
+  // still said, at the foot of the rows, rather than lost.
+  const orphan = sq.fat && !fs.concat(rin).some((p) => p && ('f:' + p.id === sq.fat || 'r:' + p.id === sq.fat));
+  const code = sn.friendCode ? 'FR-' + sn.friendCode : '';
+  return '<div class="sqfw">'
+    + (req ? '<p class="sqh">Requests &middot; ' + rin.length + '</p>' + req : '')
+    + '<p class="sqh">Friends &middot; ' + fs.length + '</p>'
+    + (rows || '<p class="sqnote">No friends yet. Share your friend code, or add a friend by theirs or by callsign.</p>'
+      + (code ? '<div class="sqfc"><span>' + esc(code) + '</span><button class="sbtn" data-fr="copy">Copy</button></div>' : ''))
+    + (orphan ? sqLineAt(sq.fat) : '')
+    + '</div>';
+}
+// THE THREE THINGS THE INVITER IS TOLD (D-BLOCK-2 E, revised by the owner),
+// word for word, with the friend's name from the friends list. A friend with
+// no name the server can vouch for is never called "No callsign" here.
+function sqSentNote(who, delivered) {
+  if (delivered === 'push') return (who ? 'Invite sent to ' + who + '.' : 'Invite sent.') + " They'll get a notification.";
+  if (delivered === 'none') return (who || 'That friend') + " is offline and can't be notified. Share your squad code instead.";
+  return who ? 'Invite sent to ' + who + '.' : 'Invite sent.';
+}
+// INVITE. With no squad the Invite creates one first, and invites only once
+// the squad it is for is in the slot -- the create's own answer is that roster,
+// which app.js has put there before this callback runs -- and only for the
+// account that asked. A refused create invites nobody.
+function sqInviteFriend(id) {
+  const s0 = snap(), f = s0 && (s0.friends || []).find((x) => x && x.id === id);
+  if (!f || sqHas(id) || sqInvited(id) || !sqCanInvite()) return;
+  const who = named(f) ? f.callsign : '', key = 'f:' + id;
+  const invite = () => {
+    sq.fat = key;
+    sqOne({ type: 'squad', op: 'invite', to: id }, { op: 'invite', kind: 'squad.invite', busy: 'invite',
+      // `already` is TRUE whenever it comes: a plain note, not a failure.
+      fail: (m, s, mine) => { if (m.error === 'already') mine.fnote = s; else mine.ferr = s; },
+      done: (m, mine) => {
+        mine.fnote = sqSentNote(who, m.delivered);
+        mine.invited.set(id, { snap: sq.snap, until: Date.now() + SQ_INVITED_MS });
+        setTimeout(sqPaint, SQ_INVITED_MS + 50);
+      } });
+  };
+  if (sq.snap) return invite();
+  sq.fat = key;
+  sqOne({ type: 'squad', op: 'create' }, { op: null, kind: 'squad.create', busy: 'invite', sink: 'ferr',
+    done: (m, mine) => {
+      if (m.op !== 'state') { mine.ferr = socErr('squad.create', 'unavailable'); return; }
+      mine.known = true; mine.gone = false; mine.err = '';
+      if (sq === mine && sqLive(sq.snap)) invite();
+    } });
+}
+// ACCEPT and DECLINE, from the box: the same friend frames the Friends screen
+// sends, their refusals said under the request. The server pushes the new
+// friends snapshot on success, and the rows follow it.
+function sqAnswer(op, id) {
+  const s0 = snap(), r = s0 && ((s0.requests && s0.requests.in) || []).find((x) => x && x.id === id);
+  if (!r) return;
+  sq.fat = 'r:' + id;
+  sqOne({ type: 'friend', op, from: id }, { type: 'friend', op, kind: 'friend.' + op, busy: 'friend', sink: 'ferr' });
 }
 // The footer of the Friends tab (design 5.1): the box shows the counts and the
 // full screen does the work. data-go is already in the delegated listener's list.
@@ -1019,6 +1132,9 @@ function sqAct(v) {
   if (op === 'kick') { if (/^\d{1,2}$/.test(arg)) sqKickAsk(Number(arg)); return; }
   if (op === 'kcancel') { if (!sq.busy) { sq.kick = null; sqPaint(); } return; }
   if (op === 'kok') { sqKickGo(); return; }
+  // The Friends tab's rows.
+  if (op === 'invite') { sqInviteFriend(arg); return; }
+  if (op === 'accept' || op === 'decline') { if (acctState() === 'in') sqAnswer(op, arg); return; }
   // IGNORE sends nothing: the inviter is not told (design 5.1 state 5).
   if (op === 'ignore') { if (sq.busy !== 'join') { sq.ignored = arg; sq.ierr = ''; sqPaint(); } return; }
 }
@@ -1694,6 +1810,23 @@ const SOC_ERR = {
   'squad.kick.slow_down':        'Too many tries. Wait a moment.',
   'squad.kick.offline':          'Not connected. Try again in a moment.',
   'squad.kick._':                'Squads are not available right now. Try again later.',
+  // Invite (squadInvite) and the create an Invite makes when there is no squad
+  // (squadCreate). not_friend is also every miss the server will not tell
+  // apart -- blocked either way, a guest, no such account -- and says only what
+  // the inviter can see. `already` is TRUE whenever it comes and is shown as a
+  // note, not a failure (task 6).
+  'squad.invite.not_friend':     'You can only invite friends.',
+  'squad.invite.full':           'Your squad is full.',
+  'squad.invite.already':        'They are already in your squad.',
+  'squad.invite.no_squad':       'Your squad has ended.',
+  'squad.invite.slow_down':      'Too many tries. Wait a moment.',
+  'squad.invite.sign_in':        'Sign in to invite friends.',
+  'squad.invite.offline':        'Not connected. Try again in a moment.',
+  'squad.invite._':              'That invite could not be sent. Try again later.',
+  'squad.create.sign_in':        'Sign in to invite friends.',
+  'squad.create.slow_down':      'Too many tries. Wait a moment.',
+  'squad.create.offline':        'Not connected. Try again in a moment.',
+  'squad.create._':              'A squad could not be started right now. Try again later.',
   _:                             'That did not work. Try again.',
 };
 function socErr(kind, code) {

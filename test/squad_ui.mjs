@@ -995,7 +995,11 @@ try {
     await ev(`(window.CC_SOCIAL = ${FRIENDS}, document.dispatchEvent(new Event('cc:social')), true)`);
     await sleep(60);
     const fk = await box();
-    if (fk && fk.text === 'Your friends \u00b7 2 1 online now. 1 request waiting for an answer. + ADD FRIEND'
+    // CHANGED BY TASK 9, which adds the Request and Friends rows under these
+    // count lines (C11): the three lines are still the tab's opening words,
+    // exactly, and + Add friend is still its last; what now sits between them
+    // is task 9's own check's to read.
+    if (fk && fk.text.startsWith('Your friends \u00b7 2 1 online now. 1 request waiting for an answer. ') && fk.text.endsWith(' + ADD FRIEND')
         && fk.btns.some((b) => b.go === 'friends' && !b.dis))
       ok(`${V}: Friends reads 2 friends, 1 online, 1 request, and offers the door to the screen`);
     else fail(`${V}: friends known ${JSON.stringify(fk && { text: fk.text, btns: fk.btns })}`);
@@ -1618,8 +1622,22 @@ try {
     await clearTx(); await t9click('#bay [data-sq="retry"]'); await sleep(60);
     await reply({ op: 'state', code: 'QK7T', leader: ME, mode: 'duel', tees: null, max: null, you: 0, held: true,
       members: [T9YOU({ ready: true }), T9MULE({ ready: true })], fits: t9fits(2) });
-    if (Object.keys(b6).length === 7 && Object.values(b6).every((n) => n === 0))
-      ok(`${V}: Start and Ready pressed past a dead attribute send nothing: seats, readiness, a dropped member, a short rack, an unheld roster, a refused re-ask`);
+    // A MEMBER'S Start and a Leave on a roster this socket does not say it
+    // holds: buttons the render never draws, pressed through the real listener.
+    const pressed = async (name, setup, v) => {
+      await setup(); await clearTx();
+      await ev(`(() => { const b = document.createElement('button'); b.setAttribute('data-sq', ${JSON.stringify(v)});
+        document.getElementById('sqPane-squad').appendChild(b); b.click(); b.remove(); return true; })()`);
+      await sleep(50); b6[name] = (await squads()).length;
+    };
+    await pressed('memberStart', () => t9state({ leader: T9_MULE, members: [T9YOU({ ready: true }), T9MULE({ ready: true })] }), 'start');
+    await pressed('leaveNotHeld', async () => {
+      await ev(`(handle({ type: 'squad', op: 'state', code: 'QK7T', leader: ${JSON.stringify(T9_MULE)}, mode: 'duel', tees: null, max: null, you: 0,
+        members: [${JSON.stringify(T9YOU({ ready: true }))}, ${JSON.stringify(T9MULE({ ready: true }))}], fits: ${JSON.stringify(t9fits(2))} }), true)`);
+      await sleep(60);
+    }, 'leave');
+    if (Object.keys(b6).length === 9 && Object.values(b6).every((n) => n === 0))
+      ok(`${V}: Start, Ready and Leave pressed past a dead attribute send nothing: seats, readiness, a dropped member, a short rack, an unheld roster, a refused re-ask, a member's Start`);
     else fail(`${V}: handler gates ${JSON.stringify(b6)}`);
 
     // ---- B7. THE CODE LINK COPIES THE LINK, NOT THE CODE (design 4.4 / 5.7):
@@ -1860,7 +1878,194 @@ try {
     await t9inject('kick:1'); await sleep(40); d6.notHeld = !!(await t9box()).kok;
     if (Object.values(d6).every((v) => v === false)) ok(`${V}: no question opens for a member, for your own row, for a row that is not there, or on a roster not held`);
     else fail(`${V}: remove gates ${JSON.stringify(d6)}`);
-    // T9-CHECKS-E
+    // ---- THE FRIENDS TAB'S ROWS (C11, design 5.1 "Friends tab states"), under
+    //      task 8's count lines: a Request · n section with Accept and a drawn
+    //      Decline, and a Friends · total section with the lamp, the callsign
+    //      and either "In your squad" or Invite. Invite with no squad creates one
+    //      first. The owner wants the inviter told whether the invite went out
+    //      (D-BLOCK-2 E, revised): one line under that friend's row, and the
+    //      button reads Invited until the next roster or thirty seconds.
+    const T9_NIA = '00000000-0000-4000-8000-000000000011', T9_GHOST = '00000000-0000-4000-8000-000000000012';
+    const FR9 = { friends: [{ id: T9_MULE, callsign: 'Steel Mule', online: true }, { id: T9_PIKE, callsign: 'Ridge Pike', online: false },
+      { id: T9_GHOST, callsign: null, online: true }], requests: { in: [{ id: T9_NIA, callsign: 'Nia Vale' }], out: [] },
+      blocked: [], friendCode: 'AB12CD', callsign: null };
+    const t9fr = () => ev(`(() => {
+      Bay.show('home');
+      const p = document.getElementById('sqPane-friends'); if (!p) return null;
+      const vis = (e) => !!e && !e.closest('.hidden') && e.getClientRects().length > 0;
+      const btn = (e) => (vis(e) ? { t: e.textContent.trim(), dis: e.disabled, title: e.getAttribute('title'), label: e.getAttribute('aria-label') } : null);
+      const rows = (k) => [...p.querySelectorAll('.sqfr[data-row^="' + k + ':"]')].map((r) => ({
+        name: (r.querySelector('.sqmt') || { textContent: null }).textContent, lit: !!r.querySelector('.pdot.on'), dot: !!r.querySelector('.pdot'),
+        inv: btn(r.querySelector('[data-sq^="invite:"]')), acc: btn(r.querySelector('[data-sq^="accept:"]')),
+        dec: btn(r.querySelector('[data-sq^="decline:"]')), decSvg: !!r.querySelector('[data-sq^="decline:"] svg'),
+        mine: vis(r.querySelector('.sqy')) ? r.querySelector('.sqy').textContent.trim() : '', tick: !!r.querySelector('.sqy svg'),
+        menu: vis(r.querySelector('.pmb')), anon: !!r.querySelector('.pmb[data-pmanon="1"]'), over: r.scrollWidth > r.clientWidth + 1,
+        line: (() => { const n = r.nextElementSibling; return n && (n.classList.contains('sqae') || n.classList.contains('sqnt')) && vis(n)
+          ? { t: n.textContent, bad: n.classList.contains('sqae') } : null; })(),
+      }));
+      return { heads: [...p.querySelectorAll('.sqh')].filter(vis).map((h) => h.textContent), req: rows('r'), fr: rows('f'),
+        text: p.innerText.replace(/\\s+/g, ' ').trim(), add: !!p.querySelector('[data-go="friends"]'), imgs: p.querySelectorAll('img').length };
+    })()`);
+    const friendsIn = async (snap9) => { await ev(`(window.CC_SOCIAL = ${JSON.stringify(snap9)}, document.dispatchEvent(new Event('cc:social')), true)`); await sleep(60); };
+    // Leave any squad: a push the server sends a leaver's other tabs.
+    await ev(`(handle({ type: 'squad', op: 'ended', reason: 'left' }), true)`); await sleep(60);
+    await friendsIn(FR9);
+    await t9click('#bay [data-sq="tab:friends"]'); await sleep(60);
+
+    // ---- E1. THE ROWS. Task 8's count lines stay above them; every name is
+    //      esc()'d; a nameless friend keeps a row with the placeholder mark; the
+    //      Decline is drawn; nothing overflows the box.
+    const e1 = await t9fr();
+    const R = (list, i) => (list && list[i]) || {};
+    if (e1 && e1.text.startsWith('Your friends · 3 2 online now. 1 request waiting for an answer.') && e1.add
+        && JSON.stringify(e1.heads) === JSON.stringify(['Requests · 1', 'Friends · 3'])
+        && e1.req.length === 1 && R(e1.req, 0).name === 'Nia Vale' && R(e1.req, 0).acc && !R(e1.req, 0).acc.dis
+        && R(e1.req, 0).dec && !R(e1.req, 0).dec.dis && R(e1.req, 0).dec.label === 'Decline Nia Vale' && R(e1.req, 0).decSvg && R(e1.req, 0).menu
+        && e1.fr.length === 3
+        && R(e1.fr, 0).name === 'Steel Mule' && R(e1.fr, 0).lit && R(e1.fr, 0).inv && R(e1.fr, 0).inv.t === 'Invite' && !R(e1.fr, 0).inv.dis && R(e1.fr, 0).menu
+        && R(e1.fr, 1).name === 'Ridge Pike' && !R(e1.fr, 1).lit && R(e1.fr, 1).dot && R(e1.fr, 1).inv && !R(e1.fr, 1).inv.dis
+        && R(e1.fr, 2).name === 'No callsign' && R(e1.fr, 2).anon && R(e1.fr, 2).inv
+        && !e1.req.concat(e1.fr).some((r) => r.over))
+      ok(`${V}: the Friends tab lists the request with Accept and a drawn Decline, and each friend with a lamp, Invite and the menu, under the counts`);
+    else fail(`${V}: friends rows ${JSON.stringify(e1)}`);
+
+    // ---- E2. INVITE WITH NO SQUAD CREATES ONE FIRST, and invites only once the
+    //      squad it is for is in the slot. Then the owner's note, and Invited.
+    await clearTx(); await t9click(`#bay [data-sq="invite:${T9_MULE}"]`); await sleep(60);
+    const e2a = await squads(), e2ab = await t9fr();
+    await reply({ op: 'state', code: 'QK7T', leader: ME, mode: 'duel', tees: null, max: null, you: 0, held: true,
+      members: [T9YOU({ ready: false })], fits: t9fits(1) });
+    const e2b = await squads();
+    await reply({ op: 'invite', ok: true, delivered: 'online' });
+    const e2 = await t9fr();
+    if (e2a.length === 1 && e2a[0].op === 'create' && typeof e2a[0].id === 'number' && R(e2ab.fr, 0).inv && R(e2ab.fr, 0).inv.t === 'Inviting' && R(e2ab.fr, 0).inv.dis
+        && e2b.length === 2 && e2b[1].op === 'invite' && e2b[1].to === T9_MULE && typeof e2b[1].id === 'number'
+        && e2 && R(e2.fr, 0).line && R(e2.fr, 0).line.t === 'Invite sent to Steel Mule.' && !R(e2.fr, 0).line.bad
+        && R(e2.fr, 0).inv && R(e2.fr, 0).inv.t === 'Invited' && R(e2.fr, 0).inv.dis
+        && R(e2.fr, 1).inv && !R(e2.fr, 1).inv.dis)
+      ok(`${V}: Invite with no squad creates it, invites once the squad is in the slot, says "Invite sent to Steel Mule." and marks that friend Invited`);
+    else fail(`${V}: create then invite ${JSON.stringify({ first: e2a, then: e2b, during: R(e2ab && e2ab.fr, 0).inv, after: e2 && e2.fr.map((r) => ({ inv: r.inv, line: r.line })) })}`);
+
+    // ---- E3. INVITED LASTS UNTIL THE NEXT ROSTER OR THIRTY SECONDS. The clock
+    //      is moved rather than waited on.
+    await ev(`(window.__now0 = Date.now, Date.now = () => window.__now0() + 31000, true)`);
+    const e3a = await t9fr();
+    await ev(`(Date.now = window.__now0, true)`);
+    const e3b = await t9fr();                                      // the same mark, back in its thirty seconds
+    await t9state({ members: [T9YOU({ ready: true })] });          // any new roster
+    const e3c = await t9fr();
+    if (e3a && R(e3a.fr, 0).inv && R(e3a.fr, 0).inv.t === 'Invite' && !R(e3a.fr, 0).inv.dis
+        && e3b && R(e3b.fr, 0).inv && R(e3b.fr, 0).inv.t === 'Invited' && e3c && R(e3c.fr, 0).inv && R(e3c.fr, 0).inv.t === 'Invite' && !R(e3c.fr, 0).inv.dis)
+      ok(`${V}: Invited turns back into Invite after thirty seconds, and on the next roster`);
+    else fail(`${V}: invited mark ${JSON.stringify({ later: R(e3a && e3a.fr, 0).inv, again: R(e3b && e3b.fr, 0).inv, roster: R(e3c && e3c.fr, 0).inv })}`);
+
+    // ---- E4. THE OTHER TWO ANSWERS, word for word (the owner's three notes):
+    //      a push handed to a device, and nobody reached. A friend with no name
+    //      is never called "No callsign" in them.
+    const sent = async (id, delivered) => {
+      await t9state({ members: [T9YOU({ ready: true })] });
+      await clearTx(); await t9click(`#bay [data-sq="invite:${id}"]`); await sleep(40);
+      await reply({ op: 'invite', ok: true, delivered });
+      const f = await t9fr();
+      const row = f && f.fr.find((r) => (id === T9_GHOST ? r.name === 'No callsign' : r.name === (id === T9_PIKE ? 'Ridge Pike' : 'Steel Mule')));
+      return row && row.line;
+    };
+    const e4 = { push: await sent(T9_PIKE, 'push'), none: await sent(T9_PIKE, 'none'), anonPush: await sent(T9_GHOST, 'push'), anonNone: await sent(T9_GHOST, 'none') };
+    if (e4.push && e4.push.t === "Invite sent to Ridge Pike. They'll get a notification." && !e4.push.bad
+        && e4.none && e4.none.t === "Ridge Pike is offline and can't be notified. Share your squad code instead." && !e4.none.bad
+        && e4.anonPush && e4.anonPush.t === "Invite sent. They'll get a notification."
+        && e4.anonNone && e4.anonNone.t === "That friend is offline and can't be notified. Share your squad code instead.")
+      ok(`${V}: the push and nobody-reached notes read word for word, and a nameless friend is "That friend"`);
+    else fail(`${V}: delivered notes ${JSON.stringify(e4)}`);
+
+    // ---- E5. IN YOUR SQUAD. A friend who is a member gets the drawn tick and
+    //      the words instead of Invite.
+    await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: false })] });
+    const e5 = await t9fr();
+    if (e5 && R(e5.fr, 0).mine === 'In your squad' && R(e5.fr, 0).tick && !R(e5.fr, 0).inv && R(e5.fr, 1).inv)
+      ok(`${V}: a friend in your squad reads "In your squad" with a drawn tick, and has no Invite`);
+    else fail(`${V}: in your squad ${JSON.stringify(e5 && e5.fr.slice(0, 2))}`);
+
+    // ---- E6. EVERY REFUSAL OF AN INVITE SAYS ITS SENTENCE UNDER THAT ROW.
+    //      `already` is TRUE whenever it comes (a friend on a row whose id the
+    //      roster cannot show yet, task 6), so it is a plain note, not a failure.
+    const invSays = [['not_friend', 'You can only invite friends.', true], ['full', 'Your squad is full.', true],
+      ['already', 'They are already in your squad.', false], ['no_squad', 'Your squad has ended.', true],
+      ['slow_down', 'Too many tries. Wait a moment.', true], ['sign_in', 'Sign in to invite friends.', true],
+      ['unavailable', 'That invite could not be sent. Try again later.', true]];
+    const e6bad = [];
+    for (const [code, line, bad] of invSays) {
+      await t9state({ members: [T9YOU({ ready: true })] });
+      await clearTx(); await t9click(`#bay [data-sq="invite:${T9_PIKE}"]`); await sleep(40);
+      await reply(code === 'sign_in' ? { type: 'social', error: 'sign_in' } : { op: 'invite', error: code });
+      const f = await t9fr(), row = R(f && f.fr, 1);
+      if (!(row.line && row.line.t === line && row.line.bad === bad && row.inv && row.inv.t === 'Invite' && !row.inv.dis)) e6bad.push({ code, line: row.line, inv: row.inv });
+    }
+    if (!e6bad.length) ok(`${V}: all ${invSays.length} refusals of an invite say their sentence under the row, and 'already' is a plain note`);
+    else fail(`${V}: invite refusals ${JSON.stringify(e6bad)}`);
+
+    // ---- E7. A REFUSED CREATE INVITES NOBODY.
+    await ev(`(handle({ type: 'squad', op: 'ended', reason: 'left' }), true)`); await sleep(60);
+    await clearTx(); await t9click(`#bay [data-sq="invite:${T9_MULE}"]`); await sleep(40);
+    await reply({ type: 'social', error: 'sign_in' });
+    const e7f = await squads(), e7 = await t9fr();
+    if (e7f.length === 1 && e7f[0].op === 'create' && R(e7 && e7.fr, 0).line && R(e7.fr, 0).line.t === 'Sign in to invite friends.' && R(e7.fr, 0).line.bad)
+      ok(`${V}: a refused create sends no invite and says why under the row`);
+    else fail(`${V}: refused create ${JSON.stringify({ sent: e7f, line: R(e7 && e7.fr, 0).line })}`);
+
+    // ---- E8. WHEN INVITE IS DEAD, AND STAYS DEAD PAST ITS ATTRIBUTE: a full
+    //      squad (the button says why), a roster this socket does not hold, a
+    //      squad that is open on another device -- a create from here would pull
+    //      the account out of it there -- and a box that has not been answered.
+    const e8 = {};
+    const deadInvite = async (name, setup) => {
+      await setup();
+      const f = await t9fr();
+      await clearTx(); await t9force(`#bay [data-sq="invite:${T9_PIKE}"]`); await sleep(40);
+      e8[name] = { dis: !!(R(f && f.fr, 1).inv && R(f.fr, 1).inv.dis), title: R(f && f.fr, 1).inv && R(f.fr, 1).inv.title, sent: (await squads()).length };
+    };
+    await deadInvite('full', () => t9state({ members: [T9YOU(), T9MULE(), T9M({ guest: true }), T9M({ guest: true })] }));
+    await deadInvite('notHeld', async () => {
+      await ev(`(handle({ type: 'squad', op: 'state', code: 'QK7T', leader: ${JSON.stringify(ME)}, mode: 'duel', tees: null, max: null, you: 0,
+        members: [${JSON.stringify(T9YOU({ ready: true }))}], fits: ${JSON.stringify(t9fits(1))} }), true)`); await sleep(60);
+    });
+    await deadInvite('open', async () => { await ev(`(handle({ type: 'squad', op: 'ended', reason: 'elsewhere' }), true)`); await sleep(60); });
+    // Unanswered: an account switch starts the box over, and nothing has asked yet.
+    await deadInvite('unknown', async () => { await setWho('out'); await setWho('in'); await friendsIn(FR9); });
+    await clearTx(); await ev('sendHello(S.ws).then(() => true)'); await sleep(60);
+    await reply({ op: 'gone' });
+    if (Object.values(e8).every((x) => x.dis && x.sent === 0) && e8.full.title === 'Your squad is full.')
+      ok(`${V}: Invite is dead, handler and all, for a full squad, an unheld roster, a squad open elsewhere, and an unanswered box`);
+    else fail(`${V}: invite gates ${JSON.stringify(e8)}`);
+
+    // ---- E9. ACCEPT AND DECLINE, from the box. Each sends its friend frame; a
+    //      refusal is said under the request it answers.
+    await t9state({ members: [T9YOU({ ready: true })] });
+    await clearTx(); await t9click(`#bay [data-sq="accept:${T9_NIA}"]`); await sleep(40);
+    const e9a = await squads(), e9af = (await tx()).filter((f) => f.type === 'friend');
+    await answer(e9af[0] && e9af[0].id, { type: 'friend', op: 'accept', error: 'no_such_request' });
+    const e9 = await t9fr();
+    await clearTx(); await t9click(`#bay [data-sq="decline:${T9_NIA}"]`); await sleep(40);
+    const e9df = (await tx()).filter((f) => f.type === 'friend');
+    await answer(e9df[0] && e9df[0].id, { type: 'friend', op: 'decline', ok: true });
+    if (e9a.length === 0 && e9af.length === 1 && e9af[0].op === 'accept' && e9af[0].from === T9_NIA
+        && R(e9 && e9.req, 0).line && R(e9.req, 0).line.t === 'That request is already gone.' && R(e9.req, 0).line.bad
+        && e9df.length === 1 && e9df[0].op === 'decline' && e9df[0].from === T9_NIA)
+      ok(`${V}: Accept and Decline send their friend frames, and a refusal is said under the request`);
+    else fail(`${V}: accept/decline ${JSON.stringify({ e9af, line: R(e9 && e9.req, 0).line, e9df })}`);
+
+    // ---- E10. EMPTY: the design's sentence and the player's own friend code
+    //       with Copy, so there is somewhere to start.
+    await friendsIn({ friends: [], requests: { in: [], out: [] }, blocked: [], friendCode: 'AB12CD', callsign: null });
+    const e10 = await t9fr();
+    const e10copy = await ev(`(() => { const b = document.querySelector('#sqPane-friends [data-fr="copy"]'); return b ? !b.disabled : null; })()`);
+    if (e10 && e10.text.includes('No friends yet. Share your friend code, or add a friend by theirs or by callsign.') && e10.text.includes('FR-AB12CD')
+        && e10copy === true && JSON.stringify(e10.heads) === JSON.stringify(['Friends · 0']))
+      ok(`${V}: no friends yet says so, and shows the player's friend code with Copy`);
+    else fail(`${V}: empty friends ${JSON.stringify({ text: e10 && e10.text, heads: e10 && e10.heads, copy: e10copy })}`);
+    await friendsIn(FR9);
+    await t9click('#bay [data-sq="tab:squad"]'); await sleep(40);
+    // T9-CHECKS-F
   }
 } catch (e) {
   fail('squad_ui task 9 stopped: ' + (e && e.message));

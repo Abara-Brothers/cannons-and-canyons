@@ -2109,6 +2109,19 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .sqib{display:flex;gap:calc(6 * var(--u));margin-top:calc(5 * var(--u))}
   #bay .sqib .sbtn{flex:1;height:calc(22 * var(--u));padding:0 calc(8 * var(--u));font-size:calc(10.5 * var(--u))}
   #bay .sqib .sbtn.on{border-color:#54c8ff;color:#fff;background:rgba(84,200,255,.18)}
+  /* The Friends tab's rows reuse the member row (.sqm); the rest is theirs. */
+  #bay .sqh{margin-top:calc(9 * var(--u));font-family:"JetBrains Mono",monospace;font-size:calc(7.5 * var(--u));font-weight:700;
+     letter-spacing:.14em;text-transform:uppercase;color:#7f8fb5}
+  #bay .sqfr .sqmt{font-size:calc(12 * var(--u))}
+  /* Two classes deep: #bay .sbtn is later in this file at one class. */
+  #bay .sqm .sbtn,#bay .sqfc .sbtn{flex:none;height:calc(18 * var(--u));padding:0 calc(7 * var(--u));font-size:calc(9.5 * var(--u));letter-spacing:.06em}
+  #bay .sqy{flex:none;display:inline-flex;align-items:center;gap:calc(3 * var(--u));font-family:"JetBrains Mono",monospace;
+     font-size:calc(6.5 * var(--u));font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#3ce88f}
+  #bay .sqy svg{width:calc(11 * var(--u));height:calc(11 * var(--u));fill:currentColor;flex:none}
+  #bay .sqnt{margin-top:calc(4 * var(--u));font-size:calc(10 * var(--u));line-height:1.25;font-weight:500;color:#9dadd0}
+  #bay .sqfc{display:flex;align-items:center;gap:calc(6 * var(--u));margin-top:calc(6 * var(--u));font-family:Rajdhani,system-ui,sans-serif;
+     font-weight:700;font-size:calc(15 * var(--u));letter-spacing:.1em;color:#ffb46b}
+  #bay .sqfc span{flex:1;min-width:0}
 
   /* ------------------------------------------------------------ launch bar -- */
   #bay .lbar{position:absolute;left:calc(18 * var(--u));right:calc(18 * var(--u));bottom:calc(12 * var(--u));height:calc(56 * var(--u));z-index:16;display:flex;
