@@ -30,11 +30,17 @@ import { createSquads } from '../server/squads.js';
 // container the code frame's room arm reads through.
 import { rooms, handleClientMessage, setCodeTaken, MODE_SEATS, TEE_IDS, validRackFor } from '../public/room-engine.js';
 import { LOADOUT_POOL, loadoutSizeFor } from '../public/game-core.js';
-import { createSocial, SOCIAL_TYPES } from '../server/social.js';
+import { createSocial, createCooldown, SOCIAL_TYPES } from '../server/social.js';
 // Task 2: the one-byte hook the code minters are proved on. The same module
 // is loaded into a spawned server.js by test/code_frame.mjs with --import;
 // here it is installed for the length of one block and taken out again.
 import { scriptCodeBytes } from './fixtures/scripted-code-bytes.mjs';
+
+// THE INVITE PUSH COOLDOWN OFF for this whole file (D-PUSH-1 R, the
+// whole-branch fix wave): most worlds below invite one offline friend more
+// than once under a clock that does not move, and pin what each invite sends.
+// (cool) turns production's 30 s window back on to prove it.
+process.env.SQUAD_INVITE_COOLDOWN_MS = '0';
 
 const out = { errors: [] };
 const ok = (m) => console.log('  ok — ' + m);
@@ -9056,6 +9062,85 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     }
     if (!bad.length) ok('(sg-k) after a failed door, a refused join (a dead code, a full squad, a block, already_in) leaves the door open: the next same-account hello reads once, and Start seats the row');
     else fail('(sg-k) refused join after a failed door: ' + JSON.stringify(bad));
+  }
+
+  // ---- (cool-u) the cooldown itself, against a clock this block moves ------
+  {
+    let t = 1000;
+    const cd = createCooldown({ ms: 100, max: 3, now: () => t });
+    const r = [];
+    r.push(cd.take('x'), cd.take('x'));            // true, false
+    t = 1099; r.push(cd.take('x'));                // false: one ms inside
+    t = 1100; r.push(cd.take('x'));                // true: the window is over, and x is held again to 1200
+    r.push(cd.take('y'), cd.take('z'));            // true, true: three held
+    const full = cd.size;
+    r.push(cd.take('w'));                          // true: the fourth evicts the oldest (x)
+    const capped = cd.size;
+    r.push(cd.take('x'));                          // true: x was evicted by the cap, so taken afresh (evicting y)
+    t = 5000; r.push(cd.take('v'));                // true, and every expired window goes as it is taken
+    const swept = cd.size;
+    const off = createCooldown({ ms: 0, max: 3, now: () => t });
+    const zero = [off.take('x'), off.take('x'), off.size];
+    // A CLOCK STEPPED BACK leaves a window behind a later one, where the
+    // sweep does not reach it: it must still end on time, not a ms after.
+    let u = 1000;
+    const back = createCooldown({ ms: 100, max: 8, now: () => u });
+    back.take('a');                                // held to 1100
+    u = 900; back.take('b');                       // held to 1000, behind a's
+    u = 1000; const stepped = back.take('b');      // b's window is over
+    if (same(r, [true, false, false, true, true, true, true, true, true]) && full === 3 && capped === 3 && swept === 1 && same(zero, [true, true, 0]) && stepped === true)
+      ok('(cool-u) createCooldown: one take per window per key, expired windows evicted on each take, at most `max` held, a window of 0 holds nothing, and a window left behind by a clock stepped back still ends on time');
+    else fail('(cool-u) createCooldown: ' + JSON.stringify({ r, full, capped, swept, zero, stepped }));
+  }
+
+  // ---- (cool) one real invite push per invitee per 30 s (D-PUSH-1 R) ------
+  // An invite needs no match, and a friend who is offline is sent a push, so
+  // without a limit any number of friends and sockets could fill a player's
+  // notification tray. Inside the window the invite takes the DRY-RUN path:
+  // the same read, the same answer, nothing sent. The window is the
+  // invitee's, however many people invite them, and it is PRODUCTION'S
+  // (SQUAD_INVITE_COOLDOWN_MS unset: 30 s), which this suite otherwise turns
+  // off so its twin worlds can invite one friend twice.
+  {
+    const prevCool = process.env.SQUAD_INVITE_COOLDOWN_MS;
+    delete process.env.SQUAD_INVITE_COOLDOWN_MS;
+    const st = t6store(ROWS6);
+    await st.addFriendship(A, B); await st.addFriendship(A, D); await st.addFriendship(C, B); await st.addFriendship(A, E);
+    const S = mkSocial6(st);
+    if (prevCool === undefined) delete process.env.SQUAD_INVITE_COOLDOWN_MS; else process.env.SQUAD_INVITE_COOLDOWN_MS = prevCool;
+    const wa = up6(S, A), wc = up6(S, C);
+    const code = await create6(S, wa);
+    await join6(S, wc, code, 'Crater Two');
+    const t0 = CLOCK6;
+    // Each invite: its answer, and whether the seam SENT ('real') or ran dry.
+    const inv = async (w, to, id, at) => {
+      CLOCK6 = t0 + at;
+      const p = PUSHES.length, d = DRY6.length;
+      await S.handle(w, { type: 'squad', op: 'invite', to, id });
+      const kind = PUSHES.length > p && DRY6.length === d ? 'real' : DRY6.length > d && PUSHES.length === p ? 'dry' : 'both or neither';
+      return { a: ans6(w, id), kind };
+    };
+    const runs = [
+      await inv(wa, B, 'c1', 0),          // real
+      await inv(wa, B, 'c2', 1),          // the same inviter again: dry
+      await inv(wc, B, 'c3', 2),          // ANOTHER inviter, the same invitee: dry
+      await inv(wa, D, 'c4', 3),          // another invitee: real
+      await inv(wa, B, 'c5', 29999),      // still inside B's window: dry
+      await inv(wa, B, 'c6', 30000),      // the window is over: real
+    ];
+    // A DROPPED invite sends nothing and takes no window: E has blocked C (a
+    // member), so the invite to E is dropped, and a real one right after it,
+    // once the block is gone, still sends.
+    await st.addBlock(E, C);
+    runs.push(await inv(wa, E, 'c7', 30001));   // dropped: dry
+    await st.removeBlock(E, C);
+    runs.push(await inv(wa, E, 'c8', 30002));   // real
+    CLOCK6 = t0;
+    const kinds = runs.map((x) => x.kind);
+    const same = runs.every((x, i) => same6(x.a, { type: 'squad', op: 'invite', ok: true, delivered: 'push', id: 'c' + (i + 1) }));
+    if (same6(kinds, ['real', 'dry', 'dry', 'real', 'dry', 'real', 'dry', 'real']) && same)
+      ok('(cool) one real invite push per invitee per 30 s, whoever invites: the rest take the dry run and are answered alike, and a dropped invite takes no window');
+    else fail('(cool) invite push cooldown: ' + JSON.stringify(runs));
   }
 
   // ---- (end of task 6 checks) ----

@@ -78,7 +78,10 @@ const HANK  = '88888888-8888-4888-8888-888888888888';   // Bob's friend, two iPh
 const IVY   = '99999999-9999-4999-8999-999999999999';   // Bob's friend, two browsers at a host that is no push service
 const JADE  = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';   // Bob's friend, three browsers whose push services refuse
 const KAI   = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';   // Bob's friend, one browser behind 24 newer rows no host can use
-const TOKENS = { 'tok-alice': ALICE, 'tok-bob': BOB, 'tok-carol': CAROL };
+const LIV   = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';   // Bob's friend, one Android phone FCM says is gone
+const MAX   = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';   // the same, and blocks Carol: every invite to MAX is dropped
+const NED   = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';   // twelve Android phones, and a browser that is only the seat's
+const TOKENS = { 'tok-alice': ALICE, 'tok-bob': BOB, 'tok-carol': CAROL, 'tok-ned': NED };
 // displayName() proves a name by re-deriving callsign_key from callsign, so
 // these pairs are what the server is entitled to believe. `state.bobKey` is
 // flipped later to break Bob's pair on purpose.
@@ -95,8 +98,15 @@ const PROFILES = {
   [IVY]: profile(IVY, 'Ivory Wren', 'JJJJ22'),
   [JADE]: profile(JADE, 'Jade Condor', 'KKKK33'),
   [KAI]: profile(KAI, 'Basalt Kite', 'MMMM44'),
+  [LIV]: profile(LIV, 'Loam Plover', 'NNNN55'),
+  [MAX]: profile(MAX, 'Marl Shrike', 'PPPP66'),
 };
-const FRIENDS = [[ALICE, BOB], [BOB, DAVE], [BOB, ERIN], [BOB, FRANK], [BOB, GREG], [BOB, HANK], [BOB, IVY], [BOB, JADE], [BOB, KAI]];
+const FRIENDS = [[ALICE, BOB], [BOB, DAVE], [BOB, ERIN], [BOB, FRANK], [BOB, GREG], [BOB, HANK], [BOB, IVY], [BOB, JADE], [BOB, KAI], [BOB, LIV], [BOB, MAX]];
+// LIV's and MAX's only devices: FCM answers 404 UNREGISTERED for both, which
+// is a dead token by fcmSend's own rule.
+const LIV_DEAD = 'fcm-dead-liv-0001', MAX_DEAD = 'fcm-dead-max-0001';
+// NED's twelve phones, every one usable: more than a push is sent to.
+const NED_FCM = Array.from({ length: 12 }, (_, i) => `fcm-token-ned-${String(i).padStart(2, '0')}`);
 // `holdSubs` parks Alice's next subscription read until the test releases it.
 // `gone` is every endpoint the server has DELETEd: the store stops returning it.
 // `expired` is whether Apple has already told the server its token expired.
@@ -183,6 +193,9 @@ let jadeWeb = null;
 const KAI_JUNK = 24;
 const kaiEc = crypto.createECDH('prime256v1'); kaiEc.generateKeys();
 let KAI_LAPTOP = null;
+// NED's seat subscription, at the inbox and in no store row (see Part 12).
+const nedEc = crypto.createECDH('prime256v1'); nedEc.generateKeys();
+let NED_SEAT = null;
 
 const hits = { user: [], subGet: [], subLimit: [], subPost: [], del: [], inbox: [], fcm: [], apns: [], apnsFallback: [] };
 const webTo = (name) => hits.inbox.filter((h) => h.path.includes(name));
@@ -211,7 +224,9 @@ const mock = http.createServer((req, res) => {
     }
     if (u.pathname === '/fcm-oauth') return json({ access_token: 'ya29.mock-access', expires_in: 3600 });
     if (u.pathname.includes('/messages:send')) {
-      hits.fcm.push(JSON.parse(body || '{}').message || {});
+      const message = JSON.parse(body || '{}').message || {};
+      hits.fcm.push(message);
+      if (String(message.token || '').startsWith('fcm-dead-')) return json({ error: { status: 'UNREGISTERED' } }, 404);
       return json({ name: 'projects/x/messages/1' });
     }
     if (u.pathname === '/rest/v1/profiles') {
@@ -283,6 +298,9 @@ const mock = http.createServer((req, res) => {
           row('apns-token-erin-iphone-0001', { platform: 'ios', token: 'apns-token-erin-iphone-0001' }, 'ios', 23),
         ]));
       }
+      if (uid === LIV) return json(pg([row(LIV_DEAD, { platform: 'android', token: LIV_DEAD }, 'android', 24)]));
+      if (uid === NED) return json(pg(NED_FCM.map((t, i) => row(t, { platform: 'android', token: t }, 'android', String(10 + i)))));
+      if (uid === MAX) return json(pg([row(MAX_DEAD, { platform: 'android', token: MAX_DEAD }, 'android', 24)]));
       if (uid === FRANK) {
         return json(pg([row('fcm-token-frank-pixel-0001', { platform: 'android', token: 'fcm-token-frank-pixel-0001' }, 'android', 24)]));
       }
@@ -431,6 +449,9 @@ function squadDriver(ws) {
   };
   return { says, ask };
 }
+// NED's nine NEWEST phones, in any order: rows are seen on day 10+i, so the
+// newest are the highest i (Part 12).
+const same9 = (tokens) => JSON.stringify([...tokens].sort()) === JSON.stringify(NED_FCM.slice(3).sort());
 // Two answers are the same answer when they differ only in the request id.
 const sameReply = (x, y) => x.raw.replace(`"id":"${x.m.id}"`, '') === y.raw.replace(`"id":"${y.m.id}"`, '');
 
@@ -441,7 +462,10 @@ const sameReply = (x, y) => x.raw.replace(`"id":"${x.m.id}"`, '') === y.raw.repl
 const servers = [];
 async function boot(port, env) {
   const child = spawn(process.execPath, ['server.js'], {
-    env: { ...process.env, PORT: String(port), BOT_FIRE_MS: '150', PICK_MS: '300', SOCIAL_PUSH_MS: '0', ...env },
+    // SQUAD_INVITE_COOLDOWN_MS '0': the per-invitee push cooldown (D-PUSH-1 R)
+    // off, so every part here that invites one friend twice still sees both
+    // sends. Part 11 boots a server with production's cooldown to prove it.
+    env: { ...process.env, PORT: String(port), BOT_FIRE_MS: '150', PICK_MS: '300', SOCIAL_PUSH_MS: '0', SQUAD_INVITE_COOLDOWN_MS: '0', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   children.push(child);
@@ -479,6 +503,8 @@ async function boot(port, env) {
   ALICE_BLANK = `https://127.0.0.1:${INBOX}/push-inbox/alice-blank`;
   jadeWeb = JADE_WEB.map((name) => ({ endpoint: `https://127.0.0.1:${INBOX}/push-inbox/${name}`,
     keys: { p256dh: b64u(erinEc.getPublicKey()), auth: b64u(crypto.randomBytes(16)) } }));
+  NED_SEAT = { endpoint: `https://127.0.0.1:${INBOX}/push-inbox/ned-seat`,
+    keys: { p256dh: b64u(nedEc.getPublicKey()), auth: b64u(crypto.randomBytes(16)) } };
   KAI_LAPTOP = { endpoint: `https://127.0.0.1:${INBOX}/push-inbox/kai-laptop`,
     keys: { p256dh: b64u(kaiEc.getPublicKey()), auth: b64u(crypto.randomBytes(16)) } };
   await new Promise((r) => mock.listen(MOCK, '127.0.0.1', r));
@@ -755,6 +781,42 @@ async function boot(port, env) {
     step("a friend with no device is answered 'none', real or dropped, one read each");
   } else fail(`the no-device invites were wrong: real=${dave1.raw} dropped=${dave2.raw} ${moved(q)}`);
   state.blocks = [];
+
+  // ---- Part 5b: an invite never deletes a device (D-PUSH-1 Q) ----------------
+  // A real invite used to DELETE every endpoint that answered dead, and a
+  // dropped one sends nothing and so deletes nothing. For a friend whose only
+  // device is dead, the SECOND invite then answered 'none' when the first was
+  // real and 'push' when it was dropped: two frames that named a block between
+  // two other players. Only turn nudges clean dead rows now. LIV and MAX each
+  // have one dead phone; every invite to MAX is dropped (MAX blocks Carol).
+  // Asked from a second device of Bob's, whose friend bucket is its own: the
+  // parts after this one spend the first device's.
+  const b5 = await openWs(GAME);
+  const bob5 = squadDriver(b5);
+  send(b5, { type: 'hello', token: 'tok-bob' });
+  state.blocks = [{ blocker: MAX, blocked: CAROL }];
+  q = traffic();
+  const del0 = hits.del.length;
+  const liv1 = await bob5.ask({ type: 'squad', op: 'invite', to: LIV, id: 'liv1' }, 'the first real invite to a dead phone');
+  if (!liv1) return finish();
+  await waitFor(() => hits.fcm.slice(q.fcm).some((m) => m.token === LIV_DEAD), 5000);
+  await settle(800);                                  // room for a DELETE to have gone out
+  const liv2 = await bob5.ask({ type: 'squad', op: 'invite', to: LIV, id: 'liv2' }, 'the second real invite to a dead phone');
+  const max1 = await bob5.ask({ type: 'squad', op: 'invite', to: MAX, id: 'max1' }, 'the first dropped invite to a dead phone');
+  await settle(800);
+  const max2 = await bob5.ask({ type: 'squad', op: 'invite', to: MAX, id: 'max2' }, 'the second dropped invite to a dead phone');
+  if (!liv2 || !max1 || !max2) return finish();
+  await settle(800);
+  state.blocks = [];
+  const livSends = hits.fcm.slice(q.fcm).filter((m) => m.token === LIV_DEAD).length;
+  const maxSends = hits.fcm.slice(q.fcm).filter((m) => m.token === MAX_DEAD).length;
+  const dels = hits.del.slice(del0);
+  if (liv1.m.delivered === 'push' && sameReply(liv2, max2) && sameReply(liv1, max1) && livSends === 2 && maxSends === 0)
+    step("a friend whose only device is dead is answered 'push' again after a real invite, byte for byte what a dropped invite's friend is");
+  else fail(`dead device, real v dropped: liv ${liv1.raw} then ${liv2.raw}; max ${max1.raw} then ${max2.raw}; sends liv=${livSends} max=${maxSends}`);
+  if (dels.length === 0) step('no invite DELETEd a subscription row, however dead the device answered');
+  else fail(`an invite deleted subscription rows: ${JSON.stringify(dels)}`);
+  b5.terminate();
 
   // ---- Part 6: the seam's time runs out ---------------------------------------
   // squadInvite answers 'none' when the seam has not answered within
@@ -1101,6 +1163,77 @@ async function boot(port, env) {
     else if (named !== 2 || !deferred || /\bsendAll\s*\(/.test(code)) {
       fail(`sendAll is not dispatched only through setImmediate: ${named} mentions, deferred line ${deferred ? 'present' : 'MISSING'}`);
     } else step('every send waits a turn of the event loop, after the answer: a real invite answers when a dropped one does');
+  }
+
+  // ---- Part 11: production's invite push cooldown, over the wire (D-PUSH-1 R) --
+  // Every server above runs with the cooldown off. This one runs production's
+  // 30 s: Frank, offline with one phone, is invited twice in a row. The second
+  // invite makes the same one read and is answered the same, and sends nothing.
+  {
+    const GAME3 = await freePort();
+    if (!(await boot(GAME3, { ...ALL_TRANSPORTS, SQUAD_INVITE_COOLDOWN_MS: '30000' }))) return finish();
+    const bw = await openWs(GAME3);
+    const bd = squadDriver(bw);
+    send(bw, { type: 'hello', token: 'tok-bob' });
+    const sq = await bd.ask({ type: 'squad', op: 'create', id: 'cd0' }, "Bob's squad on the cooldown server");
+    if (!sq || !sq.m.code) { fail(`cooldown server: squad create answered ${sq && sq.raw}`); return finish(); }
+    const franks = () => hits.fcm.filter((m) => m.token === 'fcm-token-frank-pixel-0001').length;
+    q = traffic();
+    const f0 = franks();
+    const cd1 = await bd.ask({ type: 'squad', op: 'invite', to: FRANK, id: 'cd1' }, 'the first invite on the cooldown server');
+    await waitFor(() => franks() > f0, 5000);
+    const cd2 = await bd.ask({ type: 'squad', op: 'invite', to: FRANK, id: 'cd2' }, 'the second invite inside the cooldown');
+    if (!cd1 || !cd2) return finish();
+    await settle(1000);                               // room for a second send to have gone out
+    if (cd1.m.delivered === 'push' && sameReply(cd1, cd2) && franks() === f0 + 1 && readsSince(q) === JSON.stringify([FRANK, FRANK]))
+      step('inside the invitee\'s 30 s a second invite reads once, is answered the same, and sends nothing');
+    else fail(`the cooldown over the wire: ${cd1.raw} then ${cd2.raw}; Frank's phone sent ${franks() - f0}; ${moved(q)}`);
+    bw.terminate();
+  }
+
+  // ---- Part 12: the seat's own subscription stays among the ten (D-PUSH-1 S) --
+  // A nudge reads the account's newest rows and sends to the first ten usable,
+  // and the seat's in-memory subscription is put FIRST. NED has twelve usable
+  // phones, and a browser that only the seat holds: after the cap, that
+  // browser must still be one of the ten, beside nine phones.
+  if (!inbox) {
+    step('SKIPPED Part 12: openssl unavailable for the TLS inbox (the seat subscription is a web one)');
+  } else {
+    const nw = await openWs(GAME);
+    send(nw, { type: 'hello', token: 'tok-ned' });
+    send(nw, { type: 'create', name: 'Loam Plover', skin: 'olive', mode: 'duel' });
+    const room = await new Promise((res) => {
+      nw.on('message', function on(raw) { const m = JSON.parse(raw); if (m.type === 'created') { nw.off('message', on); res(m); } });
+    });
+    if (!(await until(() => hits.user.includes('tok-ned'), 5000, "Ned's token verification"))) return finish();
+    send(nw, { type: 'pushSub', sub: NED_SEAT, token: 'tok-ned' });
+    if (!(await until(() => hits.subPost.some((b) => b.endpoint === NED_SEAT.endpoint), 5000, "Ned's seat upsert"))) return finish();
+    const fcm0 = hits.fcm.length;
+    let nSeat = -1, nFired = false;
+    nw.on('message', (raw) => {
+      const m = JSON.parse(raw);
+      if (m.type === 'start') nSeat = m.you;
+      if (m.type === 'turn' && m.turn === nSeat && !nFired) {
+        nFired = true;
+        send(nw, { type: 'fire', weapon: 'cannon', angle: 45, power: 55 });
+        setTimeout(() => nw.terminate(), 150);
+      }
+    });
+    const ow = await openWs(GAME);
+    let oSeat = -1, oShots = 0;
+    ow.on('message', (raw) => {
+      const m = JSON.parse(raw);
+      if (m.type === 'start') oSeat = m.you;
+      if (m.type === 'turn' && m.turn === oSeat && oShots < 8) { oShots++; send(ow, { type: 'fire', weapon: 'cannon', angle: 45, power: 55 }); }
+    });
+    send(ow, { type: 'join', code: room.code, name: 'Stranger', skin: 'desert' });
+    if (!(await until(() => webTo('ned-seat').length >= 1, 30000, "the nudge to Ned's seat subscription"))) return finish();
+    await settle(1500);                               // every send of that one nudge has landed
+    const phones = hits.fcm.slice(fcm0).filter((m) => NED_FCM.includes(m.token)).map((m) => m.token);
+    if (webTo('ned-seat').length === 1 && phones.length === 9 && same9(phones))
+      step("a nudge to an account with twelve usable devices still reaches the seat's own browser, beside its nine newest phones");
+    else fail(`the seat's subscription among the ten: seat hits ${webTo('ned-seat').length}, phones ${JSON.stringify(phones)}`);
+    ow.terminate();
   }
 
   // ---- Part 10: every server this file booted is still up ---------------------

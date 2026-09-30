@@ -779,7 +779,7 @@ async function apnsSend(token, title, body, url, tag) {
 // aborted `signal` — its caller has stopped waiting and answered without it.
 const PUSH_DEVICES_MAX = 10;   // devices one push is sent to
 const PUSH_ROWS_READ = 25;     // the newest rows read to find them
-async function pushToUser(uid, { title, body, url, tag }, { seed = null, onDrop = null, dryRun = false, signal = null } = {}) {
+async function pushToUser(uid, { title, body, url, tag }, { seed = null, onDrop = null, dryRun = false, signal = null, noDelete = false } = {}) {
   // Either transport is enough to be worth trying: a web-only server (no FCM
   // key) still nudges browsers, and an FCM-only one still nudges phones.
   if (!webpush && !fcm && !apns) return false;
@@ -822,7 +822,8 @@ async function pushToUser(uid, { title, body, url, tag }, { seed = null, onDrop 
   const drop = (endpoint) => {
     // The caller's half FIRST: a throw out of it must not cost the DELETE.
     if (onDrop) { try { onDrop(endpoint); } catch { /* the store half still runs */ } }
-    if (SB_SECRET) {
+    // `noDelete`: a squad invite's sends clean nothing (see pushSquadInvite).
+    if (SB_SECRET && !noDelete) {
       sbAdmin('DELETE', `/push_subscriptions?endpoint=eq.${encodeURIComponent(endpoint)}`).catch(() => {});
     }
   };
@@ -897,6 +898,13 @@ async function pushNudgeAsync(room, seat) {
 // the answer. `dryRun` is a dropped invite (D-BLOCK 4): the same read and the
 // same answer, nothing sent. `signal` is aborted once the inviter has been
 // answered 'none', and nothing may be sent after that.
+//
+// AN INVITE NEVER DELETES A DEVICE (D-PUSH-1 Q). A real invite used to DELETE
+// every endpoint that answered dead, and a dropped one sends nothing, so it
+// deleted nothing: for a friend whose only device was dead, a second invite
+// then answered 'none' after a real one and 'push' after a dropped one, and
+// those two frames named a block between two other players. Only turn nudges
+// clean dead rows now, so both leave the store as they found it.
 async function pushSquadInvite(toUserId, { code, from, size, max }, { dryRun = false, signal = null } = {}) {
   // `from` is displayName()'s, and null is legitimate — an unprovable name
   // keeps its invite everywhere else, so it keeps it here. 'A player' is
@@ -907,7 +915,7 @@ async function pushSquadInvite(toUserId, { code, from, size, max }, { dryRun = f
     body: `${who} invites you to their squad (${size} of ${max}).`,
     url: `/?squad=${code}`,
     tag: `cc-squad-${code}`,
-  }, { dryRun, signal });
+  }, { dryRun, signal, noDelete: true });
 }
 
 // The one capability the engine cannot have: sending a push needs the VAPID keys

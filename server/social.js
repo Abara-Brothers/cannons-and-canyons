@@ -135,6 +135,34 @@ const SKIN_IDS = new Set(['olive', 'desert', 'jungle', 'midnight', 'arctic', 'go
 // characters, so it needs no guard of its own.
 export const codeOf = (v) => (typeof v === 'string' ? v : '').toUpperCase().trim().slice(0, 8);
 
+// A PER-KEY COOLDOWN: take(key) is true when the caller may act now, and
+// the key is then held for `ms`; false while an earlier take's window is
+// open. Its one user is the invite push (D-PUSH-1 R, in createSocial).
+// BOUNDED, because every key is a value off the wire: expired entries go on
+// every take (a Map iterates in insertion order, a re-taken key is
+// re-inserted, and every window is the same length, so the expired ones are
+// at the front; a clock stepped back can leave one behind a later one, and
+// it goes when that one does), and at `max` entries the oldest goes, so a
+// flood of new keys costs the flood's own oldest window, never memory. A
+// window of 0 holds nothing. Exported for its own tests.
+export function createCooldown({ ms, max, now }) {
+  const until = new Map();
+  return {
+    take(key) {
+      const t = now();
+      for (const [k, u] of until) { if (u > t) break; until.delete(k); }
+      const u = until.get(key);
+      if (u !== undefined && u > t) return false;
+      until.delete(key);
+      if (!(ms > 0)) return true;
+      while (until.size >= max) until.delete(until.keys().next().value);
+      until.set(key, t + ms);
+      return true;
+    },
+    get size() { return until.size; },
+  };
+}
+
 // ---- UNBLOCK KEYS (BINDING.md resolution 24, applied to the blocked list) ----
 // THE HOLE THIS CLOSES. A lobby seat carries a per-room opaque handle instead of
 // an account id precisely so a modified client cannot correlate a player across
@@ -2160,7 +2188,12 @@ export function createSocial({
       if (!dropped) for (const w of live) safeSend(w, frame);
       return squadReply(ws, msg, 'invite', { ok: true, delivered: 'online' });
     }
-    const pushed = await askPushSeam(to, { code: frame.code, from: frame.from.callsign, size: frame.size, max: frame.max }, dropped);
+    // ONE REAL PUSH PER INVITEE PER INVITE_COOLDOWN_MS (D-PUSH-1 R), whoever
+    // invites: inside the window a real invite takes the dropped one's path —
+    // the dry run, the same read and the same answer, nothing sent. Taken
+    // before the await, so two invites racing to one friend send once.
+    const real = !dropped && inviteCooldown.take(to);
+    const pushed = await askPushSeam(to, { code: frame.code, from: frame.from.callsign, size: frame.size, max: frame.max }, !real);
     squadReply(ws, msg, 'invite', { ok: true, delivered: pushed ? 'push' : 'none' });
   }
 
@@ -2186,6 +2219,14 @@ export function createSocial({
   // and the owner asked for that answer to be true.
   const envInvitePush = Number(process.env.SQUAD_INVITE_PUSH_MS);
   const INVITE_PUSH_MS = Number.isFinite(envInvitePush) && envInvitePush >= 0 ? envInvitePush : 4000;
+  // THE INVITE PUSH COOLDOWN (D-PUSH-1 R): an invite needs no match, so
+  // without it any number of friends and sockets could fill one player's
+  // notification tray. Keyed on the invitee alone, so it caps what a player
+  // is sent however many people send it. Read per instance, like every time
+  // knob here; 0 turns it off (the suites that invite one friend twice).
+  const envCooldown = Number(process.env.SQUAD_INVITE_COOLDOWN_MS);
+  const INVITE_COOLDOWN_MS = Number.isFinite(envCooldown) && envCooldown >= 0 ? envCooldown : 30000;
+  const inviteCooldown = createCooldown({ ms: INVITE_COOLDOWN_MS, max: 4096, now });
   async function askPushSeam(to, payload, dryRun) {
     const stop = new AbortController();
     let timer = null;
