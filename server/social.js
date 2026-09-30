@@ -164,6 +164,31 @@ export function createCooldown({ ms, max, now }) {
   };
 }
 
+// THE SQUAD REFUSALS, BY OP (E9, the whole-branch fix wave): every error code
+// a squad reply to that op can carry, and nothing else. The client words
+// each as squad.<op>.<code>, so this is the contract between the two, and
+// test/squad.mjs (err) pins it: adding or renaming a code is a change the
+// client must be told of. squadReply and Start's fan-out send any code NOT
+// on its op's list as 'unavailable', so a word the state machine or the
+// seating starts to answer can never reach a client unnamed. An op not
+// listed here (one that does not exist) answers only slow_down or
+// unavailable. `dropped` (ready) is the machine's refusal of a Ready on a
+// row with no socket; `refused` and `capacity` (start) are the seating's.
+const BASE_ERRORS = Object.freeze(['slow_down', 'unavailable']);
+export const SQUAD_ERRORS = new Map(Object.entries({
+  create: [...BASE_ERRORS],
+  join: [...BASE_ERRORS, 'no_such_squad', 'full', 'already_in'],
+  leave: [...BASE_ERRORS],
+  kick: [...BASE_ERRORS, 'not_leader', 'no_such_member'],
+  ready: [...BASE_ERRORS, 'no_squad', 'no_rack', 'dropped'],
+  mode: [...BASE_ERRORS, 'no_squad', 'not_leader', 'bad_mode', 'bad_tees', 'bad_max'],
+  start: [...BASE_ERRORS, 'no_squad', 'not_leader', 'wrong_device', 'no_rack', 'duplicate_member', 'wont_fit',
+    'member_offline', 'not_ready', 'member_busy', 'refused', 'capacity'],
+  resume: [...BASE_ERRORS],
+  invite: [...BASE_ERRORS, 'no_squad', 'full', 'not_friend', 'already'],
+}).map(([op, codes]) => [op, Object.freeze(codes)]));
+const squadError = (op, code) => ((SQUAD_ERRORS.get(op) || BASE_ERRORS).includes(code) ? code : 'unavailable');
+
 // ---- UNBLOCK KEYS (BINDING.md resolution 24, applied to the blocked list) ----
 // THE HOLE THIS CLOSES. A lobby seat carries a per-room opaque handle instead of
 // an account id precisely so a modified client cannot correlate a player across
@@ -997,7 +1022,11 @@ export function createSocial({
   // seam is touched.
   const SQUAD_LINKED = new Set(['create', 'invite', 'kick']);
 
-  const squadReply = (ws, msg, op, rest) => reply(ws, msg, { type: 'squad', op, ...rest });
+  // An error is sent only by its op's name for it (SQUAD_ERRORS); the key
+  // keeps its place in the frame when it is renamed.
+  const squadReply = (ws, msg, op, rest) => reply(ws, msg, {
+    type: 'squad', op, ...rest, ...(rest && typeof rest.error === 'string' ? { error: squadError(op, rest.error) } : {}),
+  });
 
   async function handleSquad(ws, msg) {
     // A SOCKET THAT HAS CLOSED ACTS ON NOTHING (task 5). A frame can wait on
@@ -1687,7 +1716,7 @@ export function createSocial({
       // box counts in the roster, and the two differ whenever the leader is
       // not the first row, so it is translated; an index naming no seat is
       // dropped rather than passed on.
-      const error = (seated && typeof seated.error === 'string' && seated.error) || 'unavailable';
+      const error = squadError('start', (seated && typeof seated.error === 'string' && seated.error) || 'unavailable');
       const blames = error === 'member_busy' || error === 'member_offline';
       const row = blames && Number.isInteger(seated.at) && seated.at >= 0 ? sq.members.indexOf(ordered[seated.at]) : -1;
       const why = row >= 0 ? { error, at: row } : { error };

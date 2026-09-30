@@ -30,7 +30,7 @@ import { createSquads } from '../server/squads.js';
 // container the code frame's room arm reads through.
 import { rooms, handleClientMessage, setCodeTaken, MODE_SEATS, TEE_IDS, validRackFor } from '../public/room-engine.js';
 import { LOADOUT_POOL, loadoutSizeFor } from '../public/game-core.js';
-import { createSocial, createCooldown, SOCIAL_TYPES } from '../server/social.js';
+import { createSocial, createCooldown, SOCIAL_TYPES, SQUAD_ERRORS } from '../server/social.js';
 // Task 2: the one-byte hook the code minters are proved on. The same module
 // is loaded into a spawned server.js by test/code_frame.mjs with --import;
 // here it is installed for the length of one block and taken out again.
@@ -9489,6 +9489,45 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     if (same6(kinds, ['real', 'dry', 'dry', 'real', 'dry', 'real', 'dry', 'real']) && same)
       ok('(cool) one real invite push per invitee per 30 s, whoever invites: the rest take the dry run and are answered alike, and a dropped invite takes no window');
     else fail('(cool) invite push cooldown: ' + JSON.stringify(runs));
+  }
+
+  // ---- (err) THE SQUAD REFUSALS ARE A CLOSED, NAMED SET (E9) ---------------
+  // Every error a squad reply can carry, by op, is one list the client maps
+  // to its words (squad.<op>.<code>). This pins it: a code added or renamed
+  // is a change the client must be told of, not something that leaks out of
+  // the state machine or the seating by accident. Anything a handler hands
+  // over that is NOT on its op's list is sent as 'unavailable' — here a
+  // seating that answers a word the list does not know, to the leader and to
+  // every member it fans out to.
+  {
+    const WANT = {
+      create: ['slow_down', 'unavailable'],
+      join: ['slow_down', 'unavailable', 'no_such_squad', 'full', 'already_in'],
+      leave: ['slow_down', 'unavailable'],
+      kick: ['slow_down', 'unavailable', 'not_leader', 'no_such_member'],
+      ready: ['slow_down', 'unavailable', 'no_squad', 'no_rack', 'dropped'],
+      mode: ['slow_down', 'unavailable', 'no_squad', 'not_leader', 'bad_mode', 'bad_tees', 'bad_max'],
+      start: ['slow_down', 'unavailable', 'no_squad', 'not_leader', 'wrong_device', 'no_rack', 'duplicate_member', 'wont_fit',
+        'member_offline', 'not_ready', 'member_busy', 'refused', 'capacity'],
+      resume: ['slow_down', 'unavailable'],
+      invite: ['slow_down', 'unavailable', 'no_squad', 'full', 'not_friend', 'already'],
+    };
+    const got = SQUAD_ERRORS instanceof Map ? Object.fromEntries(SQUAD_ERRORS) : null;
+    const frozen = SQUAD_ERRORS instanceof Map && [...SQUAD_ERRORS.values()].every((l) => Object.isFrozen(l));
+    if (same6(got, WANT) && frozen) ok('(err) every squad op\'s refusal codes are one pinned, frozen list');
+    else fail('(err) SQUAD_ERRORS: ' + JSON.stringify(got) + ' frozen ' + frozen);
+    const st = t6store(ROWS6);
+    const S = mkSocial6(st, { seatSquad: () => ({ ok: false, error: 'weird_new_word', at: 1 }) });
+    const wa = up6(S, A), wc = up6(S, C);
+    const code = await create6(S, wa);
+    await join6(S, wc, code, 'Crater Two');
+    await S.handle(wc, { type: 'squad', op: 'ready', ready: true, loadout: RACK5 });
+    clear6(wa, wc);
+    await S.handle(wa, { type: 'squad', op: 'start', loadout: RACK5, id: 'w' });
+    const lead = ans6(wa, 'w'), member = got6(wc, 'squad', 'start');
+    if (same6(lead, { type: 'squad', op: 'start', error: 'unavailable', id: 'w' }) && same6(member, [{ type: 'squad', op: 'start', error: 'unavailable' }]))
+      ok('(err) a code the list does not name is sent as unavailable, to the leader and to every member');
+    else fail('(err) an unlisted code: ' + JSON.stringify({ lead, member }));
   }
 
   // ---- (end of task 6 checks) ----
