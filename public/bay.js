@@ -721,6 +721,10 @@ const sqAErr = (s) => '<p class="sqae' + (s ? '' : ' hidden') + '">' + esc(s || 
 // guest's (a guest has no id to report); the leader's Remove is on every row
 // but their own, a guest's included, and names the row by its handle, `rid`
 // (D-UI-3): a row the server gave no handle is a row no kick can name.
+// TWO LINES (D-UI-5): the name has the first line (.sqm1) to itself, and the
+// status words (.sqms) and the controls share the second (.sqm2), so no status
+// word or button ever takes width from a name. The Friends tab's rows are
+// built the same way.
 const sqRid = (p) => (p && typeof p.rid === 'string' && p.rid ? p.rid : '');
 function sqRow(p, i, sn, ctl) {
   const you = i === sn.you, name = nameOf(p), lead = sqIsLead(sn, p);
@@ -729,16 +733,16 @@ function sqRow(p, i, sn, ctl) {
     : p.ready ? '<span class="sqr on" role="img" aria-label="Ready" title="Ready">' + IC.tick + '</span>'
     : '<span class="sqr">Not ready</span>';
   const kick = ctl.lead && !you && !lead && !!sqRid(p);
-  return '<div class="sqm">'
+  return '<div class="sqm"><div class="sqm1">'
     + '<span class="pdot' + (lit ? ' on' : '') + '" title="' + (p.dropped ? 'Reconnecting' : lit ? 'Online' : 'Offline') + '">' + IC.dot + '</span>'
-    + '<span class="sqmn"><span class="sqmt">' + esc(name) + '</span>' + (you ? '<span class="sqmy">(you)</span>' : '') + '</span>'
-    + (lead ? '<span class="sql">Leader</span>' : '') + st
+    + '<span class="sqmn"><span class="sqmt">' + esc(name) + '</span>' + (you ? '<span class="sqmy">(you)</span>' : '') + '</span></div>'
+    + '<div class="sqm2"><span class="sqms">' + (lead ? '<span class="sql">Leader</span>' : '') + st + '</span>'
     + (you || p.id == null ? '' : menuBtn(p.id, 'id', name, false, !named(p)))
     // Never "Remove No callsign" to a screen reader (review T9-R1-12): the
     // question in the footer says "this player", and so does the label.
     + (kick ? '<button class="sqic" data-sq="kick:' + esc(sqRid(p)) + '" title="Remove from the squad" aria-label="Remove '
       + (named(p) ? esc(p.callsign) : 'this player') + ' from the squad"' + (ctl.on ? '' : ' disabled') + '>' + IC.cross + '</button>' : '')
-    + '</div>';
+    + '</div></div>';
 }
 // THE DASHED ROW, while the squad has room: the row opens the Friends tab
 // (design 5.1 state 2's Invite friends), and the code COPIES THE LINK --
@@ -1086,21 +1090,23 @@ function sqFriendRows(sn) {
   const full = !!(sq.snap && (sq.snap.members || []).length >= SQ_MAX);
   const req = rin.filter((p) => p && p.id).map((p) => {
     const name = nameOf(p), key = 'r:' + p.id;
-    return '<div class="sqm sqfr" data-row="' + esc(key) + '"><span class="sqmn"><span class="sqmt">' + esc(name) + '</span></span>'
-      + '<button class="sbtn" data-sq="accept:' + esc(p.id) + '"' + (on ? '' : ' disabled') + '>Accept</button>'
+    return '<div class="sqm sqfr" data-row="' + esc(key) + '"><div class="sqm1"><span class="sqmn"><span class="sqmt">' + esc(name) + '</span></span></div>'
+      + '<div class="sqm2"><span class="sqms"></span><button class="sbtn" data-sq="accept:' + esc(p.id) + '"' + (on ? '' : ' disabled') + '>Accept</button>'
       + '<button class="sqic" data-sq="decline:' + esc(p.id) + '" title="Decline" aria-label="Decline ' + (named(p) ? esc(p.callsign) : 'this player') + '"' + (on ? '' : ' disabled') + '>' + IC.cross + '</button>'
-      + menuBtn(p.id, 'id', name, false, !named(p)) + '</div>' + sqLineAt(key);
+      + menuBtn(p.id, 'id', name, false, !named(p)) + '</div></div>' + sqLineAt(key);
   }).join('');
   const rows = fs.filter((p) => p && p.id).map((p) => {
     const name = nameOf(p), key = 'f:' + p.id;
-    const act = sqHas(p.id) ? '<span class="sqy">' + IC.tick + 'In your squad</span>'
+    const mine = sqHas(p.id);
+    const act = mine ? ''
       : sqInvited(p.id) ? '<button class="sbtn" data-sq="invite:' + esc(p.id) + '" disabled>Invited</button>'
       : '<button class="sbtn" data-sq="invite:' + esc(p.id) + '"' + (full ? ' title="Your squad is full."' : '') + (can ? '' : ' disabled')
         + (why ? ' aria-describedby="sqInvWhy"' : '') + '>'
         + (sq.busy === 'invite' && sq.fat === key ? 'Inviting' : 'Invite') + '</button>';
-    return '<div class="sqm sqfr" data-row="' + esc(key) + '"><span class="pdot' + (p.online ? ' on' : '') + '" title="' + (p.online ? 'Online' : 'Offline') + '">' + IC.dot + '</span>'
-      + '<span class="sqmn"><span class="sqmt">' + esc(name) + '</span></span>' + act
-      + menuBtn(p.id, 'id', name, false, !named(p)) + '</div>' + sqLineAt(key);
+    return '<div class="sqm sqfr" data-row="' + esc(key) + '"><div class="sqm1"><span class="pdot' + (p.online ? ' on' : '') + '" title="' + (p.online ? 'Online' : 'Offline') + '">' + IC.dot + '</span>'
+      + '<span class="sqmn"><span class="sqmt">' + esc(name) + '</span></span></div>'
+      + '<div class="sqm2"><span class="sqms">' + (mine ? '<span class="sqy">' + IC.tick + 'In your squad</span>' : '') + '</span>' + act
+      + menuBtn(p.id, 'id', name, false, !named(p)) + '</div></div>' + sqLineAt(key);
   }).join('');
   // A line whose row has gone -- a request answered, a friend removed -- is
   // still said, at the foot of the rows, rather than lost.

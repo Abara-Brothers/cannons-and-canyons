@@ -2598,6 +2598,118 @@ try {
         && hRows && !hRows.req.concat(hRows.fr).some((r) => r.over))
       ok(`${V}: the squad's status words are at least 7.5u, and Remove, Decline and every member menu take a tap across about 24 px without overlapping each other or Accept`);
     else fail(`${V}: words and targets ${JSON.stringify({ squad: hSq, friends: hFr, over: hRows && hRows.req.concat(hRows.fr).map((r) => r.over) })}`);
+
+    // ---- I. TWO-LINE ROWS (D-UI-5). A busy row carried its status words or its
+    //      buttons on the name's line, and the name gave way: at a407cc1 a
+    //      reconnecting member read "Rid..." and a request "Nia ..." at both
+    //      phone viewports. The name now has the first line to itself and the
+    //      status words sit beneath it.
+    //  I1. EVERY FIXTURE NAME READS IN FULL, measured on the name itself: the
+    //      ellipsis is drawn exactly when its scrollWidth passes its
+    //      clientWidth. In the leader's view of a reconnecting member (menu and
+    //      Remove on the row), in a member's view of a reconnecting leader
+    //      (Leader, Reconnecting and the menu on one row) and on the Friends
+    //      tab's request, In your squad and Invite rows. Every row's status
+    //      words sit below its name, and no control's target (its box and its
+    //      ::before layer, read back from the layout as H does) reaches up into
+    //      the name's line.
+    //  I2. A TAP ON THE STATUS WORDS OPENS NOTHING. The member menu's target
+    //      reached 16u left over "Not ready" and "Reconnecting", and a friend's
+    //      menu 3u over "In your squad", so a tap on the words opened that
+    //      player's menu. Each status word -- Leader, the Ready tick, Not ready,
+    //      Reconnecting, In your squad -- is sampled at its corners, edge
+    //      midpoints and centre, 0.75 px in, and no sample lands on a control;
+    //      then it is pressed for real (a CDP mouse press and release at its
+    //      right edge, the point nearest the menu), and no menu opens, no Remove
+    //      question opens and nothing is sent. A real press on a menu does open
+    //      it, in both panes, so the presses do reach the controls.
+    const t9names = (paneId) => ev(`(() => {
+      const pane = document.getElementById(${JSON.stringify(paneId)});
+      const vis = (e) => !!e && !e.closest('.hidden') && e.getClientRects().length > 0;
+      const px = (v) => parseFloat(v) || 0;
+      const top = (b) => { const r = b.getBoundingClientRect(), ps = getComputedStyle(b, '::before');
+        return ps.position === 'absolute' ? Math.min(r.top, r.top + px(getComputedStyle(b).borderTopWidth) + px(ps.top)) : r.top; };
+      return [...pane.querySelectorAll('.sqm')].filter(vis).map((r) => {
+        const n = r.querySelector('.sqmt'), nb = n.getBoundingClientRect(), line = (r.querySelector('.sqm1') || n).getBoundingClientRect();
+        const words = [...r.querySelectorAll('.sql, .sqr, .sqy')].filter(vis);
+        const ctl = [...r.querySelectorAll('.pmb, .sqic, .sbtn')].filter(vis);
+        return { name: n.textContent, cut: n.scrollWidth > n.clientWidth, sw: n.scrollWidth, cw: n.clientWidth, words: words.length,
+          under: words.every((w) => w.getBoundingClientRect().top >= nb.bottom - 0.5),
+          foot: ctl.every((b) => top(b) >= line.bottom - 0.5), ctl: ctl.map((b) => +(top(b) - line.bottom).toFixed(2)) };
+      });
+    })()`);
+    const WORDS = '.sqm .sql, .sqm .sqr, .sqm .sqy';
+    const t9tap = async (x, y) => {
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 });
+      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1 });
+      await sleep(60);
+    };
+    // What a press opened, shut again: the player menu (by its own Close), or
+    // the leader's Remove question in the footer.
+    const t9shut = () => ev(`(() => {
+      const m = document.getElementById('pmenu'), open = !!(m && !m.hidden);
+      if (open) m.querySelector('[data-pm="close"]').click();
+      const k = document.querySelector('#bay [data-sq="kcancel"]'), ask = !!(k && !k.closest('.hidden'));
+      if (ask) k.click();
+      return { open, ask };
+    })()`);
+    const t9words = async (paneId) => {
+      const out = [], pick = `[...document.getElementById(${JSON.stringify(paneId)}).querySelectorAll(${JSON.stringify(WORDS)})].filter((x) => !x.closest('.hidden') && x.getClientRects().length > 0)`;
+      const n = await ev(`${pick}.length`);
+      for (let k = 0; k < n; k++) {
+        const w = await ev(`(() => {
+          const e = ${pick}[${k}];
+          e.scrollIntoView({ block: 'center' });
+          const r = e.getBoundingClientRect(), E = 0.75;
+          const xs = [r.left + E, (r.left + r.right) / 2, r.right - E], ys = [r.top + E, (r.top + r.bottom) / 2, r.bottom - E];
+          const hit = xs.flatMap((x) => ys.map((y) => { const b = document.elementFromPoint(x, y), c = b && b.closest('button'); return c ? (c.getAttribute('data-sq') || c.className) : ''; })).filter(Boolean);
+          // Nothing left open over the rows: an open menu's sheet would take
+          // every sample and every press, and prove nothing.
+          const m = document.getElementById('pmenu'), clear = !(m && !m.hidden) && !document.querySelector('#bay [data-sq="kcancel"]');
+          return { t: e.textContent.trim() || e.getAttribute('aria-label'), x: r.right - E, y: (r.top + r.bottom) / 2, hit, clear };
+        })()`);
+        const sent = (await tx()).length;
+        await t9tap(w.x, w.y);
+        const s = await t9shut();
+        out.push({ t: w.t, hit: w.hit, clear: w.clear, open: s.open, ask: s.ask, sent: (await tx()).length - sent });
+      }
+      return out;
+    };
+    const t9menuTap = async (paneId) => {
+      const c = await ev(`(() => { const b = [...document.getElementById(${JSON.stringify(paneId)}).querySelectorAll('.sqm .pmb')].find((x) => !x.closest('.hidden') && x.getClientRects().length > 0);
+        if (!b) return null; b.scrollIntoView({ block: 'center' }); const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+      if (!c) return null;
+      await t9tap(c.x, c.y);
+      return (await t9shut()).open;
+    };
+    const iN = {}, iW = {};
+    await t9state({ mode: 'ffa', members: [T9YOU({ ready: true }), T9MULE({ ready: false }), T9PIKE({ ready: true, dropped: true })] });
+    await t9box();
+    iN.lead = await t9names('sqPane-squad'); iW.lead = await t9words('sqPane-squad');
+    await t9state({ leader: T9_PIKE, mode: 'ffa', members: [T9YOU({ ready: false }), T9PIKE({ ready: true, dropped: true }), T9MULE({ ready: false })] });
+    await t9box();
+    iN.member = await t9names('sqPane-squad'); iW.member = await t9words('sqPane-squad');
+    const iMenuSq = await t9menuTap('sqPane-squad');
+    await friendsIn({ ...FR9, friends: [{ id: T9_MULE, callsign: 'Steel Mule', online: true }, { id: T9_PIKE, callsign: 'Ridge Pike', online: false }] });
+    await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
+    await t9click('#bay [data-sq="tab:friends"]'); await sleep(60);
+    iN.friends = await t9names('sqPane-friends'); iW.friends = await t9words('sqPane-friends');
+    const iMenuFr = await t9menuTap('sqPane-friends');
+    const iShut = await ev(`(() => { const m = document.getElementById('pmenu'); return !(m && !m.hidden); })()`);
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1 });
+    await t9click('#bay [data-sq="tab:squad"]'); await sleep(40);
+    await friendsIn(FR9);
+    const iNamed = (rows, names, words) => Array.isArray(rows) && JSON.stringify(rows.map((r) => r.name)) === JSON.stringify(names)
+      && JSON.stringify(rows.map((r) => r.words)) === JSON.stringify(words) && rows.every((r) => !r.cut && r.under && r.foot);
+    if (iNamed(iN.lead, ['Dusty Crag', 'Steel Mule', 'Ridge Pike'], [2, 1, 1]) && iNamed(iN.member, ['Dusty Crag', 'Ridge Pike', 'Steel Mule'], [1, 2, 1])
+        && iNamed(iN.friends, ['Nia Vale', 'Steel Mule', 'Ridge Pike'], [0, 1, 0]))
+      ok(`${V}: every fixture name reads in full on a line of its own, the status words beneath it and no control's target reaching into it -- a reconnecting member, a reconnecting leader, a request, a squadmate and a friend to invite`);
+    else fail(`${V}: two-line rows, names ${JSON.stringify(iN)}`);
+    const iAll = [].concat(iW.lead, iW.member, iW.friends);
+    if (iW.lead.length === 4 && iW.member.length === 4 && iW.friends.length === 1
+        && iAll.every((w) => w.clear && w.hit.length === 0 && !w.open && !w.ask && w.sent === 0) && iMenuSq === true && iMenuFr === true && iShut)
+      ok(`${V}: a tap anywhere on Leader, Ready, Not ready, Reconnecting or In your squad opens no menu and asks nothing, and a tap on a menu opens it`);
+    else fail(`${V}: a tap on the status words ${JSON.stringify({ iW, iMenuSq, iMenuFr, iShut })}`);
   }
 } catch (e) {
   fail('squad_ui task 9 stopped: ' + (e && e.message));

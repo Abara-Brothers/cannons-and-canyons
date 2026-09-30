@@ -2042,8 +2042,26 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   /* Task 9's classes, none of them Task 8's (.sqb .sqn .sqc .sqf are taken).
      A row keeps every fixed part flex:none and lets only the name shrink, so
      no row is ever wider than the box however long the callsign. */
-  #bay .sqm{display:flex;align-items:center;gap:calc(5 * var(--u));height:calc(30 * var(--u));padding:0 calc(8 * var(--u)) 0 calc(6 * var(--u));
+  /* TWO LINES (D-UI-5). The name has the first line (.sqm1) to itself; the
+     status words (.sqms) and the controls share the second (.sqm2), so no
+     status word or button takes width from a name. The row is 48u: 2u above
+     the name's line, that line (13.2u to 14u), clear ground (8.25u or more on
+     every row with a control), the 18u controls and 6u below them -- so a
+     control's target (8u round its square, below) reaches up to the foot of
+     the name's line and no further, and 2u past the row's foot, as it did on
+     the one-line row. */
+  #bay .sqm{display:flex;flex-direction:column;height:calc(48 * var(--u));
+     padding:calc(2 * var(--u) - 1px) calc(8 * var(--u)) calc(6 * var(--u) - 1px) calc(6 * var(--u));
      border-radius:calc(4 * var(--u));border:1px solid rgba(140,168,214,.22);background:rgba(16,21,31,.6);margin-top:calc(6 * var(--u))}
+  #bay .sqm1{flex:none;display:flex;align-items:center;gap:calc(5 * var(--u));min-width:0}
+  #bay .sqm2{flex:none;display:flex;align-items:center;gap:calc(5 * var(--u));height:calc(18 * var(--u));margin-top:auto}
+  /* The status words start under the name (the lamp's 11u and the 5u gap), and
+     the group takes the line's free width, which puts the controls at its
+     right end: the widest words a row carries, Leader and Reconnecting beside
+     a member menu, end more than 8u short of the 16u that menu's target
+     reaches left (below). A row with no status words (a request, a friend to
+     invite) keeps the group empty, and it only pushes the controls right. */
+  #bay .sqms{flex:1;min-width:0;display:flex;align-items:center;gap:calc(5 * var(--u));padding-left:calc(16 * var(--u))}
   #bay .sqm .pdot{width:calc(11 * var(--u));height:calc(11 * var(--u))}
   #bay .sqmn{flex:1;min-width:0;display:flex;align-items:baseline;gap:calc(3 * var(--u))}
   #bay .sqmt{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:Rajdhani,system-ui,sans-serif;
@@ -2064,14 +2082,17 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
      draws is unchanged; a transparent layer reaching 8u past its edge all
      round is the target. (Remove and Decline carry a 1px border and the layer
      is placed from inside it, so theirs adds the 1px back; the menu has none:
-     #bay button sets border:0.) The row is 30u and rows stand 6u apart, so a
-     target reaches 2u past its row and stands 2u clear of the next row's --
-     clear, not merely touching: Chrome's hit test was measured reaching about
-     a pixel past a layer's edge. The row's 8u right padding keeps the last
-     control's layer inside the row.
-     A MEMBER ROW'S MENU reaches LEFT only, 16u, over the status words, which
-     take no tap: the leader's Remove then stands 10u beside it, the two
-     targets 2u clear of each other, and the name keeps that width.
+     #bay button sets border:0.) The controls stand on the row's second line,
+     6u above its foot, and rows stand 6u apart, so a target reaches 2u past
+     its row and stands clear of the next one -- clear, not merely touching:
+     Chrome's hit test was measured reaching about a pixel past a layer's
+     edge. Upward it reaches over the clear ground under the name to the foot
+     of the name's line box, below its letters: the lowest descender stops
+     more than 1.2u above that foot (D-UI-5). The row's 8u right padding
+     keeps the last control's layer inside the row.
+     A MEMBER ROW'S MENU reaches LEFT only, 16u, over the empty end of the
+     status line, never over a status word (D-UI-5): the leader's Remove then
+     stands 10u beside it, the two targets 2u clear of each other.
      DECLINE HAS THE LARGER GAP rather than a question (the Friends screen's
      own Decline is one tap, and the box's sends the same frame): it stands 16u
      from Accept and 24u from the menu, so between its target and each
