@@ -1339,5 +1339,60 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   }
 }
 
+// ---- 18. NOTHING MAY NAME THE PANEL THAT WAS DELETED -------------------------
+// The Bay's recent-match panel, the route that fed it and its suite went on
+// 2026-09-30, after the Squad box took the home dashboard's left slot. What
+// survives a deleted surface is PROSE, and this project has already shipped that
+// fault: 63d4781 exists because test/security.mjs justified itself by citing a
+// privacy.html sentence task 9 had deleted, and only a whole-project audit found
+// it, because no suite reads a comment. Removing this panel left FIVE kinds of
+// stale text behind -- a player-visible sentence in privacy.html, two store
+// declarations read by app reviewers, the comments claiming
+// server/display-name.js has two callers, a runner registration, and a CSS run
+// with no producer. A grep found them once; this keeps them found.
+//
+// THE TOKENS ARE THE ONES THAT CANNOT BE ANYTHING ELSE. `/history` is a route
+// that no longer exists. `history.mjs` is a file that no longer exists.
+// `sortie` is that panel's word and appears in no live copy. `.sor` and
+// `#bay .res` are its two CSS classes, and nothing else produced either.
+// `data-rematch`/`dataset.rematch` is its chip. THE IN-MATCH REMATCH IS A
+// DIFFERENT, LIVE FEATURE -- #rematchBtn, app.js's rematchBtn.onclick, the
+// engine's `case 'rematch'` and test/rematch.mjs -- and none of those spellings
+// is matched here.
+//
+// test/house-rules.mjs is deliberately NOT in the list. Rule 14's comment
+// explains, in the past tense, that a select without callsign_key really did
+// ship on that route; history is not a claim about the present, and that rule
+// still guards every remaining and future select.
+{
+  const FILES = ['public/bay.js', 'public/app.js', 'public/styles.css', 'public/privacy.html',
+    'server.js', 'server/social.js', 'server/display-name.js',
+    'store/STORE_LISTING.md', 'store/REVIEW_NOTES.md',
+    'test/run-all.sh', 'test/display_name.mjs', 'test/health.mjs', 'test/offline.mjs'];
+  const GONE = [
+    [/\/history\b/, 'the deleted route'],
+    [/\bhistory\.mjs\b/, 'the deleted suite'],
+    [/sortie/i, "the deleted panel's name"],
+    [/\.sor\b/, "the deleted panel's row class"],
+    [/#bay \.res\b/, "the deleted panel's result badge"],
+    [/data-rematch|dataset\.rematch/, "the deleted panel's rematch chip"],
+  ];
+  const hits = [];
+  for (const rel of FILES) {
+    read(rel).split('\n').forEach((line, i) => {
+      for (const [re, what] of GONE) {
+        if (re.test(line)) hits.push(`${rel}:${i + 1} names ${what} — ${line.trim().slice(0, 100)}`);
+      }
+    });
+  }
+  if (hits.length) {
+    fail(`the recent-match panel is gone; ${hits.length} place(s) still name it or the route it fed:\n      `
+      + hits.join('\n      '));
+  } else {
+    ok(`none of the ${FILES.length} shipped and test files names the deleted panel, its route, its suite,`
+      + ' its two CSS classes or its rematch chip');
+  }
+}
+
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nALL GOOD');
 process.exit(out.errors.length ? 1 : 0);

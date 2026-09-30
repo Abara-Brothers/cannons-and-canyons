@@ -71,8 +71,9 @@ reports they filed or that were filed about them. Crash reports carry no account
 address, and are deleted after 30 days. The live match relay — shots, aim, movement and the names
 on the seats — is held in server memory only and is discarded when the room ends; the RESULT of an
 ONLINE match is a row in a server-side ledger, carrying the account identifier of every player who
-had one (a guest's automatic account included) and who won, kept permanently, and read back to the
-player as the Recent sorties panel on the home screen. Offline Vs. Computer and solo Golf never
+had one (a guest's automatic account included) and who won, kept permanently, and readable only by
+our server — it is the record that lets us verify anything a player earns by playing online. No
+client can read it. Offline Vs. Computer and solo Golf never
 reach a server and leave no row. Export and deletion are both available in-app, and the deletion
 page is reachable without signing in; deletion erases everything except those ledger rows, which
 keep the random identifier once everything that could join it to a person has gone.

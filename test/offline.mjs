@@ -1,6 +1,6 @@
 // Offline play in the REAL page (items 2 + B + A's client half): the pending
-// lobby, Play solo, Cancel, the header's Back arrow, and the three launch
-// paths — driven over CDP against the real app.js / bay.js / room-engine.js.
+// lobby, Play solo, Cancel, the header's Back arrow, and the two launch paths
+// — driven over CDP against the real app.js / bay.js / room-engine.js.
 //
 // WHY THIS EXISTS: nothing else looks at the not-connected half of intent().
 // The forbidden behaviour — an invite room silently turned into a solo game by
@@ -109,7 +109,7 @@ const NEED = { duel: 'Duel needs a connection', boss: 'Boss Fight needs a connec
 const LABEL = { duel: 'Play vs Computer', ffa: 'Play vs Computer', boss: 'Play solo', aliens: 'Play solo', golf: 'Play solo' };
 
 try {
-  // ---- 0. the three launch paths and the predicates, online ----------------
+  // ---- 0. the two launch paths and the predicates, online ------------------
   await fresh();
   const r0 = await ev(`(() => {
     window.__sent = []; const orig = intent; window.intent = (m) => { __sent.push(m); };
@@ -120,15 +120,13 @@ try {
     ccMode = 'ffa'; ccFfaOpp = 'friend'; $('createBtn').onclick(); const d = snap();   // ccOpp is still 'cpu': must not leak
     ccFfaOpp = 'cpu'; Bay.show('armoury'); document.querySelector('#bay [data-launch]').click(); const e = snap();
     Bay.show('home'); document.querySelector('#bay .launch').click(); const launchScr = $('bay').dataset.scr; Bay.show('home');
-    const btn = document.createElement('button'); btn.dataset.rematch = 'ffa'; btn.dataset.vs = 'friend'; document.getElementById('bay').appendChild(btn);
-    btn.click(); const f = snap(); btn.dataset.vs = 'cpu'; btn.click(); const g = snap(); btn.remove();
     const home = (() => { Bay.show('home'); return document.querySelector('#bay .lbar').textContent; })();
     const p = { offBoss: soloOfferable({ type: 'create', mode: 'boss' }), offGolf: soloOfferable({ type: 'create', mode: 'golf' }), offDuel: soloOfferable({ type: 'create', mode: 'duel' }),
       offAi: soloOfferable({ type: 'ai', mode: 'ffa' }), byAi: soloByConstruction({ type: 'ai' }), byCreate: soloByConstruction({ type: 'create', mode: 'golf' }),
       frame: soloFrameFor({ type: 'create', mode: 'ffa', max: 3, name: 'T', skin: 'olive' }), frameBoss: soloFrameFor({ type: 'create', mode: 'boss', max: 2 }),
       frameDuel: soloFrameFor({ type: 'create', mode: 'duel', max: 2, name: 'T', skin: 'olive' }) };
     ccMode = 'duel'; ccOpp = 'friend'; ccFfaOpp = 'friend'; window.intent = orig;
-    return { a, b, c, d, e, f, g, p, home, launchScr };
+    return { a, b, c, d, e, p, home, launchScr };
   })()`);
   const isAiFfa = (m) => m && m.type === 'ai' && m.mode === 'ffa' && m.max === 4 && typeof m.difficulty === 'string' && typeof m.name === 'string' && typeof m.skin === 'string';
   if (isAiFfa(r0.a)) ok('0: Launch with FFA + Computer sends the ai frame with mode and max'); else fail('0: ffa+cpu frame was ' + JSON.stringify(r0.a));
@@ -137,7 +135,6 @@ try {
   if (r0.d && r0.d.type === 'create') ok("0: a Duel 'Computer' choice does not leak into a Free-for-all Launch"); else fail('0: leak — ' + JSON.stringify(r0.d));
   if (isAiFfa(r0.e)) ok("0: the armoury's bay-doors button reaches the same predicate"); else fail('0: armoury launch frame was ' + JSON.stringify(r0.e));
   if (r0.launchScr === 'setup') ok('0: the home Launch button opens Match setup, like a second tap on the mode card (owner, 2026-09-18)'); else fail('0: home Launch went to ' + r0.launchScr);
-  if (r0.f && r0.f.type === 'create' && isAiFfa(r0.g)) ok('0: a sortie rematch chip restores who it was against (friend -> create, Computer -> ai)'); else fail(`0: rematch frames were ${JSON.stringify(r0.f)} / ${JSON.stringify(r0.g)}`);
   if (/You \+ 3 CPU/.test(r0.home)) ok("0: with Computer picked the home launch bar says 'You + 3 CPU'"); else fail('0: home launch bar read: ' + r0.home.slice(0, 80));
   // The offline badges: one per board, derived from the same predicates, so
   // what a board says and what a tap does can only ever agree.

@@ -401,35 +401,6 @@ function applyMotion() {
 }
 const km = (u) => (u >= 1000 ? (u / 1000).toFixed(1) + 'k' : String(u));
 
-/* ---- recent sorties ------------------------------------------------------------
-   Online matches only, read from the server's ledger through /history (the
-   ledger is deny-all to clients; the server resolves opponents to callsigns
-   and never hands over a uuid). Hidden when empty by decision, so a mostly
-   offline player never sees an empty box. Fetched at most once a minute. */
-const API = IS_NATIVE_BAY ? 'https://' + (window.CC_NATIVE_HOST || 'tanks.abarabrothers.com') : '';
-let sorties = { rows: [], at: 0, busy: false };
-function ago(iso) {
-  const t = Date.parse(iso); if (!Number.isFinite(t)) return '';
-  const m = Math.max(0, Math.round((Date.now() - t) / 60000));
-  if (m < 2) return 'just now'; if (m < 60) return m + 'm ago';
-  const h = Math.round(m / 60); if (h < 24) return h + 'h ago';
-  const d = Math.round(h / 24); return d === 1 ? 'yesterday' : d + ' days';
-}
-async function loadSorties() {
-  if (sorties.busy || Date.now() - sorties.at < 60000) return;
-  const C = window.Cloud; if (!C || !C.enabled || !C.enabled()) return;
-  sorties.busy = true;
-  try {
-    const tok = await C.token(false);          // never mint an account just to read history
-    if (!tok) return;
-    const r = await fetch(API + '/history', { headers: { Authorization: 'Bearer ' + tok } });
-    if (!r.ok) return;
-    const j = await r.json();
-    sorties.rows = Array.isArray(j.rows) ? j.rows.slice(0, 4) : [];
-    sorties.at = Date.now();
-    if (current === 'home') render('home');   // the panel appears once there is something in it
-  } catch {} finally { sorties.busy = false; }
-}
 // The account chip: who this device is signed in as, at a glance. It reads the
 // state the old #accountBtn carries (in / guest / out) plus CC_ACCOUNT from
 // refreshAccountChip(), and taps straight into that button, so every account
@@ -448,18 +419,8 @@ function accountChip() {
 }
 const PROVIDER_NAME = { apple: 'Apple', google: 'Google' };
 
-function sortiesPanel() {
-  const rows = sorties.rows.map((r) =>
-    '<button class="sor" data-rematch="' + esc(r.mode) + '" data-vs="' + (r.opponent === 'Computer' ? 'cpu' : 'friend') + '" title="Play ' + esc(modeOf(r.mode).name) + ' again">'
-    + '<span class="stx"><span class="snm">' + esc(r.opponent || 'Commander') + '</span>'
-    + '<span class="smt">' + esc(SHORT[r.mode] || r.mode) + ' &middot; ' + esc(ago(r.when)) + '</span></span>'
-    + '<span class="res ' + (r.result === 'W' ? 'w' : r.result === 'L' ? 'l' : '') + '">' + esc(r.result || '&ndash;') + '</span>'
-    + IC.again.replace('<svg', '<svg class="rag"') + '</button>').join('');
-  return '<div class="pnl' + (rows ? '' : ' hidden') + '" style="left:' + u(18) + ';top:' + u(174) + ';width:' + u(196) + ';height:' + u(192) + '"><div class="ph">Recent sorties<s></s></div>' + rows + '</div>';
-}
-
 /* ---- the Squad box -------------------------------------------------------
-   The LEFT home panel, 196 x 192u, in the slot Recent sorties held. Two tabs,
+   The LEFT home panel, 196 x 192u, in the slot the recent-match panel held. Two tabs,
    Squad and Friends (D10), and every state a player can be in before the
    squad itself is drawn.
 
@@ -1255,7 +1216,7 @@ function sqPaint() {
 // socialIntro) -- answered, refused or in flight. A refusal is Retry's to
 // clear, exactly as frNeed() leaves the friends frame alone: without that,
 // every presence push would re-ask a server that is already saying no, which
-// is how loadSorties() came to pour one error row per player per home visit
+// is how the old recent-match loader came to pour one error row per player per home visit
 // into the live database. A NEW introduction -- a reconnect, or a sign-in's
 // hello -- asks again, whatever the screen: a member whose socket blipped
 // mid-match is dropped, and removed a minute later unless this socket resumes
@@ -2782,12 +2743,6 @@ function render(name) {
   // The four error sinks are cleared with fr.res at the top of this function,
   // where the markup can still see it.
   if (enterFriends) frNeed();
-  // ON ENTRY ONLY (review T8-R1-4). Recent sorties has no panel any more -- the
-  // Squad box took its slot -- and Task 10 deletes this call with the function.
-  // Until then it must not run on a repaint: home now repaints on every
-  // presence push and every squad frame, and while /history is failing each
-  // run is one more request, and one more token check on the server.
-  if (entering && current === 'home') loadSorties();
   // THE BELT UNDER THE OTHER ASKS, ON ENTRY ONLY -- a tab tap re-renders home
   // and must not re-ask. Every introduction, account change and return already
   // asks, from any screen; entering home asks about an introduction none of
@@ -2817,7 +2772,7 @@ function setField(k, v) {
 
 document.addEventListener('click', (e) => {
   const host = $('bay'); if (!host || !host.classList.contains('active')) return;
-  const t = e.target.closest('[data-go],[data-back],[data-set],[data-roll],[data-toggle],[data-launch],[data-join],[data-pick],[data-old],[data-skin],[data-rematch],[data-solo],[data-cs],[data-fr],[data-sq]');
+  const t = e.target.closest('[data-go],[data-back],[data-set],[data-roll],[data-toggle],[data-launch],[data-join],[data-pick],[data-old],[data-skin],[data-solo],[data-cs],[data-fr],[data-sq]');
   if (!t || !host.contains(t)) return;
   if (has('Audio')) Audio.ensure();
   // The lobby's Back IS Cancel. Leaving any other way strands a queued create
@@ -2829,18 +2784,6 @@ document.addEventListener('click', (e) => {
     back(); return;
   }
   if (t.dataset.pick) { togglePick(t.dataset.pick); render(current); return; }
-  // Rematch cannot reach a named player (there is no way to invite one), so it
-  // starts the same mode with a fresh code -- honest about what it can do.
-  // The chip also restores WHO it was against ('Computer' is the literal the
-  // server emits for a vs-bot row): a 'Computer' FFA row really restarts vs
-  // CPUs, and a human FFA row can no longer start a surprise bot match because
-  // ccFfaOpp happened to be 'cpu'.
-  if (t.dataset.rematch) {
-    const md = t.dataset.rematch, vs = t.dataset.vs === 'cpu' ? 'cpu' : 'friend';
-    setField('mode', md);
-    if (md === 'duel') setField('opp', vs); else if (md === 'ffa') setField('ffaOpp', vs);
-    const b = $('createBtn'); if (b) b.onclick(); return;
-  }
   if ('solo' in t.dataset) { if (fn('playSolo')) playSolo(); return; }
   if (t.dataset.old) { const b = $(t.dataset.old); if (!b) return; if (typeof b.onclick === 'function') b.onclick(); else b.click(); return; }
   if (t.dataset.skin) {

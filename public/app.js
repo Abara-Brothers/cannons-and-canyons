@@ -2835,9 +2835,10 @@ $('createBtn').onclick = () => {
   Audio.ensure(); $('homeError').textContent = '';
   // A vs-Computer game is an 'ai' frame: Duel exactly as it always was
   // (no mode, no max — key for key the frame every shipped client sends), and
-  // since item A a Free-for-all too, carrying its mode and seat count. All
-  // three launch paths reach this onclick: the bay's Launch, the sortie
-  // rematch chip and the legacy button.
+  // since item A a Free-for-all too, carrying its mode and seat count. BOTH
+  // launch paths reach this onclick: the bay's Launch and the legacy button.
+  // There were three; the recent-match chip was removed with its panel on
+  // 2026-09-30.
   const vsCpu = (ccMode === 'duel' && ccOpp === 'cpu') || (ccMode === 'ffa' && ccFfaOpp === 'cpu');
   if (vsCpu) {
     intent({ type: 'ai', difficulty: cpuDifficulty, name: myName(), skin: mySkin(),

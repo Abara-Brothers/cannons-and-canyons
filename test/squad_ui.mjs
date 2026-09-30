@@ -1198,28 +1198,32 @@ try {
     if (s21b && s21b.text.startsWith(NOSQ)) ok(`${V}: the "has ended" line is not repeated on the next answer`);
     else fail(`${V}: ended line stuck ${JSON.stringify(s21b && s21b.text)}`);
 
-    // ---- 22. RECENT SORTIES IS FETCHED ON ENTERING HOME ONLY (review T8-R1-4).
-    //       Its panel is gone -- this box took its slot -- and Task 10 removes
-    //       loadSorties. Until then it must not run on a repaint: home now
-    //       repaints on every presence push and every squad frame, and while
-    //       /history is failing each run is one more request, and one more token
-    //       check on the server, for a panel nobody can see. Run on the page
-    //       check 21 reloaded: the earlier checks hold Cloud.token open, and a
-    //       fetch parked on a token that never comes keeps loadSorties busy.
+    // ---- 22. THE BAY NEVER FETCHES /history (review T8-R1-4, then Task 10).
+    //       The recent-match panel went with Task 8, and its loader and the
+    //       route it read went with Task 10. This check used to count ONE fetch
+    //       on entering home and none on a repaint; with the loader gone it
+    //       counts NONE either way, under the exact conditions in which the
+    //       loader fired -- a Cloud session with a token, three repaints, then a
+    //       fresh entry to home -- so putting the loader back fails it. The spy
+    //       counts one probe of its own first, so a zero here is a count and not
+    //       a harness that saw nothing. Run on the page check 21 reloaded: the
+    //       earlier checks hold Cloud.token open.
     await ev(`(() => {
       window.__hist = 0;
       window.__fetch0 = window.__fetch0 || window.fetch;
       window.fetch = (u, o) => { if (String(u).includes('/history')) { window.__hist++; return Promise.resolve(new Response('', { status: 502 })); } return window.__fetch0(u, o); };
       window.__tok0 = Cloud.token; Cloud.token = async () => 'tok-h';
       return true; })()`);
+    const histSpy = await ev(`(fetch('/history'), window.__hist)`);
+    await ev(`(window.__hist = 0, true)`);
     for (let i = 0; i < 3; i++) { await ev(`(document.dispatchEvent(new Event('cc:social')), true)`); await sleep(80); }
     const histRepaint = await ev('window.__hist');
     await ev(`(Bay.go('career'), true)`); await sleep(60);
     await ev(`(Bay.go('home'), true)`); await sleep(150);
     const histEntry = (await ev('window.__hist')) - histRepaint;
     await ev(`(window.fetch = window.__fetch0, Cloud.token = window.__tok0, true)`);
-    if (histRepaint === 0 && histEntry === 1) ok(`${V}: /history is fetched once on entering home, and never on a repaint`);
-    else fail(`${V}: /history fetched ${histRepaint} time(s) on three repaints, ${histEntry} on entering home (want 0 and 1)`);
+    if (histSpy === 1 && histRepaint === 0 && histEntry === 0) ok(`${V}: /history is never fetched -- not on a repaint, not on entering home`);
+    else fail(`${V}: /history fetched ${histRepaint} time(s) on three repaints, ${histEntry} on entering home (want 0 and 0; the spy counted ${histSpy} of its own probe, want 1)`);
   }
 } catch (e) {
   fail('squad_ui stopped: ' + (e && e.message));

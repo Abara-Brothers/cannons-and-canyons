@@ -129,8 +129,9 @@ visitor actually has. Everything in a blockquote below IS paste-ready copy.
     game-results history) — the **match ledger**: one row per ONLINE match with the mode, the account
     identifier of every player who had one (a guest's automatic account included), the winner, the
     player count, whether a computer opponent was involved, the golf card where there is one, and the
-    end time. The game reads the last eight of them back as the **Recent sorties** panel on the home
-    screen. Kept permanently; see the deletion note below.
+    end time. The ledger is server-side only and no client can read it; it is the record that lets
+    us verify anything a player earns by playing online. Kept permanently; see the deletion note
+    below.
   - Shared: **none** with any third party. Sold: **none**. Processed ephemerally: the live match relay
     itself (shots, aim, movement and the names on the seats, in server memory only, discarded when the
     room ends) — the RESULT of an online match is not ephemeral, it is the ledger row above.
