@@ -371,6 +371,17 @@ const SQ_PROFILES = new Map([
   [SQD, { id: SQD, callsign: 'FOLLOW ME OK', callsign_key: null }],
   [SQE, { id: SQE, callsign: 'Echo Seven', callsign_key: 'echo seven' }],
 ]);
+// THE TWO-SQUADS STATE, BUILT THE ONE WAY IT STILL STANDS (E8, the
+// whole-branch fix wave). A guest row whose socket signs in as an account
+// with a row in ANOTHER squad now leaves once the sign-in door lets the
+// account in. Until then — the door's read out, or failed (D-BLOCK-3 H) —
+// the socket holds a guest row in one squad while its account is in another,
+// and every guard below that is asked in that state still has to hold. So
+// the worlds that test those guards sign in with the door's read failing:
+// while DOOR_FAILS is set, the store fakes' blockIdsOf throws. The door
+// reads SYNCHRONOUSLY inside onAuth, so the flag need only span that call.
+let DOOR_FAILS = false;
+const failedDoor = (fn) => { DOOR_FAILS = true; try { fn(); } finally { DOOR_FAILS = false; } };
 // `boom` fails the lookup whenever the asked-for ids include one of its
 // members, so a test can fail ONE squad's snapshot and not another's.
 function sqstore() {
@@ -384,8 +395,9 @@ function sqstore() {
       return m;
     },
     // Task 6: a join reads the joiner's blocks. Nobody here has blocked
-    // anybody, and the read is not counted in `calls`.
-    async blockIdsOf() { return { blocked: [], blockedBy: [] }; },
+    // anybody, and the read is not counted in `calls`. It fails only inside
+    // failedDoor (above).
+    async blockIdsOf() { if (DOOR_FAILS) throw new Error('sb GET 500'); return { blocked: [], blockedBy: [] }; },
   };
   return st;
 }
@@ -1579,7 +1591,7 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
     const two = sqat(wb, 'state').code;
     await S.handle(h, { type: 'squad', op: 'join', code: two, name: 'H', skin: 'gold' });
     const hRid = ridOf(wb, 1);                          // h's row, as squad two's leader sees it
-    g.userId = SQB; g.isGuest = false; S.onAuth(g);   // g's account now leads squad two, elsewhere
+    failedDoor(() => { g.userId = SQB; g.isGuest = false; S.onAuth(g); });   // g's account now leads squad two, elsewhere (door failed: E8)
     g.rx.length = 0; h.rx.length = 0;
     await S.handle(g, { type: 'squad', op: 'kick', rid: hRid, id: 'k' });
     if (g.rx.length === 1 && g.rx[0].op === 'kick' && g.rx[0].error === 'not_leader' && h.rx.length === 0)
@@ -1608,7 +1620,7 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
     const Y = sqat(wc, 'state').code;
     await S.handle(wb, { type: 'squad', op: 'join', code: Y });
     await S.handle(g, { type: 'squad', op: 'join', code: X, name: 'G', skin: 'gold' });
-    g.userId = SQB; g.isGuest = false; S.onAuth(g);
+    failedDoor(() => { g.userId = SQB; g.isGuest = false; S.onAuth(g); });   // the guest row stands (door failed: E8)
     g.rx.length = 0; wa.rx.length = 0;
     await S.handle(g, { type: 'squad', op: 'join', code: Y, id: 'j' });
     const answer = g.rx.find((f) => f.id === 'j') || {};
@@ -2244,7 +2256,7 @@ const FITS_BY_SIZE = [
   const Y = sqat(wd, 'state').code;
   const h = sqws(null);
   await S.handle(h, { type: 'squad', op: 'join', code, name: 'H', skin: 'gold' });
-  h.userId = SQD; h.isGuest = false; S.onAuth(h);
+  failedDoor(() => { h.userId = SQD; h.isGuest = false; S.onAuth(h); });   // the guest row stands (door failed: E8)
   h.rx.length = 0; wd.rx.length = 0;
   await S.handle(h, { type: 'squad', op: 'ready', ready: true, loadout: RACK5, id: 'h' });
   const hrow = (sqat(wa, 'state').members || [])[3] || {};
@@ -2453,7 +2465,7 @@ const FITS_BY_SIZE = [
   await S.handle(g, { type: 'squad', op: 'join', code: one, name: 'G', skin: 'gold' });
   await S.handle(wb, { type: 'squad', op: 'create' });
   await S.handle(h, { type: 'squad', op: 'join', code: sqat(wb, 'state').code, name: 'H', skin: 'gold' });
-  g.userId = SQB; g.isGuest = false; S.onAuth(g);
+  failedDoor(() => { g.userId = SQB; g.isGuest = false; S.onAuth(g); });   // the guest row stands (door failed: E8)
   g.rx.length = 0; h.rx.length = 0; wb.rx.length = 0; wa.rx.length = 0;
   await S.handle(g, { type: 'squad', op: 'mode', mode: 'boss', id: 'x' });
   if (same(g.rx, [{ type: 'squad', op: 'mode', error: 'not_leader', id: 'x' }]) && h.rx.length === 0 && wb.rx.length === 0 && wa.rx.length === 0)
@@ -2671,7 +2683,7 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   await S.handle(wb, { type: 'squad', op: 'create' });
   await S.handle(wc, { type: 'squad', op: 'join', code: sqat(wb, 'state').code });
   for (const w of [wb, wc]) await S.handle(w, { type: 'squad', op: 'ready', ready: true, loadout: stR(0) });
-  g.userId = SQB; g.isGuest = false; S.onAuth(g);
+  failedDoor(() => { g.userId = SQB; g.isGuest = false; S.onAuth(g); });   // the guest row stands (door failed: E8)
   for (const w of [wa, wb, wc, g]) w.rx.length = 0;
   await S.handle(g, { type: 'squad', op: 'start', id: 'x' });
   if (same(g.rx, [{ type: 'squad', op: 'start', error: 'not_leader', id: 'x' }]) && seat.calls.length === 0 && [wa, wb, wc].every((w) => w.rx.length === 0))
@@ -3179,8 +3191,9 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   const store5 = () => {
     const st = { gate: null, entered: null, onEnter: null, calls: 0 };
     // Task 6: a join reads the joiner's blocks; nobody here has blocked
-    // anybody, and the read is not counted in `calls`.
-    st.blockIdsOf = async () => ({ blocked: [], blockedBy: [] });
+    // anybody, and the read is not counted in `calls`. It fails only inside
+    // failedDoor (top of file).
+    st.blockIdsOf = async () => { if (DOOR_FAILS) throw new Error('sb GET 500'); return { blocked: [], blockedBy: [] }; };
     st.profilesByIds = async (ids) => {
       st.calls += 1;
       if (st.gate) { const g = st.gate; st.gate = null; if (st.onEnter) st.onEnter(); await g; }
@@ -3303,7 +3316,9 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     if (shape === 'another squad') await S.handle(wm, { type: 'squad', op: 'create' });
     const g = mkws5(null);                     // never said hello
     await S.handle(g, { type: 'squad', op: 'join', code, name: 'G', skin: 'gold' });
-    switch5(S, g, MEM);                        // signs in mid-squad (no hook: it had no id)
+    // signs in mid-squad (no hook: it had no id). For 'another squad' the
+    // door's read fails, the one way that guest row still stands (E8).
+    if (shape === 'another squad') failedDoor(() => switch5(S, g, MEM)); else switch5(S, g, MEM);
     await flush5();
     const held = shape === 'adopted' ? MEM : 'guest';
     wl.rx.length = 0; wm.rx.length = 0;
@@ -3726,7 +3741,7 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     const wt = up5(S, mkws5(THIRD));
     await S.handle(wt, { type: 'squad', op: 'create' });
     const other = last5(wt, 'state').code;
-    switch5(S, g, THIRD);
+    failedDoor(() => switch5(S, g, THIRD));   // the guest row stands (door failed: E8)
     await flush5();
     g.rx.length = 0;
     await S.handle(g, { type: 'squad', op: 'resume', code, id: 'rh' });
@@ -4340,12 +4355,13 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     else fail('(rid-d) drop and resume: ' + JSON.stringify({ first: rids[MEM], dropped, back, own }));
   }
   {
-    // THE VARIANT TASK 2 ACCEPTED is left as it is: g holds a guest row in X
-    // and signs in as MEM, who LEADS squad Y from another device. (That state
-    // is what (h9), (s3l), (st6) and squad_seat's (B11) are built on.) From
-    // it, MEM's other device joining X would put the account in X twice, so
-    // that join is refused — and refused before anything moves, so Y keeps
-    // its leader.
+    // THE VARIANT TASK 2 ACCEPTED: g holds a guest row in X and signs in as
+    // MEM, who LEADS squad Y from another device. Since E8 it stands only
+    // until the sign-in door lets MEM in (then the guest row leaves X);
+    // here the door's read fails, so it stands. (It is what (h9), (s3l) and
+    // (st6) are built on.) From it, MEM's other device joining X would put
+    // the account in X twice, so that join is refused — and refused before
+    // anything moves, so Y keeps its leader.
     const S = social5(store5(), { cw: mkClockwork() });
     const wl = up5(S, mkws5(LEAD)), wm = up5(S, mkws5(MEM));
     await S.handle(wl, { type: 'squad', op: 'create' });
@@ -4354,7 +4370,7 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     const Y = last5(wm, 'state').code;
     const g = mkws5(null);
     await S.handle(g, { type: 'squad', op: 'join', code: X, name: 'G', skin: 'gold' });
-    switch5(S, g, MEM);
+    failedDoor(() => switch5(S, g, MEM));   // the guest row stands (door failed: E8)
     await flush5();
     const x0 = ids5(last5(wl, 'state'));
     wl.rx.length = 0;
@@ -4895,9 +4911,10 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   // ---- (inv-i) WHICH squad: the row this socket holds ---------------------
   // squadKey's order, the file's one answer to "which row is this caller":
   // the socket's own row first, the account's only for a socket holding none.
-  // Built in the TWO-SQUADS state task 5 left standing on purpose (see
-  // claimOnSignIn): device 1 joined C's squad X as a guest and then signed in
-  // as A, while A leads squad Y from device 2. The Invite button pressed on
+  // Built in the TWO-SQUADS state (see claimOnSignIn), which since E8 stands
+  // only while the sign-in door has not let the account in: device 1 joined
+  // C's squad X as a guest and then signed in as A (its door's read failing),
+  // while A leads squad Y from device 2. The Invite button pressed on
   // device 1 is on X's box; an account-first lookup would invite to Y.
   {
     const st = t6store(ROWS6);
@@ -4910,7 +4927,10 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     const wa1 = t6ws(null);
     await join6(S, wa1, X, 'Anvil');
     // server.js's hello, in its order: the generation, the identity, onAuth.
+    // The door's read fails, the one way this state still stands (E8).
+    st.boom.add('blockIdsOf');
     wa1.authGen = 1; wa1.userId = A; wa1.isGuest = false; S.onAuth(wa1);
+    st.boom.delete('blockIdsOf');
     const wb = up6(S, B);
     await S.handle(wa1, { type: 'squad', op: 'invite', to: B, id: 'x' });
     const inv = invited6(wb)[0];
@@ -5263,7 +5283,9 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     await join6(S, wb, Y, 'Bunker Nine');
     const wa1 = t6ws(null);
     await join6(S, wa1, X, 'Anvil');
+    st.boom.add('blockIdsOf');                  // the door's read fails: the state stands (E8)
     wa1.authGen = 1; wa1.userId = A; wa1.isGuest = false; S.onAuth(wa1);
+    st.boom.delete('blockIdsOf');
     clear6(wa1, wa2, wb, wc);
     await S.handle(wa1, { type: 'block', op: 'add', id: B });
     const y = last6(wa2, 'squad', 'state');
@@ -5349,7 +5371,9 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     await create6(S, wb1);
     const wb2 = t6ws(null);
     await join6(S, wb2, X, 'Bunker');
+    st.boom.add('blockIdsOf');                  // the door's read fails: the row stands (E8)
     wb2.authGen = 1; wb2.userId = B; wb2.isGuest = false; S.onAuth(wb2);
+    st.boom.delete('blockIdsOf');
     const wg2 = t6ws(GU, true); S.onAuth(wg2);
     await join6(S, wg2, X, 'Ghost');
     const wg1 = t6ws(GU, true); S.onAuth(wg1);
@@ -5378,7 +5402,9 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     await create6(S, wa2);
     const wa1 = t6ws(null);
     await join6(S, wa1, X, 'Anvil');
+    st.boom.add('blockIdsOf');                  // the door's read fails: the row stands (E8)
     wa1.authGen = 1; wa1.userId = A; wa1.isGuest = false; S.onAuth(wa1);
+    st.boom.delete('blockIdsOf');
     const wg = t6ws(GU, true); S.onAuth(wg);
     await join6(S, wg, X, 'Ghost');
     const wa3 = up6(S, A);
@@ -6260,7 +6286,9 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     const gate = g.st.hold('blockIdsOf');
     hello6(g.S, wn, B);
     const inside = await within6(gate.inside);
-    hello6(g.S, wn, E);
+    // E's own door fails its read, so E's hello decides nothing either and
+    // the row stands (E8 would otherwise take it out of the squad for E).
+    g.st.boom.add('blockIdsOf'); hello6(g.S, wn, E); g.st.boom.delete('blockIdsOf');
     gate.release();
     await settle6();
     await g.S.handle(g.wc, { type: 'squad', op: 'resume', id: 'r' });
@@ -6510,7 +6538,7 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     await create6(g.S, up6(g.S, B));
     const wn = t6ws(null);
     await join6(g.S, wn, g.code, 'Bunker');
-    hello6(g.S, wn, B);
+    g.st.boom.add('blockIdsOf'); hello6(g.S, wn, B); g.st.boom.delete('blockIdsOf');   // the row stands (door failed: E8)
     await settle6();
     wn.authGen += 1; g.S.onClose(wn); wn.userId = null; wn.isGuest = false;   // server.js's sign-out
     await g.st.addBlock(A, B);
@@ -7754,8 +7782,9 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   // ---- (blk-t) two shared squads: every removed row is told before any roster
   // T6-R2-2. The pair can share TWO squads. C leads Y; A leads X with B in it;
   // a tab of A's and a tab of B's joined Y with no account and then signed
-  // in. Their doors let them in but left them guest rows, because each
-  // account already has its row in X (claimOnSignIn's two-squads state). A
+  // in. Their doors' reads failed, so they stand as guest rows while each
+  // account has its row in X (the two-squads state, which since E8 a door
+  // that lets the account in ends). A
   // blocks B: in Y, which C leads, A's tab leaves; in X, which A leads, B
   // goes as a kick. The first roster push's name read is held. B must
   // already hold exactly the kick, and B's resume must answer gone only
@@ -7775,7 +7804,7 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
       await join6(S, wb, X, 'Bunker Nine');
       const ta = t6ws(null), tb = t6ws(null);
       await join6(S, ta, Y, 'Anvil'); await join6(S, tb, Y, 'Bunker');
-      hello6(S, ta, A); hello6(S, tb, B);
+      st.boom.add('blockIdsOf'); hello6(S, ta, A); hello6(S, tb, B); st.boom.delete('blockIdsOf');   // the rows stand (doors failed: E8)
       await settle6();
       await S.handle(wc, { type: 'squad', op: 'resume', id: 'y0' });
       const y0 = ids6(ans6(wc, 'y0'));
@@ -8031,16 +8060,15 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   // ---- (sg-i iii, d) a row the re-run lets in that stays a GUEST row --------
   // Since T6-R2-3 an account row has no door, so a row the re-run ADOPTS is
   // no longer read on the next hello whatever `squadAs` says. A row the
-  // re-run lets in but leaves a guest row still has a door. That happens
-  // when the account has its row in another squad (claimOnSignIn's
-  // two-squads state). So the admit itself must leave the socket as the
-  // account: B's next hello, while the store fails, must read nothing and
+  // re-run lets in but leaves a guest row still has a door. That happens for
+  // an ANONYMOUS account, whose rows are always guest rows. (It also used to
+  // happen when the account had its row in another squad; since E8 that row
+  // leaves instead, below.) So the admit itself must leave the socket as the
+  // account: its next hello, while the store fails, must read nothing and
   // keep nothing out of Start.
   {
     const g = await failWorld6(null, false);
-    const wb1 = up6(g.S, B);
-    await create6(g.S, wb1);
-    g.st.boom.add('blockIdsOf'); hello6(g.S, g.wn, B); await settle6();
+    g.st.boom.add('blockIdsOf'); hello6(g.S, g.wn, GU, true); await settle6();
     g.st.boom.delete('blockIdsOf');
     clear6(g.wa, g.wc, g.wn);
     g.st.calls.length = 0;
@@ -8049,15 +8077,35 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     const admitted = reads6(g.st);
     g.st.calls.length = 0;
     g.st.boom.add('blockIdsOf');
-    hello6(g.S, g.wn, B);
+    hello6(g.S, g.wn, GU, true);
     await settle6();
     g.st.boom.delete('blockIdsOf');
     const reads = reads6(g.st);
     const s2 = await start6(g, 's2');
     const x = ids6(await roster6(g, 'r'));
     if (same6(s1, OFF6('s1')) && admitted === 1 && reads === 0 && same6(s2, OK6('s2')) && g.seated.length === 1 && g.seated[0].length === 3 && same6(x, [A, C, null]))
-      ok('(sg-i) a row the re-run lets in but leaves a guest row (the account is in another squad) is not read again on the next hello, and Start seats it');
+      ok('(sg-i) a row the re-run lets in but leaves a guest row (an anonymous account) is not read again on the next hello, and Start seats it');
     else fail('(sg-i) re-hello after a guest-row admit: ' + JSON.stringify({ s1, admitted, reads, s2, seated: g.seated.map((l) => l.length), x }));
+  }
+  {
+    // (iii, e) AND WHEN THE ACCOUNT LET IN HAS ITS ROW IN ANOTHER SQUAD (E8):
+    // the re-run's admit ends the two-squads state. The guest row leaves,
+    // its socket is told ended:elsewhere, the squad sees the leave, and the
+    // next Start seats the two left.
+    const g = await failWorld6(null, false);
+    const wb1 = up6(g.S, B);
+    await create6(g.S, wb1);
+    g.st.boom.add('blockIdsOf'); hello6(g.S, g.wn, B); await settle6();
+    g.st.boom.delete('blockIdsOf');
+    clear6(g.wa, g.wc, g.wn);
+    const s1 = await start6(g, 's1');
+    await settle6();
+    const told = got6(g.wn, 'squad').filter((f) => f.op === 'ended');
+    const s2 = await start6(g, 's2');
+    const x = ids6(await roster6(g, 'r'));
+    if (same6(s1, OFF6('s1')) && same6(told, [{ type: 'squad', op: 'ended', reason: 'elsewhere' }]) && same6(s2, OK6('s2')) && g.seated.length === 1 && g.seated[0].length === 2 && same6(x, [A, C]))
+      ok('(sg-i) a row the re-run lets in whose account is in another squad leaves, told ended:elsewhere, and Start seats the rest');
+    else fail('(sg-i) re-run admit into the two-squads state: ' + JSON.stringify({ s1, told, s2, seated: g.seated.map((l) => l.length), x }));
   }
 
   // ---- (inv-r) the seam's bound is 4 s unless the knob sets it, never negative
@@ -9146,6 +9194,49 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     }
     if (!bad.length) ok('(sg-k) after a failed door, a refused join (a dead code, a full squad, a block, already_in) leaves the door open: the next same-account hello reads once, and Start seats the row');
     else fail('(sg-k) refused join after a failed door: ' + JSON.stringify(bad));
+  }
+
+  // ---- (one) ONE SQUAD PER PLAYER, at the sign-in door (E8) ---------------
+  // A tab holding a GUEST row in one squad signs in as an account that
+  // already has a row in ANOTHER squad. That state used to be left standing
+  // (one account in two squads); now the account's existing row wins: the
+  // guest row leaves its squad, whose members see a leave, and that socket
+  // is told ended:elsewhere. In both orders: the account's row first, and
+  // the account's row landing while the door reads.
+  {
+    const ELSEWHERE = { type: 'squad', op: 'ended', reason: 'elsewhere' };
+    const bad = [];
+    for (const order of ['account row first', 'account row during the door']) {
+      const st = t6store(ROWS6);
+      const S = mkSocial6(st);
+      const wa = up6(S, A), wc = up6(S, C), wb = up6(S, B);
+      const s1 = await create6(S, wa);
+      const s2 = await create6(S, wc);
+      const g = t6ws(null);
+      await join6(S, g, s2, 'Guest');
+      let h = null;
+      if (order === 'account row first') await join6(S, wb, s1, 'Bee');
+      else h = holdAt6(st, 'blockIdsOf', 1);
+      clear6(wa, wb, wc, g);
+      hello6(S, g, B);
+      if (h) {
+        const inside = await within6(h.inside);
+        await join6(S, wb, s1, 'Bee');        // the account's row lands in S1 while g's door reads
+        if (!inside) h.restore();
+        h.release();
+      }
+      await settle6();
+      const two = last6(wc, 'squad', 'state');
+      await S.handle(wa, { type: 'squad', op: 'resume', id: 'ar' });
+      await S.handle(wb, { type: 'squad', op: 'resume', id: 'br' });
+      const r = { told: got6(g, 'squad').filter((f) => f.op === 'ended'), s2: ids6(two), s1: ids6(ans6(wa, 'ar')), bHeld: (ans6(wb, 'br') || {}).held };
+      await S.handle(g, { type: 'squad', op: 'resume', id: 'gr' });
+      r.gResume = (ans6(g, 'gr') || {}).code === s1 ? 's1 (second device)' : ans6(g, 'gr');
+      if (!(same6(r.told, [ELSEWHERE]) && same6(r.s2, [C]) && same6(r.s1, [A, B]) && r.bHeld === true && r.gResume === 's1 (second device)'))
+        bad.push({ order, r });
+    }
+    if (!bad.length) ok('(one) a guest row whose socket signs in as an account with a row in another squad leaves its squad, told ended:elsewhere, and the account\'s row stays where it is, in both orders');
+    else fail('(one) one squad per player at the sign-in door: ' + JSON.stringify(bad));
   }
 
   // ---- (cool-u) the cooldown itself, against a clock this block moves ------

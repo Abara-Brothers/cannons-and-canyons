@@ -1360,10 +1360,12 @@ export function createSocial({
     const from = squadKey(ws);
     const olds = squadsOfCaller(ws, from);
     // THE ACCOUNT IS ALREADY STANDING IN THIS SQUAD AS A GUEST ROW whose
-    // socket has since signed in as it — left so by claimOnSignIn when the
-    // account was in another squad at the time, and by the sign-in door
-    // until its read lets the account in. Joining would put it here twice. Refused BEFORE anything moves, so the squad
-    // the account is in now keeps it (task 5's fix pass).
+    // socket has since signed in as it — left so by the sign-in door until
+    // its read lets the account in (or while a failed read holds it; once
+    // let in, claimOnSignIn adopts it, or it leaves for the account's row
+    // elsewhere, E8). Joining would put it here twice. Refused BEFORE
+    // anything moves, so the squad the account is in now keeps it (task 5's
+    // fix pass).
     const me = identityKey(ws);
     const target = squads.get(codeOf(msg.code));
     if (target && hidden && anyRowOf(target, hidden)) return squadReply(ws, msg, 'join', { error: 'no_such_squad' });
@@ -1814,13 +1816,16 @@ export function createSocial({
   //     this socket takes it — resume's own rule, and the device in the
   //     player's hand. Otherwise the row stays where it is and this socket
   //     is told `ended: elsewhere`, as any device whose row went elsewhere is.
-  //   * The account has a row in ANOTHER squad: left exactly as it was. That
-  //     is the state task 2 accepted and (h9), (s3l), (st6) and squad_seat's
-  //     (B11) are built on — a socket showing one squad must not command the
-  //     other with an index read off the wrong screen. It cannot seat the
-  //     account twice in ONE room; squadJoin refuses the account's own join
-  //     into the squad where its guest row stands, and Start refuses a
-  //     duplicate outright (duplicate_member) whatever the cause.
+  //   * The account has a row in ANOTHER squad: ONE SQUAD PER PLAYER (E8,
+  //     the whole-branch fix wave; task 2 had left one account in two
+  //     squads). The account's existing row wins. The guest row leaves its
+  //     squad — a guest row, so no hand-off and no end — whose members are
+  //     pushed their roster as for any leave, and this socket is told
+  //     `ended: elsewhere`, as any device whose row went elsewhere is. Until
+  //     the door lets the account in (or while a failed door holds the row),
+  //     the two-squads state can still stand, nameless and out of Start;
+  //     ledSquad's two halves, squadJoin's already_in and Start's
+  //     duplicate_member still guard it.
   //
   // `rowKey` is the door's: the row it read for, followed by its key (see
   // the door), because a socket that closed meanwhile no longer holds it.
@@ -1841,7 +1846,13 @@ export function createSocial({
       const adopted = squads.adoptGuest(key, id);
       if (adopted) { pushSquad(adopted, null, null).catch(() => {}); return; }
       const theirs = squads.memberOf(id);
-      if (!theirs || theirs.squad !== here.squad) return;     // another squad: as it was
+      if (!theirs) return;
+      if (theirs.squad !== here.squad) {                      // another squad: the account's row wins
+        squads.leave(key);
+        endedElsewhere(ws);
+        pushSquadAfterExit(here.squad).catch(() => {});
+        return;
+      }
       const was = theirs.member.ws;
       const held = !!(was && was.readyState === 1);
       squads.leave(key);                                      // a guest row: no hand-off, no end
@@ -2065,9 +2076,9 @@ export function createSocial({
   // EVERY ROW OF squad `sq` THAT ACCOUNT `id` STANDS ON: the account's own
   // row, and any row held by a live socket signed in as that account. The
   // second half is for the rows keyed by a CONNECTION rather than an account
-  // — a guest row whose socket has since signed in (the two-squads state
-  // claimOnSignIn leaves standing, and a row the sign-in door has not let
-  // in yet, or whose read failed), and an anonymous account's guest row. A
+  // — a guest row whose socket has since signed in (a row the sign-in door
+  // has not let in yet, or whose read failed: since E8 the only two-squads
+  // state), and an anonymous account's guest row. A
   // block and an invite name an ACCOUNT, and this is how they find the seat
   // that account is in when the seat is keyed by a socket.
   //

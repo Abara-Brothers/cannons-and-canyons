@@ -867,22 +867,31 @@ async function sectionB() {
 
   // ---- B11. ledSquad, both halves, over the wire -----------------------------
   {
-    // THE ACCOUNT ALONE IS NOT LEADERSHIP. Squad Y is led by pilot 2 and is
-    // ready to go. Socket g holds a GUEST row in squad X, then signs in as
-    // pilot 2. Start from g must not start Y, which its account leads from
-    // another device.
+    // ONE SQUAD PER PLAYER, OVER THE WIRE (E8, the whole-branch fix wave).
+    // Squad Y is led by pilot 2 and is ready to go. Socket g holds a GUEST row
+    // in squad X, then signs in as pilot 2. Once the sign-in door lets pilot 2
+    // in, the account's row in Y wins: g's guest row leaves X (whose leader
+    // sees the leave) and g is told ended:elsewhere. g is then only a second
+    // device of Y's leader, so its Start is refused wrong_device and nothing
+    // is built. (Until E8 the guest row stayed in X and this Start answered
+    // not_leader; test/squad.mjs (st6) keeps ledSquad's halves proved in the
+    // state that still stands while a door's read has failed.)
     const y = await squadUp(S.port, [2, 3], 'duel');
     const x = await squadUp(S.port, [1], 'duel');
     if (x && y) {
       const g = await open(S.port);
       const j = await ask(g, { op: 'join', code: x.code, name: 'Guest', skin: 'gold' });
+      const from = g._rx.length, fromX = x.ws[0]._rx.length;
       put(g, { type: 'hello', token: 'tok-2' });
+      const ended = await wait(g, (m) => m.type === 'squad' && m.op === 'ended', 5000, from);
+      const xs = await wait(x.ws[0], (m) => m.type === 'squad' && m.op === 'state' && m.members.length === 1, 5000, fromX);
       const r = await ask(g, { op: 'start' });
       await settle([g, ...x.ws, ...y.ws]);
       const built = [g, ...x.ws, ...y.ws].some((w) => seen(w, 'created').length || seen(w, 'start').length);
-      if (j && j.op === 'state' && j.you === 1 && r && r.error === 'not_leader' && !built)
-        ok('(B11) a socket holding a guest row cannot start the squad its account leads from another device');
-      else fail('(B11) cross-squad start: ' + JSON.stringify({ j: j && j.you, r, built }));
+      if (j && j.op === 'state' && j.you === 1 && ended && ended.reason === 'elsewhere' && xs && xs.members.length === 1
+        && r && r.error === 'wrong_device' && !built)
+        ok('(B11) a guest row whose socket signs in as the leader of another squad leaves its squad (ended:elsewhere), and that socket cannot start the other squad from there');
+      else fail('(B11) cross-squad sign-in: ' + JSON.stringify({ j: j && j.you, ended, x: xs && xs.members.length, r, built }));
       await closeAll([g, ...x.ws, ...y.ws]);
     }
   }
