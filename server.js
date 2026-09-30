@@ -1041,6 +1041,21 @@ async function accountDelete(req, res, cors) {
     });
     // 404 = already gone (a retry after a dropped response) — that IS success.
     if (!del.ok && del.status !== 404) return json(502, { error: 'deletion failed upstream' });
+    // THE ACCOUNT'S LIVE SOCKETS BECOME NOBODY, NOW. Nothing re-verifies a
+    // socket after its hello, so without this every open socket of the
+    // deleted account kept ws.userId and went on acting as it: in its squad,
+    // at the social gates, on every write (each then failing on a foreign
+    // key). Each is made exactly what a sign-out makes it — helloSink's null
+    // branch: presence and squad rows first (onClose), the generation bumped
+    // so a later hello already in flight on it cannot put the identity back,
+    // then the fields cleared. Compared case-blind, the way the social layer
+    // reads ids. RESIDUAL: a socket whose FIRST hello GoTrue answered before
+    // the delete, and that lands after it, is not known to be this account
+    // yet and is not reached; any later hello with the token fails.
+    const gone = String(uid).trim().toLowerCase();
+    for (const c of wss.clients) {
+      if (c.userId && String(c.userId).trim().toLowerCase() === gone) helloSink(c, null);
+    }
     json(200, { ok: true });
   } catch { json(502, { error: 'deletion failed upstream' }); }
 }

@@ -79,7 +79,9 @@ const ROWS = {
 // and the real store, because a test that calls the handler directly can pass
 // while the path that reaches it is broken.
 const GUEST_ID = '44444444-4444-4444-8444-444444444444';
-const TOKENS = { 'tok-honest': HONEST_ID, 'tok-tampered': TAMPER_ID, 'tok-slow': SLOW_ID, 'tok-slower': HONEST_ID, 'tok-guest': GUEST_ID };
+// An account section 10 deletes. Only its sockets may change when it goes.
+const DOOMED_ID = '55555555-5555-4555-8555-555555555555';
+const TOKENS = { 'tok-honest': HONEST_ID, 'tok-tampered': TAMPER_ID, 'tok-slow': SLOW_ID, 'tok-slower': HONEST_ID, 'tok-guest': GUEST_ID, 'tok-doomed': DOOMED_ID };
 const ANON = new Set(['tok-guest']);
 // How long the mock GoTrue sits on each delayed token before answering. Long
 // enough that a sign-out, or a second hello, is comfortably ahead of it — and
@@ -618,6 +620,50 @@ async function presentedName(token, typed) {
     else fail('(9c) push-token sign-in door: joined ' + JSON.stringify(joined) + ', ack ' + JSON.stringify(acked) + ', then ' + JSON.stringify(g && g._rx.slice(-3)));
     try { lead.close(); } catch {}
     try { g.close(); } catch {}
+  }
+
+  // ---- 10. A DELETED ACCOUNT'S SOCKETS STOP BEING IT --------------------------
+  // POST /account/delete removed the auth user and left every live socket of
+  // it identified: ws.userId stayed set, nothing re-verifies a socket after
+  // its hello, so those sockets kept acting as an account that no longer
+  // exists (every write then failing on a foreign key). They must become
+  // nobody at once, as a sign-out makes them, and the squad the account was
+  // in must see it leave. A bystander's socket must not change at all.
+  {
+    const d1 = await open(), d2 = await open(), h = await open();
+    send(d1, { type: 'hello', token: 'tok-doomed' });
+    send(d2, { type: 'hello', token: 'tok-doomed' });
+    send(h, { type: 'hello', token: 'tok-honest' });
+    send(h, { type: 'squad', op: 'create', id: 101 });
+    const made = await wait(h, 'squad');
+    if (made && made.code) send(d1, { type: 'squad', op: 'join', code: made.code, name: 'Doomed', skin: 'gold', id: 102 });
+    const joined = await wait(d1, 'squad');
+    send(d2, { type: 'friends', id: 103 });
+    const before = await wait(d2, 'friends');
+    h._rx.length = 0; d2._rx.length = 0;
+    const res = await fetch(`http://127.0.0.1:${GAME_PORT}/account/delete`, { method: 'POST', headers: { Authorization: 'Bearer tok-doomed' } });
+    send(d2, { type: 'friends', id: 104 });
+    const after = await wait(d2, 'social', 3000);
+    const panel = d2._rx.find((m) => m.type === 'friends');
+    let roster = null;
+    for (let i = 0; i < 100 && !roster; i++) {
+      roster = h._rx.find((m) => m.type === 'squad' && m.op === 'state') || null;
+      if (!roster) await sleep(20);
+    }
+    send(h, { type: 'friends', id: 105 });
+    const still = await wait(h, 'friends', 3000);
+    if (joined && joined.op === 'state' && before && !before.error && res.status === 200)
+      ok('(10) the world is real: the account was in a squad and signed in on two sockets, and the delete answered 200');
+    else fail('(10) setup: joined ' + JSON.stringify(joined) + ' panel ' + JSON.stringify(before) + ' delete ' + res.status);
+    if (after && after.error === 'sign_in' && !panel)
+      ok('(10) after /account/delete, the deleted account\'s other socket is nobody: the friends panel answers sign_in');
+    else fail('(10) a socket of a deleted account still acts as it: friends answered ' + JSON.stringify(panel || after));
+    if (roster && roster.members.length === 1 && roster.members[0].id === HONEST_ID)
+      ok('(10) and its squad sees it leave');
+    else fail('(10) the squad after the delete: ' + JSON.stringify(roster));
+    if (still && !still.error) ok('(10) a socket of another account is untouched by the delete');
+    else fail('(10) the bystander after the delete: ' + JSON.stringify(still));
+    for (const w of [d1, d2, h]) { try { w.close(); } catch {} }
   }
 
   // ---- 7. nothing crashed the host ------------------------------------------
