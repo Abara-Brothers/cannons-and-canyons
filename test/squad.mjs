@@ -8367,10 +8367,11 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   }
   {
     // (vi) THE TEARDOWN RUNS AGAIN AS THE ANSWER ARRIVES, for anything a door
-    // could not stop. One way onto a row passes no door: server.js's
-    // push-subscription sink sets ws.userId with no onAuth (routed to Task
-    // 12). A tab with no account stands in A's squad and becomes B that way
-    // while A's block on B is out. The second teardown removes it as a kick,
+    // could not stop. No known way onto a row passes no door any more (the
+    // push-subscription sink goes through server.js's hello path since the
+    // whole-branch fix wave), so the state is built by hand: a tab with no
+    // account stands in A's squad and becomes B with no onAuth while A's
+    // block on B is out. The second teardown removes it as a kick,
     // and the blocker is answered only after that roster, whose name read is
     // held here past every write: members first, actor last.
     const g = await signWorld6(null);
@@ -8662,7 +8663,7 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   }
   {
     // (b) (blk-w vi) with that write: a tab with no account in A's squad
-    // becomes B by no door (the push-subscription sink) while the write is
+    // becomes B by no door (built by hand, as (vi) builds it) while the write is
     // out, and the write then fails without committing. The second teardown
     // still removes the row as a kick, and the blocker's answer, unavailable,
     // comes only after that roster, whose name read is held. The same when

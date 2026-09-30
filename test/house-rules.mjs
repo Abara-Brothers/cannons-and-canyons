@@ -954,13 +954,19 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   // test/auth_sink.mjs, which drives the real sink in a real server against a
   // mock GoTrue and PostgREST. This section is the cheap tripwire for the two
   // lines that suite cannot distinguish; it is not the proof.
-  const sinkStart = src.indexOf('setAuthSink((ws, token) => {');
+  //
+  // THE SINK IS A NAMED FUNCTION, helloSink, handed to setAuthSink, because the
+  // push-subscription sink introduces a hello-less socket through it too (the
+  // whole-branch fix wave). Both halves are pinned: the body is found by its
+  // declaration, and it must really be the function the engine's hello calls.
+  const sinkStart = src.indexOf('function helloSink(ws, token) {');
   let sink = '';
-  if (sinkStart < 0) {
-    bad.push('no "setAuthSink((ws, token) => {" in server.js — there is no auth sink to check, and'
-      + ' every assertion below would pass vacuously against the rest of the file');
+  if (sinkStart < 0 || !/^setAuthSink\(helloSink\);$/m.test(src)) {
+    bad.push('no "function helloSink(ws, token) {" handed to "setAuthSink(helloSink);" in server.js —'
+      + ' there is no auth sink to check, and every assertion below would pass vacuously against the'
+      + ' rest of the file');
   } else {
-    const sinkEnd = src.indexOf('\n});', sinkStart);
+    const sinkEnd = src.indexOf('\n}\n', sinkStart);
     sink = src.slice(sinkStart, sinkEnd < 0 ? src.length : sinkEnd)
       .split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
   }

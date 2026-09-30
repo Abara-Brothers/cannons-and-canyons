@@ -337,7 +337,13 @@ async function sbAdmin(method, path, body, prefer) {
 // A socket says hello with its account token: verify, remember. The userId
 // rides on the socket object, so a resumed seat keeps its identity as long
 // as the reconnecting socket says hello too (the client does, on every open).
-setAuthSink((ws, token) => {
+//
+// THE ONE DOOR TO AN IDENTITY. A named function rather than the sink's
+// closure because the push-subscription sink below introduces a socket that
+// never said hello, and it must do it HERE: ws.isGuest beside ws.userId, the
+// generation cancel, and social.onAuth, whose sign-in door checks any squad
+// row the socket holds against the account's blocks.
+function helloSink(ws, token) {
   // An explicit null token means "this socket is nobody now" — the client
   // sends it on sign-out. Without it the socket kept the PREVIOUS account's
   // identity for its whole life, so a device that signed out carried on
@@ -458,16 +464,30 @@ setAuthSink((ws, token) => {
     // answered sign_in for a race the client cannot see.
     if (ws.authGen === gen) ws.authPending = null;
   });
-});
+}
+setAuthSink(helloSink);
 
 // A player registered a push subscription: persist it keyed to their account
 // so it survives room teardown, deploys, and works from every device. The
 // engine already stored the in-memory copy and sent pushOk; this is the
 // durable half, best-effort by design (ISSUE-003).
+//
+// A SOCKET THAT NEVER SAID HELLO IS INTRODUCED BY THIS TOKEN THROUGH THE
+// HELLO PATH, never by writing ws.userId here. It used to write it and
+// nothing else: no ws.isGuest, so an ANONYMOUS account passed requireLinked
+// (friends, chosen names), and no onAuth, so a squad row the socket held
+// never met the sign-in door. The client's first nudge opt-in is exactly this
+// socket — Cloud.token(true) mints the account and no hello follows — so the
+// identity still lands, now the one way every identity does. A hello already
+// in flight is waited for first; a null token (no cloud) introduces nobody.
 setPushSubSink((ws, sub, token) => {
   (async () => {
+    if (!ws.userId && ws.authPending) await ws.authPending;
+    if (!ws.userId && typeof token === 'string' && token) {
+      helloSink(ws, token);
+      if (ws.authPending) await ws.authPending;
+    }
     const id = ws.userId || await sbUserFromToken(token);
-    if (id) ws.userId = id;
     if (!id || !SB_SECRET) return;
     // Web subscriptions carry a URL endpoint; native ones carry an FCM token
     // under `sub.token` with `sub.platform` naming the OS. One row shape, one

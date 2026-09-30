@@ -50,7 +50,7 @@ const finish = () => {
   console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nALL GOOD');
   process.exit(out.errors.length ? 1 : 0);
 };
-setTimeout(() => { fail('timeout'); finish(); }, 45000);
+setTimeout(() => { fail('timeout'); finish(); }, 60000);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---- The two profile rows ----------------------------------------------------
@@ -96,6 +96,8 @@ const reportPosts = [], blockPosts = [];
 // DELETE removes and the two GETs read it, so case 8 can block, list and unblock
 // against something that remembers.
 const blockRows = new Set();
+// Every token GoTrue was asked about, in order (section 9 waits on these).
+const verifiedTokens = [];
 mock = http.createServer((req, res) => {
   let body = '';
   req.on('data', (c) => { body += c; });
@@ -105,6 +107,7 @@ mock = http.createServer((req, res) => {
     if (u.pathname === '/auth/v1/health') return json(200, { name: 'GoTrue', version: 'mock' });
     if (u.pathname === '/auth/v1/user') {
       const token = (req.headers.authorization || '').replace('Bearer ', '');
+      verifiedTokens.push(token);
       const id = TOKENS[token];
       if (!id) { res.writeHead(401); return res.end('{}'); }
       // Linked for every token but 'tok-guest'. is_anonymous is the field the
@@ -527,6 +530,94 @@ async function presentedName(token, typed) {
 
     try { g.close(); } catch {}
     try { h.close(); } catch {}
+  }
+
+  // ---- 9. A PUSH TOKEN INTRODUCES A SOCKET THE WAY A HELLO DOES --------------
+  // A pushSub frame carries an access token too, and a socket that never said
+  // hello becomes that account when it lands. It used to set ws.userId there
+  // and nothing else: no ws.isGuest, so an ANONYMOUS account passed the linked
+  // gate, and no onAuth, so a squad row such a socket held skipped the sign-in
+  // door. Every check waits for the push token to be verified first, because a
+  // frame answered before that proves nothing about what the token did.
+  const pushSub = async (ws, token, tag) => {
+    const seen = verifiedTokens.length;
+    send(ws, { type: 'pushSub', sub: { endpoint: `https://push.example.test/sub/${tag}`, keys: { p256dh: 'x', auth: 'y' } }, token });
+    const acked = await wait(ws, 'pushOk', 4000);
+    for (let i = 0; i < 100 && !verifiedTokens.slice(seen).includes(token); i++) await sleep(20);
+    await sleep(250);                           // the verified identity lands on the socket
+    return acked;
+  };
+  const seated = async () => {                  // a socket holding a seat: the only kind a pushSub is taken from
+    const ws = await open();
+    send(ws, { type: 'create', name: 'Seat', skin: 'olive', mode: 'duel' });
+    return (await wait(ws, 'lobby')) ? ws : null;
+  };
+  {
+    // (9a) AN ANONYMOUS PUSH TOKEN IS A GUEST, and the friends panel is not a guest's.
+    const ws = await seated();
+    const acked = ws && await pushSub(ws, 'tok-guest', 'guest');
+    if (ws) { send(ws, { type: 'friends', id: 91 }); }
+    const r = ws && await wait(ws, 'social', 3000);
+    const panel = ws && ws._rx.find((m) => m.type === 'friends');
+    if (acked && r && r.error === 'sign_in' && !panel)
+      ok('(9a) a socket identified only by an ANONYMOUS push token is a guest: the friends panel answers sign_in');
+    else fail('(9a) anonymous push token: ack ' + JSON.stringify(acked) + ', friends answered ' + JSON.stringify(panel || r));
+    try { ws.close(); } catch {}
+  }
+  {
+    // (9b) A LINKED PUSH TOKEN STILL IDENTIFIES THE SOCKET (the control: nudges
+    // for that seat find the account's other devices, as they always did).
+    const ws = await seated();
+    const acked = ws && await pushSub(ws, 'tok-honest', 'honest');
+    if (ws) send(ws, { type: 'friends', id: 92 });
+    const panel = ws && await wait(ws, 'friends', 3000);
+    if (acked && panel && !panel.error) ok('(9b) a socket identified only by a LINKED push token is that account: the friends panel answers');
+    else fail('(9b) linked push token: ack ' + JSON.stringify(acked) + ', friends answered ' + JSON.stringify(panel || ws && ws._rx.slice(-3)));
+    try { ws.close(); } catch {}
+  }
+  {
+    // (9d) A HELLO ALREADY IN FLIGHT IS WAITED FOR, not overtaken. The socket
+    // says hello as a linked account whose verification takes 600 ms, then
+    // registers a subscription with a different (anonymous) token. The hello
+    // is who the socket is; the push token must not cancel it and stand in.
+    const ws = await seated();
+    if (ws) {
+      send(ws, { type: 'hello', token: 'tok-slow' });
+      await pushSub(ws, 'tok-guest', 'inflight');
+      for (let i = 0; i < 60 && !verifiedTokens.includes('tok-slow'); i++) await sleep(20);
+      await sleep(SLOW_MS + 300);
+      send(ws, { type: 'friends', id: 95 });
+    }
+    const panel = ws && await wait(ws, 'friends', 3000);
+    if (panel && !panel.error) ok('(9d) a push token sent while a hello is verifying waits for it: the socket is the hello\'s account');
+    else fail('(9d) push token over an in-flight hello: friends answered ' + JSON.stringify(panel || ws && ws._rx.slice(-3)));
+    try { ws.close(); } catch {}
+  }
+  {
+    // (9c) THE SIGN-IN DOOR. A tab with no account joins HONEST's squad by
+    // code, holds a seat of its own, and becomes the guest account through a
+    // push token. HONEST has blocked that account, so the door must remove the
+    // row as a kick, exactly as it does for a hello.
+    const lead = await open();
+    send(lead, { type: 'hello', token: 'tok-honest' });
+    send(lead, { type: 'squad', op: 'create', id: 93 });
+    const made = await wait(lead, 'squad');
+    const g = await seated();
+    if (g && made && made.code) send(g, { type: 'squad', op: 'join', code: made.code, name: 'Tab', skin: 'gold', id: 94 });
+    const joined = g && await wait(g, 'squad');
+    blockRows.add(HONEST_ID + '>' + GUEST_ID);
+    const acked = g && joined && joined.op === 'state' && await pushSub(g, 'tok-guest', 'door');
+    let kicked = null;
+    for (let i = 0; i < 100 && g && !kicked; i++) {
+      kicked = g._rx.find((m) => m.type === 'squad' && m.op === 'ended') || null;
+      if (!kicked) await sleep(20);
+    }
+    blockRows.delete(HONEST_ID + '>' + GUEST_ID);
+    if (acked && kicked && kicked.reason === 'kicked')
+      ok('(9c) a guest row whose socket becomes a blocked account through a push token is removed by the sign-in door, as a kick');
+    else fail('(9c) push-token sign-in door: joined ' + JSON.stringify(joined) + ', ack ' + JSON.stringify(acked) + ', then ' + JSON.stringify(g && g._rx.slice(-3)));
+    try { lead.close(); } catch {}
+    try { g.close(); } catch {}
   }
 
   // ---- 7. nothing crashed the host ------------------------------------------

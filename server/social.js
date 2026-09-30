@@ -1832,13 +1832,11 @@ export function createSocial({
   // member removes it, still nameless; none, and claimOnSignIn runs as it
   // always did.
   //
-  // ONE WAY IN DOES NOT PASS HERE, and it is not this file's: server.js's
-  // push-subscription sink sets ws.userId from a token on a socket that
-  // never said hello, with no onAuth (pre-existing, routed to Task 12, whose
-  // fix must go through onAuth). Until then a guest row such a socket holds
-  // goes through this door at the socket's next hello, which `squadAs`
-  // counts as a new account. An account row it makes by a join was vetted
-  // by that join, and it has no door.
+  // EVERY WAY IN PASSES HERE. server.js's push-subscription sink, which
+  // once set ws.userId from a token on a socket that never said hello with
+  // no onAuth, now introduces such a socket through the hello path itself,
+  // so a guest row it holds meets this door like any other. An account row
+  // a join makes was vetted by that join, and it has no door.
   //
   // THE ROW IS REMOVED AS A KICK: its socket gets exactly squadKick's victim
   // frame and the rest of the squad the roster a kick gives them. Nothing
@@ -2674,9 +2672,10 @@ export function createSocial({
   // sign-in whose block read was already out; a pair whose addBlock threw
   // and may still commit is kept 16 s past its answer, for a row that
   // commits late (D-BLOCK-5 K; a refusal cannot, and is not kept, T6-R1-1).
-  // One way in is not this
-  // file's and does not pass them: server.js's push-subscription sink (see
-  // the sign-in door); the second teardown catches a row it moved meanwhile.
+  // Every known way in passes
+  // one of them (server.js's push-subscription sink goes through the hello
+  // path now, see the sign-in door); the second teardown stays, in depth,
+  // for a row something might still move there meanwhile.
   //
   // WHO IS BLOCKING IS CAPTURED ON ENTRY (D-BLOCK-2 D): the account, before
   // the first await. Every write, the teardown and the friends pushes act
@@ -2849,7 +2848,7 @@ export function createSocial({
             // pending. A note or a log that throws leaves it pending, and so
             // apart. The teardown then runs AGAIN, for anything that reached
             // a shared squad while the row was out by a way no door stands on
-            // (server.js's push-subscription sink, see the sign-in door).
+            // (none is known; defence in depth, see the sign-in door).
             // Usually it finds nothing, and then it removes and sends nothing.
             try { if (failed && !refused) noteThrown(blocker, id); logBlock(blocker, id); blockPending.delete(pend); } catch { /* still pending */ }
             again = squadBlockTeardown(blocker, id)().catch(() => {});
