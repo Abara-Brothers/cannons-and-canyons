@@ -513,10 +513,14 @@ const sqNote = (html) => '<p class="sqn">' + html + '</p>';
 // the same thing in the settings column, for the same reason.
 const sqErr = (s) => '<p class="sqe' + (s ? '' : ' hidden') + '">' + esc(s || '') + '</p>';
 
-function sqTab(id, name, txt, known, dot, lamp) {
+// Each tab CONTROLS its pane and each pane is LABELLED BY its tab, so a screen
+// reader hears which panel a tab opens. `label`, when given, is the tab's whole
+// accessible name: it must still begin with the visible name.
+function sqTab(id, name, txt, known, dot, lamp, label) {
   const on = sq.tab === id;
-  return '<button class="sqtb' + (on ? ' on' : '') + '" data-sq="tab:' + id + '" role="tab"'
-    + ' aria-selected="' + (on ? 'true' : 'false') + '" title="' + name + '">'
+  return '<button class="sqtb' + (on ? ' on' : '') + '" id="sqTab-' + id + '" data-sq="tab:' + id + '" role="tab"'
+    + ' aria-controls="sqPane-' + id + '" aria-selected="' + (on ? 'true' : 'false') + '"'
+    + (label ? ' aria-label="' + esc(label) + '"' : '') + ' title="' + name + '">'
     + '<span class="sqtn">' + name + '</span>'
     + '<span class="sqc' + (lamp ? ' lit' : '') + (known ? '' : ' hidden') + '">' + (lamp ? IC.dot : '') + esc(txt) + '</span>'
     + '<i class="sqd' + (dot ? '' : ' hidden') + '" aria-hidden="true"></i></button>';
@@ -529,17 +533,21 @@ function sqTabs() {
   const sn = snap();
   const inN = sn && sn.requests && Array.isArray(sn.requests.in) ? sn.requests.in.length : 0;
   const onN = sn && Array.isArray(sn.friends) ? sn.friends.filter((x) => x && x.online).length : 0;
+  // The request lamp is aria-hidden and the pill is a bare number, so the
+  // Friends tab says both in words.
+  const fName = 'Friends' + (sn ? ', ' + onN + ' online' : '')
+    + (inN > 0 ? ', ' + inN + ' request' + (inN === 1 ? '' : 's') + ' waiting' : '');
   return '<div class="sqt" role="tablist">'
     + sqTab('squad', 'Squad', count < 0 ? '' : count + ' / ' + SQ_MAX, count >= 0, false, false)
-    + sqTab('friends', 'Friends', sn ? String(onN) : '', !!sn, inN > 0, true)
+    + sqTab('friends', 'Friends', sn ? String(onN) : '', !!sn, inN > 0, true, fName)
     + '</div>';
 }
 function sqPanel() {
   return '<div class="pnl sqx" style="left:' + u(18) + ';top:' + u(174) + ';width:' + u(196) + ';height:' + u(192) + '">'
     + sqTabs()
     + '<div class="sqb">'
-    +   '<div class="sqp' + (sq.tab === 'squad' ? '' : ' hidden') + '">' + sqPane() + '</div>'
-    +   '<div class="sqp' + (sq.tab === 'friends' ? '' : ' hidden') + '">' + sqFriends() + '</div>'
+    +   '<div class="sqp' + (sq.tab === 'squad' ? '' : ' hidden') + '" id="sqPane-squad" role="tabpanel" aria-labelledby="sqTab-squad">' + sqPane() + '</div>'
+    +   '<div class="sqp' + (sq.tab === 'friends' ? '' : ' hidden') + '" id="sqPane-friends" role="tabpanel" aria-labelledby="sqTab-friends">' + sqFriends() + '</div>'
     + '</div></div>';
 }
 const SQ_SIGN_IN = 'Sign in to add friends and keep your progress across devices. Your guest progress on this device comes with you when you do.';
@@ -566,14 +574,14 @@ function sqPane() {
   // below, so the answer's repaint morphs it in place and keeps what the player
   // has typed (morphChildren is positional); that is why Retry follows it.
   if (!sq.known || sq.err) return sqNote('Not loaded yet.') + sqErr(sq.err) + sqCodeRow(true) + sqRetry();
-  // NO INVITE UNDER A SQUAD THIS SOCKET WAS ONLY SHOWN (D-UI-1): the squad is
-  // open on another tab or device, and every squad control belongs to the
-  // socket on its row. The code field stays -- it is the one field (X8), a
-  // room code needs no squad, and entering a squad code is the player choosing
-  // to join it from here -- at the same child index as in every other
-  // answered state, so a repaint keeps what was typed.
+  // NO INVITE UNDER A SQUAD THIS ACCOUNT HOLDS ELSEWHERE (D-UI-1, review
+  // T8-R1-9): the squad is on another tab or device, and every squad control
+  // belongs to the socket on its row. The code field stays -- it is the one
+  // field (X8), a room code needs no squad, and entering a squad code is the
+  // player choosing to join it from here -- at the same child index as in
+  // every other answered state, so a repaint keeps what was typed.
   const lead = sqLead();
-  if (lead) return lead + (window.CC_SQUAD_END === 'open' ? SQ_GAP : sqInvite()) + sqCodeRow(true);
+  if (lead) return lead + (sqAway() ? SQ_GAP : sqInvite()) + sqCodeRow(true);
   return sqNote('No squad yet. Squad up, then pick a mode on the boards and start together.')
     + sqInvite() + sqCodeRow(true) + sqSeats();
 }
@@ -585,8 +593,14 @@ function sqPane() {
 // never had one is told "No squad yet". An `ended` push says a little more,
 // and only what the player can see for themselves: a kick -- which is also
 // EXACTLY how a block that removes a player reads (D-BLOCK) -- their own
-// leave, or another device of theirs acting on the squad.
+// leave, or another tab or device of theirs acting on the squad.
 const SQ_ENDED = 'Your squad has ended. Squad up again.';
+// `elsewhere` is sent when another socket of this ACCOUNT took this one's row
+// by resuming, or left, created or joined from there (server/social.js,
+// endedElsewhere). "changed" is the word true of all of those, and a second
+// tab on THIS device is the commonest source, so the line names both. Task 9
+// inherits this string.
+const SQ_ELSEWHERE = 'Your squad was changed in another tab or on another device.';
 // `open` (D-UI-1): the server showed this socket the account's squad with
 // `held: false` -- a live socket elsewhere holds the row, so this one only
 // looked. The owner's sentence, word for word.
@@ -602,7 +616,7 @@ function sqLead() {
   const end = window.CC_SQUAD_END;
   if (end) return sqNote(end === 'kicked' ? 'You were removed from the squad.'
     : end === 'left' ? 'You left the squad.'
-    : end === 'elsewhere' ? 'Your squad was changed on another device.'
+    : end === 'elsewhere' ? SQ_ELSEWHERE
     : end === 'open' ? SQ_OPEN
     : SQ_ENDED);
   return sq.gone ? sqNote(SQ_ENDED) : '';
@@ -624,8 +638,17 @@ function sqFriends() {
   if (acctState() !== 'in') return sqNote(SQ_SIGN_IN) + sqAdd(false);
   const sn = snap();
   // null IS NOT EMPTY here either. The Friends screen says this in full; the
-  // box has room for the short form, and re-entering home asks again.
-  if (!sn) return sqNote('Not loaded yet.') + sqErr(socWait().err) + sqAdd(true);
+  // box has room for the short form and a Retry. NOTHING RE-ASKS BY ITSELF:
+  // the read is eight round trips on the server, asked once per connection and
+  // per sign-in (app.js socialBoot) and after that only by hand -- a home visit
+  // is no reason to spend them again on a server that is saying no.
+  if (!sn) {
+    const w = socWait();
+    return sqNote('Not loaded yet.') + sqErr(w.err)
+      + '<div class="sqf"><button class="sbtn" data-sq="fretry"' + (w.busy ? ' disabled' : '') + '>'
+      + (w.busy ? 'Loading' : 'Retry') + '</button></div>'
+      + sqAdd(true);
+  }
   const fs = sn.friends || [], onN = fs.filter((x) => x && x.online).length;
   const rin = (sn.requests && sn.requests.in) || [];
   // The request line keeps its node when there is nothing to say, so the
@@ -649,9 +672,18 @@ function sqAct(v) {
   // than standing on a stale `known`.
   if (op === 'retry') { sq.err = ''; sq.known = false; sqAsk(); render(current); return; }
   if (op === 'code') { sqEnter(); return; }
+  // The Friends tab's Retry: the same read the Friends screen's Retry asks for.
+  // socialResync() refuses a second while one is out, and repaints at once.
+  if (op === 'fretry') { if (fn('socialResync')) socialResync(); return; }
 }
-const sqRetry = () => '<div class="sqf"><button class="sbtn" data-sq="retry"' + (sq.asking ? ' disabled' : '') + '>'
-  + (sq.asking ? 'Loading' : 'Retry') + '</button></div>';
+// Retry is HELD, and says why, while an ask is out AND until the socket's
+// hello has marked it: sqAsk refuses to ask before the hello, so a live Retry
+// there was a button that did nothing when tapped. The mark asks by itself.
+const sqRetry = () => {
+  const wait = sq.asking || !sqIntro();
+  return '<div class="sqf"><button class="sbtn" data-sq="retry"' + (wait ? ' disabled' : '') + '>'
+    + (wait ? 'Loading' : 'Retry') + '</button></div>';
+};
 // Invite friends opens the Friends TAB, not the Friends screen: the tab is
 // where a squad is built from, and the screen is a whole-page detour out of
 // the box (design 5.1 state 2).
@@ -696,11 +728,12 @@ function sqAsk(bare, back) {
   const n = sqIntro();
   if (!n || !wsReady() || sq.asking || (acctState() !== 'in' && !sq.snap)) return;
   // `had`: a squad this answer can take away -- a presented code, a squad on
-  // screen, a squad this tab was shown open on another socket (`open`: the
-  // player has seen that the account has one), or, for a return's second
-  // question, the "has ended" line itself.
+  // screen, a squad this tab gave up to another tab or device (`elsewhere`: it
+  // held one, and its bare question presents no code) or was shown open there
+  // (`open`: the player has seen that the account has one), or, for a
+  // return's second question, the "has ended" line itself.
   const mine = sq, code = bare || sq.bare ? '' : sqStored(),
-    had = !!code || !!sq.snap || window.CC_SQUAD_END === 'open' || (!!back && sq.gone);
+    had = !!code || !!sq.snap || sqAway() || (!!back && sq.gone);
   mine.asking = true; mine.again = false; mine.via = n;
   // Every write below goes to `mine`, the state that asked: an account switch
   // replaces `sq` (sqReset), and an answer to the old account's question must
@@ -2133,8 +2166,10 @@ function render(name) {
   // where the markup can still see it.
   if (enterFriends) frNeed();
   if (current === 'home') loadSorties();
-  // ASKED ON ENTRY, NOT PER RENDER -- a tab tap re-renders home and must not
-  // re-ask. sqNeed() is idempotent anyway, and waits for the socket's hello.
+  // THE BELT UNDER THE OTHER ASKS, ON ENTRY ONLY -- a tab tap re-renders home
+  // and must not re-ask. Every introduction, account change and return already
+  // asks, from any screen; entering home asks about an introduction none of
+  // them announced. sqNeed() is idempotent and waits for the socket's hello.
   if (entering && current === 'home') sqNeed();
 }
 
@@ -2278,9 +2313,9 @@ document.addEventListener('cc:squad', () => {
   if (sn && typeof sn.code === 'string' && sn.code) { sqStore(sn.code); sq.bare = false; }
   if (end !== sqEndSeen) {
     sqEndSeen = end;
-    // ELSEWHERE: another device of this account took the row or acted on the
-    // squad. OPEN: this tab was shown the squad while another socket holds its
-    // row. The squad is not over for the ACCOUNT, so the code stays
+    // ELSEWHERE: another tab or device of this account took the row or acted
+    // on the squad. OPEN: this tab was shown the squad while another socket
+    // holds its row. The squad is not over for the ACCOUNT, so the code stays
     // -- but this tab resumes bare from now on (see sqBack). Every other end
     // is final.
     if (end === 'elsewhere' || end === 'open') sq.bare = true;
@@ -2352,7 +2387,9 @@ document.addEventListener('keydown', (e) => {
   // The Squad box's code field, on home. The join panel never had an Enter key
   // despite the comment above claiming it did -- this one does, because a
   // 4-letter code on a phone keyboard ends with the Go key and nothing else.
-  if (e.target && e.target.id === 'sqCode') { e.preventDefault(); sqEnter(); return; }
+  // A HELD KEY IS ONE PRESS: autorepeat would send a code frame (and a join)
+  // per repeat, enough to trip the socket's message limiter, which closes it.
+  if (e.target && e.target.id === 'sqCode') { e.preventDefault(); if (!e.repeat) sqEnter(); return; }
   if (current !== 'friends') return;
   const id = e.target && e.target.id;
   if (id === 'frQ') { e.preventDefault(); frSearch(); }

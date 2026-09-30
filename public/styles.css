@@ -1996,6 +1996,12 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .sqtb{flex:1;position:relative;display:flex;align-items:center;justify-content:center;gap:calc(5 * var(--u));
      font-family:Rajdhani,system-ui,sans-serif;font-weight:600;font-size:calc(11 * var(--u));letter-spacing:.06em;
      text-transform:uppercase;color:#8d9cc0;transition:.15s}
+  /* THE TAB IS EASIER TO HIT THAN IT LOOKS (review T8-R1-17). The bar keeps
+     the mockup's 22u, which is only 12-16 CSS px on a phone in landscape, and
+     each tab reaches 8u further DOWN, over the pane's own top padding and its
+     first line's margin (11u at least, so no control sits under it). Down only:
+     the tab bar is the panel's top edge and the panel clips its overflow. */
+  #bay .sqtb::after{content:'';position:absolute;left:0;right:0;top:0;bottom:calc(-8 * var(--u))}
   #bay .sqtb:hover{color:#eef3ff}
   #bay .sqtb.on{color:#ffb46b;box-shadow:inset 0 calc(-2 * var(--u)) 0 #ffb46b}
   #bay .sqc{display:inline-flex;align-items:center;gap:calc(3 * var(--u));font-family:"JetBrains Mono",monospace;

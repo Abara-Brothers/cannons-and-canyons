@@ -212,6 +212,28 @@ try {
         && JSON.stringify(before.tabs.map((t) => t.kids)) === JSON.stringify(after.tabs.map((t) => t.kids)))
       ok(`${V}: the box keeps the same node shape across a tab switch`);
     else fail(`${V}: node shape moved ${JSON.stringify(before && [before.shape, before.panes])} -> ${JSON.stringify(after && [after.shape, after.panes])}`);
+    // THE TABS NAME THEIR PANELS (review T8-R1-17): each tab controls a
+    // role=tabpanel that is labelled by it, so a screen reader hears which
+    // panel a tab opens.
+    const wired = await ev(`[...document.querySelectorAll('#bay .sqtb')].map((t) => {
+      const p = document.getElementById(t.getAttribute('aria-controls') || '');
+      return !!(t.id && p && p.classList.contains('sqp') && p.getAttribute('role') === 'tabpanel' && p.getAttribute('aria-labelledby') === t.id);
+    })`);
+    if (JSON.stringify(wired) === '[true,true]') ok(`${V}: each tab controls a role=tabpanel pane that is labelled by it`);
+    else fail(`${V}: tab/panel wiring ${JSON.stringify(wired)}`);
+    // A TAB IS EASIER TO HIT THAN IT LOOKS (review T8-R1-17): the bar stays
+    // 22u, but a tap 5u below it -- over the pane's own top padding, where no
+    // control sits -- still lands on the tab above.
+    const hit = await ev(`(() => {
+      const u = document.querySelector('#bay .stage').getBoundingClientRect().width / 932;
+      const bar = document.querySelector('#bay .sqt'), t = document.querySelector('#bay .sqtb[data-sq="tab:squad"]');
+      if (!bar || !t) return null;
+      const r = t.getBoundingClientRect(), el = document.elementFromPoint(r.x + r.width / 2, r.bottom + 5 * u);
+      const tab = el && el.closest('.sqtb');
+      return { bar: Math.round(bar.getBoundingClientRect().height / u), at: tab ? tab.getAttribute('data-sq') : (el && el.className) || null };
+    })()`);
+    if (hit && hit.bar === 22 && hit.at === 'tab:squad') ok(`${V}: the tab bar stays 22u, and a tap just below a tab still lands on it`);
+    else fail(`${V}: tab hit area ${JSON.stringify(hit)}`);
     // And the code field is an INPUT, which morphNode never touches.
     const kept = await ev(`(() => { const i = document.getElementById('sqCode'); return i ? i.value : null; })()`);
     if (kept === 'WXYZ') ok(`${V}: a tab switch repaints in place and keeps what the player typed`);
@@ -284,10 +306,13 @@ try {
     //      AND NOTHING IS ASKED BEFORE THE HELLO. The stub socket has never been
     //      introduced, and a resume sent on it now would be answered for nobody.
     const NOSQ = 'No squad yet.';
+    //      RETRY IS HELD UNTIL THE HELLO (review T8-R1-5): sqAsk refuses to ask
+    //      before it, so a live Retry here was a button that did nothing when
+    //      tapped. It says Loading, because the box is; the hello asks by itself.
     const w0 = await box(), q0 = await squads();
     if (w0 && w0.text.startsWith('Not loaded yet.') && !w0.text.includes(NOSQ) && q0.length === 0
-        && w0.btns.some((b) => b.sq === 'retry' && !b.dis) && w0.tabs[0].pill === null)
-      ok(`${V}: before any answer the box says "Not loaded yet." with a live Retry, and asks nothing before the hello`);
+        && w0.btns.some((b) => b.sq === 'retry' && b.dis && b.t === 'Loading') && w0.tabs[0].pill === null)
+      ok(`${V}: before any answer the box says "Not loaded yet.", holds Retry (Loading) until the hello, and asks nothing before it`);
     else fail(`${V}: third state ${JSON.stringify(w0 && { text: w0.text, btns: w0.btns, pill: w0.tabs[0].pill, sent: q0 })}`);
     // THE CODE FIELD DOES NOT WAIT FOR THE SQUAD ANSWER (review T8-R1-2). The
     // code frame is answered from memory, before any sign-in and with the
@@ -391,8 +416,15 @@ try {
     await click('#bay [data-sq="retry"]');
     await sleep(60);
     const again = await squads();
+    // WHILE RETRY'S QUESTION IS OUT THE BOX KNOWS NOTHING (review T8-R1-6):
+    // Retry drops the old answer along with the refusal, so the wait reads
+    // "Not loaded yet." and never "No squad yet".
+    const inflight = await box();
     if (still.length === 0 && again.length === 1 && again[0].op === 'resume') ok(`${V}: Retry clears the refusal and asks again; a repaint does not`);
     else fail(`${V}: Retry sent ${JSON.stringify(again)} (a repaint sent ${still.length})`);
+    if (inflight && inflight.text.startsWith('Not loaded yet.') && !inflight.text.includes(NOSQ))
+      ok(`${V}: while Retry's question is out the box says "Not loaded yet.", not "No squad yet"`);
+    else fail(`${V}: Retry in flight ${JSON.stringify(inflight && inflight.text)}`);
     await reply({ op: 'gone' });
     // THE ANSWER REPAINTS IN PLACE: the code field sits at the same place in
     // the pane before and after it, so morphChildren keeps the node and the
@@ -512,7 +544,10 @@ try {
     //      showing is evidence enough on its own.
     await ev(`(localStorage.removeItem('cc_squad'), true)`);
     await reconnect(); await token();
-    await reply({ op: 'gone' });
+    // The reconnect's friends read is answered HERE, before anything clears the
+    // frame log: left out, it stays in flight for twelve seconds and a later
+    // check's friends Retry finds a read already out.
+    await reply({ op: 'gone' }); await settleFriends();
     const lost = await box();
     // Another tab of this account, on this device, joins a squad meanwhile and
     // stores its code. The return here must still ask BARE: with that code it
@@ -546,25 +581,31 @@ try {
     //       membership ends sends them a frame (D-BLOCK), and the box says what
     //       it says -- never why. A block that removes a player sends EXACTLY
     //       the kick frame, so it reads exactly as a kick.
+    // The fourth column: Invite friends is offered under the line. Not under
+    // `elsewhere`, whose squad may still be the account's on the other tab or
+    // device: every squad control belongs to the socket on the row (D-UI-1,
+    // review T8-R1-9). The code field is offered under every line.
     const ENDS = [
-      [{ op: 'ended', reason: 'kicked' }, 'You were removed from the squad.', null],
-      [{ op: 'ended', reason: 'left' }, 'You left the squad.', null],
-      [{ op: 'left', ok: true, id: 987654 }, 'You left the squad.', null],
-      [{ op: 'ended', reason: 'no_leader' }, 'Your squad has ended. Squad up again.', null],
-      [{ op: 'ended', reason: 'constructor' }, 'Your squad has ended. Squad up again.', null],
-      // Another device of this account took the squad, or changed it. The
-      // squad is not over for the ACCOUNT, so its code stays.
-      [{ op: 'ended', reason: 'elsewhere' }, 'Your squad was changed on another device.', 'BKPQ'],
+      [{ op: 'ended', reason: 'kicked' }, 'You were removed from the squad.', null, true],
+      [{ op: 'ended', reason: 'left' }, 'You left the squad.', null, true],
+      [{ op: 'left', ok: true, id: 987654 }, 'You left the squad.', null, true],
+      [{ op: 'ended', reason: 'no_leader' }, 'Your squad has ended. Squad up again.', null, true],
+      [{ op: 'ended', reason: 'constructor' }, 'Your squad has ended. Squad up again.', null, true],
+      // Another tab or device of this account took the row, or left, created
+      // or joined from there (server/social.js endedElsewhere). A second tab on
+      // THIS device is the common case, so the line names both (review
+      // T8-R1-9). The squad is not over for the ACCOUNT, so its code stays.
+      [{ op: 'ended', reason: 'elsewhere' }, 'Your squad was changed in another tab or on another device.', 'BKPQ', false],
     ];
     // window.CC_SQUAD_END is a CLOSED vocabulary: a reason this build does not
     // know is 'ended', never the server's own word.
     const endWord = { kicked: 'kicked', left: 'left', no_leader: 'no_leader', constructor: 'ended', elsewhere: 'elsewhere' };
-    for (const [frame, line, keep] of ENDS) {
+    for (const [frame, line, keep, invite] of ENDS) {
       await push(SNAP);
       await push(frame);
       const e = await box();
       const word = await ev('window.CC_SQUAD_END');
-      if (e && e.text.startsWith(line) && e.field && e.field.on && e.btns.some((b) => b.sq === 'tab:friends')
+      if (e && e.text.startsWith(line) && e.field && e.field.on && e.btns.some((b) => b.sq === 'tab:friends') === invite
           && (await slot()) === null && (await stored()) === keep && e.tabs[0].pill === '0 / 4'
           && word === (frame.op === 'left' ? 'left' : endWord[frame.reason]))
         ok(`${V}: ${frame.op}${frame.reason ? ':' + frame.reason : ''} -- "${line}", the slot is empty and the code is ${keep ? 'kept' : 'forgotten'}`);
@@ -618,8 +659,11 @@ try {
     else fail(`${V}: reconnect after elsewhere sent ${JSON.stringify(reSeq.map((f) => f.type + (f.op ? ':' + f.op : '') + (f.code ? ':' + f.code : '')))} held=${JSON.stringify(await stored())}`);
     await reply({ op: 'gone' }); await settleFriends();
     const g13 = await box();
-    if (g13 && g13.text.startsWith(NOSQ) && (await stored()) === 'BKPQ')
-      ok(`${V}: \`gone\` to a bare question is "No squad yet" and spends no code the tab did not present`);
+    // THIS TAB HELD A SQUAD until another tab or device took it, so the bare
+    // question's `gone` is the neutral "has ended" line (sheet "FROM TASK 6"
+    // note 4; review T8-R1-8) -- and the code it did not present is not spent.
+    if (g13 && g13.text.startsWith('Your squad has ended. Squad up again.') && (await stored()) === 'BKPQ')
+      ok(`${V}: \`gone\` to a tab that gave its squad up elsewhere is "has ended", and spends no code the tab did not present`);
     else fail(`${V}: bare gone ${JSON.stringify(g13 && g13.text)} held=${JSON.stringify(await stored())}`);
 
     // ---- 14. ONE CODE FIELD (D8/5.3). It asks the server which kind of code it
@@ -700,6 +744,16 @@ try {
     if ((await tx()).filter((f) => f.type === 'code').length === 1) ok(`${V}: Enter in the code field commits it`);
     else fail(`${V}: Enter sent ${JSON.stringify(await tx())}`);
     await codeReply({ kind: 'none' });
+    // A HELD KEY IS ONE PRESS (review T8-R1-10): an autorepeated Enter sends
+    // nothing, or a held Go key pours code and join frames into the socket's
+    // message limiter, which closes the socket.
+    await typeCode('MNPQ'); await clearTx();
+    await ev(`(() => { const i = document.getElementById('sqCode'); if (!i) return false; i.focus();
+      i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', repeat: true, bubbles: true })); return true; })()`);
+    await sleep(40);
+    const rep = (await tx()).filter((f) => f.type === 'code');
+    if (rep.length === 0) ok(`${V}: an autorepeated Enter sends nothing`);
+    else { fail(`${V}: an autorepeated Enter sent ${JSON.stringify(rep)}`); await codeReply({ kind: 'none' }); }
     // (f) A PLAYER WITH NO ACCOUNT WHO ENTERS A SQUAD CODE IS IN IT (D11), and
     //     sees it. With no squad in hand such a player asks nothing: their
     //     squad is keyed to the socket they joined on.
@@ -744,6 +798,11 @@ try {
     if (fr1 && fr1.pill === '1' && fr1.dot === true)
       ok(`${V}: cc:social repaints home -- Friends reads 1 online with the waiting-request lamp`);
     else fail(`${V}: friends tab ${JSON.stringify(fr1)}`);
+    // THE LAMP IS NOT THE ONLY WAY TO KNOW (review T8-R1-17): it is aria-hidden,
+    // so the tab's name says the waiting request in words.
+    const frName = await ev(`(() => { const t = document.querySelectorAll('#bay .sqtb')[1]; return t ? t.getAttribute('aria-label') : null; })()`);
+    if (frName === 'Friends, 1 online, 1 request waiting') ok(`${V}: the Friends tab's name says 1 online and 1 request waiting`);
+    else fail(`${V}: Friends tab name ${JSON.stringify(frName)}`);
     // A DIFFERENT ACCOUNT IS NOT YOUR SQUAD.
     await clearTx();
     await ev(`(() => { const b = $('accountBtn'); b.dataset.state = 'in';
@@ -767,6 +826,21 @@ try {
     if (fu && fu.tabs[1].pill === null && fu.text.startsWith('Not loaded yet.') && !fu.text.includes('No friends'))
       ok(`${V}: Friends with no snapshot says "Not loaded yet.", and the pill is absent rather than 0`);
     else fail(`${V}: friends unknown ${JSON.stringify(fu && { pill: fu.tabs[1].pill, text: fu.text })}`);
+    // A REFUSED FRIENDS READ HAS A RETRY (review T8-R1-7). Nothing re-asks it by
+    // itself -- it is eight round trips on the server, asked once per
+    // connection and per sign-in -- so the tab offers the tap, and says Loading
+    // while that question is out.
+    await ev(`(window.CC_SOCIAL_ERR = 'unavailable', document.dispatchEvent(new Event('cc:social')), true)`);
+    const fe = await box();
+    await clearTx(); await click('#bay [data-sq="fretry"]'); await sleep(60);
+    const fq = (await tx()).filter((f) => f.type === 'friends');
+    const fl = await box();
+    await ev(`(() => { for (const f of window.__tx.filter((x) => x.type === 'friends')) handle({ type: 'friends', error: 'unavailable', id: f.id }); window.CC_SOCIAL_ERR = ''; document.dispatchEvent(new Event('cc:social')); return true; })()`);
+    await sleep(60);
+    if (fe && fe.err === 'Friends are not available right now. Try again later.' && fe.btns.some((b) => b.sq === 'fretry' && !b.dis && b.t === 'Retry')
+        && fq.length === 1 && fl && fl.btns.some((b) => b.sq === 'fretry' && b.dis && b.t === 'Loading'))
+      ok(`${V}: a refused friends read offers Retry, which asks once and says Loading while it waits`);
+    else fail(`${V}: friends retry ${JSON.stringify({ fe: fe && { err: fe.err, btns: fe.btns }, fq, fl: fl && fl.btns })}`);
     await ev(`(window.CC_SOCIAL = ${FRIENDS}, document.dispatchEvent(new Event('cc:social')), true)`);
     await sleep(60);
     const fk = await box();
@@ -775,6 +849,79 @@ try {
       ok(`${V}: Friends reads 2 friends, 1 online, 1 request, and offers the door to the screen`);
     else fail(`${V}: friends known ${JSON.stringify(fk && { text: fk.text, btns: fk.btns })}`);
     await click('#bay [data-sq="tab:squad"]');
+
+    // ---- 17. AN ANSWER SETTLES THE ACCOUNT THAT ASKED (review T8-R1-13). An
+    //       account switch replaces the box's state; the answer to the old
+    //       account's question lands on the old state, never on the new one,
+    //       whose own question is still out. Both of the box's questions: the
+    //       resume and the code.
+    const OTHER = `{ id: '00000000-0000-4000-8000-0000000000cc', anonymous: false, google: true, apple: false, email: 'other@example.com', accounts: [{ provider: 'google', email: 'other@example.com' }] }`;
+    const flipTo = (acc) => ev(`(() => { const b = $('accountBtn'); b.classList.remove('hidden'); b.dataset.state = 'in';
+      window.CC_ACCOUNT = ${acc}; document.dispatchEvent(new CustomEvent('cc:account'));
+      for (const f of window.__tx.filter((x) => x.type === 'friends')) handle({ type: 'friends', error: 'unavailable', id: f.id });
+      window.CC_SOCIAL_ERR = ''; return true; })()`);
+    const ra = await ask('');                                   // this account's resume is out
+    await clearTx(); await flipTo(OTHER);                        // the switch asks for the new account
+    const rb = await squads();
+    await answer(ra[0] && ra[0].id, { type: 'squad', op: 'gone' });
+    const iso = await box();
+    await reply({ op: 'gone' });                                 // the new account's own answer
+    if (ra.length === 1 && rb.length === 1 && rb[0].op === 'resume' && iso && iso.text.startsWith('Not loaded yet.') && !iso.text.includes(NOSQ)
+        && iso.btns.some((b) => b.sq === 'retry' && b.dis))
+      ok(`${V}: the old account's resume answer does not settle the new account's box`);
+    else fail(`${V}: resume answer crossed accounts ${JSON.stringify({ ra, rb, iso: iso && { text: iso.text, btns: iso.btns } })}`);
+    await typeCode('ZZZZ'); await clearTx(); await click('#bay [data-sq="code"]'); await sleep(40);
+    const cq = (await tx()).filter((f) => f.type === 'code');
+    await clearTx(); await setWho('in');                         // back to the first account, which asks
+    await answer(cq[0] && cq[0].id, { type: 'code', kind: 'none' });
+    const iso2 = await box();
+    await reply({ op: 'gone' });
+    if (cq.length === 1 && iso2 && iso2.text.startsWith('Not loaded yet.') && !iso2.text.includes(SQ_NONE))
+      ok(`${V}: the old account's code answer does not land on the new account's field`);
+    else fail(`${V}: code answer crossed accounts ${JSON.stringify({ cq, iso2: iso2 && iso2.text })}`);
+    await typeCode('');
+
+    // ---- 18. BACK TO THE TAB, one event at a time (review T8-R1-14). A phone
+    //       fires visibilitychange on the way OUT, while the page is hidden: an
+    //       ask then would spend the return's question as the app goes to the
+    //       background. And either event alone is a return.
+    const arm = async () => { await push(SNAP); await push({ op: 'ended', reason: 'elsewhere' }); };
+    const visib = () => ev(`(document.dispatchEvent(new Event('visibilitychange', { bubbles: true })), true)`);
+    await arm();
+    await ev(`(Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }), true)`);
+    await clearTx(); await visib(); await sleep(60);
+    const whileHidden = await squads();
+    await ev(`(delete document.hidden, document.hidden)`);
+    await clearTx(); await ev(`(window.dispatchEvent(new Event('focus')), true)`); await sleep(60);
+    const byFocus = await squads();
+    await reply(SNAP);
+    await arm();
+    await clearTx(); await visib(); await sleep(60);
+    const byVis = await squads();
+    await reply(SNAP);
+    if (whileHidden.length === 0) ok(`${V}: a visibilitychange while the page is hidden asks nothing`);
+    else fail(`${V}: asked while hidden ${JSON.stringify(whileHidden)}`);
+    if (bare1(byFocus)) ok(`${V}: focus alone is a return: it asks once, bare`);
+    else fail(`${V}: focus alone sent ${JSON.stringify(byFocus)}`);
+    if (bare1(byVis)) ok(`${V}: visibilitychange alone is a return: it asks once, bare`);
+    else fail(`${V}: visibilitychange alone sent ${JSON.stringify(byVis)}`);
+
+    // ---- 19. ENTERING HOME ASKS what nothing else asked (review T8-R1-15).
+    //       Every introduction, account change and return already asks, from
+    //       any screen; the entry hook is the belt under them. Driven alone: an
+    //       introduction whose cc:squad never fired is asked about the moment
+    //       home is entered, and not before.
+    await ev(`(Bay.go('career'), true)`);
+    await clearTx();
+    await ev(`(helloWs = S.ws, helloN++, true)`);               // a mark nobody announced
+    await sleep(60);
+    const unheard = await squads();
+    await ev(`(Bay.go('home'), true)`); await sleep(60);
+    const onEntry = await squads();
+    await reply(SNAP);
+    if (unheard.length === 0 && onEntry.length === 1 && onEntry[0].op === 'resume')
+      ok(`${V}: entering home asks about an introduction no event announced`);
+    else fail(`${V}: entry hook: before ${JSON.stringify(unheard)}, on entry ${JSON.stringify(onEntry)}`);
 
     // ---- 20. A ROSTER THIS SOCKET WAS ONLY SHOWN (D-UI-1; review T8-R1-1). A
     //       bare resume from a second tab or device, while a live socket
