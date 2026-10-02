@@ -92,6 +92,10 @@ async function ev(expression) {
 }
 async function until(expr, ms, step = 100) { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await ev(expr).catch(() => false)) return true; await sleep(step); } return ev(expr).catch(() => false); }
 await send('Page.enable'); await send('Runtime.enable');
+// The cold-start intro (public/intro.js) is off for this suite: it covers the bay
+// with a pointer-catching canvas for six seconds on a fresh load. test/intro.mjs
+// owns it. Scripts for new documents only run while the Page domain is enabled.
+await send('Page.addScriptToEvaluateOnNewDocument', { source: 'window.__ccNoIntro = true;' });
 
 const STATE = `({ local: S.local, playing: S.playing, mode: S.mode, n: S.n, names: S.names, kinds: S.kinds, boss: S.boss, code: S.code, connected: S.connected,
   pend: (typeof pendingIntent === 'undefined' || !pendingIntent) ? null : pendingIntent.mode, lw: lobbyWait,

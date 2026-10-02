@@ -339,6 +339,12 @@ else
   # media-query rewrite (ISSUE-039, the iPad reflow) survivable. Also skips
   # cleanly without Chrome.
   run layout node test/layout.mjs
+  # The cold-start intro (public/intro.js): that its last frame IS the live
+  # menu at six viewports, whatever the menu currently looks like; skipping;
+  # the launches that must not play it; faults inside it; and that the iOS
+  # launch image is still its frame 0. Self-hosted on its own free ports.
+  # Skips without Chrome.
+  run intro node test/intro.mjs
 
   # Expected chatter: the listen banner, the readiness line (8.58 — locally it
   # always reads supabase=unconfigured, which is correct with no env), and the

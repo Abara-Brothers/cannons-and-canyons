@@ -32,6 +32,7 @@ const SHELL = [
   'room-engine.js',      // rooms/turns/bots — the other half of an offline match
   'styles.css?v=12',
   'bay.js?v=12',          // the Launch Bay front end
+  'intro.js?v=12',        // the cold-start intro: an offline launch plays it too
   'fonts/barlow-500.woff2',
   'fonts/barlow-600.woff2',
   'fonts/barlow-700.woff2',

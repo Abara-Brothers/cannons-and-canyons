@@ -26,7 +26,7 @@ const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8');
 // new one is covered the day it is added.
 const UI_FILES = ['public/index.html', 'public/app.js', 'public/bay.js', 'public/styles.css', 'server.js',
   'public/game-core.js', 'public/room-engine.js', 'public/cloud.js', 'public/errors.js',
-  'public/privacy.html', 'public/delete-account.html', 'public/sw.js', 'public/config.js',
+  'public/privacy.html', 'public/delete-account.html', 'public/sw.js', 'public/config.js', 'public/intro.js',
   ...readdirSync(path.join(ROOT, 'server')).filter((f) => f.endsWith('.js')).sort().map((f) => `server/${f}`)];
 
 // ---- 1. NO EMOJI ANYWHERE IN THE UI -----------------------------------------
@@ -551,7 +551,7 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
 // plugins are reached through the Capacitor bridge instead.
 {
   const bad = [];
-  for (const file of ['public/app.js', 'public/cloud.js', 'public/errors.js', 'public/config.js', 'public/sw.js']) {
+  for (const file of ['public/app.js', 'public/cloud.js', 'public/errors.js', 'public/config.js', 'public/sw.js', 'public/intro.js']) {
     read(file).split('\n').forEach((line, i) => {
       if (/^\s*(\/\/|\*)/.test(line)) return;                    // skip comments
       // static `from '…'` and dynamic `import('…')`, bare specifier only

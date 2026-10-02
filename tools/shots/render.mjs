@@ -87,6 +87,10 @@ ws.onmessage = (e) => {
 };
 
 await send('Page.enable');
+// The cold-start intro (public/intro.js) is off for this suite: it covers the bay
+// with a pointer-catching canvas for six seconds on a fresh load. test/intro.mjs
+// owns it. Scripts for new documents only run while the Page domain is enabled.
+await send('Page.addScriptToEvaluateOnNewDocument', { source: 'window.__ccNoIntro = true;' });
 await send('Runtime.enable');
 await send('Emulation.setDeviceMetricsOverride', {
   width: CSS_W, height: CSS_H, deviceScaleFactor: DPR, mobile: true,

@@ -75,6 +75,14 @@ const send = (method, params = {}) => new Promise((res, rej) => {
 });
 const ev = async (expr) => { const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error(r.exceptionDetails.text + ' ' + JSON.stringify(r.exceptionDetails.exception && r.exceptionDetails.exception.description)); return r.result.value; };
 
+// The cold-start intro (public/intro.js) is off for this suite: it covers the bay
+// with a pointer-catching canvas for six seconds on a fresh load, and these checks
+// hit-test and press the bay from the first second. test/intro.mjs owns it. A
+// script for new documents only runs while the Page domain is enabled, so it is
+// enabled here, before any load, and never disabled again.
+await send('Page.enable');
+await send('Page.addScriptToEvaluateOnNewDocument', { source: 'window.__ccNoIntro = true;' });
+
 const ME = '00000000-0000-4000-8000-0000000000aa';
 const LINKED = `{ id: '${ME}', anonymous: false, google: true, apple: false, email: 'me@example.com', accounts: [{ provider: 'google', email: 'me@example.com' }] }`;
 const GUEST  = `{ id: '00000000-0000-4000-8000-0000000000bb', anonymous: true, google: false, apple: false, email: null, accounts: [] }`;
@@ -1180,7 +1188,6 @@ try {
     await ev(`(localStorage.setItem('cc_squad', 'QRST'), true)`);
     const booted = await load();
     await send('Page.removeScriptToEvaluateOnNewDocument', { identifier: hold.identifier });
-    await send('Page.disable');
     if (!booted) { fail(`${V}: page never became ready for the reload check`); continue; }
     for (let i = 0; i < 40 && !(await ev('typeof window.__who === "function"')); i++) await sleep(100);
     await stubSocket();

@@ -40,13 +40,116 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 /// document-start user script that defines `window.Capacitor.Plugins.<jsName>`.
 /// So JS gets a bridge method with no <script> tag, no eval, no CDN and no new
 /// file in the Xcode target -- which is what the app's CSP and its no-bundler
-/// rule require. Both native sign-in plugins register here; there must be
-/// exactly ONE of these subclasses.
+/// rule require. Every local plugin registers here (the two native sign-in
+/// plugins and CCLaunch); there must be exactly ONE of these subclasses.
 class CCBridgeViewController: CAPBridgeViewController {
     override func capacitorDidLoad() {
         super.capacitorDidLoad()
         bridge?.registerPluginInstance(CCWebAuthPlugin())
         bridge?.registerPluginInstance(AppleSignInPlugin())
+        bridge?.registerPluginInstance(CCLaunchPlugin())
+    }
+
+    // MARK: Launch hold (cold-start intro, spec R17)
+
+    /// iOS drops the launch screen at the window's first draw, and the web view
+    /// then shows flat #0b1020 until the page paints: doors -> flat dark ->
+    /// doors. So a copy of the launch image is held over the web view (the
+    /// root view IS the WKWebView: Capacitor's loadView sets `view = webView`)
+    /// until intro.js has drawn frame 0 and calls `CCLaunch.hide()`. Two native
+    /// fallbacks mean a JS failure can never trap the player behind it: the
+    /// main-frame load finishing + 1 s, and a hard 10 s from install. The hard
+    /// stop is only for a load that never finishes, so it waits as long as the
+    /// intro waits for a slow menu: a cold start on a freshly booted iPad took
+    /// ~4.5 s to frame 0, and a 4 s stop showed flat dark between the doors.
+    private var launchHold: UIImageView?
+    private var launchHoldReleasing = false
+    private var launchHoldWaiters: [() -> Void] = []
+    private var launchLoadObservation: NSKeyValueObservation?
+    private var launchLoadStarted = false
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        installLaunchHold()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        // Autoresizing already tracks the bounds (the web view is created at
+        // .zero and sized by the window); this also keeps the hold on top if
+        // WebKit adds a subview of its own while the page loads.
+        if let hold = launchHold {
+            hold.frame = view.bounds
+            view.bringSubviewToFront(hold)
+        }
+    }
+
+    private func installLaunchHold() {
+        guard launchHold == nil else { return }
+        // Same asset, mode and colour as LaunchScreen.storyboard, so the swap
+        // from the system launch screen to this view is invisible.
+        let hold = UIImageView(image: UIImage(named: "LaunchDoors"))
+        hold.contentMode = .scaleAspectFill
+        hold.backgroundColor = UIColor(red: 11.0 / 255.0, green: 16.0 / 255.0, blue: 32.0 / 255.0, alpha: 1) // #0b1020
+        hold.frame = view.bounds
+        hold.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        hold.isUserInteractionEnabled = false
+        hold.clipsToBounds = true
+        view.addSubview(hold)
+        launchHold = hold
+
+        // Fallback (b): unconditional. Both fallbacks use a zero-tolerance
+        // Timer in .common mode, not asyncAfter: GCD may defer an asyncAfter
+        // (measured: 4.2 s for 4.0 s), and .common keeps it firing while a
+        // touch on the web view is being tracked.
+        startLaunchHoldTimer(after: 10.0, #selector(launchHoldHardStop(_:)))
+        // Fallback (a): main-frame load finished + 1 s. Observed through
+        // WKWebView's KVO-compliant `isLoading`, never by replacing Capacitor's
+        // navigationDelegate. Loading -> not loading is didFinish (or a failed
+        // load, which must not trap the player either).
+        launchLoadObservation = webView?.observe(\.isLoading, options: [.initial, .new]) { [weak self] webView, _ in
+            let loading = webView.isLoading
+            DispatchQueue.main.async { self?.launchLoadingChanged(loading) }
+        }
+    }
+
+    private func launchLoadingChanged(_ loading: Bool) {
+        if loading { launchLoadStarted = true; return }
+        guard launchLoadStarted, launchLoadObservation != nil else { return }
+        launchLoadObservation?.invalidate()
+        launchLoadObservation = nil
+        startLaunchHoldTimer(after: 1.0, #selector(launchHoldPageSettled(_:)))
+    }
+
+    private func startLaunchHoldTimer(after seconds: TimeInterval, _ action: Selector) {
+        let timer = Timer(timeInterval: seconds, target: self, selector: action, userInfo: nil, repeats: false)
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    // Timer's documented selector shape: one argument, the timer.
+    @objc private func launchHoldHardStop(_ timer: Timer) { releaseLaunchHold(reason: "timeout 10s") }
+    @objc private func launchHoldPageSettled(_ timer: Timer) { releaseLaunchHold(reason: "page loaded + 1s") }
+
+    /// Fades the hold out and removes it. Idempotent: `completion` runs once
+    /// the hold is gone -- at once if it already is, or when an in-flight fade
+    /// ends. Main thread only.
+    func releaseLaunchHold(reason: String, completion: (() -> Void)? = nil) {
+        guard let hold = launchHold else { completion?(); return }
+        if let completion = completion { launchHoldWaiters.append(completion) }
+        if launchHoldReleasing { return }
+        launchHoldReleasing = true
+        launchLoadObservation?.invalidate()
+        launchLoadObservation = nil
+        CAPLog.print("CCLaunch: launch hold released (\(reason))")
+        UIView.animate(withDuration: 0.12, animations: {
+            hold.alpha = 0
+        }, completion: { _ in
+            hold.removeFromSuperview()
+            self.launchHold = nil
+            let waiters = self.launchHoldWaiters
+            self.launchHoldWaiters = []
+            waiters.forEach { $0() }
+        })
     }
 }
 
@@ -223,5 +326,31 @@ public class AppleSignInPlugin: CAPPlugin, CAPBridgedPlugin,
         pending = nil
         controller = nil
         rawNonce = nil
+    }
+}
+
+// MARK: - CCLaunch: release the launch hold
+
+/// `window.Capacitor.Plugins.CCLaunch.hide()` removes the copy of the launch
+/// image that CCBridgeViewController holds over the web view. intro.js calls it
+/// two rAFs after frame 0, or at once when no intro plays. Safe to call any
+/// number of times: it resolves when the hold is gone (after a ~0.12 s fade,
+/// over a frame drawn to be identical), or at once if it already is.
+@objc(CCLaunchPlugin)
+public class CCLaunchPlugin: CAPPlugin, CAPBridgedPlugin {
+    public let identifier = "CCLaunchPlugin"
+    public let jsName = "CCLaunch"
+    public let pluginMethods: [CAPPluginMethod] = [
+        CAPPluginMethod(name: "hide", returnType: CAPPluginReturnPromise),
+    ]
+
+    @objc func hide(_ call: CAPPluginCall) {
+        // Plugin calls arrive on the bridge's queue; the view work is UIKit.
+        DispatchQueue.main.async {
+            guard let host = self.bridge?.viewController as? CCBridgeViewController else {
+                call.resolve(); return
+            }
+            host.releaseLaunchHold(reason: "CCLaunch.hide()") { call.resolve() }
+        }
     }
 }

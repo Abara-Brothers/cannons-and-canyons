@@ -8374,6 +8374,13 @@ function drawFloaters() {
 // ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
+// What boot is about to do with this launch, published for the cold-start
+// intro (intro.js), which must stay out of the way of a launch that is going
+// somewhere. Set from the SAME expression boot routes on below, so the two can
+// never disagree: 'resume' for a held seat, 'room' or 'squad' for a link boot
+// is acting on, null for a launch that lands on home. A link without a saved
+// name is only prefilled, so it is null too.
+let BOOT_CLAIM = null;
 function boot() {
   // Capture this BEFORE seeding — the deep-link auto-join must still require a
   // name the player actually owns, not one we just handed them a millisecond ago.
@@ -8412,6 +8419,7 @@ function boot() {
   // hadName is unchanged and gates both kinds, for the reason it was captured
   // above: a name the player has never seen is not a name to enter someone's
   // squad under.
+  BOOT_CLAIM = loadResume() ? 'resume' : (link && hadName ? link.kind : null);
   if (link && hadName && !loadResume()) {
     if (link.kind === 'room') {
       setTimeout(() => intent({ type: 'join', code: link.code, name: savedName(), skin: mySkin() }), 300);

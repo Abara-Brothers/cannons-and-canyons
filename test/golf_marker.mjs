@@ -66,6 +66,10 @@ const send = (method, params = {}) => new Promise((res, rej) => {
 const ev = async (expr) => { const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error(r.exceptionDetails.text + ' ' + JSON.stringify(r.exceptionDetails.exception && r.exceptionDetails.exception.description)); return r.result.value; };
 const until = async (expr, ms, step = 100) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await ev(expr).catch(() => false)) return true; await sleep(step); } return ev(expr).catch(() => false); };
 await send('Page.enable'); await send('Runtime.enable');
+// The cold-start intro (public/intro.js) is off for this suite: it covers the bay
+// with a pointer-catching canvas for six seconds on a fresh load. test/intro.mjs
+// owns it. Scripts for new documents only run while the Page domain is enabled.
+await send('Page.addScriptToEvaluateOnNewDocument', { source: 'window.__ccNoIntro = true;' });
 await send('Emulation.setDeviceMetricsOverride', { width: 932, height: 430, deviceScaleFactor: 2, mobile: false });
 await send('Page.navigate', { url: `http://127.0.0.1:${appPort}/` });
 const ready = await until(`typeof cupMarker === 'function' && typeof startLocal === 'function' && !!window.Bay && S.connected === true`, 15000, 150);

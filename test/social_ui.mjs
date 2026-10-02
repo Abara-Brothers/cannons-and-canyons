@@ -76,6 +76,10 @@ const send = (method, params = {}) => new Promise((res, rej) => {
 });
 const ev = async (expr) => { const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error(r.exceptionDetails.text + ' ' + JSON.stringify(r.exceptionDetails.exception && r.exceptionDetails.exception.description)); return r.result.value; };
 await send('Page.enable'); await send('Runtime.enable');
+// The cold-start intro (public/intro.js) is off for this suite: it covers the bay
+// with a pointer-catching canvas for six seconds on a fresh load. test/intro.mjs
+// owns it. Scripts for new documents only run while the Page domain is enabled.
+await send('Page.addScriptToEvaluateOnNewDocument', { source: 'window.__ccNoIntro = true;' });
 
 // The copy, from its authorities, written with escapes so this file stays ASCII
 // — public/bay.js emits the entities &ndash; and &mdash;, and textContent gives
