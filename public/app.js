@@ -2280,14 +2280,36 @@ async function enableNativePings() {
       });
     });
     Push.addListener('registrationError', () => showToast('Could not enable nudges here'));
-    // Tapping a notification deep-links into whatever it names: the room of a
-    // turn nudge, or the squad of an invite. onPushTap is top level so it can be
-    // driven by test/deeplink.mjs; this line is the whole registration.
-    Push.addListener('pushNotificationActionPerformed', (a) => onPushTap(a && a.notification && a.notification.data && a.notification.data.url));
+    // removeAllListeners() above cleared EVERY listener on the plugin, boot's
+    // tap listener included, so it goes back on here through the one function
+    // that adds it: exactly one tap listener after this, never none, never two.
+    listenForPushTaps(Push);
     await Push.register();
   } catch {
     showToast('Could not enable nudges here');
   }
+}
+
+// THE NOTIFICATION TAP'S LISTENER, and the only place it is added. Tapping a
+// notification deep-links into whatever it names: the room of a turn nudge, or
+// the squad of an invite. onPushTap is top level so test/deeplink.mjs can drive
+// it; this is the whole registration.
+//
+// BOOT ADDS IT on every native launch, not only the Nudges button. Android's
+// PushNotificationsPlugin fires pushNotificationActionPerformed with
+// retainUntilConsumed=true, and BridgeActivity.onCreate replays the launch
+// intent through it, so the tap that started or resumed the app is HELD until
+// the first listener for that event is added, and delivered then. While the
+// only addListener lived inside enableNativePings, a tap reached the game only
+// in a session where the player had pressed Nudges first; every other tap
+// opened the app and went nowhere. Every page load also clears the plugin's
+// listeners (BridgeWebViewClient.onPageStarted resets the bridge), so even that
+// session lost it at the next "Leave game".
+//
+// Adding a listener asks for nothing: no permission prompt and no register().
+// Those stay behind the Nudges button, where the player asked for them.
+function listenForPushTaps(Push) {
+  Push.addListener('pushNotificationActionPerformed', (a) => onPushTap(a && a.notification && a.notification.data && a.notification.data.url));
 }
 
 let pendingIntent = null;
@@ -2302,7 +2324,9 @@ function flushIntent() { if (pendingIntent) { sendMsg(pendingIntent); pendingInt
 //     window -- a full page load, so the code arrives through boot's own read
 //     of the URL and this file needs nothing extra for it;
 //   * Capacitor's pushNotificationActionPerformed, which does NOT navigate. It
-//     hands the url to the LIVE page, where boot ran hours ago.
+//     hands the url to the LIVE page: one that booted hours ago, or, for the
+//     tap that launched the app, one that booted a moment ago and is still
+//     acting on its own claim.
 // One parser serves all three; only the third needs an arbiter of its own, and
 // that is onPushTap below.
 //
@@ -2364,6 +2388,15 @@ function deepLink(u) {
 // of room-engine.js (startLocal), which has no social code: a squad frame sent
 // there vanishes, and the reply's waiter would blame the account service twelve
 // seconds later. The code parks instead, and goes when the real socket is back.
+// AND NOT DOWN AN OPEN SOCKET WHOSE HELLO HAS NOT SETTLED. onopen sends the
+// resume and the parked intent at once, but sendHello awaits the session's
+// token before its frame goes, so for that moment the socket is open and is
+// still nobody. Boot's own call never meets that window (it runs while the
+// socket is still CONNECTING); the notification tap that launched the app can,
+// because the plugin hands it over on its own schedule. socialIntro() is
+// non-zero only once THIS socket's hello has settled, so that is the gate, not
+// readyState: a code that arrives in the window parks, and the same hook sends
+// it.
 //
 // The one code a player will enter through a link at a time, '' for none. The
 // Squad box is not told the answer: app.js's socialReply puts the roster a join
@@ -2387,7 +2420,7 @@ const SQUAD_LINK_ERR = {
 function joinSquadByCode(code) {
   const c = deepLinkCode(code);
   if (!c) return;
-  if (S.local || !S.ws || S.ws.readyState !== 1) { pendingSquadJoin = c; connect(); return; }
+  if (S.local || !socialIntro()) { pendingSquadJoin = c; connect(); return; }
   pendingSquadJoin = '';
   socialSend({ type: 'squad', op: 'join', code: c, name: myName(), skin: mySkin() }, (r) => {
     if (r && r.error) showToast(SQUAD_LINK_ERR[r.error] || 'That squad could not be joined right now. Try again later.');
@@ -2396,18 +2429,31 @@ function joinSquadByCode(code) {
 function flushSquadJoin(ws) { if (pendingSquadJoin && ws === S.ws) joinSquadByCode(pendingSquadJoin); }
 
 // The body of the native notification tap, named so a suite can drive the real
-// thing: the listener registration lives inside enableNativePings, behind the
-// Capacitor bridge, where no test can reach it.
+// thing; listenForPushTaps is the one line that hands it the url.
 //
 // THIS PATH DOES NOT NAVIGATE. sw.js's notificationclick calls c.navigate(url)
 // and the page boots again, so the web tap is arbitrated by boot's precedence;
-// Capacitor hands the data to this live page instead, where boot ran hours ago
-// and cc_resume is not the question -- S.playing is.
+// Capacitor hands the data to this live page instead. That page did not always
+// boot hours ago: the tap that LAUNCHED the app is held by the plugin until
+// boot adds the listener, so it lands a moment after boot(), while boot's own
+// claim is still being acted on. So it is arbitrated against live state, in
+// boot's order:
+//   * a match in progress outranks a notification, and says so;
+//   * A HELD SEAT BEATS IT, as it beats ?room= and ?squad= in boot. A resume
+//     record with no room open is exactly when connect()'s onopen sends a
+//     resume (its own predicate, less the S.playing already ruled out), and
+//     the record lives until that resume is answered: 'restore' makes
+//     S.playing true, 'resumeError' clears it. A join for another room sent
+//     behind that resume would cost the player the held seat, and a squad join
+//     would land on top of the match it restores. The tap is DROPPED, not
+//     queued, for the reason boot gives; and when the held seat IS the tap's
+//     room (an async duel's turn nudge), the resume takes the player there.
 function onPushTap(url) {
   const link = deepLink(url);
   if (!link) return;
   if (link.code === S.code) return;              // already where the tap points
   if (S.playing) { showToast('Finish this match first'); return; }
+  if (!S.code && loadResume()) return;           // a held seat's resume is in flight, and it wins
   if (link.kind === 'room') {
     $('codeInput').value = link.code;
     intent({ type: 'join', code: link.code, name: myName(), skin: mySkin() });
@@ -8426,6 +8472,15 @@ function boot() {
     } else {
       joinSquadByCode(link.code);   // no timer: it parks until the socket's hello settles
     }
+  }
+  // THE FOURTH CLAIMANT: the notification tap that launched the app. The plugin
+  // holds it until this listener exists (listenForPushTaps) and delivers it a
+  // moment later, so it goes on LAST, once the three claims above are settled:
+  // BOOT_CLAIM is published and a held seat's resume is already promised by
+  // connect()'s onopen. onPushTap arbitrates against exactly that state.
+  if (IS_NATIVE) {
+    const Push = window.Capacitor.Plugins && window.Capacitor.Plugins.PushNotifications;
+    if (Push) listenForPushTaps(Push);
   }
 }
 boot();
