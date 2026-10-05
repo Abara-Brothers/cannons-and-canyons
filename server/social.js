@@ -2670,6 +2670,30 @@ export function createSocial({
     await pushBoth(ws.userId, from);
   }
 
+  // CANCEL, FOR A REQUEST THE CALLER SENT: the hand twin of D-BLOCK-5 J. When
+  // A blocks B and A's own pending request to B is the only row between them,
+  // the block deletes that request and B's panel is pushed without it. While
+  // no hand act did the same, a request vanishing from B's panel could only
+  // mean a block. Withdrawing deletes the same row and pushes both panels in
+  // the same order the block does (the caller's, then theirs), so B receives
+  // the same snapshot whichever of the two A did.
+  //
+  // Read from the caller's OWN outgoing requests and nothing else, and not
+  // gated on blocks, for decline's reason: it only deletes a row of the
+  // caller's. Nothing about the other player is read before the answer, so a
+  // withdraw aimed at someone who blocked the caller (whose block took the
+  // request with it) answers what a request that never existed answers, at
+  // the same cost. A malformed `to` is in no list, so it is answered the same
+  // way too.
+  async function friendWithdraw(ws, msg) {
+    const to = wireId(msg.to);
+    const reqs = await store.requestsOf(ws.userId);
+    if (!to || !reqs.outgoing.includes(to)) return friendReply(ws, msg, 'withdraw', { error: 'no_such_request' });
+    await store.deleteRequest(ws.userId, to);
+    friendReply(ws, msg, 'withdraw', { ok: true });
+    await pushBoth(ws.userId, to);
+  }
+
   // Design 4.2 names this parameter `id`, which is also the correlation key the
   // contract echoes — for `remove` they are deliberately the same value, so the
   // echo comes back as the removed friend's uuid. A client must therefore match
@@ -2684,10 +2708,11 @@ export function createSocial({
     await pushBoth(ws.userId, id);
   }
 
-  const FRIEND_OPS = { add: friendAdd, search: friendSearch, request: friendRequest, accept: friendAccept, decline: friendDecline, remove: friendRemove };
+  const FRIEND_OPS = { add: friendAdd, search: friendSearch, request: friendRequest, accept: friendAccept, decline: friendDecline, withdraw: friendWithdraw, remove: friendRemove };
   // Design 4.2: friend add/search/request, ten a minute per socket. accept,
-  // decline and remove act on a row already on the player's screen, cost one
-  // write each and cannot be aimed at a stranger, so they are not in the bucket.
+  // decline, withdraw and remove act on a row already on the player's screen,
+  // cost one write each and cannot be aimed at a stranger, so they are not in
+  // the bucket.
   const FRIEND_LIMITED = new Set(['add', 'search', 'request']);
 
   async function handleFriend(ws, msg) {
@@ -3069,7 +3094,8 @@ export function createSocial({
     await pushFriends(blocker);
     // ONLY WHEN THE BLOCK TOOK A ROW THEIR PANEL SHOWED (T6-R1-1): the
     // friendship, or a request either way. Then their panel really did
-    // change, and it is rebuilt as an unfriend or a decline rebuilds it.
+    // change, and it is rebuilt as an unfriend, a decline or (for the
+    // blocker's own request, D-BLOCK-5 J) a withdraw rebuilds it.
     // Otherwise nothing of theirs changed, and no hand act ever sends a
     // friends frame to a player whose panel did not change: beside a kick,
     // a leave or nothing at all, it would say they had been blocked. Rows

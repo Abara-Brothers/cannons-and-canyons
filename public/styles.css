@@ -2461,6 +2461,12 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .fsec{height:1px;background:rgba(140,168,214,.18);margin:calc(10 * var(--u)) 0 calc(8 * var(--u));flex:none}
   #bay .frl{margin-top:calc(2 * var(--u));overflow-y:auto;min-height:0}
   #bay .frl2{flex:1}
+  /* The requests the player SENT, one Cancel row each: two rows show and the
+     rest scroll. The friends list below takes only the height left over (its
+     flex basis is 0), so an uncapped run of these rows shrank it to nothing,
+     friends and the "No friends yet" line alike. The count line above the
+     rows says how many there are. */
+  #bay .frlo{max-height:calc(92 * var(--u))}
   #bay .pcd{display:flex;align-items:center;gap:calc(8 * var(--u));padding:calc(6 * var(--u)) calc(9 * var(--u));border-radius:calc(5 * var(--u));
      border:1px solid rgba(140,168,214,.22);background:rgba(16,21,31,.6);margin-top:calc(6 * var(--u));height:calc(40 * var(--u));flex:none}
   #bay .pcd .sn{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}

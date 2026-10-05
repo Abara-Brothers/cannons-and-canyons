@@ -1250,6 +1250,97 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   if (ec.length === 0) ok(`${V}: friends — leaving the screen and coming back clears the column errors with the lists`);
   else fail(`${V}: error survived re-entry ${JSON.stringify(ec)}`);
 
+  // ---- 27c. CANCEL, FOR A REQUEST YOU SENT (op 'withdraw', the hand twin of
+  //      D-BLOCK-5 J). The count line stays and each request sits beneath it
+  //      as a row with Cancel and the player menu; the tap sends exactly
+  //      {friend, withdraw, to}; the row leaves on the server's panel push,
+  //      as an answered request does; and a refusal is said in column 2,
+  //      beside the requests, in this op's own words.
+  const ECHO = '44444444-4444-4444-8444-444444444444';
+  const outRows = () => ev(`(() => {
+    const col = document.querySelectorAll('#bay .fcol')[1];
+    const note = [...col.querySelectorAll('.fnote')].find((e) => /waiting for an answer/.test(e.textContent));
+    const list = col.querySelector('.frlo');
+    return {
+      note: note ? note.textContent.trim() : null,
+      after: !!(note && list && (note.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING)),
+      rows: list ? [...list.querySelectorAll('.pcd')].map((c) => {
+        const b = c.querySelector('[data-fr^="wd:"]');
+        return { name: c.querySelector('.sn').textContent.trim(), fr: b && b.getAttribute('data-fr'), text: b && b.textContent.trim(),
+                 label: b && b.getAttribute('aria-label'), off: !!(b && b.disabled), menu: !!c.querySelector('[data-pmenu]'), dot: !!c.querySelector('.pdot') };
+      }) : null,
+      cancels: document.querySelectorAll('#bay [data-fr^="wd:"]').length,
+    };
+  })()`);
+  await arm(FSNAP.reqs);
+  let wo = await outRows();
+  if (wo.note === '1 request waiting for an answer.' && wo.after
+      && JSON.stringify(wo.rows) === JSON.stringify([{ name: 'Echo Five', fr: 'wd:' + ECHO, text: 'Cancel', label: 'Cancel request to Echo Five', off: false, menu: true, dot: false }]))
+    ok(`${V}: friends — a request you sent is a row under its count line, with Cancel (named for the player) and the menu`);
+  else fail(`${V}: outgoing rows ${JSON.stringify(wo)}`);
+  await arm(FSNAP.reqs, 'in', false);
+  wo = await outRows();
+  if (wo.rows && wo.rows.length === 1 && wo.rows[0].off === true) ok(`${V}: friends — with no connection Cancel is disabled`);
+  else fail(`${V}: outgoing rows offline ${JSON.stringify(wo)}`);
+  await arm(FSNAP.reqs);
+  await click(`#bay [data-fr="wd:${ECHO}"]`);
+  await sleep(60);
+  fq = await tx();
+  if (fq.length === 1 && fq[0].type === 'friend' && fq[0].op === 'withdraw' && fq[0].to === ECHO && fq[0].id != null && Object.keys(fq[0]).sort().join() === 'id,op,to,type')
+    ok(`${V}: friends — Cancel sends {friend, withdraw, to}`);
+  else fail(`${V}: withdraw frame ${JSON.stringify(fq)}`);
+  await answer(`(fv) => fv.type === 'friend' && fv.op === 'withdraw'`, { type: 'friend', op: 'withdraw', ok: true });
+  await ev(`(() => { handle({ type: 'friends', friends: [], requests: { in: [{ id: '33333333-3333-4333-8333-333333333333', callsign: 'Dune Four' }], out: [] }, blocked: [], friendCode: 'ABC234', callsign: 'Anvil Six' }); return true; })()`);
+  await sleep(60);
+  wo = await outRows();
+  fv = await scr();
+  if (wo.cancels === 0 && wo.rows === null && wo.note === null && !fv.cards.includes('Echo Five') && fv.cards.includes('Dune Four') && (await errCols()).length === 0)
+    ok(`${V}: friends — the row and its count line leave on the panel push, the incoming request stays, and nothing is said`);
+  else fail(`${V}: outgoing row after the push ${JSON.stringify({ wo, cards: fv.cards })}`);
+  for (const [code, words] of [['no_such_request', 'That request is already gone.'], ['unavailable', 'Friends are not available right now. Try again later.']]) {
+    await arm(FSNAP.reqs);
+    await click(`#bay [data-fr="wd:${ECHO}"]`);
+    await answer(`(fv) => fv.type === 'friend' && fv.op === 'withdraw'`, { type: 'friend', op: 'withdraw', error: code });
+    ec = await errCols();
+    wo = await outRows();
+    if (ec.length === 1 && ec[0].col === 1 && ec[0].text === words && wo.rows && wo.rows.length === 1)
+      ok(`${V}: friends — a refused Cancel (${code}) is said in column 2, beside the requests, and the row stays until the panel says otherwise`);
+    else fail(`${V}: withdraw refusal ${code} ${JSON.stringify({ ec, wo })}`);
+  }
+  // SEVERAL SENT REQUESTS. The friends list below takes only the height left
+  // over, so the sent rows are capped at two and scroll: nothing overflows the
+  // frame, and at least one friend card stays in view. Measured here and, on
+  // the 667x375 pass, at 812x375 too (the iPhone X class landscape).
+  const MANY = `{friends:[{id:'11111111-1111-4111-8111-111111111111',callsign:'Bunker Nine',online:true},{id:'22222222-2222-4222-8222-222222222222',callsign:'Crater Two',online:false},{id:'66666666-6666-4666-8666-666666666666',callsign:'Fjord Six',online:false}],requests:{in:[{id:'33333333-3333-4333-8333-333333333333',callsign:'Dune Four'}],out:[${[1, 2, 3, 4, 5].map((n) => `{id:'4444444${n}-4444-4444-8444-444444444444',callsign:'Sent Number ${n}'}`).join(',')}]},blocked:[],friendCode:'ABC234',callsign:'Anvil Six'}`;
+  const manyGeo = () => ev(`(() => {
+    const body = document.querySelector('#bay .pbody').getBoundingClientRect();
+    const cols = document.querySelector('#bay .cols').getBoundingClientRect();
+    const bay = document.querySelector('#bay');
+    const col = document.querySelectorAll('#bay .fcol')[1];
+    const out = col.querySelector('.frlo'), fl = col.querySelector('.frl2'), card = out && out.querySelector('.pcd');
+    const step = card ? card.getBoundingClientRect().height + parseFloat(getComputedStyle(card).marginTop) : 0;
+    return { inBody: cols.bottom <= body.bottom + 1 && cols.right <= body.right + 1,
+             colOverflow: [...document.querySelectorAll('#bay .fcol')].filter((e) => e.scrollHeight > e.clientHeight + 1).length,
+             page: [bay.scrollWidth > bay.clientWidth, bay.scrollHeight > bay.clientHeight],
+             rows: out ? out.querySelectorAll('.pcd').length : 0, scrolls: !!(out && out.scrollHeight > out.clientHeight + 1),
+             outH: out ? out.getBoundingClientRect().height : -1, step, friendsH: fl ? fl.getBoundingClientRect().height : -1 };
+  })()`);
+  const fitsMany = (g) => g.inBody && g.colOverflow === 0 && !g.page[0] && !g.page[1] && g.rows === 5 && g.scrolls
+    && g.outH <= 2 * g.step + 1 && g.friendsH >= g.step;
+  await arm(MANY);
+  let mg = await manyGeo();
+  if (fitsMany(mg)) ok(`${V}: friends — five sent requests scroll inside two rows, nothing overflows, and the friends list keeps a card in view`);
+  else fail(`${V}: five sent requests geometry ${JSON.stringify(mg)}`);
+  if (V === '667x375') {
+    await send('Emulation.setDeviceMetricsOverride', { width: 812, height: 375, deviceScaleFactor: 2, mobile: true });
+    await arm(MANY);
+    mg = await manyGeo();
+    await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: w < 900 });
+    await arm(FSNAP.empty);
+    if (fitsMany(mg)) ok('812x375: friends — five sent requests scroll inside two rows, nothing overflows, and the friends list keeps a card in view');
+    else fail(`812x375: five sent requests geometry ${JSON.stringify(mg)}`);
+  }
+
   // ---- 28. search: the frame, 0 results, 1 result, Add friend, an error
   await arm(FSNAP.empty);
   await ev(`(() => { $('frQ').value = '  Crater Two '; return true; })()`);

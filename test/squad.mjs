@@ -8333,10 +8333,11 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   }
   {
     // (iii) EACH ROW THE PANEL SHOWED STILL PUSHES IT. B had asked A: B
-    // receives exactly what a kick and a decline send. A had asked B: B's
-    // panel is told the request has gone. No hand act withdraws a request,
-    // so this one has no twin; it names nothing, and D-BLOCK-5 J DECIDED it
-    // as an accepted residual. The second check pins that decision.
+    // receives exactly what a kick and a decline send. A had asked B: B
+    // receives exactly what a kick and a withdraw send. D-BLOCK-5 J first
+    // accepted that second push as a residual with no hand twin; the
+    // withdraw op (Cancel on a request you sent) is that twin, and the second
+    // check compares the two as the first compares a block with a decline.
     const bad = [];
     {
       const g = await world6(A, [B, C], []);
@@ -8357,11 +8358,18 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
       await g.st.addRequest(A, B);
       const g2 = up6(g.S, B);
       await g.S.handle(g.w[A], { type: 'block', op: 'add', id: B });
+      const t = await world6(A, [B, C], []);
+      await t.st.addRequest(A, B);
+      const t2 = up6(t.S, B);
+      await kick6(t, A, B);
+      await t.S.handle(t.w[A], { type: 'friend', op: 'withdraw', to: B });
+      const mine = seq6(g.mark, [g.w[B], g2, g.w[C]]), twin = seq6(t.mark, [t.w[B], t2, t.w[C]]);
       const fb = got6(g.w[B], 'friends'), fb2 = got6(g2, 'friends');
-      if (!(same6(got6(g.w[B], 'squad'), [KICKED6]) && fb.length === 1 && fb2.length === 1 && same6(fb[0].requests, { in: [], out: [] }) && same6(fb2[0].requests, { in: [], out: [] })))
-        bad.push({ rows: 'A asked B', b: g.w[B].rx, b2: g2.rx });
+      if (!(mine.length === 4 && same6(mine, twin) && same6(got6(g.w[B], 'squad'), [KICKED6]) && fb.length === 1 && fb2.length === 1
+          && same6(fb[0].requests, { in: [], out: [] }) && same6(fb2[0].requests, { in: [], out: [] })))
+        bad.push({ rows: 'A asked B', block: mine, kickWithdraw: twin });
     }
-    if (!bad.length) ok('(blk-v) a request either way still pushes the blocked player\'s panel: B\'s own request goes exactly as a kick and a decline send it, and A\'s request to B leaves B\'s panel too (the decided residual D-BLOCK-5 J)');
+    if (!bad.length) ok('(blk-v) a request either way still pushes the blocked player\'s panel: B\'s own request goes exactly as a kick and a decline send it, and A\'s request to B exactly as a kick and a withdraw send it (D-BLOCK-5 J\'s hand twin)');
     else fail('(blk-v) requests: ' + JSON.stringify(bad));
   }
   {

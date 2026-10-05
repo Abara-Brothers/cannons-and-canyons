@@ -2697,6 +2697,166 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     if (!bad.length) ok('(db4 ii) behind a request or a friendship that outlived the block, add and request still answer the block\'s way: your own is blocked, theirs a genuine miss, never already, never a friendship, and nothing is written');
     else fail('(db4 ii) block lines against already and the acceptance: ' + JSON.stringify(bad));
   }
+
+  // ---- (wd) withdraw: the hand twin of D-BLOCK-5 J --------------------------
+  // When A blocks B and A's own pending request to B is the only row between
+  // them, the block deletes that request and B's panel is pushed without it.
+  // While no hand act did the same, a request vanishing from B's panel could
+  // only mean a block. Withdraw is that hand act, so (v) compares what B
+  // receives from each. The op reads the caller's own outgoing requests and
+  // nothing else: it is not gated on blocks, and nothing about the other
+  // player is read, so a withdraw aimed at someone who blocked the caller
+  // answers and costs what a genuine miss does (iv).
+  const WD_WRITES = new Set(['addFriendship', 'removeFriendship', 'addRequest', 'deleteRequest', 'addBlock', 'removeBlock']);
+  {
+    // (i) THE ROW GOES, AND BOTH PANELS ARE TOLD. The caller is answered ok
+    // with its id echoed, then every device of the caller and the other
+    // player is pushed a snapshot without the request. An upper-case id off
+    // the wire is the same account. Someone else's request to B is kept.
+    const st = memStore(ROWS);
+    await st.addRequest(A, B);
+    await st.addRequest(C, B);
+    const S = mkSocial(st);
+    const wa = mkws(A), wa2 = mkws(A), wb = mkws(B);
+    S.onAuth(wa); S.onAuth(wa2); S.onAuth(wb);
+    await sleep(60);
+    wa.rx.length = 0; wa2.rx.length = 0; wb.rx.length = 0; st.calls.length = 0;
+    await S.handle(wa, { type: 'friend', op: 'withdraw', to: B.toUpperCase(), id: 'w1' });
+    if (same(sent(wa, 'friend'), [{ type: 'friend', op: 'withdraw', ok: true, id: 'w1' }]) && wa.rx[0] && wa.rx[0].type === 'friend')
+      ok('(wd) withdraw: answered ok with the id echoed, ahead of the snapshot');
+    else fail('(wd) withdraw answer: ' + JSON.stringify(wa.rx));
+    if (same([...st.requests], [C + '>' + B]) && same(st.calls.filter((c) => WD_WRITES.has(c)), ['deleteRequest']))
+      ok('(wd) withdraw: the caller\'s request is the one row deleted, and someone else\'s request to the same player is kept');
+    else fail('(wd) withdraw rows: ' + JSON.stringify({ rows: [...st.requests], calls: st.calls }));
+    const fa = sent(wa, 'friends'), fa2 = sent(wa2, 'friends'), fb = sent(wb, 'friends');
+    if (fa.length === 1 && fa2.length === 1 && fb.length === 1
+        && same(fa[0].requests, { in: [], out: [] }) && same(fa2[0].requests, { in: [], out: [] })
+        && same(fb[0].requests, { in: [{ id: C, callsign: 'Crater Two' }], out: [] }) && fb[0].id === undefined)
+      ok('(wd) withdraw: every device of the caller, and the other player, is pushed a snapshot without the request');
+    else fail('(wd) withdraw pushes: ' + JSON.stringify({ a: fa, a2: fa2, b: fb }));
+  }
+  {
+    // (ii) EVERY MISS IS no_such_request. It costs the caller's one read and
+    // no write, and pushes nobody: an id nobody holds, B's own request to A
+    // (not A's to withdraw), someone else's request, a request A already
+    // withdrew, A's own id, and ids that are not ids at all.
+    const st = memStore(ROWS);
+    await st.addRequest(B, A);
+    await st.addRequest(C, D);
+    await st.addRequest(A, E);
+    const S = mkSocial(st);
+    const wa = mkws(A), wb = mkws(B), wd = mkws(D), we = mkws(E);
+    for (const w of [wa, wb, wd, we]) S.onAuth(w);
+    await S.handle(wa, { type: 'friend', op: 'withdraw', to: E });
+    await sleep(60);
+    const keep = JSON.stringify([...st.requests]);
+    const bad = [];
+    const MISSES = [['unknown', uid(99)], ['their request to me', B], ['someone else\'s', D], ['already withdrawn', E], ['self', A],
+      ['not a uuid', 'not-a-uuid'], ['empty', ''], ['absent', undefined], ['a number', 42], ['an object', { id: E }]];
+    for (const [what, to] of MISSES) {
+      for (const w of [wa, wb, wd, we]) w.rx.length = 0;
+      st.calls.length = 0;
+      const frame = { type: 'friend', op: 'withdraw', id: 'q' };
+      if (to !== undefined) frame.to = to;
+      await S.handle(wa, frame);
+      const got = { a: wa.rx, others: wb.rx.length + wd.rx.length + we.rx.length, calls: st.calls.slice(), rows: JSON.stringify([...st.requests]) };
+      if (!(same(got.a, [{ type: 'friend', op: 'withdraw', error: 'no_such_request', id: 'q' }]) && !got.others && same(got.calls, ['requestsOf']) && got.rows === keep))
+        bad.push({ what, ...got });
+    }
+    if (!bad.length) ok(`(wd) withdraw: all ${MISSES.length} misses (unknown, their request, someone else's, already withdrawn, self, malformed) answer no_such_request for one read, write nothing and push nobody`);
+    else fail('(wd) withdraw misses: ' + JSON.stringify(bad));
+  }
+  {
+    // (iii) NOT IN THE FRIEND BUCKET. A withdraw acts on a row already on the
+    // player's screen, as decline and remove do: twelve of them leave a
+    // search all ten of its turns, and one still goes through with the
+    // bucket empty.
+    const st = memStore(ROWS);
+    const S = mkSocial(st);
+    const wa = mkws(A), wb = mkws(B);
+    S.onAuth(wa); S.onAuth(wb);
+    for (let i = 0; i < 12; i++) await S.handle(wa, { type: 'friend', op: 'withdraw', to: B });
+    for (let i = 0; i < 10; i++) await S.handle(wa, { type: 'friend', op: 'search', q: 'nobody here' });
+    const spent = sent(wa, 'friend').filter((m) => m.error === 'slow_down').length;
+    await S.handle(wa, { type: 'friend', op: 'search', q: 'nobody here' });
+    const empty = (last(wa, 'friend') || {}).error === 'slow_down';
+    await st.addRequest(A, B);
+    await S.handle(wa, { type: 'friend', op: 'withdraw', to: B, id: 'late' });
+    const l = last(wa, 'friend') || {};
+    if (spent === 0 && empty && l.ok === true && l.id === 'late' && st.requests.size === 0)
+      ok('(wd) withdraw: not in the friend bucket — twelve spend nothing a search needs, and one still lands with the bucket empty');
+    else fail('(wd) withdraw bucket: ' + JSON.stringify({ spent, empty, l, rows: [...st.requests] }));
+  }
+  {
+    // (iv) B BLOCKED A, AND A WITHDRAWS. B's block took A's request with it,
+    // so the answer is a genuine miss, byte for byte and read for read: the
+    // caller's own requests, nothing about B, and nothing pushed to B. And a
+    // request that OUTLIVED B's block (a half-failed teardown) is withdrawn
+    // exactly as it would be with no block at all, up to the answer: the op
+    // reads nothing that could tell the two apart. `upto` is the store calls
+    // made before the answer went out.
+    const world = async (block, row) => {
+      const st = memStore(ROWS);
+      const upto = [];
+      const S = createSocial({ store: st, terms: [], now: () => CLOCK,
+        send: (ws, f) => { if (f.type === 'friend' && f.op === 'withdraw') upto.push(st.calls.slice()); ws.rx.push(f); } });
+      const wa = mkws(A), wb = mkws(B);
+      S.onAuth(wa); S.onAuth(wb);
+      if (block === 'op' || row) await S.handle(wa, { type: 'friend', op: 'request', to: B });
+      if (block === 'op') await S.handle(wb, { type: 'block', op: 'add', id: A });
+      if (block === 'row') await st.addBlock(B, A);
+      await sleep(60);
+      wa.rx.length = 0; wb.rx.length = 0; st.calls.length = 0;
+      await S.handle(wa, { type: 'friend', op: 'withdraw', to: B, id: 'q' });
+      return { a: JSON.stringify(wa.rx), b: wb.rx.length, upto: upto[0], all: st.calls.slice(), rows: [...st.requests] };
+    };
+    const blocked = await world('op', false), miss = await world(null, false);
+    if (blocked.a === JSON.stringify([{ type: 'friend', op: 'withdraw', error: 'no_such_request', id: 'q' }]) && blocked.a === miss.a
+        && same(blocked.all, ['requestsOf']) && same(miss.all, ['requestsOf']) && !blocked.b && !miss.b && !blocked.rows.length)
+      ok('(wd) withdraw: after B blocked A, A\'s withdraw is byte for byte a genuine miss, one read of A\'s own requests and nothing about B, and B is sent nothing');
+    else fail('(wd) withdraw after being blocked: ' + JSON.stringify({ blocked, miss }));
+    const outlived = await world('row', true), plain = await world(null, true);
+    if (outlived.a === plain.a && same(outlived.upto, ['requestsOf', 'deleteRequest']) && same(plain.upto, outlived.upto)
+        && outlived.b === plain.b && !outlived.rows.length && !plain.rows.length && JSON.parse(outlived.a)[0].ok === true)
+      ok('(wd) withdraw: a request that outlived B\'s block is withdrawn as it would be with no block — the same answer, the same reads before it');
+    else fail('(wd) withdraw of a request that outlived the block: ' + JSON.stringify({ outlived, plain }));
+  }
+  {
+    // (v) THE TWIN (D-BLOCK-5 J). A's request to B is the only row between
+    // them. In one world A blocks B; in the other A withdraws the request.
+    // B, on both devices, must receive the same frames in the same order: one
+    // snapshot each, without A's request, and nothing else. B's panel holds
+    // a friend who is online, a request each way and a block of B's own, so
+    // the snapshot compared is a full one. Each of B's sockets has a fixed
+    // unblock salt, so the two worlds key B's blocked list alike.
+    const world = async (act) => {
+      const st = memStore(ROWS);
+      await st.addRequest(A, B);
+      await st.addFriendship(B, C);
+      await st.addRequest(D, B);
+      await st.addRequest(B, E);
+      await st.addBlock(B, F);
+      const S = mkSocial(st);
+      const wa = mkws(A), wb = mkws(B), wb2 = mkws(B), wc = mkws(C);
+      wb.blockSalt = 'salt-one'; wb2.blockSalt = 'salt-two';
+      for (const w of [wa, wb, wb2, wc]) S.onAuth(w);
+      await sleep(60);
+      for (const w of [wa, wb, wb2, wc]) w.rx.length = 0;
+      await S.handle(wa, act === 'block' ? { type: 'block', op: 'add', id: B } : { type: 'friend', op: 'withdraw', to: B });
+      await sleep(60);
+      return { b: JSON.stringify([wb.rx, wb2.rx]), c: wc.rx.length, fb: sent(wb, 'friends'), a: wa.rx, rows: [...st.requests], blocks: [...st.blocks] };
+    };
+    const blk = await world('block'), wd = await world('withdraw');
+    const fb = blk.fb[0] || {};
+    if (blk.fb.length === 1 && same(fb.requests, { in: [{ id: D, callsign: 'Dune Four' }], out: [{ id: E, callsign: 'Echo Seven' }] })
+        && same(fb.friends, [{ id: C, callsign: 'Crater Two', online: true }]) && (fb.blocked || []).length === 1
+        && same(blk.rows, [D + '>' + B, B + '>' + E]) && same(wd.rows, blk.rows) && blk.blocks.includes(A + '>' + B))
+      ok('(wd) the J world: A\'s block takes A\'s request and pushes B one full snapshot without it');
+    else fail('(wd) J world: ' + JSON.stringify(blk));
+    if (blk.b === wd.b && !blk.c && !wd.c)
+      ok('(wd) the twin: B receives, on both devices, exactly the same frames from A\'s withdraw as from A\'s block (D-BLOCK-5 J)');
+    else fail('(wd) twin: ' + JSON.stringify({ block: blk.b, withdraw: wd.b, c: [blk.c, wd.c] }));
+  }
 }
 
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall social checks passed');

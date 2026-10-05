@@ -2054,6 +2054,9 @@ const SOC_ERR = {
   'friend.decline.no_such_request': 'That request is already gone.',
   'friend.decline.offline':      'Not connected. Try again in a moment.',
   'friend.decline._':            'Friends are not available right now. Try again later.',
+  'friend.withdraw.no_such_request': 'That request is already gone.',
+  'friend.withdraw.offline':     'Not connected. Try again in a moment.',
+  'friend.withdraw._':           'Friends are not available right now. Try again later.',
   'friend.remove.no_such_user':  'They are not on your friends list.',
   'friend.remove.offline':       'Not connected. Try again in a moment.',
   'friend.remove._':             'Friends are not available right now. Try again later.',
@@ -2457,19 +2460,29 @@ function frPeople(sn, on) {
   const reqRows = rin.map((p) => pcard(p, { dot: false, dis: !on,
     act: '<button class="sbtn" data-fr="acc:' + esc(p.id) + '"' + (on ? '' : ' disabled') + '>Accept</button>'
        + '<button class="sbtn" data-fr="dec:' + esc(p.id) + '"' + (on ? '' : ' disabled') + '>Ignore</button>' })).join('');
+  // A REQUEST THE PLAYER SENT CAN BE CANCELLED (op 'withdraw'), one row each
+  // under the line that counts them. It is the hand twin of a block that
+  // takes the blocker's own request (D-BLOCK-5 J): without it, a request
+  // vanishing from the other player's panel could only mean a block. The row
+  // leaves when the server pushes the panel without it, as an answered
+  // request does, so the tap needs no success word of its own.
+  const outRows = rout.map((p) => pcard(p, { dot: false, dis: !on,
+    act: '<button class="sbtn" data-fr="wd:' + esc(p.id) + '" aria-label="Cancel request to ' + (named(p) ? esc(p.callsign) : 'this player') + '"'
+       + (on ? '' : ' disabled') + '>Cancel</button>' })).join('');
   const rows = friends.map((p) => pcard(p, { dis: !on })).join('');
   // The requests a player must ANSWER and the ones they are waiting on belong
   // together, above the list. Left at the foot of the column the outgoing line
   // floated two hundred units under the last friend card, orphaned from the
   // thing it is about, because the list below it takes the spare height.
-  // Accept and Ignore are the controls in this column, so THIS is where their
-  // refusal is said — beside the request it answers, not in the search box two
-  // columns away.
+  // Accept, Ignore and Cancel are the controls in this column, so THIS is
+  // where their refusal is said — beside the requests, not in the search box
+  // two columns away.
   return (rin.length || rout.length
       ? '<span class="lbl">Requests' + (rin.length ? ' &middot; ' + rin.length : '') + '</span>'
         + (rin.length ? '<div class="frl">' + reqRows + '</div>' : '')
         + errLine(fr.perr)
-        + (rout.length ? '<p class="fnote">' + rout.length + ' request' + (rout.length === 1 ? '' : 's') + ' waiting for an answer.</p>' : '')
+        + (rout.length ? '<p class="fnote">' + rout.length + ' request' + (rout.length === 1 ? '' : 's') + ' waiting for an answer.</p>'
+          + '<div class="frl frlo">' + outRows + '</div>' : '')
         + '<div class="fsec"></div>'
       : errLine(fr.perr))
     + '<span class="lbl">Your friends &middot; ' + friends.length + '</span>'
@@ -2625,14 +2638,15 @@ function frAct(v) {
   if (op === 'share') return frShareCode(true);
   if (op === 'retry') return frRetry();
   // Add friend acts on the SEARCH RESULT, which is in column 1 under the search
-  // box — so its refusal belongs to `ferr`, where the card is. Accept and Ignore
-  // are column 2, Unblock is column 3.
+  // box — so its refusal belongs to `ferr`, where the card is. Accept, Ignore
+  // and Cancel are column 2, Unblock is column 3.
   if (op === 'req') return frOne({ type: 'friend', op: 'request', to: arg }, 'friend', 'request', 'friend.request', 'ferr', (m) => {
     fr.res = null;
     if (fn('showToast')) showToast(m.state === 'friends' ? 'You are now friends.' : 'Request sent.');
   });
   if (op === 'acc') return frOne({ type: 'friend', op: 'accept', from: arg }, 'friend', 'accept', 'friend.accept', 'perr', () => {});
   if (op === 'dec') return frOne({ type: 'friend', op: 'decline', from: arg }, 'friend', 'decline', 'friend.decline', 'perr', () => {});
+  if (op === 'wd') return frOne({ type: 'friend', op: 'withdraw', to: arg }, 'friend', 'withdraw', 'friend.withdraw', 'perr', () => {});
   if (op === 'unblock') return frOne({ type: 'block', op: 'remove', id: arg }, 'block', 'remove', 'block.remove', 'berr', () => {
     if (fn('showToast')) showToast('Unblocked.');
     gbRefresh();
