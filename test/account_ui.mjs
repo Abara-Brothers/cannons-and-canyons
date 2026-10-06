@@ -142,12 +142,22 @@ for (const [w, h] of [[667, 375], [932, 430]]) {
   // size the old check also read.
   const noJoin = await ev(`(() => { const u = (() => { const e = document.createElement('div'); e.style.cssText = 'position:absolute;width:calc(100 * var(--u))'; $('bay').appendChild(e); const w = e.getBoundingClientRect().width / 100; e.remove(); return w; })(); Bay.show('join'); const c = document.querySelector('#bay .top .chip'); const r = { scr: $('bay').dataset.scr, chip: c ? +(parseFloat(getComputedStyle(c).fontSize) / u).toFixed(1) : null, overlay: !!document.querySelector('#bay .jn'), bar: [...document.querySelectorAll('#bay .lbar button')].map((b) => b.textContent.trim()) }; Bay.show('home'); return r; })()`);
   if (noJoin.scr === 'home' && noJoin.chip === 12 && !noJoin.overlay && !noJoin.bar.some((t) => /Join code/.test(t)) && noJoin.bar.some((t) => /Launch/.test(t))) ok(`${V}: the join screen is gone -- an unknown name falls back to home, with no overlay and no Join code button`); else fail(`${V}: join leftovers ${JSON.stringify(noJoin)}`);
-  // 11. tap targets (owner, 2026-09-18): every header chip is 55u tall, the square
-  //     ones 55u wide, the header row 55u tall, and its bottom edge exactly 4u
-  //     above the mode boards — all on home only. Measured as a gap, not an
-  //     absolute y: the design frame is letterboxed at some viewports.
+  // 11. tap targets. CHANGED BY U5 (owner, 2026-10-06: the whole top row
+  //     "smaller, same height, touch area >= 44px"; it was 55u chips under a
+  //     55u row, 4u above the boards). Every header chip is 40u tall, the
+  //     square ones 40u wide, the header row 40u tall; the row stands
+  //     max(4u, 22px - 20u) below the top of the safe box (no insets here, so
+  //     the bay's own top) and the boards max(12u, 22px - 20u) below it -- all
+  //     on home only. The 44px targets themselves, read by hit-testing, are
+  //     test/home_fit.mjs's. Measured as a gap, not an absolute y: the design
+  //     frame is letterboxed at some viewports.
   const tap = await ev(`(() => { const u = (() => { const e = document.createElement('div'); e.style.cssText = 'position:absolute;width:calc(100 * var(--u))'; $('bay').appendChild(e); const w = e.getBoundingClientRect().width / 100; e.remove(); return w; })(); Bay.show('home'); const r = (el) => el.getBoundingClientRect(); const bay = r(document.querySelector('#bay .bay')); /* the design frame, letterboxed inside #bay at some sizes */ const top = r(document.querySelector('#bay .top')); const boards = r(document.querySelector('#bay .boards')); const chips = [...document.querySelectorAll('#bay .top .chip')]; return { n: chips.length, heights: chips.map((c) => +(r(c).height / u).toFixed(1)), sqWidths: chips.filter((c) => c.classList.contains('sq')).map((c) => +(r(c).width / u).toFixed(1)), topY: +((top.top - bay.top) / u).toFixed(1), topH: +(top.height / u).toFixed(1), gap: +((boards.top - top.bottom) / u).toFixed(1) }; })()`);
-  if (tap.n === 5 && tap.heights.every((h) => h === 55) && tap.sqWidths.length === 2 && tap.sqWidths.every((w) => w === 55) && tap.topH === 55 && tap.gap === 4) ok(`${V}: five header chips 55u tall (44pt on the phone), square ones 55u wide, header 55u tall, exactly 4u clear of the boards`); else fail(`${V}: tap targets ${JSON.stringify(tap)}`);
+  const uPx = await ev(`(() => { const e = document.createElement('div'); e.style.cssText = 'position:absolute;width:calc(1000 * var(--u))'; $('bay').appendChild(e); const w = e.getBoundingClientRect().width / 1000; e.remove(); return w; })()`);
+  const reach = Math.max(0, 22 - 20 * uPx) / uPx;            // the target's reach past a chip, in u
+  const wantTop = +Math.max(4, reach).toFixed(1), wantGap = +Math.max(12, reach).toFixed(1);
+  if (tap.n === 5 && tap.heights.every((h) => h === 40) && tap.sqWidths.length === 2 && tap.sqWidths.every((w) => w === 40) && tap.topH === 40
+    && Math.abs(tap.topY - wantTop) <= 0.1 && Math.abs(tap.gap - wantGap) <= 0.1) ok(`${V}: five header chips 40u tall, square ones 40u wide, header 40u tall, ${wantTop}u from the top and ${wantGap}u clear of the boards`);
+  else fail(`${V}: tap targets ${JSON.stringify({ ...tap, wantTop, wantGap })}`);
   // 11b. nothing on the home header, boards, stations or launch bar clips after the bump
   const clips = await ev(`(() => [...document.querySelectorAll('#bay .top *, #bay .boards .blab *, #bay .pnl *, #bay .lbar .ltg, #bay .lbar .rk')].filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.className))()`);
   if (clips.length === 0) ok(`${V}: no horizontal clipping in the header, board labels, stations or launch tags`); else fail(`${V}: clipped ${JSON.stringify(clips)}`);

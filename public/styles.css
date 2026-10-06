@@ -1862,9 +1862,10 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .chip.acc svg{width:calc(12 * var(--u));height:calc(12 * var(--u))}
   #bay .chip.acc svg + svg{margin-left:calc(-1 * var(--u))}
   #bay .chip.dim{color:#8494b8;border-style:dashed}
-  /* Bay controls, Account row: one line per linked provider. */
+  /* Bay controls, Account row: one line per linked provider, its mark 12u
+     beside the line's 13u words. */
   #bay .row .rd .acl{display:flex;align-items:center;gap:calc(5 * var(--u))}
-  #bay .row .rd .acl svg{width:calc(10 * var(--u));height:calc(10 * var(--u));fill:currentColor;flex:none}
+  #bay .row .rd .acl svg{width:calc(12 * var(--u));height:calc(12 * var(--u));fill:currentColor;flex:none}
 
   /* HOME TYPE SIZE (owner, 2026-09-18): the mono labels on the home screen ran
      7.5-9u, under 9 CSS px on a phone, and were hard to read. Only the home
@@ -1881,23 +1882,86 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay[data-scr=home] .bnf{font-size:calc(9 * var(--u))}
   #bay[data-scr=home] .ph{font-size:calc(10 * var(--u))}
   #bay[data-scr=home] .ltg{font-size:calc(10 * var(--u))}
-  /* HOME HEADER TAP TARGETS (owner, 2026-09-18, second pass: "go to 44pt"). On
-     the phone 1u = min((874 - 2*59) / 932, (402 - 21) / 430) ≈ 0.81pt once the
-     landscape safe-area insets are taken out, so 44pt is 55u. The five chips are
-     55u tall (square ones 55u wide), icons 22u, and the header row is 55u from
-     4u — its bottom edge at 59u. Everything below moves to make room, sizes
-     unchanged: the mode boards from 48u to 63u (4u clear of the header), the
-     two side panels from 162u to 174u (inline, in bay.js), and the launch bar
-     from 12u to 4u above the bottom of the frame (4u clear of the panels). The
-     chip text goes 10.5u -> 12u so it is not lost inside the larger chip. Home
-     only, like the sizes above. */
-  #bay[data-scr=home] .top{top:calc(4 * var(--u));height:calc(55 * var(--u))}
-  #bay[data-scr=home] .chip{height:calc(55 * var(--u));padding:0 calc(16 * var(--u));gap:calc(10 * var(--u));border-radius:calc(7 * var(--u));font-size:calc(12 * var(--u))}
-  #bay[data-scr=home] .chip svg{width:calc(22 * var(--u));height:calc(22 * var(--u))}
-  #bay[data-scr=home] .chip.sq{width:calc(55 * var(--u));padding:0}
-  #bay[data-scr=home] .chip.acc svg{width:calc(19 * var(--u));height:calc(19 * var(--u))}
-  #bay[data-scr=home] .boards{top:calc(63 * var(--u))}
-  #bay[data-scr=home] .lbar{bottom:calc(4 * var(--u))}
+  /* HOME REACHES BOTH SAFE EDGES (owner, 2026-10-06: the empty space under the
+     Launch ribbon). The design frame (.stage) is fitted to the safe box by
+     whichever axis is tighter and centred in it. An iPhone held sideways insets
+     both long sides for the Dynamic Island (~62pt each) and the bottom for the
+     home indicator (21pt), so the WIDTH limits: on an iPhone 17 the frame
+     stood ~17pt short of the safe box above and below, and ~40pt of bare
+     floor showed under the ribbon. --ht is that gap, the one the centring
+     leaves above the frame and again below it. Home now spans the whole safe
+     height and gets no wider (--u is unchanged): the top row and the mode
+     boards rise by --ht, the ribbon, the tank and its platform sink by it, and
+     the side panels and the battlefield window stretch across both, so the
+     spare height lands between the boards and the ribbon. The ribbon then
+     stands 4u above the safe bottom, never in the home-indicator strip.
+     THE .stage BOX ITSELF STAYS WHERE IT WAS, and only its contents move. The
+     cold-start intro (intro.js) paints its doors, the studio mark and the
+     beacons in that box's coordinates, and test/intro.mjs pins its frame 0 to
+     the iOS launch image; home's chrome it finds at runtime, so it deals that
+     in from wherever it now stands. Every other screen keeps the centred
+     frame: their columns are fixed heights, and stretching them is not this
+     fix.
+     CAPPED AT 140u, a little past the tallest landscape tablet (a 13-inch iPad
+     at 1366x1024 leaves 135u): every phone and tablet held sideways reaches
+     both edges, and a portrait iPad window, which would leave 450u, does not
+     stretch the side panels taller than the screen is wide. */
+  #bay[data-scr=home]{--ht:min(calc((var(--bay-ah) - 430 * var(--u)) / 2), calc(140 * var(--u)))}
+  /* THE TOP ROW (owner, 2026-10-06: "smaller, same height, touch area >= 44px";
+     it was 55u, 51 CSS px on an 874x402 page). The five chips are drawn 40u
+     tall, the square ones 40u wide, with 18u icons; the words stay 12u. 40u
+     is 37 CSS px there and 32pt on the phone, so each chip carries a
+     transparent layer (::after) that makes its target at least 44 CSS px
+     tall -- centred on it, reaching --te = max(0, 22px - 20u) above and below
+     -- and the square ones at least 44px wide as well. The layer is placed
+     from inside the chip's 1px border, so it adds that 1px back; sideways it
+     ends at the chip's own edges. The square ones' layer reaches LEFT only:
+     a layer past a chip's right edge is overflow, which test/account_ui.mjs
+     reads as clipped text. So a square chip stands max(9u, 45px - 40u) from
+     its neighbour -- the reach and a pixel more, because Chrome hit-tests a
+     layer at a fractional offset up to a pixel wide of where it is laid out
+     -- and no two targets share a pixel. The words in the wide chips
+     already make those wider than 44px.
+     The row stands --rt below the safe top: 4u, or --te where that is more,
+     so the whole of every target is on the screen. */
+  #bay[data-scr=home]{--te:max(0px, 22px - 20 * var(--u));--rt:max(calc(4 * var(--u)), var(--te))}
+  #bay[data-scr=home] .top{top:calc(var(--rt) - var(--ht));height:calc(40 * var(--u))}
+  #bay[data-scr=home] .chip{position:relative;height:calc(40 * var(--u));padding:0 calc(13 * var(--u));gap:calc(8 * var(--u));border-radius:calc(6 * var(--u));font-size:calc(12 * var(--u))}
+  #bay[data-scr=home] .chip svg{width:calc(18 * var(--u));height:calc(18 * var(--u))}
+  #bay[data-scr=home] .chip.sq{width:calc(40 * var(--u));padding:0;margin-left:max(0px, 45px - 49 * var(--u))}
+  #bay[data-scr=home] .chip.acc svg{width:calc(16 * var(--u));height:calc(16 * var(--u))}
+  #bay[data-scr=home] .chip::after{content:'';position:absolute;left:-1px;right:-1px;top:calc(50% - max(50% + 1px, 22px));height:max(100% + 2px, 44px)}
+  #bay[data-scr=home] .chip.sq::after{left:auto;width:max(100% + 2px, 44px)}
+  /* THE BOARDS COME UP UNDER THE ROW (owner: "the mode cards move up into the
+     space saved"). --bt is where they start, before --ht: under the row, and
+     then 12u below it -- the 10.8u an armed board rises (translateY -9u,
+     scale 1.04) and a little more, so no armed board ever reaches a chip --
+     or --te below it where that is more, so no target ever lies over a
+     resting board. That is 56u from the top of the safe box where the row
+     stands at 4u (874x402 and up), where it was 63u; a smaller phone's row
+     stands lower, to keep its targets on the screen, and the boards with it. */
+  #bay[data-scr=home]{--bt:calc(var(--rt) + 40 * var(--u) + max(calc(12 * var(--u)), var(--te)))}
+  #bay[data-scr=home] .boards{top:calc(var(--bt) - var(--ht))}
+  /* THE SIDE PANELS fill the height between the boards and the ribbon. They
+     start 115u below the boards' top -- the lowest corner of a tilted end
+     board, Duel's or Golf's, is 112.6u down -- and end 4u above the ribbon,
+     366u down the frame and --ht below that. The Squad box's list takes the
+     extra height (it scrolls); Bay stations spreads its three stations over
+     it: each grows to at most 60u (a larger target), and the gaps between
+     them open with the spare height to at most 20u, any rest staying under
+     the last one. Their left, right and width are inline in bay.js. */
+  #bay[data-scr=home] .pnl{top:calc(var(--bt) + 115 * var(--u) - var(--ht));height:calc(251 * var(--u) - var(--bt) + 2 * var(--ht))}
+  #bay[data-scr=home] .stn{display:flex;flex-direction:column}
+  #bay[data-scr=home] .stn .st{flex:1 1 auto;max-height:calc(60 * var(--u));
+     margin-top:clamp(calc(6 * var(--u)), calc(6 * var(--u) + var(--ht) / 3), calc(20 * var(--u)))}
+  /* THE TANK AND ITS PLATFORM stand on the ribbon's side: they sink by --ht
+     with it, the glow and the floor light with them. The battlefield window
+     behind them stretches from under the boards down to the same floor. (The
+     tank's own place on the platform is bay.js's stage(), its `sink`.) */
+  #bay[data-scr=home] .glow,#bay[data-scr=home] .spill,#bay[data-scr=home] .plat,
+  #bay[data-scr=home] .refl,#bay[data-scr=home] .tankw{margin-top:var(--ht)}
+  #bay[data-scr=home] .ap{top:calc(138 * var(--u) - var(--ht));height:calc(200 * var(--u) + 2 * var(--ht))}
+  #bay[data-scr=home] .lbar{bottom:calc(4 * var(--u) - var(--ht))}
 
   /* SERVICE RECORD TYPE SIZE (owner, 2026-09-18): the same step as home, a fifth
      up on the small mono text; names and the big numbers are untouched. The two
@@ -2461,7 +2525,15 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .row .rt{flex:1;min-width:0;display:block}
   #bay .row .rn2{display:block;font-family:Rajdhani,system-ui,sans-serif;font-size:calc(15 * var(--u));font-weight:600;
      text-transform:uppercase;letter-spacing:.03em;line-height:1;color:#eef3ff}
-  #bay .row .rd{display:block;font-size:calc(10.5 * var(--u));color:#7f8fb5;margin-top:calc(4 * var(--u));white-space:nowrap;overflow:hidden;
+  /* THE LINE UNDER EACH ROW (owner, 2026-10-06: "slightly larger, easily
+     legible"). 13u, the size the Squad box gives every word that is not a
+     name (9.3 CSS px at 667x375), where it was 10.5u (7.5px); and #b3c0de,
+     the bay's colour for words meant to be read (.phow, .gcd), where
+     #7f8fb5 was a label's: against #1b2436, the brightest stop of the page's
+     own background, that is 8.5:1 where it was 4.8:1. Every fixed sentence
+     still fits its row on one line at 667x375, and two linked accounts still
+     fit the 52u row. */
+  #bay .row .rd{display:block;font-size:calc(13 * var(--u));color:#b3c0de;margin-top:calc(4 * var(--u));white-space:nowrap;overflow:hidden;
      text-overflow:ellipsis}
   #bay .rk2{width:calc(56 * var(--u));height:calc(26 * var(--u));border-radius:calc(4 * var(--u));background:#161d2e;border:1px solid rgba(140,168,214,.24);
      position:relative;flex:none;transition:.18s}

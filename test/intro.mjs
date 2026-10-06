@@ -3,14 +3,17 @@
 // WHAT THIS PROVES. The owner's hard requirement is that the end of the intro
 // IS the menu: the last frame and the first frame of the dashboard are the
 // same picture, and that stays true when the dashboard changes. So the centre
-// of this suite is the seam, checked three ways that do not depend on knowing
+// of this suite is the seam, checked four ways that do not depend on knowing
 // what the dashboard looks like:
 //   - the canvas is fully transparent on every frame of the hand-off;
 //   - every element's computed style is identical in the last intro frame and
 //     after the intro has removed itself;
 //   - after the intro, a bay redraw (the morph re-asserts every attribute from
 //     the template) finds NOTHING to change, and the #bay subtree equals a load
-//     that never played the intro.
+//     that never played the intro;
+//   - every part of home stands in the last intro frame exactly where it stands
+//     after it -- including on an iPhone 17's safe areas, where home stretches
+//     to the safe box (U5, 2026-10-06) and the ribbon ends on its bottom.
 // Around that: no frame of the dashboard before the doors (A1), when it must
 // not play (A4-A6), skipping (A7), the menu redrawing itself mid-intro (A8), a
 // slow menu (A9), a dashboard element the intro has never seen (A10), leaving
@@ -112,7 +115,7 @@ const send = (method, params = {}, sessionId) => new Promise((resolve, reject) =
 //   Seam: computed style of every #bay element in the first frame at
 //       tp >= 5960, to compare with the same elements after the intro.
 const INSTR = `(() => {
-  const S = window.__t = { stageSeen: false, coverAtStage: null, a1Checks: 0, a1Fails: [], a3Frames: 0, a3Max: 0, seam: null, errors: 0, clicks: 0, revealOpacity: null };
+  const S = window.__t = { stageSeen: false, coverAtStage: null, a1Checks: 0, a1Fails: [], a3Frames: 0, a3Max: 0, seam: null, geo: null, errors: 0, clicks: 0, revealOpacity: null };
   addEventListener('error', () => { S.errors++; });
   addEventListener('unhandledrejection', () => { S.errors++; });
   document.addEventListener('click', () => { S.clicks++; });
@@ -131,6 +134,20 @@ const INSTR = `(() => {
     S.coverAtStage = cv ? alphaRange(cv)[0] : -1;
   }).observe(document, { childList: true, subtree: true });
   const PROPS = ['opacity', 'translate', 'scale', 'filter', 'clip-path', 'visibility', 'transform'];
+  // Geometry: where the menu's parts stand, in CSS px. The chrome and the
+  // boards by their drawn boxes; the tank and its platform by their laid-out
+  // boxes, because the tank's idle bob moves its drawn box from frame to frame.
+  window.__geo = function () {
+    const R = (e) => { const b = e.getBoundingClientRect(); return [b.left, b.top, b.width, b.height].map((n) => Math.round(n * 100) / 100); };
+    const L = (e) => { let x = 0, y = 0; for (let n = e; n && n.id !== 'bay'; n = n.offsetParent) { x += n.offsetLeft; y += n.offsetTop; } return [x, y, e.offsetWidth, e.offsetHeight]; };
+    const all = (s) => Array.from(document.querySelectorAll('#bay .stage ' + s)), st = document.querySelector('#bay .stage');
+    return {
+      stage: st ? R(st) : null,
+      top: all('> .top').map(R), chips: all('.top .chip').map(R), cards: all('.boards .bcard').map(R),
+      pnl: all('> .pnl').map(R), lbar: all('> .lbar').map(R), ap: all('> .ap').map(R),
+      tankw: all('> .tankw').map(L), plat: all('> .plat').map(L),
+    };
+  };
   window.__snap = function () {
     return Array.from(document.querySelectorAll('#bay *')).map((el) => {
       const cs = getComputedStyle(el), anim = el.getAnimations ? el.getAnimations().length > 0 : false;
@@ -146,7 +163,7 @@ const INSTR = `(() => {
         S.revealOpacity = top ? Array.from(top.children).filter((c) => { const r = c.getBoundingClientRect(); return r.width >= 1 && r.height >= 1; }).map((c) => +getComputedStyle(c).opacity) : [];
       }
       if (I.tp >= 5955) { const r = alphaRange(cv); S.a3Frames++; if (r[1] > S.a3Max) S.a3Max = r[1]; }
-      if (I.tp >= 5960 && !S.seam) S.seam = window.__snap();
+      if (I.tp >= 5960 && !S.seam) { S.seam = window.__snap(); S.geo = window.__geo(); }
     }
     requestAnimationFrame(loop);
   }
@@ -235,6 +252,9 @@ const VIEWS = [
   { label: '390x844 rotation shim', w: 390, h: 844, dpr: 3 },
   { label: '844x390 notched 47/47/0/21', w: 844, h: 390, dpr: 3, insets: { left: 47, right: 47, top: 0, bottom: 21 } },
   { label: '844x390 asymmetric 32/0/0/0', w: 844, h: 390, dpr: 3, insets: { left: 32, right: 0, top: 0, bottom: 0 } },
+  // U5: an iPhone 17 held sideways, where home stretches to the safe box --
+  // the frame is width-limited and the ribbon goes down to 4u above 402 - 21.
+  { label: '874x402 iPhone 17 62/62/0/21', w: 874, h: 402, dpr: 3, insets: { left: 62, right: 62, top: 0, bottom: 21 }, stretched: true },
 ];
 let controlSubtree = {};
 for (const v of VIEWS) {
@@ -263,6 +283,28 @@ for (const v of VIEWS) {
   else T.seam.forEach((row, i) => { const a = after[i]; if (row[0] !== a[0] || row[1] !== a[1]) diffs.push(`#${i} ${row[0]}.${row[1]} became ${a[0]}.${a[1]}`); else if (row[2] && a[2] && JSON.stringify(row[2]) !== JSON.stringify(a[2])) diffs.push(`${row[0]}.${row[1]} ${JSON.stringify(row[2])} -> ${JSON.stringify(a[2])}`); });
   check(`[${v.label}] seam: every element computes the same in the last intro frame and after it`, diffs.length === 0, diffs.slice(0, 4).join('\n      '));
   check(`[${v.label}] seam: nothing in the menu starts a transition when the intro lets go`, (await p.ev(TRANSITIONS)).length === 0);
+  // U5: THE LAST FRAME STANDS WHERE THE LIVE MENU STANDS. The seam above
+  // compares styles; this compares where every part of home actually is --
+  // the top row, each chip, each board, both panels, the ribbon, the
+  // battlefield window, the tank and its platform -- in the intro's last
+  // frame and on the live menu after it, so a home that moved its parts (the
+  // stretched frame) is still handed over exactly.
+  const geoNow = await p.ev('window.__geo()');
+  const geoDiff = [];
+  if (!T.geo) geoDiff.push('no last-frame geometry');
+  else for (const k of Object.keys(geoNow)) {
+    const a = JSON.stringify(T.geo[k]), b = JSON.stringify(geoNow[k]);
+    const flat = (x) => [].concat(...(Array.isArray(x[0]) ? x : [x]));
+    if (!T.geo[k] || !geoNow[k] || T.geo[k].length !== geoNow[k].length) { if (a !== b) geoDiff.push(`${k}: ${a} vs ${b}`); continue; }
+    const fa = flat(T.geo[k]), fb = flat(geoNow[k]);
+    if (fa.some((n, i) => Math.abs(n - fb[i]) > 0.5)) geoDiff.push(`${k}: ${a} vs ${b}`);
+  }
+  check(`[${v.label}] geometry: the last intro frame's menu stands exactly where the live menu does`, geoDiff.length === 0 && geoNow.chips.length === 5 && geoNow.cards.length === 5, geoDiff.slice(0, 3).join('\n      '));
+  if (v.stretched && T.geo) {
+    const [lx, ly, lw, lh] = T.geo.lbar[0], st = T.geo.stage, tp = T.geo.top[0];
+    check(`[${v.label}] the intro ends on the stretched home: the ribbon 4u above the safe bottom (${(ly + lh).toFixed(1)} of ${v.h - v.insets.bottom}), the row and the ribbon outside the centred frame`,
+      Math.abs(ly + lh - (v.h - v.insets.bottom)) <= 4 && ly + lh <= v.h - v.insets.bottom && ly + lh > st[1] + st[3] + 10 && tp[1] < st[1] - 5, JSON.stringify({ lbar: T.geo.lbar[0], stage: st, top: tp }));
+  }
   const redraw = await p.ev(REDRAW_DIFF);
   check(`[${v.label}] A2 a redraw after the intro finds nothing to change`, redraw.length === 0, redraw.slice(0, 6).join(', '));
   const sub = await p.ev(SUBTREE);

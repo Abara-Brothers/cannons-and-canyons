@@ -335,17 +335,19 @@ function dust() {
   }
   return '<div class="deco">' + m + '</div>';
 }
-// The lit platform, the reflection, and the tank itself. o = {cx, cy, w} in design px.
+// The lit platform, the reflection, and the tank itself. o = {cx, cy, w} in design px,
+// and o.sink: how much lower the tank and its reflection stand on the platform
+// than everywhere else draws them (0 when absent).
 function stage(skinId, o) {
-  const w = o.w, h = Math.round(w * 246 / 300);
+  const w = o.w, h = Math.round(w * 246 / 300), sink = o.sink || 0;
   const pw = Math.round(w * 1.5), ph = Math.round(pw * 0.193);
   const src = tankURL(skinId, w);
   const img = (extra) => src ? '<img src="' + src + '" alt="Your tank" style="width:' + u(w) + '"' + (extra || '') + '>' : '';
   return '<div class="plat" style="left:' + u(o.cx - pw / 2) + ';top:' + u(o.cy - ph / 2) + ';width:' + u(pw) + ';height:' + u(ph) + '">'
     + '<span class="plate"></span><span class="platc"></span><span class="rim"></span>'
     + '<span class="ringw" style="left:0;top:' + u(Math.round((ph - pw) / 2)) + ';width:' + u(pw) + ';height:' + u(pw) + '"><span class="ring"></span></span></div>'
-    + '<div class="refl" style="left:' + u(o.cx - w / 2) + ';top:' + u(o.cy - 7) + ';width:' + u(w) + ';height:' + u(Math.round(h * 0.34)) + '">' + img(' alt=""') + '</div>'
-    + '<div class="tankw" style="left:' + u(o.cx - w / 2) + ';top:' + u(o.cy - 3 - h) + ';width:' + u(w) + '">' + img() + '</div>';
+    + '<div class="refl" style="left:' + u(o.cx - w / 2) + ';top:' + u(o.cy - 7 + sink) + ';width:' + u(w) + ';height:' + u(Math.round(h * 0.34)) + '">' + img(' alt=""') + '</div>'
+    + '<div class="tankw" style="left:' + u(o.cx - w / 2) + ';top:' + u(o.cy - 3 - h + sink) + ';width:' + u(w) + '">' + img() + '</div>';
 }
 
 /* ---- inner-page chrome: same room, different station ------------------------ */
@@ -629,7 +631,9 @@ const sqRequests = () => { const sn = snap(); return sn && sn.requests && Array.
 function sqPanel() {
   const n = sqCount(), inN = sqRequests();
   const label = 'Manage squad' + (inN > 0 ? ', ' + inN + ' friend request' + (inN === 1 ? '' : 's') + ' waiting' : '');
-  return '<div class="pnl sqx" style="left:' + u(18) + ';top:' + u(174) + ';width:' + u(196) + ';height:' + u(192) + '">'
+  // Its top and height are styles.css's (THE SIDE PANELS): they follow the
+  // height the home frame has to spare.
+  return '<div class="pnl sqx" style="left:' + u(18) + ';width:' + u(196) + '">'
     + '<div class="sqhd"><span class="sqhn">Squad</span>'
     +   '<span class="sqhc' + (n < 0 ? ' hidden' : '') + '"><span aria-hidden="true">' + (n < 0 ? '' : n + '/' + SQ_MAX) + '</span>'
     +     '<span class="sqvh">' + (n < 0 ? '' : ', ' + n + ' of ' + SQ_MAX) + '</span></span>'
@@ -3200,7 +3204,13 @@ SCREENS.home = function () {
     +   '<span class="aprib" style="left:' + u(120) + '"></span><span class="aprib" style="right:' + u(120) + '"></span>'
     +   '<span class="apstr" style="left:0"></span><span class="apstr" style="right:0"></span></div>'
     + '<div class="spill"></div><div class="glow"></div>'
-    + stage(s.skinId, { cx: 466, cy: 320, w: 204 })
+    // THE TANK STANDS ON ITS PLATFORM (owner, 2026-10-06: "sits lower, closer
+    // to the blue ring, no longer cut off by the mode cards"). Drawn 20u lower
+    // than the paint shop draws it, its tracks are inside the ring rather than
+    // on its far rim, and the top of the sprite -- the barrel's end -- stays
+    // clear of the boards' lowest edge at the top of its bob. Position only:
+    // the sprite, its size and drawTank are untouched (the design is locked).
+    + stage(s.skinId, { cx: 466, cy: 320, w: 204, sink: 20 })
     + '<div class="top">'
     +   '<div class="mark">Cannons <i>&amp;</i> Canyons<span>Abara Brothers &middot; Launch Bay</span></div>'
     +   '<div class="grow"></div>'
@@ -3212,7 +3222,7 @@ SCREENS.home = function () {
     + '</div>'
     + '<div class="boards">' + boards + '</div>'
     + sqPanel()
-    + '<div class="pnl" style="right:' + u(18) + ';top:' + u(174) + ';width:' + u(196) + ';height:' + u(192) + '"><div class="ph">Bay stations<s></s></div>' + stations + '</div>'
+    + '<div class="pnl stn" style="right:' + u(18) + ';width:' + u(196) + '"><div class="ph">Bay stations<s></s></div>' + stations + '</div>'
     + '<div class="lbar">'
     +   '<span class="lic">' + MODE_IC[m.id] + '</span>'
     +   '<span style="display:block"><span class="lnm">' + esc(m.name) + '</span><span class="ltg">' + esc(m.tag) + '</span></span>'

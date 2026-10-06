@@ -351,8 +351,14 @@ else
   # media-query rewrite (ISSUE-039, the iPad reflow) survivable. Also skips
   # cleanly without Chrome.
   run layout node test/layout.mjs
+  # The rules home's geometry must keep, which layout cannot say (owner,
+  # 2026-10-06): the ribbon on the safe bottom with an iPhone 17's safe areas
+  # emulated, one smaller top row with 44px targets, nothing over a board, the
+  # tank on its platform under every board, and the Bay controls line legible.
+  # Self-hosted on its own free ports. Skips without Chrome.
+  run home_fit node test/home_fit.mjs
   # The cold-start intro (public/intro.js): that its last frame IS the live
-  # menu at six viewports, whatever the menu currently looks like; skipping;
+  # menu at seven viewports, whatever the menu currently looks like; skipping;
   # the launches that must not play it; faults inside it; and that the iOS
   # launch image is still its frame 0. Self-hosted on its own free ports.
   # Skips without Chrome.

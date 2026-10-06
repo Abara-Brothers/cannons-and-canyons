@@ -161,6 +161,10 @@ const box = () => ev(`(() => {
   const cnt = p.querySelector('.sqhc'), mg = p.querySelector('.sqmg');
   return {
     geom: [Math.round((r.x - stg.x) / u), Math.round((r.y - stg.y) / u), Math.round(r.width / u), Math.round(r.height / u)],
+    // Where the box's neighbours stand, in the same units (U5: the box spans
+    // from under the boards to the ribbon, however tall the safe box is).
+    boardsTop: (document.querySelector('#bay .boards').getBoundingClientRect().y - stg.y) / u,
+    lbarTop: (document.querySelector('#bay .lbar').getBoundingClientRect().y - stg.y) / u,
     shape: [...p.children].map((c) => c.tagName + '.' + c.className),
     count: cnt && !cnt.classList.contains('hidden') ? cnt.firstElementChild.textContent : null,
     manage: mg ? { t: mg.firstChild.textContent, dis: mg.disabled, go: mg.getAttribute('data-go'), label: mg.getAttribute('aria-label'),
@@ -243,12 +247,20 @@ if (want('t8')) try {
     //      baseline (R7), so it is asserted here rather than left to that diff.
     //      CHANGED BY U4: its two children are the header and the list, where
     //      they were the tab bar and the panes.
+    //      CHANGED BY U5 (owner, 2026-10-06: home reaches the safe box's top
+    //      and bottom, and the boards came up under a smaller top row): the
+    //      slot was a fixed 18,174 196x192u. It is still the left slot, 196u
+    //      wide at 18u, but it now spans from 115u under the boards' top to 4u
+    //      above the ribbon -- 171u and 195u tall on a 932x430 page, taller
+    //      wherever the safe box has height to spare (667x375).
     const b1 = await box();
-    if (b1 && JSON.stringify(b1.geom) === '[18,174,196,192]' && JSON.stringify(b1.shape) === '["DIV.sqhd","DIV.sqb"]'
+    const slotOk = b1 && b1.geom[0] === 18 && b1.geom[2] === 196 && Math.abs(b1.geom[1] - (b1.boardsTop + 115)) <= 1
+      && Math.abs(b1.geom[1] + b1.geom[3] - (b1.lbarTop - 4)) <= 1 && b1.geom[3] >= 195;
+    if (slotOk && JSON.stringify(b1.shape) === '["DIV.sqhd","DIV.sqb"]'
         && JSON.stringify(b1.bayOver) === '[false,false]' && JSON.stringify(b1.over) === '[false,false]'
         && (await ev(`document.querySelector('#bay .pnl').classList.contains('sqx')`)))
-      ok(`${V}: the Squad box holds the left slot at 18,174 196x192u, a header and a list, and nothing overflows`);
-    else fail(`${V}: slot ${JSON.stringify(b1 && { geom: b1.geom, shape: b1.shape, over: b1.over, bayOver: b1.bayOver })}`);
+      ok(`${V}: the Squad box holds the left slot, ${b1.geom.join(',')}u: 115u under the boards to 4u above the ribbon, a header and a list, and nothing overflows`);
+    else fail(`${V}: slot ${JSON.stringify(b1 && { geom: b1.geom, boardsTop: b1.boardsTop, lbarTop: b1.lbarTop, shape: b1.shape, over: b1.over, bayOver: b1.bayOver })}`);
 
     // ---- 2. MANAGE OPENS THE WINDOW (U4; owner, 2026-10-06: "replace Invite
     //      friends with a button that opens a window to manage the squad").
