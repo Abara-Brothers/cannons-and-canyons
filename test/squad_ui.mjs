@@ -1387,121 +1387,135 @@ try {
     // ---- A1. THE LEADER'S FORMING BOX (design 5.1 state 3). Two of four, both
     //      ready, duel fits: rows with a DRAWN lamp, "(you)", Leader and the
     //      ready ticks, the dashed invite row carrying the code link, the Seats
-    //      line lit by `fits`, the mode readout and a live Start -- and the
+    //      line lit by `fits`, the mode readout and a live Ready -- and the
     //      one code field below the roster (D-UI-2).
+    //      CHANGED BY U3 (owner, 2026-10-06: every player readies, the leader
+    //      too, and nobody starts): the leader's row carries its own tick, as
+    //      every row does (it said only Leader since fix wave E9), and the
+    //      leader's footer has Ready where Start was. Start is gone.
     await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
     const a1 = await t9box();
     if (a1 && a1.rows.length === 2
-        && a1.rows[0].name === 'Dusty Crag' && a1.rows[0].you && a1.rows[0].lead && !a1.rows[0].tick && a1.rows[0].dot && a1.rows[0].lit  // no tick on the leader (fix wave E9)
+        && a1.rows[0].name === 'Dusty Crag' && a1.rows[0].you && a1.rows[0].lead && a1.rows[0].tick && a1.rows[0].dot && a1.rows[0].lit
         && a1.rows[1].name === 'Steel Mule' && !a1.rows[1].you && !a1.rows[1].lead && a1.rows[1].tick
         && a1.add && a1.invite && !a1.invite.dis && a1.link && a1.link.t === 'Code QK7T' && !a1.link.dis
         && JSON.stringify(a1.seats) === JSON.stringify(['Duel 2*', 'FFA 2–4*', 'Boss 1–2*', 'Aliens 1–2*', 'Golf 1–4*'])
-        && a1.line === 'Duel · 2' && a1.start && !a1.start.dis && a1.start.t === 'Start' && !a1.ready
+        && a1.line === 'Duel · 2' && !a1.start && a1.ready && !a1.ready.dis && a1.ready.t === 'Ready' && a1.ready.pressed === 'true'
         && a1.leave && !a1.leave.dis && a1.leave.t === 'Leave'
         && a1.codes === 1 && a1.codeInPane && a1.codeAfterRoster
         && !a1.ownLaunch && a1.probeInBar && a1.inside && !a1.bayOver && !a1.rows.some((r) => r.over))
-      ok(`${V}: leader forming -- rows with a drawn lamp, (you), Leader and ticks, the dashed invite row with the code link, the Seats line lit by fits, Start and Leave live, and the one code field below the roster`);
+      ok(`${V}: leader forming -- rows with a drawn lamp, (you), Leader and a tick on every ready row, the dashed invite row with the code link, the Seats line lit by fits, Ready (no Start) and Leave live, and the one code field below the roster`);
     else fail(`${V}: leader forming ${JSON.stringify(a1)}`);
     // The leader's Remove and the player menu are on the OTHER row only.
     if (a1 && a1.rows.length === 2 && !a1.rows[0].menu && !a1.rows[0].kick && a1.rows[1].menu && a1.rows[1].kick && !a1.rows[1].kick.dis && a1.rows[1].kick.v === 'kick:' + RID_MULE)
       ok(`${V}: the leader sees Remove and the player menu on every row but their own`);
     else fail(`${V}: leader row controls ${JSON.stringify(a1 && a1.rows.map((r) => ({ menu: r.menu, kick: r.kick })))}`);
 
-    // ---- A2. START REFUSED BY SEATS, BOTH WAYS (X6). Too big: three on a duel.
-    //      Too small: one on a free-for-all. The footer keeps the spec's
-    //      "<Mode> · seats N, squad M", which is true in both directions.
-    await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true }), T9PIKE({ ready: true })] });
+    // ---- A2. NO READY UP WHERE THE SEATS REFUSE, BOTH WAYS (X6). Too big:
+    //      three on a duel. Too small: one on a free-for-all. The footer keeps
+    //      the spec's "<Mode> · seats N, squad M", which is true in both
+    //      directions. CHANGED BY U3: the leader's dead control was Start; it is
+    //      the leader's own Ready now, dead for standing UP (sqUpWhy).
+    await t9state({ members: [T9YOU(), T9MULE({ ready: true }), T9PIKE({ ready: true })] });
     const a2 = await t9box();
-    await t9state({ mode: 'ffa', members: [T9YOU({ ready: true })] });
+    await t9state({ mode: 'ffa', members: [T9YOU()] });
     const a2s = await t9box();
-    if (a2 && a2.start && a2.start.dis && a2.line === 'Duel · seats 2, squad 3'
+    if (a2 && !a2.start && a2.ready && a2.ready.dis && a2.line === 'Duel · seats 2, squad 3'
         && JSON.stringify(a2.seats) === JSON.stringify(['Duel 2', 'FFA 2–4*', 'Boss 1–2', 'Aliens 1–2', 'Golf 1–4*'])
-        && a2s && a2s.start && a2s.start.dis && a2s.line === 'Free-for-all · seats 2–4, squad 1')
-      ok(`${V}: a squad too big or too small for the armed mode has a dead Start and a footer that says so`);
-    else fail(`${V}: seats refusal ${JSON.stringify({ big: a2 && { dis: a2.start && a2.start.dis, line: a2.line, seats: a2.seats }, small: a2s && { dis: a2s.start && a2s.start.dis, line: a2s.line } })}`);
+        && a2s && a2s.ready && a2s.ready.dis && a2s.line === 'Free-for-all · seats 2–4, squad 1')
+      ok(`${V}: a squad too big or too small for the armed mode has a dead Ready and a footer that says so`);
+    else fail(`${V}: seats refusal ${JSON.stringify({ big: a2 && { ready: a2.ready, line: a2.line, seats: a2.seats }, small: a2s && { ready: a2s.ready, line: a2s.line } })}`);
     // A2b. THE BOX READS `fits`, IT DOES NOT COUNT. Two members, which the seat
     //      table says fit a duel, and a frame that says they do not: the frame
     //      wins, because it is the one truth the boards read too.
-    await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })], fits: { duel: false, ffa: true, boss: true, aliens: true, golf: true } });
+    await t9state({ members: [T9YOU(), T9MULE({ ready: true })], fits: { duel: false, ffa: true, boss: true, aliens: true, golf: true } });
     const a2b = await t9box();
-    if (a2b && a2b.start && a2b.start.dis && a2b.line === 'Duel · seats 2, squad 2' && a2b.seats[0] === 'Duel 2')
-      ok(`${V}: Start and the Seats line follow the frame's fits, not a count of the rows`);
-    else fail(`${V}: fits not read ${JSON.stringify(a2b && { dis: a2b.start && a2b.start.dis, line: a2b.line, seats: a2b.seats })}`);
+    if (a2b && a2b.ready && a2b.ready.dis && a2b.line === 'Duel · seats 2, squad 2' && a2b.seats[0] === 'Duel 2')
+      ok(`${V}: Ready and the Seats line follow the frame's fits, not a count of the rows`);
+    else fail(`${V}: fits not read ${JSON.stringify(a2b && { ready: a2b.ready, line: a2b.line, seats: a2b.seats })}`);
 
-    // ---- A3. START REFUSED BY READINESS. One flag different from A1. And a
-    //      member who is DROPPED is not ready whatever their flag says (task 5:
-    //      a dropped row can arrive ready, readied from another device before
-    //      the drop): the row says Reconnecting, no tick, the lamp is dark.
+    // ---- A3. WAITING ON READINESS. One flag different from A1: the footer
+    //      counts the member it waits for, and the ready leader can still stand
+    //      down. And a member who is DROPPED is not ready whatever their flag
+    //      says (task 5: a dropped row can arrive ready, readied from another
+    //      device before the drop): the row says Reconnecting, no tick, the
+    //      lamp is dark, and nobody can ready up beside them.
+    //      CHANGED BY U3: this held the leader's Start; the leader readies now.
     await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: false })] });
     const a3 = await t9box();
-    await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true, dropped: true })] });
+    await t9state({ members: [T9YOU(), T9MULE({ ready: true, dropped: true })] });
     const a3d = await t9box();
-    if (a3 && a3.rows.length === 2 && a3d && a3d.rows.length === 2 && a3.start && a3.start.dis && a3.line === 'Waiting for 1' && a3.rows[1].state === 'Not ready' && !a3.rows[1].tick
-        && a3d && a3d.start && a3d.start.dis && a3d.line === 'Waiting for 1' && a3d.rows[1].state === 'Reconnecting' && !a3d.rows[1].tick && !a3d.rows[1].lit)
-      ok(`${V}: a member not ready, or dropped though marked ready, holds Start and the footer counts them`);
-    else fail(`${V}: readiness refusal ${JSON.stringify({ a3: a3 && { dis: a3.start && a3.start.dis, line: a3.line, row: a3.rows[1] }, a3d: a3d && { dis: a3d.start && a3d.start.dis, line: a3d.line, row: a3d.rows[1] } })}`);
+    if (a3 && a3.rows.length === 2 && a3d && a3d.rows.length === 2 && a3.ready && !a3.ready.dis && a3.ready.pressed === 'true' && a3.line === 'Waiting for 1' && a3.rows[1].state === 'Not ready' && !a3.rows[1].tick
+        && a3d && a3d.ready && a3d.ready.dis && a3d.line === 'Waiting for 1' && a3d.rows[1].state === 'Reconnecting' && !a3d.rows[1].tick && !a3d.rows[1].lit)
+      ok(`${V}: a member not ready, or dropped though marked ready, is counted on the footer; a ready leader can stand down, and nobody can ready up beside a dropped member`);
+    else fail(`${V}: readiness refusal ${JSON.stringify({ a3: a3 && { ready: a3.ready, line: a3.line, row: a3.rows[1] }, a3d: a3d && { ready: a3d.ready, line: a3d.line, row: a3d.rows[1] } })}`);
 
-    // ---- A4. THE RACK IS THE SQUAD MODE'S, NOT THE ARMED ONE'S. Five picks
-    //      fill a duel; a Boss Fight squad drafts seven, whatever mode this
-    //      device has armed on its own boards.
+    // ---- A4. THE RACK IS THE SQUAD MODE'S, NOT THE ARMED ONE'S, AND A SHORT
+    //      ONE NEVER STOPS A READY. CHANGED BY U3 (owner, 2026-10-06: a short
+    //      rack is filled with standard weapons, never a reason a start fails):
+    //      a short rack put the Armoury's "Pick N more" door where Start or
+    //      Ready stood (task 11, D-UI-3); now Ready is live and sends the
+    //      stored picks with the empty slots filled from the standard draft and
+    //      then the pool, and that rack is saved. Five picks fill a duel; a
+    //      Boss Fight squad drafts seven, whatever mode this device has armed
+    //      on its own boards. The leader readies here, as every player does.
+    const t9ready = async () => {
+      await clearTx(); await t9click('#bay [data-sq="ready"]'); await sleep(40);
+      const f = (await squads()).filter((x) => x.op === 'ready');
+      if (f.length) await reply({ op: 'ready', error: 'unavailable' });
+      return f;
+    };
+    const t9stored = () => ev(`JSON.parse(localStorage.getItem('cc_loadout'))`);
     await t9rack(['mortar', 'cluster', 'napalm']);
-    await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
-    const a4 = await t9box();
+    await t9state({ members: [T9YOU(), T9MULE({ ready: true })] });
+    const a4 = await t9box(), a4f = await t9ready(), a4s = await t9stored();
     await t9rack(FIVE);
-    await t9state({ mode: 'boss', members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
-    const a4b = await t9box();
-    // CHANGED BY TASK 11 (D-UI-3): a short rack's "Pick N more" is no longer a
-    // dead Start but the Armoury's door (data-sq="rack"), so "holds Start" is
-    // now asserted as NO Start at all -- and the door's live state and words.
-    if (a4 && !a4.start && a4.rack && !a4.rack.dis && a4.rack.t === 'Pick 2 more' && a4b && !a4b.start && a4b.rack && !a4b.rack.dis && a4b.rack.t === 'Pick 2 more'
-        && (await ev('ccMode')) === 'duel')
-      ok(`${V}: a rack short of the squad mode's draft offers no Start, and says how many more to pick on the Armoury's door`);
-    else fail(`${V}: short rack ${JSON.stringify({ a4: a4 && { start: a4.start, rack: a4.rack }, a4b: a4b && { start: a4b.start, rack: a4b.rack }, armed: await ev('ccMode') })}`);
+    await t9state({ mode: 'boss', members: [T9YOU(), T9MULE({ ready: true })] });
+    const a4b = await t9box(), a4bf = await t9ready(), a4bs = await t9stored();
+    const BOSS7 = FIVE.concat(['gas', 'buster']);
+    if (a4 && !a4.rack && !a4.start && a4.ready && !a4.ready.dis && a4f.length === 1 && a4f[0].ready === true && JSON.stringify(a4f[0].loadout) === JSON.stringify(FIVE)
+        && JSON.stringify(a4s) === JSON.stringify(FIVE)
+        && a4b && !a4b.rack && a4b.ready && !a4b.ready.dis && a4bf.length === 1 && JSON.stringify(a4bf[0].loadout) === JSON.stringify(BOSS7)
+        && JSON.stringify(a4bs) === JSON.stringify(BOSS7) && (await ev('ccMode')) === 'duel')
+      ok(`${V}: a rack short of the squad mode's draft readies anyway, filled with standard weapons and saved -- three to a duel's five, five to a Boss Fight's seven`);
+    else fail(`${V}: short rack ${JSON.stringify({ a4: a4 && { ready: a4.ready, rack: a4.rack }, a4f, a4s, a4b: a4b && { ready: a4b.ready, rack: a4b.rack }, a4bf, a4bs, armed: await ev('ccMode') })}`);
     // AND THE OTHER WAY ROUND: seven picks stored, Duel armed on this device, a
-    // Boss Fight squad. The rack is full for the squad's mode, so Start is live
-    // and carries all seven -- read against the armed mode it would be cut to
-    // five, and the leader could never start the mode their squad is in.
+    // Boss Fight squad. The rack is full for the squad's mode, so Ready carries
+    // all seven -- read against the armed mode it would be cut to five.
     const SEVEN = ['mortar', 'cluster', 'napalm', 'airstrike', 'volley', 'buster', 'gas'];
     await t9rack(SEVEN);
-    await t9state({ mode: 'boss', members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
-    const a4c = await t9box();
-    await clearTx(); await t9click('#bay [data-sq="start"]'); await sleep(40);
-    const a4f = await squads();
-    if (a4f.length) await reply({ op: 'start', error: 'capacity' });
+    await t9state({ mode: 'boss', members: [T9YOU(), T9MULE({ ready: true })] });
+    const a4c = await t9box(), a4cf = await t9ready();
     await t9rack(FIVE);
-    if (a4c && a4c.start && !a4c.start.dis && a4c.start.t === 'Start' && a4f.length === 1 && JSON.stringify(a4f[0].loadout) === JSON.stringify(SEVEN)
+    if (a4c && a4c.ready && !a4c.ready.dis && a4cf.length === 1 && JSON.stringify(a4cf[0].loadout) === JSON.stringify(SEVEN)
         && (await ev('ccMode')) === 'duel')
-      ok(`${V}: seven picks fill a Boss Fight squad's rack on a device armed on Duel, and Start carries all seven`);
-    else fail(`${V}: full seven-pick rack ${JSON.stringify({ start: a4c && a4c.start, sent: a4f })}`);
+      ok(`${V}: seven picks fill a Boss Fight squad's rack on a device armed on Duel, and Ready carries all seven`);
+    else fail(`${V}: full seven-pick rack ${JSON.stringify({ ready: a4c && a4c.ready, sent: a4cf })}`);
     // AND GOLF ASKS FOR NO RACK (owner, 2026-10-06: golf menus show the bag,
-    // never a weapon). One stored pick and a golf squad: the leader is offered
-    // Start, not "Pick 4 more", and a member Ready -- and each frame carries a
-    // full five, the stored pick first and then the standard draft, because the
-    // server still checks a golf seat's rack. The stored preference is untouched.
+    // never a weapon). One stored pick and a golf squad: the leader's Ready and
+    // a member's each carry a full five, the stored pick first and then the
+    // standard draft, because the server still checks a golf seat's rack --
+    // and the stored preference is untouched, since golf drafts nothing.
     const GOLF5 = ['buster', 'mortar', 'cluster', 'napalm', 'airstrike'];
     await t9rack(['buster']);
-    await t9state({ mode: 'golf', tees: 'mens', max: 2, members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
-    const a4g = await t9box();
-    await clearTx(); await t9click('#bay [data-sq="start"]'); await sleep(40);
-    const a4gf = await squads();
-    if (a4gf.length) await reply({ op: 'start', error: 'capacity' });
+    await t9state({ mode: 'golf', tees: 'mens', max: 2, members: [T9YOU(), T9MULE({ ready: true })] });
+    const a4g = await t9box(), a4gf = await t9ready();
     await t9state({ leader: T9_MULE, mode: 'golf', tees: 'mens', max: 2, members: [T9YOU({ ready: false }), T9MULE({ ready: true })] });
-    const a4gm = await t9box();
-    await clearTx(); await t9click('#bay [data-sq="ready"]'); await sleep(40);
-    const a4gr = await squads();
-    if (a4gr.length) await reply({ op: 'ready', error: 'unavailable' });
+    const a4gm = await t9box(), a4gr = await t9ready();
     const a4gStored = await ev(`localStorage.getItem('cc_loadout')`);
     await t9rack(FIVE);
     await ev(`(ccMode = 'duel', true)`);
-    if (a4g && !a4g.rack && a4g.start && !a4g.start.dis && a4gf.length === 1 && a4gf[0].op === 'start' && JSON.stringify(a4gf[0].loadout) === JSON.stringify(GOLF5)
-        && a4gm && !a4gm.rack && a4gm.ready && !a4gm.ready.dis && a4gr.length === 1 && a4gr[0].op === 'ready' && a4gr[0].ready === true
+    if (a4g && !a4g.rack && a4g.ready && !a4g.ready.dis && a4gf.length === 1 && JSON.stringify(a4gf[0].loadout) === JSON.stringify(GOLF5)
+        && a4gm && !a4gm.rack && a4gm.ready && !a4gm.ready.dis && a4gr.length === 1 && a4gr[0].ready === true
         && JSON.stringify(a4gr[0].loadout) === JSON.stringify(GOLF5) && a4gStored === '["buster"]')
-      ok(`${V}: a golf squad never asks for a rack: one stored pick still gives the leader Start and a member Ready, each sending a full five`);
-    else fail(`${V}: golf rack ${JSON.stringify({ lead: a4g && { rack: a4g.rack, start: a4g.start }, sent: a4gf, member: a4gm && { rack: a4gm.rack, ready: a4gm.ready }, readied: a4gr, stored: a4gStored })}`);
+      ok(`${V}: a golf squad never asks for a rack: one stored pick still gives the leader and a member a Ready, each sending a full five, the stored pick untouched`);
+    else fail(`${V}: golf rack ${JSON.stringify({ lead: a4g && { rack: a4g.rack, ready: a4g.ready }, sent: a4gf, member: a4gm && { rack: a4gm.rack, ready: a4gm.ready }, readied: a4gr, stored: a4gStored })}`);
 
     // ---- A5. THE MEMBER'S BOX (design 5.1 state 4): no Start, no Seats line,
     //      a cyan Ready toggle that carries its state as aria-pressed, Leave,
     //      and the sentence that names who decides. No Remove anywhere.
+    //      CHANGED BY U3: the sentence said the leader "picks the mode and
+    //      starts"; the leader picks the mode, and the last Ready starts it.
     await t9state({ leader: T9_MULE, members: [T9YOU({ ready: false }), T9MULE({ ready: true })] });
     const a5 = await t9box();
     await t9state({ leader: T9_MULE, members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
@@ -1509,20 +1523,21 @@ try {
     if (a5 && a5.rows.length === 2 && !a5.start && a5.ready && a5.ready.cy && !a5.ready.dis && a5.ready.pressed === 'false' && a5.ready.t === 'Ready'
         && a5.leave && !a5.leave.dis && a5.leave.t === 'Leave'
         && !a5.rows[0].lead && a5.rows[1].lead && a5.seats.length === 0 && !a5.rows.some((r) => r.kick)
-        && a5.note === 'Steel Mule picks the mode and starts. You will be placed in the room together.'
+        && a5.note === 'Steel Mule picks the mode. The match starts when everyone is ready.'
         && a5.line === 'Duel · 2'
         && a5r && a5r.ready && a5r.ready.pressed === 'true' && a5r.ready.t === 'Ready' && !a5r.ready.dis)
       ok(`${V}: member forming -- no Start, a cyan Ready toggle with its state in aria-pressed, Leave, the leader named, no Remove`);
     else fail(`${V}: member forming ${JSON.stringify({ a5, a5r: a5r && a5r.ready })}`);
     await t9rack(['mortar']);
     await t9state({ leader: T9_MULE, members: [T9YOU({ ready: false }), T9MULE({ ready: true })] });
-    const a5s = await t9box();
+    const a5s = await t9box(), a5sf = await t9ready();
     await t9rack(FIVE);
-    // CHANGED BY TASK 11 (D-UI-3), as A4: no Ready to stand up with, and the
-    // Armoury's door in its place.
-    if (a5s && !a5s.ready && a5s.rack && !a5s.rack.dis && a5s.rack.t === 'Pick 4 more' && a5s.leave && !a5s.leave.dis)
-      ok(`${V}: a member short of a full rack has no Ready to stand up with, is offered the Armoury, and can still leave`);
-    else fail(`${V}: member short rack ${JSON.stringify(a5s && { ready: a5s.ready, rack: a5s.rack, leave: a5s.leave })}`);
+    // CHANGED BY U3, as A4 (it was task 11's "Pick 4 more" door, D-UI-3): a
+    // member one pick short readies with the four empty slots filled.
+    if (a5s && a5s.ready && !a5s.ready.dis && !a5s.rack && a5s.leave && !a5s.leave.dis
+        && a5sf.length === 1 && JSON.stringify(a5sf[0].loadout) === JSON.stringify(['mortar', 'cluster', 'napalm', 'airstrike', 'volley']))
+      ok(`${V}: a member short of a full rack still has Ready, which fills the rack with standard weapons, and can leave`);
+    else fail(`${V}: member short rack ${JSON.stringify(a5s && { ready: a5s.ready, rack: a5s.rack, leave: a5s.leave, sent: a5sf })}`);
 
     // ---- A6. A FRAME THAT NAMES NO LEADER MUST NOT CROWN EVERY GUEST. A
     //      guest's id is null by construction, so a bare `p.id === leader`
@@ -1530,7 +1545,7 @@ try {
     await t9state({ leader: null, members: [T9YOU({ ready: true }), T9M({ guest: true }), T9M({ guest: true })] });
     const a6 = await t9box();
     if (a6 && a6.rows.length === 3 && a6.rows.filter((r) => r.lead).length === 0 && !a6.start
-        && a6.note === 'The squad leader picks the mode and starts. You will be placed in the room together.')
+        && a6.note === 'The squad leader picks the mode. The match starts when everyone is ready.')
       ok(`${V}: a squad with no named leader crowns nobody, guests included, and gives nobody Start`);
     else fail(`${V}: leaderless squad ${JSON.stringify(a6 && { lead: a6.rows.map((r) => r.lead), start: a6.start, note: a6.note })}`);
 
@@ -1569,9 +1584,10 @@ try {
       members: [${JSON.stringify(T9YOU({ ready: true }))}, ${JSON.stringify(T9MULE({ ready: true }))}], fits: ${JSON.stringify(t9fits(2))} }), true)`);
     await sleep(80);
     const a9 = await t9box();
-    if (a9 && a9.rows.length === 2 && a9.start && a9.start.dis && a9.rows[1].kick && a9.rows[1].kick.dis)
+    // CHANGED BY U3: the leader's control here was Start; it is Ready.
+    if (a9 && a9.rows.length === 2 && !a9.start && a9.ready && a9.ready.dis && a9.rows[1].kick && a9.rows[1].kick.dis)
       ok(`${V}: a roster that does not say held:true shows its rows with every squad control dead`);
-    else fail(`${V}: held gate ${JSON.stringify(a9 && { start: a9.start, kick: a9.rows[1] && a9.rows[1].kick })}`);
+    else fail(`${V}: held gate ${JSON.stringify(a9 && { ready: a9.ready, kick: a9.rows[1] && a9.rows[1].kick })}`);
 
     // ---- A10. THE ONE CODE FIELD UNDER A SQUAD (D-UI-2). It is the pane's
     //       seventh child in every squad state -- with a refused re-ask and
@@ -1600,14 +1616,14 @@ try {
       ok(`${V}: the code field keeps what was typed across a roster push, a refused re-ask and its Retry; under the refusal the squad is shown read-only, with no controls`);
     else fail(`${V}: code field under a squad ${JSON.stringify({ a10: a10 && a10.codeAt, kept1, a10r: a10r && { at: a10r.codeAt, rerr: a10r.rerr, retry: a10r.retry, foot: a10r.foot, add: a10r.add, rows: a10r.rows.length, summary: a10r.summary }, kept2, a10b: a10b && { at: a10b.codeAt, rerr: a10b.rerr, retry: a10b.retry, foot: a10b.foot }, kept3 })}`);
 
-    // ---- A11. START STAYS IN VIEW. Four members overflow the pane, and the
-    //       footer holding Start is pinned to its visible bottom rather than
-    //       scrolled out of reach.
+    // ---- A11. READY STAYS IN VIEW. Four members overflow the pane, and the
+    //       footer holding Ready (Start until U3) is pinned to its visible
+    //       bottom rather than scrolled out of reach.
     await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true }), T9PIKE({ ready: true }), T9M({ guest: true, ready: true })] });
     const a11 = await t9box();
-    if (a11 && a11.rows.length === 4 && !a11.add && a11.footIn === true && a11.start && a11.inside && !a11.rows.some((r) => r.over))
-      ok(`${V}: a full squad drops the invite row, and the footer holding Start stays inside the visible pane`);
-    else fail(`${V}: full squad ${JSON.stringify(a11 && { rows: a11.rows.length, add: a11.add, footIn: a11.footIn, start: a11.start })}`);
+    if (a11 && a11.rows.length === 4 && !a11.add && a11.footIn === true && a11.ready && a11.inside && !a11.rows.some((r) => r.over))
+      ok(`${V}: a full squad drops the invite row, and the footer holding Ready stays inside the visible pane`);
+    else fail(`${V}: full squad ${JSON.stringify(a11 && { rows: a11.rows.length, add: a11.add, footIn: a11.footIn, ready: a11.ready })}`);
     // ---- B1. READY SENDS ONE CORRELATED FRAME, WITH THE RACK, AND SAYS SO
     //      WHILE IT IS OUT. Standing down carries no rack: only standing up
     //      needs one (design 4.3). The server answers `ready` with its own op.
@@ -1652,9 +1668,11 @@ try {
     else fail(`${V}: leave ${JSON.stringify({ b2f, leave: b2 && b2.leave, text: b2t })}`);
     // ---- B2b. THE LEADER LEAVES TOO (D-UI-3). The same frame, the same answer:
     //      the server hands the lead to the earliest signed-in member (squads.js
-    //      detach; test/squad.mjs (h3)). While it is out Start is dead as well.
+    //      detach; test/squad.mjs (h3)). While it is out Ready is dead as well.
     //      And the heir's box follows the roster that names them: a member told
-    //      they now lead gets the leader's footer, Start and Leave.
+    //      they now lead gets the leader's Seats line in place of who decides.
+    //      CHANGED BY U3: the leader's footer had Start where a member's had
+    //      Ready; every footer has Ready and Leave now.
     await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
     await clearTx(); await t9click('#bay [data-sq="leave"]'); await sleep(60);
     const b2lf = await squads(), b2l = await t9box();
@@ -1666,29 +1684,37 @@ try {
     await t9state({ leader: ME, members: [T9YOU({ ready: true })] });            // Steel Mule left: the lead is ours
     const b2h = await t9box();
     if (b2lf.length === 1 && b2lf[0].op === 'leave' && typeof b2lf[0].id === 'number' && Object.keys(b2lf[0]).sort().join() === 'id,op,type'
-        && b2l && b2l.leave && b2l.leave.t === 'Leaving' && b2l.leave.dis && b2l.start && b2l.start.dis
+        && b2l && b2l.leave && b2l.leave.t === 'Leaving' && b2l.leave.dis && b2l.ready && b2l.ready.dis && !b2l.start
         && b2lt.includes('You left the squad.') && b2lslot === null
-        && b2h0 && !b2h0.start && b2h0.ready && b2h && b2h.start && b2h.leave && !b2h.leave.dis && !b2h.ready)
-      ok(`${V}: the leader's Leave sends the one leave frame, holds Start while it is out, and a member the roster names leader gets Start and Leave`);
-    else fail(`${V}: leader leave ${JSON.stringify({ b2lf, out: b2l && { leave: b2l.leave, start: b2l.start }, text: b2lt, slot: b2lslot, member: b2h0 && { start: b2h0.start, ready: b2h0.ready }, heir: b2h && { start: b2h.start, leave: b2h.leave, ready: b2h.ready } })}`);
+        && b2h0 && !b2h0.start && b2h0.ready && b2h0.seats.length === 0 && b2h0.note !== ''
+        && b2h && !b2h.start && b2h.ready && b2h.leave && !b2h.leave.dis && b2h.seats.length === 5 && b2h.note === '')
+      ok(`${V}: the leader's Leave sends the one leave frame, holds Ready while it is out, and a member the roster names leader gets the Seats line, Ready and Leave`);
+    else fail(`${V}: leader leave ${JSON.stringify({ b2lf, out: b2l && { leave: b2l.leave, ready: b2l.ready }, text: b2lt, slot: b2lslot, member: b2h0 && { start: b2h0.start, ready: b2h0.ready, note: b2h0.note }, heir: b2h && { start: b2h.start, leave: b2h.leave, ready: b2h.ready, seats: b2h.seats, note: b2h.note } })}`);
 
-    // ---- B3. START SENDS ONE FRAME WITH THE LEADER'S RACK (the server takes it
-    //      as the leader's Ready for this start), and the box says Rolling out
-    //      -- keeping every row on screen -- until the answer frees it.
-    await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
-    await clearTx(); await t9click('#bay [data-sq="start"]'); await sleep(60);
+    // ---- B3. THE LEADER READIES, AND NOTHING EVER SENDS START. CHANGED BY U3
+    //      (owner, 2026-10-06: "the leader does not need to initiate the game
+    //      start"): this pinned the leader's Start -- one frame with the rack,
+    //      Rolling out while it was out. The leader's Ready now sends the one
+    //      ready frame with the rack, reads Sending while it is out, and the
+    //      answer frees it; no frame of this client is ever a start.
+    await t9state({ members: [T9YOU(), T9MULE({ ready: true })] });
+    await clearTx(); await t9click('#bay [data-sq="ready"]'); await sleep(60);
     const b3f = await squads(), b3 = await t9box();
-    await reply({ op: 'start', ok: true, code: 'RM7Q' });
+    await reply({ op: 'ready', ok: true });
     const b3d = await t9box();
-    if (b3f.length === 1 && b3f[0].op === 'start' && JSON.stringify(b3f[0].loadout) === JSON.stringify(FIVE) && typeof b3f[0].id === 'number'
-        && b3 && b3.line === 'Rolling out' && b3.start && b3.start.dis && b3.rows.length === 2
-        && b3d && b3d.start && !b3d.start.dis && b3d.line === 'Duel · 2')
-      ok(`${V}: Start sends one frame with the rack, says Rolling out with the rows kept, and the answer frees the footer`);
-    else fail(`${V}: start ${JSON.stringify({ b3f, out: b3 && { line: b3.line, start: b3.start, rows: b3.rows.length }, back: b3d && { line: b3d.line, start: b3d.start } })}`);
+    if (b3f.length === 1 && b3f[0].op === 'ready' && b3f[0].ready === true && JSON.stringify(b3f[0].loadout) === JSON.stringify(FIVE) && typeof b3f[0].id === 'number'
+        && b3 && b3.ready && b3.ready.t === 'Sending' && b3.ready.dis && b3.rows.length === 2 && !b3.start
+        && b3d && b3d.ready && !b3d.ready.dis && b3d.line === 'Duel · 2')
+      ok(`${V}: the leader's Ready sends one ready frame with the rack, says Sending with the rows kept, and the answer frees the footer -- no Start anywhere`);
+    else fail(`${V}: leader ready ${JSON.stringify({ b3f, out: b3 && { line: b3.line, ready: b3.ready, rows: b3.rows.length }, back: b3d && { line: b3d.line, ready: b3d.ready } })}`);
 
-    // ---- B4. EVERY REFUSAL OF A START SAYS ITS OWN SENTENCE, frees the footer,
-    //      blames no connection for a server-side cause, and names nobody the
-    //      server did not point at. `at` names the roster row at fault on
+    // ---- B4. EVERY REFUSAL OF A START SAYS ITS OWN SENTENCE, blames no
+    //      connection for a server-side cause, and names nobody the server did
+    //      not point at. CHANGED BY U3: these were the answers to the leader's
+    //      own Start, which this client no longer sends; the same refusals now
+    //      reach EVERY member as a push (the countdown's end, or an old
+    //      leader's Start the seating refused, R6), and each is said on the
+    //      box's action line and on the ready control, with nothing sent. `at` names the roster row at fault on
     //      member_offline and member_busy only; a null callsign there is never
     //      rendered as a name ("No callsign isn't ready" would be nonsense).
     //      member_offline is also what a live row gets while the server checks
@@ -1717,15 +1743,15 @@ try {
     ];
     const b4bad = [];
     for (const [code, at, line] of says) {
-      await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true }), T9M({ id: NAMELESS, callsign: null, ready: true })],
-        mode: 'ffa', fits: t9fits(3) });
-      await clearTx(); await t9click('#bay [data-sq="start"]'); await sleep(40);
-      const sent = (await squads()).length;
-      await reply(at === undefined ? { op: 'start', error: code } : { op: 'start', error: code, at });
-      const bx = await t9box();
-      if (!(sent === 1 && bx && bx.aerr === line && bx.start && !bx.start.dis)) b4bad.push({ code, at, sent, aerr: bx && bx.aerr, start: bx && bx.start });
+      await t9state({ members: [T9YOU(), T9MULE(), T9M({ id: NAMELESS, callsign: null })], mode: 'ffa', fits: t9fits(3) });
+      await clearTx();
+      await ev(`(handle(${JSON.stringify(at === undefined ? { type: 'squad', op: 'start', error: code } : { type: 'squad', op: 'start', error: code, at })}), true)`);
+      await sleep(60);
+      const bx = await t9box(), sent = (await tx()).length;
+      const say = await ev(`(document.querySelector('#bay .lbar .launch .rdys') || {}).textContent || null`);
+      if (!(sent === 0 && bx && bx.aerr === line && say === line && bx.ready && !bx.ready.dis)) b4bad.push({ code, at, sent, aerr: bx && bx.aerr, say, ready: bx && bx.ready });
     }
-    if (!b4bad.length) ok(`${V}: all ${says.length} start refusals say their own sentence and free Start`);
+    if (!b4bad.length) ok(`${V}: all ${says.length} start refusals pushed to the squad say their own sentence on the box and on the ready control, and send nothing`);
     else fail(`${V}: start refusals ${JSON.stringify(b4bad)}`);
 
     // ---- B5. THE LATCH. socialTx answers SYNCHRONOUSLY when the socket is down,
@@ -1744,54 +1770,51 @@ try {
     else fail(`${V}: offline latch ${JSON.stringify({ sent: b5f.length, ready: b5 && b5.ready, aerr: b5 && b5.aerr })}`);
 
     // ---- B6. THE GATES ARE IN THE HANDLER, NOT IN THE ATTRIBUTE. Each of these
-    //      Starts and Readies is pressed with its disabled attribute stripped,
-    //      and none may reach the server: a squad the mode has no seats for, a
-    //      member not ready, a member dropped though ready, a short rack, a
-    //      roster this socket does not say it holds, and a squad under a
-    //      refused re-ask. The control run (B3) proves the same tap sends.
+    //      Readies is pressed with its disabled attribute stripped, and none may
+    //      reach the server: standing up in a squad the mode has no seats for,
+    //      in a squad of one, beside a dropped member, on a roster this socket
+    //      does not say it holds, and under a refused re-ask. The control run
+    //      (B3) proves the same tap sends.
+    //      CHANGED BY U3: these were the leader's Start gates (seats, readiness,
+    //      a dropped member) and a short rack's; Start is gone, a short rack
+    //      readies (A4), and so does the leader. What this client must never
+    //      send is a start, pressed on a button the render never drew.
     const b6 = {};
     const gate = async (name, setup, sel) => { await setup(); await clearTx(); await t9force(sel); await sleep(50); b6[name] = (await squads()).length; };
-    await gate('seats', () => t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true }), T9PIKE({ ready: true })] }), '#bay [data-sq="start"]');
-    await gate('notReady', () => t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: false })] }), '#bay [data-sq="start"]');
-    await gate('dropped', () => t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true, dropped: true })] }), '#bay [data-sq="start"]');
-    // CHANGED BY TASK 11 (D-UI-3): a short rack draws no Start and no Ready any
-    // more (its place is the Armoury's door), so a force-click on the old
-    // selector would find nothing and pass for that reason alone. The handler's
-    // own rack gate is pressed through a button the render never drew instead.
-    const short9 = async (name, setup, v) => { await setup(); await clearTx(); await t9press(v); await sleep(50); b6[name] = (await squads()).length; };
-    await short9('shortStart', async () => { await t9rack(['mortar']); await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] }); }, 'start');
-    await short9('shortReady', () => t9state({ leader: T9_MULE, members: [T9YOU({ ready: false }), T9MULE({ ready: true })] }), 'ready');
-    await t9rack(FIVE);
+    await gate('seats', () => t9state({ members: [T9YOU(), T9MULE({ ready: true }), T9PIKE({ ready: true })] }), '#bay [data-sq="ready"]');
+    await gate('alone', () => t9state({ mode: 'boss', members: [T9YOU()] }), '#bay [data-sq="ready"]');
+    await gate('dropped', () => t9state({ members: [T9YOU(), T9MULE({ ready: true, dropped: true })] }), '#bay [data-sq="ready"]');
     await gate('notHeld', async () => {
       await ev(`(handle({ type: 'squad', op: 'state', code: 'QK7T', leader: ${JSON.stringify(ME)}, mode: 'duel', tees: null, max: null, you: 0,
-        members: [${JSON.stringify(T9YOU({ ready: true }))}, ${JSON.stringify(T9MULE({ ready: true }))}], fits: ${JSON.stringify(t9fits(2))} }), true)`);
+        members: [${JSON.stringify(T9YOU())}, ${JSON.stringify(T9MULE({ ready: true }))}], fits: ${JSON.stringify(t9fits(2))} }), true)`);
       await sleep(60);
-    }, '#bay [data-sq="start"]');
+    }, '#bay [data-sq="ready"]');
     await gate('refused', async () => {
-      await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
+      await t9state({ members: [T9YOU(), T9MULE({ ready: true })] });
       await ev('sendHello(S.ws).then(() => true)'); await sleep(60);
       await reply({ error: 'unavailable' });
-    }, '#bay [data-sq="start"]');
+    }, '#bay [data-sq="ready"]');
     await clearTx(); await t9click('#bay [data-sq="retry"]'); await sleep(60);
     await reply({ op: 'state', code: 'QK7T', leader: ME, mode: 'duel', tees: null, max: null, you: 0, held: true,
       members: [T9YOU({ ready: true }), T9MULE({ ready: true })], fits: t9fits(2) });
-    // A MEMBER'S Start and a Leave on a roster this socket does not say it
-    // holds: buttons the render never draws, pressed through the real listener.
+    // A Start, a leader's or a member's, and a Leave on a roster this socket
+    // does not say it holds: buttons the render never draws, pressed through
+    // the real listener.
     const pressed = async (name, setup, v) => {
       await setup(); await clearTx();
       await ev(`(() => { const b = document.createElement('button'); b.setAttribute('data-sq', ${JSON.stringify(v)});
         document.getElementById('sqPane-squad').appendChild(b); b.click(); b.remove(); return true; })()`);
       await sleep(50); b6[name] = (await squads()).length;
     };
+    await pressed('leaderStart', () => t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] }), 'start');
     await pressed('memberStart', () => t9state({ leader: T9_MULE, members: [T9YOU({ ready: true }), T9MULE({ ready: true })] }), 'start');
-    await pressed('leaderReady', () => t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] }), 'ready');
     await pressed('leaveNotHeld', async () => {
       await ev(`(handle({ type: 'squad', op: 'state', code: 'QK7T', leader: ${JSON.stringify(T9_MULE)}, mode: 'duel', tees: null, max: null, you: 0,
         members: [${JSON.stringify(T9YOU({ ready: true }))}, ${JSON.stringify(T9MULE({ ready: true }))}], fits: ${JSON.stringify(t9fits(2))} }), true)`);
       await sleep(60);
     }, 'leave');
-    if (Object.keys(b6).length === 10 && Object.values(b6).every((n) => n === 0))
-      ok(`${V}: Start, Ready and Leave pressed past a dead attribute send nothing: seats, readiness, a dropped member, a short rack, an unheld roster, a refused re-ask, a member's Start, a leader's Ready`);
+    if (Object.keys(b6).length === 8 && Object.values(b6).every((n) => n === 0))
+      ok(`${V}: Ready and Leave pressed past a dead attribute send nothing -- seats, a squad of one, a dropped member, an unheld roster, a refused re-ask -- and a Start pressed by anyone sends nothing at all`);
     else fail(`${V}: handler gates ${JSON.stringify(b6)}`);
 
     // ---- B7. THE CODE LINK COPIES THE LINK, NOT THE CODE (design 4.4 / 5.7):
@@ -1977,20 +2000,21 @@ try {
     await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
     await invite({ code: 'RM8P', from: { callsign: 'Ridge Pike' }, size: 3 });
     const c7a = await t9box();
-    // Another action out (the leader's Start): Join waits for it (review
-    // T9-R1-8, N14) -- the box has one action at a time.
-    await clearTx(); await t9click('#bay [data-sq="start"]'); await sleep(40);
+    // Another action out (the leader's Ready -- the leader's Start until U3):
+    // Join waits for it (review T9-R1-8, N14) -- the box has one action at a
+    // time.
+    await clearTx(); await t9click('#bay [data-sq="ready"]'); await sleep(40);
     const c7busy = await t9box();
-    await reply({ op: 'start', error: 'refused' });
+    await reply({ op: 'ready', error: 'unavailable' });
     await clearTx(); await t9click('#bay [data-sq^="join:"]'); await sleep(40);
     const c7f = await squads();
     await reply({ op: 'join', error: 'full' });
     await invite({ code: 'QK7T' });
     const c7b = await t9box();
     if (c7a && c7a.inv && c7a.inv.t.indexOf('Ridge Pike') === 0 && c7a.rows.length === 2 && c7f.length === 1 && c7f[0].code === 'RM8P'
-        && c7b && !c7b.inv && c7busy && c7busy.line === 'Rolling out' && c7busy.inv && c7busy.inv.join && c7busy.inv.join.dis)
+        && c7b && !c7b.inv && c7busy && c7busy.ready && c7busy.ready.t === 'Sending' && c7busy.inv && c7busy.inv.join && c7busy.inv.join.dis)
       ok(`${V}: an invite while in another squad sits above it and joins the new one, and waits while another action is out; an invite to your own squad is not shown`);
-    else fail(`${V}: invite over a squad ${JSON.stringify({ a: c7a && { inv: c7a.inv, rows: c7a.rows.length }, busy: c7busy && { line: c7busy.line, inv: c7busy.inv }, sent: c7f, b: c7b && c7b.inv })}`);
+    else fail(`${V}: invite over a squad ${JSON.stringify({ a: c7a && { inv: c7a.inv, rows: c7a.rows.length }, busy: c7busy && { ready: c7busy.ready, inv: c7busy.inv }, sent: c7f, b: c7b && c7b.inv })}`);
 
     // ---- C8. AN INVITE BELONGS TO THE ACCOUNT IT WAS SENT TO. The same account
     //      again (a token refresh fires cc:account) keeps it; a sign-out drops it.
@@ -2041,7 +2065,7 @@ try {
     const d1c = await t9box(), d1cf = await squads();
     if (d1 && d1.line === 'Remove Steel Mule from the squad?' && d1.kok && !d1.kok.dis && d1.kok.t === 'Remove' && d1.kcancel && !d1.start
         && d1f.length === 0 && d1focus === 'kcancel'
-        && d1c && !d1c.kok && d1c.start && d1c.line === 'Duel · 2' && d1cf.length === 0)
+        && d1c && !d1c.kok && d1c.ready && d1c.line === 'Duel · 2' && d1cf.length === 0)   // Ready: Start until U3
       ok(`${V}: Remove asks "Remove Steel Mule from the squad?" with the keyboard on Cancel, and Cancel sends nothing`);
     else fail(`${V}: remove confirm ${JSON.stringify({ d1: d1 && { line: d1.line, kok: d1.kok, kcancel: d1.kcancel, start: d1.start }, sent: d1f, focus: d1focus, after: d1c && { kok: d1c.kok, line: d1c.line }, sent2: d1cf })}`);
 
@@ -2061,7 +2085,7 @@ try {
     const d2d = await t9box();
     if (d2f.length === 1 && d2f[0].op === 'kick' && d2f[0].rid === RID_MULE && typeof d2f[0].id === 'number' && !('i' in d2f[0])
         && d2 && d2.kok && d2.kok.t === 'Removing' && d2.kok.dis && d2.kcancel && d2.kcancel.dis && d2k && d2k.kok && d2k.kok.t === 'Removing'
-        && d2d && d2d.rows.length === 1 && !d2d.kok && d2d.start && d2d.aerr === '')
+        && d2d && d2d.rows.length === 1 && !d2d.kok && d2d.ready && d2d.aerr === '')   // Ready: Start until U3
       ok(`${V}: Remove names an account row by its rid, reads Removing while out, and the roster that answers it closes the question`);
     else fail(`${V}: kick by rid ${JSON.stringify({ d2f, out: d2 && { kok: d2.kok, kcancel: d2.kcancel }, back: d2d && { rows: d2d.rows.length, kok: d2d.kok, aerr: d2d.aerr } })}`);
 
@@ -2111,7 +2135,7 @@ try {
     await t9inject('kok'); await sleep(60);
     const d4xf = await squads(), d4xc = await t9box();
     if (d4xf.length) await reply({ op: 'kick', error: 'no_such_member' });   // an answer, so a red run does not cascade
-    if (d4x && !d4x.kok && d4x.start && d4xf.length === 0 && d4xc && d4xc.aerr === 'The squad changed. Check the list and try again.')
+    if (d4x && !d4x.kok && d4x.ready && d4xf.length === 0 && d4xc && d4xc.aerr === 'The squad changed. Check the list and try again.')   // Ready: Start until U3
       ok(`${V}: a guest's Remove is withdrawn when that guest goes, even with another guest in the same place, and a late Remove sends nothing and says why`);
     else fail(`${V}: guest remove came back ${JSON.stringify({ kok: d4x && d4x.kok, line: d4x && d4x.line, sent: d4xf, aerr: d4xc && d4xc.aerr })}`);
     // AN ACCOUNT ROW THE SAME WAY: an earlier row leaves, the question stays.
@@ -2133,7 +2157,7 @@ try {
     const d4ef = await squads();
     if (d4ef.length) await reply({ op: 'kick', error: 'no_such_member' });
     if (d4d && d4d.line === 'Remove Ridge Pike from the squad?' && d4g.length === 1 && d4g[0].rid === RID_PIKE
-        && d4e && !d4e.kok && d4e.start && d4ef.length === 0)
+        && d4e && !d4e.kok && d4e.ready && d4ef.length === 0)   // Ready: Start until U3
       ok(`${V}: an account's Remove survives the roster moving, and no question carries over into another squad`);
     else fail(`${V}: stale remove ${JSON.stringify({ acct: d4d && d4d.line, acctSent: d4g, other: d4e && { kok: d4e.kok, line: d4e.line }, otherSent: d4ef })}`);
 
@@ -2149,7 +2173,7 @@ try {
       await t9click('#bay [data-sq="kok"]'); await sleep(40);
       await reply(code === 'sign_in' ? { type: 'social', error: 'sign_in' } : { op: 'kick', error: code });
       const bx = await t9box();
-      if (!(bx && bx.aerr === line && !bx.kok && bx.start)) d5bad.push({ code, aerr: bx && bx.aerr, kok: bx && bx.kok });
+      if (!(bx && bx.aerr === line && !bx.kok && bx.ready)) d5bad.push({ code, aerr: bx && bx.aerr, kok: bx && bx.kok });   // Ready: Start until U3
     }
     if (!d5bad.length) ok(`${V}: all ${kickSays.length} refusals of a Remove say their own sentence and close the question`);
     else fail(`${V}: remove refusals ${JSON.stringify(d5bad)}`);
@@ -2532,21 +2556,24 @@ try {
         && fc.length === 1 && fc[0].code === 'RM3Q' && fcAfter.length === 0 && fcScr === 'lobby' && fcCode === 'RM4Q')
       ok(`${V}: a late answer cancels nothing once the player has gone home or moved to another lobby, and an offline room's lobby asks nothing`);
     else fail(`${V}: real lobby guards ${JSON.stringify({ a: { asked: fa, then: faAfter, scr: faScr }, b: fb, c: { asked: fc, then: fcAfter, scr: fcScr, code: fcCode } })}`);
-    // F4. The LEADER's own refused Start, answered after the engine's create:
-    //     the same question, and the leader lands back on the box with the
-    //     refusal said in it.
-    await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
-    await clearTx(); await t9click('#bay [data-sq="start"]'); await sleep(40);
-    const startId = ((await squads())[0] || {}).id;
+    // F4. A COUNTDOWN THAT ENDED IN A REFUSAL after the engine's create had
+    //     seated this player (U3: the server tells every member, R6's frame):
+    //     the same question, and the player lands back on the box with the
+    //     refusal said in it, and on the ready control, free to ready again.
+    //     CHANGED BY U3: this was the leader's own refused Start, answered by
+    //     id; this client sends no Start, and the refusal is a push.
+    await t9state({ members: [T9YOU(), T9MULE()] });
     await lobbyAt('RM6Q');
-    await answer(startId, { type: 'squad', op: 'start', error: 'refused' });
+    await clearTx(); await ev(`(handle({ type: 'squad', op: 'start', error: 'refused' }), true)`); await sleep(60);
     const f4q = await kinds();
     const probe = f4q.find((f) => f.type === 'code');
     await answer(probe && probe.id, { type: 'code', kind: 'none' });
     const f4e = await scr(), f4 = await t9box();
-    if (probe && probe.code === 'RM6Q' && f4e === 'home' && f4 && f4.aerr === 'That match could not be started. Try again.' && f4.start && !f4.start.dis)
-      ok(`${V}: the leader's refused Start leaves the dead lobby too, and the box says why`);
-    else fail(`${V}: leader dead lobby ${JSON.stringify({ asked: f4q, scr: f4e, aerr: f4 && f4.aerr })}`);
+    const f4say = await ev(`(document.querySelector('#bay .lbar .launch .rdys') || {}).textContent || null`);
+    if (probe && probe.code === 'RM6Q' && f4e === 'home' && f4 && f4.aerr === 'That match could not be started. Try again.'
+        && f4say === 'That match could not be started. Try again.' && f4.ready && !f4.ready.dis)
+      ok(`${V}: a countdown refused after the room was built leaves the dead lobby too, and the box and the ready control say why`);
+    else fail(`${V}: leader dead lobby ${JSON.stringify({ asked: f4q, scr: f4e, aerr: f4 && f4.aerr, say: f4say })}`);
 
     // ---- F5. A JOIN FOR A CODE THE INVITE DOES NOT HOLD SENDS NOTHING: the
     //      frame takes the SLOT's code, never a button's word for it.
@@ -2571,14 +2598,13 @@ try {
     const imgs = () => ev(`document.querySelectorAll('#sqPane-squad img, #sqPane-friends img').length`);
     const g = {};
     await t9state({ members: [T9YOU({ ready: true }), T9PIKE({ callsign: EVIL, ready: true })] });
-    await clearTx(); await t9click('#bay [data-sq="start"]'); await sleep(40);
-    await reply({ op: 'start', error: 'member_offline', at: 1 });
+    await ev(`(handle({ type: 'squad', op: 'start', error: 'member_offline', at: 1 }), true)`); await sleep(60);   // a push since U3
     g.say = [(await t9box()).aerr === EVIL + " isn't ready to start yet.", await imgs()];
     await t9click(`#bay [data-sq="kick:${RID_PIKE}"]`); await sleep(40);
     g.ask = [(await t9box()).line === 'Remove ' + EVIL + ' from the squad?', await imgs()];
     await t9click('#bay [data-sq="kcancel"]'); await sleep(40);
     await t9state({ leader: T9_PIKE, members: [T9YOU({ ready: true }), T9PIKE({ callsign: EVIL, ready: true })] });
-    g.lead = [(await t9box()).note === EVIL + ' picks the mode and starts. You will be placed in the room together.', await imgs()];
+    g.lead = [(await t9box()).note === EVIL + ' picks the mode. The match starts when everyone is ready.', await imgs()];
     await friendsIn({ friends: [{ id: T9_MULE, callsign: EVIL, online: false }], requests: { in: [{ id: T9_NIA, callsign: EVIL }], out: [] },
       blocked: [], friendCode: 'AB12CD', callsign: null });
     await t9click('#bay [data-sq="tab:friends"]'); await sleep(40);
@@ -2758,12 +2784,15 @@ try {
     await friendsIn(FR9);
     const iNamed = (rows, names, words) => Array.isArray(rows) && JSON.stringify(rows.map((r) => r.name)) === JSON.stringify(names)
       && JSON.stringify(rows.map((r) => r.words)) === JSON.stringify(words) && rows.every((r) => !r.cut && r.under && r.foot);
-    if (iNamed(iN.lead, ['Dusty Crag', 'Steel Mule', 'Ridge Pike'], [1, 1, 1])   // the leader's row: Leader, no tick (fix wave E9) && iNamed(iN.member, ['Dusty Crag', 'Ridge Pike', 'Steel Mule'], [1, 2, 1])
+    // The leader's row: Leader and its tick (U3; fix wave E9 had taken the tick
+    // off). The member view's check sat behind that comment on this line, and
+    // so was never asked: it is a condition again.
+    if (iNamed(iN.lead, ['Dusty Crag', 'Steel Mule', 'Ridge Pike'], [2, 1, 1]) && iNamed(iN.member, ['Dusty Crag', 'Ridge Pike', 'Steel Mule'], [1, 2, 1])
         && iNamed(iN.friends, ['Nia Vale', 'Steel Mule', 'Ridge Pike'], [0, 1, 0]))
       ok(`${V}: every fixture name reads in full on a line of its own, the status words beneath it and no control's target reaching into it -- a reconnecting member, a reconnecting leader, a request, a squadmate and a friend to invite`);
     else fail(`${V}: two-line rows, names ${JSON.stringify(iN)}`);
     const iAll = [].concat(iW.lead, iW.member, iW.friends);
-    if (iW.lead.length === 3 && iW.member.length === 4 && iW.friends.length === 1   // no tick on the leader (fix wave E9)
+    if (iW.lead.length === 4 && iW.member.length === 4 && iW.friends.length === 1   // the leader's tick is a status word again (U3)
         && iAll.every((w) => w.clear && w.hit.length === 0 && !w.open && !w.ask && w.sent === 0) && iMenuSq === true && iMenuFr === true && iShut)
       ok(`${V}: a tap anywhere on Leader, Ready, Not ready, Reconnecting or In your squad opens no menu and asks nothing, and a tap on a menu opens it`);
     else fail(`${V}: a tap on the status words ${JSON.stringify({ iW, iMenuSq, iMenuFr, iShut })}`);
@@ -2812,6 +2841,9 @@ try {
       bof: b.map((x) => !!x.querySelector('.bof')) };
   })()`);
 
+  // How long the leader's coalesced mode send waits after the last tap
+  // (bay.js SQ_MODE_MS, 250 ms), with room to spare.
+  const MODE_WAIT0 = 450;
   for (const [w, h] of [[932, 430], [667, 375]]) {
     const V = `${w}x${h}`;
     await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: w < 900 });
@@ -2922,23 +2954,33 @@ try {
     if (size.scr === 'home' && size.pill === 9) ok(`${V}: the pill takes the home type bump (9u), not the 7.5u hole .bof sits in`);
     else fail(`${V}: pill size ${JSON.stringify(size)}`);
 
-    // ---- B6. ARMING A DIMMED BOARD IS ALLOWED (design 5.2). The dim is advice;
-    //      the control that refuses is Start, in the box. A member here, so the
-    //      tap is the board's alone: first tap arms, second opens Match setup.
+    // ---- B6. A DIMMED BOARD IS ADVICE, NOT A REFUSAL (design 5.2), and since
+    //      U3 a MEMBER'S boards are the squad's mode, which only the leader
+    //      picks (owner, 2026-10-06). CHANGED BY U3: a member's tap on another
+    //      board armed it (fix wave E5); now it arms nothing, sends nothing and
+    //      is explained ("The squad leader picks the mode."), and the board
+    //      that stays lit is the squad's, dimmed or not. A tap on the squad's
+    //      own board still opens Match setup. Three strong on a duel: the lit
+    //      board is the squad's Duel, dimmed.
     await t11state({ leader: T11_MULE, members: [T11YOU(), T11MULE(), T11PIKE()] });
+    await ev(`(Bay.show('home'), window.__t11toast = [], window.__t11st = showToast, window.showToast = (t) => { __t11toast.push(t); }, true)`);
+    await clearTx();
     const tap = await ev(`(() => {
       const boards = () => [...document.querySelectorAll('#bay .board')];
       boards()[2].click();
-      const armed = Bay.state().mode.id, cls = boards()[2].className;
-      boards()[2].click();
+      const armed = Bay.state().mode.id, boss = boards()[2].className, duel = boards()[0].className, said = __t11toast.slice();
+      boards()[0].click();
       const scr = $('bay').dataset.scr;
       Bay.show('home');
-      return { armed, cls, scr };
+      return { armed, boss, duel, said, scr };
     })()`);
-    await ev(`(ccMode = 'duel', Bay.show('home'), true)`);
-    if (tap.armed === 'boss' && /\bon\b/.test(tap.cls) && /\bnofit\b/.test(tap.cls) && tap.scr === 'setup')
-      ok(`${V}: a tap on a dimmed board arms it and keeps it dimmed; a second tap opens Match setup, like any other board`);
-    else fail(`${V}: dimmed tap ${JSON.stringify(tap)}`);
+    await sleep(MODE_WAIT0);
+    const tapSent = (await squads()).length;
+    await ev(`(window.showToast = window.__t11st, ccMode = 'duel', Bay.show('home'), true)`);
+    if (tap.armed === 'duel' && !/\bon\b/.test(tap.boss) && /\bnofit\b/.test(tap.boss) && /\bon\b/.test(tap.duel) && /\bnofit\b/.test(tap.duel)
+        && JSON.stringify(tap.said) === JSON.stringify(['The squad leader picks the mode.']) && tap.scr === 'setup' && tapSent === 0)
+      ok(`${V}: a member's tap on another board arms nothing, sends nothing and says the leader picks; the squad's own board, dimmed, opens Match setup`);
+    else fail(`${V}: dimmed tap ${JSON.stringify({ tap, tapSent })}`);
 
     // ---- B7. THE MISSION BOARD SHOWS THE SAME PILL (design 5.2), keeps every
     //      offline badge test/offline.mjs asserts on its five cards, and the
@@ -2987,7 +3029,7 @@ try {
     const t11board = (...idx) => ev(`(() => { const b = () => [...document.querySelectorAll('#bay .board')]; for (const i of ${JSON.stringify(idx)}) b()[i].click(); return true; })()`);
     const t11modes = async () => (await squads()).filter((f) => f.op === 'mode');
     const t11aerr = () => ev(`(() => { Bay.show('home'); const e = document.querySelector('#sqPane-squad .sqml ~ .sqae'); return e && !e.classList.contains('hidden') ? e.textContent : ''; })()`);
-    const MODE_WAIT = 450;
+    const MODE_WAIT = MODE_WAIT0;
     await t11state({ members: [T11YOU(), T11MULE()] });
     await clearTx();
     await t11board(4); await sleep(MODE_WAIT);
@@ -2997,19 +3039,22 @@ try {
     else fail(`${V}: leader mode ${JSON.stringify(m1)}`);
     await reply({ op: 'mode', ok: true });
     await t11state({ mode: 'golf', tees: 'mens', max: null, members: [T11YOU(), T11MULE()] });
-    // ---- M1b. THE FREE-FOR-ALL'S COUNT IS STILL SENT, AS A NUMBER, and golf
-    //      is put back for M2.
+    // ---- M1b. THE FREE-FOR-ALL SENDS NO SEAT COUNT EITHER, and golf is put
+    //      back for M2. CHANGED BY U3: it sent this device's CPU count as the
+    //      number 4; a squad's room is sized to the squad, and every change of
+    //      the squad's settings now stands every member down, so a count that
+    //      seats nobody must not.
     await clearTx();
     await t11board(1); await sleep(MODE_WAIT);
     const m1b = await t11modes();
     await reply({ op: 'mode', ok: true });
-    await t11state({ mode: 'ffa', max: 4, members: [T11YOU(), T11MULE()] });
+    await t11state({ mode: 'ffa', max: null, members: [T11YOU(), T11MULE()] });
     await clearTx();
     await t11board(4); await sleep(MODE_WAIT);
     await reply({ op: 'mode', ok: true });
     await t11state({ mode: 'golf', tees: 'mens', max: null, members: [T11YOU(), T11MULE()] });
-    if (m1b.length === 1 && m1b[0].mode === 'ffa' && m1b[0].tees === null && m1b[0].max === 4)
-      ok(`${V}: the leader arming the free-for-all sends its seat count as the number 4, and no tee set`);
+    if (m1b.length === 1 && m1b[0].mode === 'ffa' && m1b[0].tees === null && m1b[0].max === null)
+      ok(`${V}: the leader arming the free-for-all sends no seat count and no tee set`);
     else fail(`${V}: leader ffa mode ${JSON.stringify(m1b)}`);
     // ---- M2. A RUN OF TAPS IS ONE FRAME, the last one. Every squad op spends
     //      from one bucket of twenty a minute (server/social.js LIMITS.squad),
@@ -3058,15 +3103,16 @@ try {
     else fail(`${V}: setup push ${JSON.stringify({ m5, m5gcount })}`);
     await reply({ op: 'mode', ok: true });
     await t11state({ mode: 'golf', tees: 'champ', max: null, members: [T11YOU(), T11MULE()] });
-    // ---- M6. A MEMBER'S BOARDS ARE THEIR OWN. The server would answer
-    //      'not_leader' every time, so the tap is never sent.
+    // ---- M6. A MEMBER'S BOARDS ARE THE SQUAD'S MODE. The server would answer
+    //      'not_leader' every time, so the tap is never sent. CHANGED BY U3:
+    //      the tap armed the member's own board; it arms nothing now (B6).
     await t11state({ leader: T11_MULE, members: [T11YOU(), T11MULE()] });
     await clearTx();
     await t11board(1); await sleep(MODE_WAIT);
     const m6 = await t11modes();
-    if (m6.length === 0 && (await ev('Bay.state().mode.id')) === 'ffa')
-      ok(`${V}: a member arming a board changes their own boards and sends the squad nothing`);
-    else fail(`${V}: member mode ${JSON.stringify(m6)}`);
+    if (m6.length === 0 && (await ev('Bay.state().mode.id')) === 'duel')
+      ok(`${V}: a member's tap on a board leaves the squad's mode armed and sends the squad nothing`);
+    else fail(`${V}: member mode ${JSON.stringify({ m6, armed: await ev('Bay.state().mode.id') })}`);
     // ---- M7. A ROSTER THIS SOCKET DOES NOT SAY IT HOLDS (D-UI-1) commands
     //      nothing: a frame with no `held` is shown, and its leader's taps stay
     //      on this device.
@@ -3120,12 +3166,13 @@ try {
     if (m9 === '' && m9armed === 'boss') ok(`${V}: a leader's tap with the socket down arms this device and leaves no refusal behind`);
     else fail(`${V}: offline tap ${JSON.stringify({ m9, m9armed })}`);
     await ev(`(ccMode = 'duel', ccTees = 'mens', Bay.show('home'), true)`);
-    // ---- R1. THE SQUAD'S RACK (D-UI-3). A member armed on Duel, five picks
-    //      stored, in a Boss Fight squad, which drafts seven. The box counted
-    //      that rack right and said "Pick 2 more" -- on a dead button, while the
-    //      Armoury drafted for Duel and would not take a sixth. That button is
-    //      now the way in: it opens the Armoury FOR THE SQUAD'S MODE, and sends
-    //      nothing.
+    // ---- R1-R3, R5, R6 (task 11, D-UI-3) ARE GONE WITH THE SQUAD'S OWN
+    //      ARMOURY (U3). A rack too short for the squad's mode put "Pick N
+    //      more" in Ready's (or Start's) place, and that door opened an Armoury
+    //      that drafted for the squad's mode and went "Back to the squad". A
+    //      Ready now fills a short rack with standard weapons itself (owner,
+    //      2026-10-06: a short rack never stops a start), so there is no door
+    //      and no squad Armoury; task 9's A4 and A5 pin the filled Ready.
     const t11arm = () => ev(`(() => {
       const q = (s) => document.querySelector(s), foot = q('#bay .pfoot');
       return { scr: $('bay').dataset.scr, title: (q('#bay .card .lbl + div') || {}).textContent || null,
@@ -3133,109 +3180,25 @@ try {
         meta: (q('#bay .pm') || {}).textContent, launch: !!q('#bay [data-launch]'),
         foot: foot ? [...foot.querySelectorAll('button')].map((b) => ({ t: b.textContent.trim(), dis: b.disabled, back: b.hasAttribute('data-back') })) : null };
     })()`);
-    // The door's label must sit on ONE line, unclipped, beside Leave: the box's
-    // footer is narrow, and "PICK 2 / MORE" broke across two.
-    const t11foot = () => ev(`(() => { Bay.show('home'); const p = document.getElementById('sqPane-squad');
-      const b = (s) => { const e = p.querySelector(s); if (!e) return null; const rg = document.createRange(); rg.selectNodeContents(e);
-        const one = new Set([...rg.getClientRects()].map((x) => Math.round(x.top))).size === 1 && e.scrollWidth <= e.clientWidth + 1;
-        return s.includes('rack') ? { t: e.textContent.trim(), dis: e.disabled, one } : { t: e.textContent.trim(), dis: e.disabled }; };
-      return { rack: b('[data-sq="rack"]'), start: b('[data-sq="start"]'), ready: b('[data-sq="ready"]') }; })()`);
-    const SEVEN11 = FIVE11.concat(['wall', 'teleport']);
+    // ---- R4. THE ARMOURY REACHED FROM MATCH SETUP drafts for the armed mode,
+    //      which for a member is the squad's (fix wave E3: a member's device
+    //      follows the squad's mode). CHANGED (owner, 2026-10-06): it is Edit's
+    //      side trip, not step 3 of 3, and it never launches -- its Done goes
+    //      back to Match setup. CHANGED BY U3: the member was put on the
+    //      squad's Boss by R3's walk through the squad's Armoury; R4 now puts
+    //      itself there, a member of a Boss Fight squad shown home.
     await t11rack(FIVE11);
-    await ev(`(ccMode = 'duel', true)`);
     await t11state({ leader: T11_MULE, mode: 'boss', members: [T11YOU(), T11MULE({ ready: true })] });
-    const r1box = await t11foot();
-    await clearTx();
-    await click('#sqPane-squad [data-sq="rack"]'); await sleep(80);
-    const r1 = await t11arm(), r1f = await squads();
-    if (r1box.rack && !r1box.rack.dis && r1box.rack.t === 'Pick 2 more' && r1box.rack.one && !r1box.ready && !r1box.start
-        && r1.scr === 'armoury' && r1.title === 'Boss Fight' && r1.slots === 7 && r1.full === 5 && r1.meta === 'Your squad' && !r1.launch
-        && JSON.stringify(r1.foot) === JSON.stringify([{ t: 'Pick 2 more', dis: true, back: false }]) && r1f.length === 0)
-      ok(`${V}: a member short of the squad's rack is offered "Pick 2 more", which opens the Armoury for the squad's seven-weapon mode and sends nothing`);
-    else fail(`${V}: squad rack door ${JSON.stringify({ r1box, r1, sent: r1f })}`);
-    // ---- R2. THE SIXTH AND SEVENTH GO IN, AN EIGHTH DOES NOT, and the rack is
-    //      kept where Ready reads it. Full, the footer goes back to the squad --
-    //      never "Open the bay doors": this is not a room of the player's own.
-    await ev(`(() => { for (const id of ['wall', 'teleport', 'minigun']) { const b = document.querySelector('#bay [data-pick="' + id + '"]'); if (b) b.click(); } return true; })()`);
-    const r2 = await t11arm(), r2store = await ev(`JSON.parse(localStorage.getItem('cc_loadout'))`);
-    if (r2.scr === 'armoury' && r2.slots === 7 && r2.full === 7 && !r2.launch && JSON.stringify(r2store) === JSON.stringify(SEVEN11)
-        && JSON.stringify(r2.foot) === JSON.stringify([{ t: 'Back to the squad', dis: false, back: true }]))
-      ok(`${V}: the squad's Armoury takes a sixth and a seventh pick, refuses an eighth, stores all seven, and its footer goes back to the squad`);
-    else fail(`${V}: squad rack fill ${JSON.stringify({ r2, r2store })}`);
-    // ---- R3. BACK IN THE BOX, READY IS LIVE AND CARRIES ALL SEVEN, on a device
-    //      still armed on Duel: the whole of D-UI-3, end to end.
-    await click('#bay .pfoot [data-back]'); await sleep(80);
-    const r3scr = await ev(`$('bay').dataset.scr`), r3 = await t11foot();
-    await clearTx(); await click('#sqPane-squad [data-sq="ready"]'); await sleep(60);
-    const r3f = (await squads()).filter((f) => f.op === 'ready');
-    if (r3f.length) await reply({ op: 'ready', ok: true });
-    if (r3scr === 'home' && r3.ready && !r3.ready.dis && r3.ready.t === 'Ready' && !r3.rack
-        && r3f.length === 1 && r3f[0].ready === true && JSON.stringify(r3f[0].loadout) === JSON.stringify(SEVEN11) && (await ev('ccMode')) === 'boss')
-      ok(`${V}: back in the box the member's Ready is live and sends all seven picks, with the device now armed on the squad's Boss (fix wave E3)`);
-    else fail(`${V}: ready after the squad rack ${JSON.stringify({ r3scr, r3, sent: r3f })}`);
-    // ---- R4. THE ARMOURY REACHED FROM MATCH SETUP drafts for the armed mode.
-    //      CHANGED (owner, 2026-10-06): it is Edit's side trip, not step 3 of
-    //      3, and it never launches -- its Done goes back to Match setup.
-    await ev(`(Bay.show('setup'), true)`);
+    await ev(`(Bay.show('home'), Bay.show('setup'), true)`);
     await click('#bay .card [data-go="armoury"]'); await sleep(80);
     const r4 = await t11arm();
     await click('#bay .pfoot [data-back]'); await sleep(80);
     const r4back = await ev(`$('bay').dataset.scr`);
     await ev(`(Bay.show('home'), true)`);
-    // CHANGED BY FIX WAVE W2 (E3): a member's device follows the squad's mode,
-    // so the armed mode here is the squad's Boss. Proved red with sqFollow off.
     if (r4.scr === 'armoury' && r4.title === 'Boss Fight' && r4.slots === 7 && r4.meta === 'Your rack' && !r4.launch
         && JSON.stringify(r4.foot) === JSON.stringify([{ t: 'Done', dis: false, back: true }]) && r4back === 'setup')
       ok(`${V}: the Armoury reached from Match setup's Edit drafts for the armed mode, never launches, and its Done goes back to Match setup`);
     else fail(`${V}: launch-flow armoury ${JSON.stringify({ r4, r4back })}`);
-    // ---- R5. THE LEADER'S SHORT START IS THE SAME DOOR, and it opens on the
-    //      rack the footer COUNTED -- the stored one, which another tab may have
-    //      changed -- not on a copy this page cached earlier (it holds seven
-    //      from R2; storage holds five again). A roster this socket does not
-    //      hold (D-UI-1) opens nothing, and nor does a press while another
-    //      squad action is out: dead in the handler too, not just the button.
-    await t11rack(FIVE11);
-    await t11state({ mode: 'boss', members: [T11YOU(), T11MULE({ ready: true })] });
-    const r5 = await t11foot();
-    await click('#sqPane-squad [data-sq="rack"]'); await sleep(80);
-    const r5a = await t11arm();
-    await ev(`(Bay.show('home'), true)`);
-    const t11force = () => ev(`(() => { const b = document.querySelector('#sqPane-squad [data-sq="rack"]'); if (!b) return false; b.removeAttribute('disabled'); b.click(); return true; })()`);
-    await clearTx(); await click('#sqPane-squad [data-sq="leave"]'); await sleep(60);
-    const r5busy = { pressed: await t11force(), scr: await ev(`$('bay').dataset.scr`) };
-    await reply({ op: 'leave', error: 'unavailable' });
-    await ev(`(Bay.show('home'), true)`);
-    await ev(`(handle({ type: 'squad', op: 'state', code: 'QK7T', leader: ${JSON.stringify(ME)}, mode: 'boss', tees: null, max: null, you: 0,
-      members: [${JSON.stringify(T11YOU())}, ${JSON.stringify(T11MULE({ ready: true }))}], fits: ${JSON.stringify(t11fits(2))} }), true)`);
-    await sleep(80);
-    const r5n = await t11foot();
-    const r5np = await t11force(); await sleep(80);
-    const r5scr = await ev(`$('bay').dataset.scr`);
-    await ev(`(Bay.show('home'), true)`);
-    if (r5.rack && !r5.rack.dis && r5.rack.t === 'Pick 2 more' && r5.rack.one && !r5.start
-        && r5a.scr === 'armoury' && r5a.title === 'Boss Fight' && r5a.slots === 7 && r5a.full === 5
-        && r5busy.pressed && r5busy.scr === 'home' && r5n.rack && r5n.rack.dis && r5np && r5scr === 'home')
-      ok(`${V}: the leader's short Start is the same Armoury door, opening on the rack the footer counted, and dead in the handler on an unheld roster or while an action is out`);
-    else fail(`${V}: leader rack door ${JSON.stringify({ r5, r5a, r5busy, r5n, r5np, r5scr })}`);
-    // ---- R6. THE ARMOURY DOES NOT FILL A SQUAD THAT HAS GONE. The squad ends
-    //      while its Armoury is open; the next pick draws the launch flow's own
-    //      Armoury, for the armed mode, with its launch.
-    await t11state({ leader: T11_MULE, mode: 'boss', members: [T11YOU(), T11MULE({ ready: true })] });
-    await click('#sqPane-squad [data-sq="rack"]'); await sleep(80);
-    const r6a = await t11arm();
-    await ev(`(handle({ type: 'squad', op: 'ended', reason: 'kicked' }), true)`); await sleep(80);
-    await ev(`(() => { const b = document.querySelector('#bay [data-pick="wall"]'); if (b) b.click(); return true; })()`);
-    const r6 = await t11arm();
-    await ev(`(Bay.show('home'), true)`);
-    // CHANGED BY FIX WAVE W2 (E3): the armed mode is the squad's Boss now, so
-    // the launch flow's own Armoury is Boss's; what this pins is that it is the
-    // player's own (Your rack, and Done -- no way back to a squad), not the
-    // squad's. CHANGED (owner, 2026-10-06): that Armoury's meta was Step 3 of
-    // 3 and its button launched; now it is Your rack, and Done goes back.
-    if (r6a.title === 'Boss Fight' && r6.scr === 'armoury' && r6.title === 'Boss Fight' && r6.slots === 7 && r6.meta === 'Your rack'
-        && JSON.stringify(r6.foot) === JSON.stringify([{ t: 'Done', dis: false, back: true }]))
-      ok(`${V}: an Armoury opened for a squad that then ends draws the armed mode's own Armoury on the next pick`);
-    else fail(`${V}: squad armoury after the squad ${JSON.stringify({ r6a: r6a.title, r6 })}`);
     await t11rack(FIVE11);
     // ---- S1. MATCH SETUP'S PLAY WITH (owner, 2026-10-06). Friend games are
     //      squads only: Computer (or Solo) and Your squad. Setup opens on Your
@@ -3243,8 +3206,11 @@ try {
     //      entry from home; a choice survives Edit's Armoury, Repaint's Paint
     //      shop and Change mode's Mission board, and never a visit. Your squad
     //      is shown but disabled, with its one line, outside a squad of two.
-    //      While it is the choice Start Game is the squad's Ready -- TASK U3's
-    //      hook, a no-op until then -- and never makes a room of its own.
+    //      While it is the choice Start Game is the squad's Ready, and never
+    //      makes a room of its own. CHANGED BY U3: home's Launch is the squad's
+    //      Ready in a squad of two, so Match setup is opened here by its other
+    //      door, the readouts; Start Game reads "Ready up 0/2" and sends the
+    //      squad's Ready, where U2's hook sent nothing.
     const s1with = () => ev(`(() => {
       const o = [...document.querySelectorAll('#bay .b-opt')].find((x) => x.querySelector('.lbl') && x.querySelector('.lbl').textContent === 'Play with');
       const st = document.querySelector('#bay .pfoot [data-launch]');
@@ -3258,7 +3224,7 @@ try {
     await t11state({ members: [T11YOU(), T11MULE()] });
     const s1 = {};
     s1.readout2 = await s1readout();
-    await click('#bay .launch'); await sleep(60);
+    await click('#bay .lbar .ros'); await sleep(60);
     s1.open = await s1with();
     await click('#bay [data-set="with=cpu"]'); await sleep(40);
     s1.cpu = await s1with();
@@ -3274,16 +3240,17 @@ try {
     s1.cpuStart = { sent: await ev('__s1sent.slice()'), squad: (await squads()).length };
     // AND BACK ON HOME, A NEW VISIT OPENS ON THE SQUAD AGAIN.
     await ev(`(Bay.show('home'), true)`);
-    await click('#bay .launch'); await sleep(60);
+    await click('#bay .lbar .ros'); await sleep(60);
     s1.again = await s1with();
     await ev(`(__s1sent.length = 0, true)`); await clearTx();
     await click('#bay .pfoot [data-launch]'); await sleep(40);
-    s1.sqStart = { sent: await ev('__s1sent.slice()'), squad: (await squads()).length, scr: await ev(`$('bay').dataset.scr`) };
+    s1.sqStart = { sent: await ev('__s1sent.slice()'), squad: await squads(), scr: await ev(`$('bay').dataset.scr`) };
+    if (s1.sqStart.squad.length) await reply({ op: 'ready', error: 'unavailable' });
     // A SQUAD'S FREE-FOR-ALL HAS NO CPU COUNT AND NO DIFFICULTY: the server
     // sizes its room to the squad, and nobody is the computer.
-    s1.ffa = await ev(`(() => { ccMode = 'ffa'; Bay.show('home'); document.querySelector('#bay .launch').click();
+    s1.ffa = await ev(`(() => { ccMode = 'ffa'; Bay.show('home'); document.querySelector('#bay .lbar .ros').click();
       const g = [...document.querySelectorAll('#bay .b-opt:not(.hidden) .lbl')].map((l) => l.textContent).join('|');
-      ccMode = 'duel'; Bay.show('home'); document.querySelector('#bay .launch').click(); return g; })()`);
+      ccMode = 'duel'; Bay.show('home'); document.querySelector('#bay .lbar .ros').click(); return g; })()`);
     // THE SQUAD DROPS TO ONE UNDER THE SCREEN: Your squad greys out, with its
     // line, and the untouched default is Computer; it comes back when a second
     // player does.
@@ -3298,8 +3265,8 @@ try {
     const S1CPU = [{ t: 'Computer', on: true, dis: false, why: null }, { t: 'Your squad', on: false, dis: false, why: null }];
     const S1OFF = [{ t: 'Computer', on: true, dis: false, why: null }, { t: 'Your squad', on: false, dis: true, why: 'Needs a squad of 2 or more' }];
     const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-    if (s1.open.scr === 'setup' && same(s1.open.opts, S1SQ) && s1.open.play === 'Your squad' && s1.open.start === 'Start Game' && /Players\s*Squad of 2/.test(s1.readout2))
-      ok(`${V}: in a squad of two, home's Players reads Squad of 2 and Match setup opens on Your squad, with Start Game`);
+    if (s1.open.scr === 'setup' && same(s1.open.opts, S1SQ) && s1.open.play === 'Your squad' && s1.open.start === 'Ready up 0/2Waiting for you, Steel Mule' && /Players\s*Squad of 2/.test(s1.readout2))
+      ok(`${V}: in a squad of two, home's Players reads Squad of 2 and Match setup opens on Your squad, Start Game reading "Ready up 0/2" and who it waits for`);
     else fail(`${V}: setup squad default ${JSON.stringify({ open: s1.open, readout: s1.readout2 })}`);
     if (same(s1.cpu.opts, S1CPU) && s1.cpu.play === 'Computer \u00b7 Medium' && s1on(s1.armoury) === 'Computer' && s1.armoury.scr === 'setup'
         && s1on(s1.paint) === 'Computer' && s1.paint.scr === 'setup' && s1on(s1.modes) === 'Computer' && s1.modes.scr === 'setup')
@@ -3313,8 +3280,9 @@ try {
     else fail(`${V}: setup reset ${JSON.stringify(s1.again)}`);
     if (s1.ffa === 'Play with') ok(`${V}: a squad's Free-for-all shows no CPU count and no Difficulty`);
     else fail(`${V}: squad ffa groups ${s1.ffa}`);
-    if (s1.sqStart.sent.length === 0 && s1.sqStart.squad === 0 && s1.sqStart.scr === 'setup')
-      ok(`${V}: Start Game with Your squad goes to the squad's Ready hook and makes no room of its own`);
+    if (s1.sqStart.sent.length === 0 && s1.sqStart.squad.length === 1 && s1.sqStart.squad[0].op === 'ready' && s1.sqStart.squad[0].ready === true
+        && JSON.stringify(s1.sqStart.squad[0].loadout) === JSON.stringify(FIVE11) && s1.sqStart.scr === 'setup')
+      ok(`${V}: Start Game with Your squad sends the squad's Ready with the rack and makes no room of its own`);
     else fail(`${V}: squad start ${JSON.stringify(s1.sqStart)}`);
     if (same(s1.one.opts, S1OFF) && s1.one.play === 'Computer \u00b7 Medium' && same(s1.two.opts, S1SQ) && /Players\s*You vs CPU/.test(s1.readout1))
       ok(`${V}: a squad of one greys Your squad out with "Needs a squad of 2 or more" and the default is Computer, live; a second player brings Your squad back`);
@@ -3615,6 +3583,250 @@ try {
   else fail(`${V}: create, mode, invite order ${JSON.stringify(w7)}`);
 } catch (e) {
   fail('squad_ui fix wave W2 stopped: ' + (e && e.message));
+}
+// ============================================================================
+// U3: THE SQUAD'S READY CONTROL (owner, 2026-10-06). "All players must ready
+// up and then the game starts ... easy for new players to pick up on straight
+// away ... the launch button greyed out with 0/2 or 1/2 players ready (the
+// group size and how many players are ready must be displayed correctly)."
+// In a squad of two or more, home's Launch and Match setup's Start Game (with
+// Your squad) are the squad's Ready: the count, who it waits for, the
+// countdown, and why it cannot start; a squad of one keeps the ordinary
+// Launch; a member's boards and tee set are the leader's to change. Every
+// roster goes in through the real handle(), every tap through the real
+// delegated listener.
+try {
+  const U3_MULE = '00000000-0000-4000-8000-0000000000cc';
+  const U3_PIKE = '00000000-0000-4000-8000-0000000000dd';
+  const U3_NAMELESS = '00000000-0000-4000-8000-0000000000ee';
+  const U3R = (tag) => (tag + '0'.repeat(32)).slice(0, 32);
+  const u3m = (id, callsign, rid, o) => Object.assign({ id, rid: U3R(rid), callsign, guest: false, online: true, ready: false, dropped: false }, o);
+  const U3YOU = (o) => u3m(ME, 'Dusty Crag', 'a1', o);
+  const U3MULE = (o) => u3m(U3_MULE, 'Steel Mule', 'c1', o);
+  const U3PIKE = (o) => u3m(U3_PIKE, 'Ridge Pike', 'd1', o);
+  const U3GUEST = (o) => u3m(null, null, 'e1', Object.assign({ guest: true }, o));
+  const U3NONAME = (o) => u3m(U3_NAMELESS, null, 'f1', o);
+  const u3fits = (n) => ({ duel: n === 2, ffa: n >= 2 && n <= 4, boss: n >= 1 && n <= 2, aliens: n >= 1 && n <= 2, golf: n >= 1 && n <= 4 });
+  const u3state = async (patch) => {
+    const n = (patch.members || []).length;
+    await ev(`(handle(Object.assign({ type: 'squad', op: 'state', code: 'QK7T', leader: ${JSON.stringify(ME)},
+      mode: 'duel', tees: null, max: null, you: 0, held: true, members: [], fits: ${JSON.stringify(u3fits(n))} }, ${JSON.stringify(patch)})), true)`);
+    await sleep(80);
+  };
+  const FIVE3 = ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'];
+  // The leader's coalesced mode send waits 250 ms after the last tap
+  // (bay.js SQ_MODE_MS); a check that nothing was sent waits past it.
+  const MODE_WAIT3 = 450;
+  // THE RIBBON'S CONTROL as a player meets it: its two lines, its state class,
+  // whether it is live, aria-pressed, the drawn tick, its look, and the type
+  // in design units.
+  const u3launch = (sel = '#bay .lbar .launch') => ev(`(() => {
+    const b = document.querySelector(${JSON.stringify(sel)});
+    if (!b) return null;
+    const u = document.querySelector('#bay .stage').getBoundingClientRect().width / 932;
+    const t = b.querySelector('.rdyt'), y = b.querySelector('.rdys'), cs = getComputedStyle(b);
+    return { label: t ? t.textContent : null, say: y ? y.textContent : null, text: b.textContent.trim(),
+      cls: b.className, dis: b.disabled, pressed: b.getAttribute('aria-pressed'), tick: !!(t && t.querySelector('svg')),
+      go: b.getAttribute('data-go'), rdy: b.hasAttribute('data-rdy'),
+      bg: cs.backgroundImage === 'none' ? cs.backgroundColor : 'gradient', color: cs.color,
+      tU: t ? +(parseFloat(getComputedStyle(t).fontSize) / u).toFixed(2) : null, yU: y ? +(parseFloat(getComputedStyle(y).fontSize) / u).toFixed(2) : null };
+  })()`);
+  const u3home = () => ev(`(Bay.show('home'), true)`);
+  const u3tap = async (sel = '#bay .lbar .launch') => { await clearTx(); await click(sel); await sleep(50); return (await squads()).filter((f) => f.op === 'ready'); };
+  const u3force = async (sel = '#bay .lbar .launch') => {
+    await clearTx();
+    await ev(`(() => { const b = document.querySelector(${JSON.stringify(sel)}); if (b) { b.removeAttribute('disabled'); b.click(); } return true; })()`);
+    await sleep(50);
+    return (await squads()).length;
+  };
+
+  for (const [w, h] of [[932, 430], [667, 375]]) {
+    const V = `${w}x${h}`;
+    await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: w < 900 });
+    await send('Page.navigate', { url: `http://127.0.0.1:${appPort}/` });
+    let u3up = false;
+    for (let i = 0; i < 80; i++) {
+      if (await ev('!!window.Bay && typeof handle === "function" && !!document.querySelector("#bay .lbar")').catch(() => false)) { u3up = true; break; }
+      await sleep(200);
+    }
+    if (!u3up) { fail(`${V}: page never became ready for the U3 checks`); continue; }
+    for (let k = 0; k < 40 && (await ev(`document.getElementById('bay').classList.contains('enter')`)); k++) await sleep(100);
+    await ev(`(localStorage.removeItem('cc_squad'), localStorage.setItem('cc_loadout', ${JSON.stringify(JSON.stringify(FIVE3))}), ccMode = 'duel', ccTees = 'mens', true)`);
+    await stubSocket(); await setWho('in');
+    await clearTx(); await ev('sendHello(S.ws).then(() => true)'); await sleep(60);
+    await reply({ op: 'gone' });
+    await clearTx(); await u3home();
+
+    // ---- U1. THE COUNT AND THE NAMES. The squad's size and how many are
+    //      ready, always; who it waits for, "you" first, two names at most and
+    //      then "+k"; a guest and a nameless player in words, never "No
+    //      callsign". Orange to ready up, cyan with a drawn tick once ready.
+    const u1 = {};
+    await u3state({ members: [U3YOU(), U3MULE()] });
+    u1.two0 = await u3launch();
+    await u3state({ members: [U3YOU({ ready: true }), U3MULE()] });
+    u1.two1 = await u3launch();
+    await u3state({ mode: 'ffa', members: [U3YOU({ ready: true }), U3MULE({ ready: true }), U3PIKE()] });
+    u1.three = await u3launch();
+    await u3state({ mode: 'ffa', members: [U3YOU(), U3MULE(), U3PIKE(), U3GUEST()] });
+    u1.four = await u3launch();
+    await u3state({ mode: 'ffa', members: [U3YOU({ ready: true }), U3MULE({ ready: true }), U3GUEST(), U3NONAME()] });
+    u1.words = await u3launch();
+    const okU1 = u1.two0 && u1.two0.rdy && !u1.two0.go && u1.two0.label === 'Ready up 0/2' && u1.two0.say === 'Waiting for you, Steel Mule'
+        && / up\b/.test(u1.two0.cls) && !u1.two0.dis && u1.two0.pressed === 'false' && !u1.two0.tick && u1.two0.bg === 'gradient'
+      && u1.two1 && u1.two1.label === 'Ready 1/2' && u1.two1.say === 'Waiting for Steel Mule' && / on\b/.test(u1.two1.cls) && !u1.two1.dis
+        && u1.two1.pressed === 'true' && u1.two1.tick && u1.two1.bg !== 'gradient'
+      && u1.three && u1.three.label === 'Ready 2/3' && u1.three.say === 'Waiting for Ridge Pike'
+      && u1.four && u1.four.label === 'Ready up 0/4' && u1.four.say === 'Waiting for you, Steel Mule +2'
+      && u1.words && u1.words.label === 'Ready 2/4' && u1.words.say === 'Waiting for a guest, a player'
+      && [u1.two0, u1.two1, u1.three, u1.four, u1.words].every((x) => x.tU >= 13 && x.yU >= 13);
+    if (okU1) ok(`${V}: Launch in a squad reads Ready up 0/2, Ready 1/2, Ready 2/3, Ready up 0/4 and who it waits for -- you first, two names, then +k, a guest and a nameless player in words -- orange to ready up, cyan with a tick once ready, every line at least 13u`);
+    else fail(`${V}: ready counts ${JSON.stringify(u1)}`);
+
+    // ---- U2. THE TAP READIES WITH THE RACK; THE NEXT ONE STANDS DOWN. One
+    //      frame each, the first carrying the rack and the second none; while
+    //      the first is out the control is dead, and the count is still shown.
+    await u3state({ members: [U3YOU(), U3MULE({ ready: true })] });
+    const u2up = await u3tap();
+    const u2busy = await u3launch();
+    await reply({ op: 'ready', ok: true });
+    await u3state({ members: [U3YOU({ ready: true }), U3MULE()] });
+    const u2down = await u3tap();
+    await reply({ op: 'ready', ok: true });
+    if (u2up.length === 1 && u2up[0].ready === true && JSON.stringify(u2up[0].loadout) === JSON.stringify(FIVE3) && typeof u2up[0].id === 'number'
+        && u2busy && u2busy.dis && u2busy.label === 'Ready up 1/2'
+        && u2down.length === 1 && u2down[0].ready === false && !('loadout' in u2down[0]))
+      ok(`${V}: a tap on Launch readies with the rack, the control is held while it is out and still shows the count, and a tap when ready stands down with no rack`);
+    else fail(`${V}: ready taps ${JSON.stringify({ u2up, u2busy, u2down })}`);
+
+    // ---- U3. THE COUNTDOWN, counted from the moment the roster ARRIVED: a
+    //      device clock a day out still shows 3, 2, 1. The box's line says it
+    //      too. A tap during it stands down; the roster that stops it takes
+    //      the countdown off every line.
+    await ev(`(window.__u3now = Date.now, Date.now = () => window.__u3now() + 86400000, true)`);
+    await u3state({ startsIn: 2500, members: [U3YOU({ ready: true }), U3MULE({ ready: true })] });
+    const u3a = await u3launch();
+    await ev(`(Date.now = window.__u3now, true)`);
+    const u3line = await ev(`(document.querySelector('#sqPane-squad .sqft .sqfl') || {}).textContent`);
+    await sleep(900);
+    const u3b = await u3launch();
+    await sleep(1000);
+    const u3c = await u3launch();
+    const u3cancel = await u3tap();
+    await reply({ op: 'ready', ok: true });
+    await u3state({ members: [U3YOU(), U3MULE({ ready: true })] });
+    const u3d = await u3launch(), u3dline = await ev(`(document.querySelector('#sqPane-squad .sqft .sqfl') || {}).textContent`);
+    await sleep(1200);
+    const u3e = await u3launch();
+    if (u3a && u3a.label === 'Starting in 3' && u3a.say === 'Everyone is ready' && / cd\b/.test(u3a.cls) && !u3a.dis && u3a.bg === 'gradient' && u3line === 'Starting in 3'
+        && u3b && u3b.label === 'Starting in 2' && u3c && u3c.label === 'Starting in 1'
+        && u3cancel.length === 1 && u3cancel[0].ready === false
+        && u3d && u3d.label === 'Ready up 1/2' && u3dline === 'Duel · 2' && u3e && u3e.label === 'Ready up 1/2')
+      ok(`${V}: everyone ready, Launch counts Starting in 3, 2, 1 from the roster's arrival whatever the device clock says, the box's line with it; a tap stands down and the next roster takes the countdown away`);
+    else fail(`${V}: countdown ${JSON.stringify({ u3a, u3line, u3b: u3b && u3b.label, u3c: u3c && u3c.label, u3cancel, u3d, u3dline, u3e: u3e && u3e.label })}`);
+
+    // ---- U4. GREY, WITH THE REASON, WHILE THE SQUAD COULD NOT START. Three on
+    //      a duel; a member offline; a member reconnecting. Standing UP is
+    //      dead -- in the handler too -- and standing down never is.
+    const u4 = {};
+    await u3state({ members: [U3YOU(), U3MULE({ ready: true }), U3PIKE()] });
+    u4.big = await u3launch(); u4.bigSent = await u3force();
+    await u3state({ members: [U3YOU(), U3MULE({ online: false })] });
+    u4.off = await u3launch(); u4.offSent = await u3force();
+    await u3state({ members: [U3YOU(), U3MULE({ ready: true, dropped: true })] });
+    u4.drop = await u3launch();
+    await u3state({ members: [U3YOU({ ready: true }), U3MULE({ dropped: true })] });
+    u4.mine = await u3launch();
+    const u4down = await u3tap();
+    await reply({ op: 'ready', ok: true });
+    if (u4.big && u4.big.dis && u4.big.label === 'Ready up 1/3' && u4.big.say === 'Duel needs 2 players' && u4.big.bg === 'rgb(31, 39, 64)' && u4.bigSent === 0
+        && u4.off && u4.off.dis && u4.off.say === 'Steel Mule is offline' && u4.offSent === 0
+        && u4.drop && u4.drop.dis && u4.drop.label === 'Ready up 0/2' && u4.drop.say === 'Steel Mule is reconnecting'
+        && u4.mine && !u4.mine.dis && u4.mine.label === 'Ready 1/2' && u4.mine.say === 'Steel Mule is reconnecting' && u4down.length === 1 && u4down[0].ready === false)
+      ok(`${V}: a squad that cannot start greys Launch out, distinct from orange, saying why -- "Duel needs 2 players", offline, reconnecting -- sends nothing even past the attribute, and a ready player can still stand down`);
+    else fail(`${V}: grey with a reason ${JSON.stringify({ u4, u4down })}`);
+
+    // ---- U5. A SQUAD OF ONE IS NO SQUAD: the ordinary Launch, which opens
+    //      Match setup and sends the squad nothing.
+    await u3state({ mode: 'boss', members: [U3YOU()] });
+    const u5 = await u3launch();
+    await clearTx(); await click('#bay .lbar .launch'); await sleep(60);
+    const u5scr = await ev(`$('bay').dataset.scr`), u5sent = (await squads()).length;
+    await u3home();
+    if (u5 && u5.text === 'Launch' && u5.go === 'setup' && !u5.rdy && !/\brdy\b/.test(u5.cls) && u5scr === 'setup' && u5sent === 0)
+      ok(`${V}: in a squad of one Launch is the ordinary Launch: it opens Match setup and sends the squad nothing`);
+    else fail(`${V}: squad of one ${JSON.stringify({ u5, u5scr, u5sent })}`);
+
+    // ---- U6. MATCH SETUP'S START GAME IS THE SAME CONTROL with Your squad, and
+    //      playing alone from a squad stands this player down first: Computer,
+    //      Start Game, one ready:false and the player's own vs-Computer game.
+    await u3state({ leader: U3_MULE, members: [U3YOU({ ready: true }), U3MULE()] });
+    await click('#bay .lbar .ros'); await sleep(60);
+    const u6sq = await u3launch('#bay .pfoot [data-launch]');
+    await click('#bay [data-set="with=cpu"]'); await sleep(40);
+    await ev(`(window.__u6sent = [], window.__u6intent = intent, window.intent = (m) => { __u6sent.push(m); }, true)`);
+    await clearTx(); await click('#bay .pfoot [data-launch]'); await sleep(50);
+    const u6f = (await squads()).filter((f) => f.op === 'ready'), u6ai = await ev('__u6sent.slice()');
+    if (u6f.length) await reply({ op: 'ready', ok: true });
+    await ev(`(window.intent = window.__u6intent, Bay.show('home'), true)`);
+    if (u6sq && u6sq.label === 'Ready 1/2' && u6sq.say === 'Waiting for Steel Mule' && / on\b/.test(u6sq.cls) && u6sq.tU >= 13 && u6sq.yU >= 13
+        && u6f.length === 1 && u6f[0].ready === false && u6ai.length === 1 && u6ai[0].type === 'ai')
+      ok(`${V}: Start Game with Your squad is the same Ready control, and a member who plays the computer alone is stood down first`);
+    else fail(`${V}: setup control ${JSON.stringify({ u6sq, u6f, u6ai })}`);
+
+    // ---- U7. THE SETTINGS ARE THE LEADER'S. A member playing with the squad
+    //      is shown the squad's tee set, and a tap on another is explained and
+    //      changes nothing; a leader playing golf alone (Solo) changes their
+    //      own tee set without touching the squad's.
+    await ev(`(window.__u7toast = [], window.__u7st = showToast, window.showToast = (t) => { __u7toast.push(t); }, ccTees = 'mens', true)`);
+    await u3state({ leader: U3_MULE, mode: 'golf', tees: 'champ', members: [U3YOU(), U3MULE()] });
+    await ev(`(Bay.show('home'), true)`);
+    await click('#bay .lbar .ros'); await sleep(60);
+    const u7tees = () => ev(`(() => { const o = [...document.querySelectorAll('#bay .b-opt')].find((x) => x.querySelector('.lbl') && x.querySelector('.lbl').textContent === 'Tee set');
+      return o ? [...o.querySelectorAll('.seg.on')].map((b) => b.dataset.set).join() : null; })()`);
+    // This device's own tee set differs from the squad's while setup is up
+    // (home's follow is what set it to the squad's), and the next roster
+    // repaints setup in place: the squad's is what it must show.
+    await ev(`(ccTees = 'mens', true)`);
+    await u3state({ leader: U3_MULE, mode: 'golf', tees: 'champ', members: [U3YOU(), U3MULE()] });
+    const u7on = await u7tees();
+    await clearTx(); await click('#bay [data-set="tees=junior"]'); await sleep(MODE_WAIT3);
+    const u7after = { on: await u7tees(), tees: await ev('ccTees'), said: await ev('__u7toast.slice()'), sent: (await squads()).filter((f) => f.op === 'mode').length };
+    await u3state({ mode: 'golf', tees: 'champ', members: [U3YOU(), U3MULE()] });
+    await ev(`(Bay.show('home'), true)`);
+    await click('#bay .lbar .ros'); await sleep(60);
+    await click('#bay [data-set="with=cpu"]'); await sleep(40);
+    await clearTx(); await click('#bay [data-set="tees=junior"]'); await sleep(MODE_WAIT3);
+    const u7lead = { tees: await ev('ccTees'), sent: (await squads()).filter((f) => f.op === 'mode').length };
+    await ev(`(window.showToast = window.__u7st, ccTees = 'mens', Bay.show('home'), true)`);
+    if (u7on === 'tees=champ' && u7after.on === 'tees=champ' && u7after.tees === 'mens' && JSON.stringify(u7after.said) === JSON.stringify(['The squad leader picks the tee set.']) && u7after.sent === 0
+        && u7lead.tees === 'junior' && u7lead.sent === 0)
+      ok(`${V}: a member with the squad sees the squad's tee set and a tap on another is explained and changes nothing; a leader playing alone changes only their own`);
+    else fail(`${V}: tee set lock ${JSON.stringify({ u7on, u7after, u7lead })}`);
+
+    // ---- U8. NOTHING SPILLS: four long callsigns waited for, on the longest
+    //      mode name, and the ribbon still fits its frame, the second line
+    //      ending in an ellipsis rather than pushing the readouts.
+    await ev(`(ccMode = 'aliens', true)`);
+    await u3state({ mode: 'aliens', fits: { duel: false, ffa: true, boss: false, aliens: true, golf: true },
+      members: [U3YOU({ ready: true }), U3MULE({ callsign: 'WWWWWWWWWWWWWWWW' }), U3PIKE({ callsign: 'MMMMMMMMMMMMMMMM' }), U3GUEST()] });
+    const u8 = await ev(`(() => { Bay.show('home'); const bar = document.querySelector('#bay .lbar'), b = bar.querySelector('.launch'), r = bar.querySelector('.ros').getBoundingClientRect(),
+      br = b.getBoundingClientRect(), bay = document.getElementById('bay');
+      return { barOver: bar.scrollWidth > bar.clientWidth + 1, clear: br.left >= r.right, inBar: br.right <= bar.getBoundingClientRect().right + 0.5,
+        bayOver: bay.scrollWidth > bay.clientWidth || bay.scrollHeight > bay.clientHeight,
+        // The LINES the text is laid out in, read off a Range over it: a block
+        // element answers one rect however many lines its text wraps to.
+        oneLine: (() => { const y = b.querySelector('.rdys'), rg = document.createRange(); rg.selectNodeContents(y);
+          return new Set([...rg.getClientRects()].map((x) => Math.round(x.top))).size === 1; })() }; })()`);
+    await ev(`(ccMode = 'duel', true)`);
+    if (u8 && !u8.barOver && u8.clear && u8.inBar && !u8.bayOver && u8.oneLine)
+      ok(`${V}: four long callsigns waited for on Alien Invasion keep the ribbon inside its frame, the control clear of the readouts and its second line on one line`);
+    else fail(`${V}: ribbon fit ${JSON.stringify(u8)}`);
+    await u3state({ members: [U3YOU()] });
+    await ev(`(handle({ type: 'squad', op: 'ended', reason: 'left' }), Bay.show('home'), true)`); await sleep(60);
+  }
+} catch (e) {
+  fail('squad_ui U3 stopped: ' + (e && e.message));
 }
 clearTimeout(watchdog);
 cleanup();

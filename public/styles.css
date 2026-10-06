@@ -2157,9 +2157,6 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .sqfb .go,#bay .sqfb .ghost{flex:1;justify-content:center;height:calc(26 * var(--u));padding:0 calc(8 * var(--u));
      font-size:calc(12 * var(--u));gap:calc(5 * var(--u));box-shadow:none}
   #bay .sqfb .go svg,#bay .sqfb .ghost svg{width:calc(11 * var(--u));height:calc(11 * var(--u))}
-  /* "Pick N more", the Armoury's door (D-UI-3): one line, never "PICK 2 / MORE",
-     with a little of the footer's padding given back so it fits beside Leave. */
-  #bay .sqfb .sqrk{white-space:nowrap;padding:0 calc(5 * var(--u))}
   #bay .sqfb .go.cy.on{background:rgba(84,200,255,.16);color:#8adaff;border:1px solid #54c8ff}
   #bay .sqfb .go.cy.on svg{fill:#54c8ff}
   #bay .sqfb .go.cy[disabled]{background:#1f2740;color:#616e94;border:0}
@@ -2223,6 +2220,26 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .launch:hover{transform:translateY(calc(-2 * var(--u)));box-shadow:0 calc(20 * var(--u)) calc(38 * var(--u)) calc(-10 * var(--u)) rgba(255,122,46,.95);filter:brightness(1.06)}
   @keyframes lpulse{0%,100%{box-shadow:0 calc(14 * var(--u)) calc(30 * var(--u)) calc(-10 * var(--u)) rgba(255,122,46,.65),inset 0 1px 0 rgba(255,255,255,.4)}
      50%{box-shadow:0 calc(14 * var(--u)) calc(34 * var(--u)) calc(-8 * var(--u)) rgba(255,122,46,1),inset 0 1px 0 rgba(255,255,255,.4)}}
+
+  /* THE SQUAD'S READY CONTROL (U3; owner, 2026-10-06). In a squad of two or
+     more, home's Launch and Match setup's Start Game are the squad's Ready:
+     the count on the first line, who it waits for (or why it cannot start)
+     on the second. Three looks that never pass for one another: ORANGE while
+     it asks this player to ready up and while the squad counts down, CYAN
+     with a tick once they are ready, and the dead grey of every disabled
+     control while it cannot. The second line is 13u, the floor for a name on
+     a phone, and keeps to one line: a long pair of callsigns ends in an
+     ellipsis rather than pushing the readouts off the ribbon. */
+  #bay .rdy{flex-direction:column;gap:calc(3 * var(--u));line-height:1}
+  #bay .rdy .rdyt{display:inline-flex;align-items:center;gap:calc(6 * var(--u))}
+  #bay .rdy .rdys{display:block;max-width:calc(320 * var(--u));overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+     font-size:calc(13 * var(--u));font-weight:600;letter-spacing:.03em;text-transform:none}
+  #bay .launch.rdy .rdyt{font-size:calc(19 * var(--u))}
+  #bay .go.rdy .rdyt{font-size:calc(16 * var(--u))}
+  #bay .rdy.on{background:rgba(84,200,255,.16);color:#8adaff;border:1px solid #54c8ff;box-shadow:none;animation:none}
+  #bay .rdy.on svg{fill:#54c8ff}
+  #bay .launch.rdy[disabled]{background:#1f2740;color:#616e94;border:0;box-shadow:none;animation:none;cursor:not-allowed;filter:none;transform:none}
+  #bay .launch.rdy[disabled] svg{fill:#616e94}
 
   /* ------------------------------------------------------- inner page chrome */
   #bay .phead{position:absolute;left:calc(18 * var(--u));right:calc(18 * var(--u));top:calc(12 * var(--u));height:calc(44 * var(--u));display:flex;align-items:center;gap:calc(12 * var(--u));z-index:14}

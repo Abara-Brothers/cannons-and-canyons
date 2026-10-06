@@ -448,9 +448,8 @@ function fillRack(m) {
   rack = full.slice();
 }
 function togglePick(id) {
-  // The Armoury's own draft: the squad's mode while it fills the squad's rack
-  // (sqArmMode, D-UI-3), the armed mode otherwise.
-  const n = (sqArmMode() || state().mode).draft, r = rackPicks(), at = r.indexOf(id);
+  // The Armoury's own draft: the armed mode's.
+  const n = state().mode.draft, r = rackPicks(), at = r.indexOf(id);
   if (at >= 0) r.splice(at, 1); else if (r.length < n) r.push(id);
   try { localStorage.setItem('cc_loadout', JSON.stringify(r)); } catch {}
   // If the game's own draft is open for this size, keep it in step too.
@@ -564,13 +563,15 @@ const SQ_NONE = 'No squad or game with that code.';
 //   kick   -- the row the leader's open "Remove ...?" is about (sqKickAsk).
 //   ferr, fnote -- what the last Friends-tab action came back with, a refusal
 //             or the note the inviter is told, said under the row `fat` names.
+//   serr   -- why the squad's last start was refused, pushed to every member
+//             (U3): the ready control says it until this player's next action.
 //   invited -- friend id -> { snap, until }: Invited until the next roster or 30 s.
 // TASK 11's field:
 //   cbusy  -- a code is out: the code frame, or the squad join it led to. One
 //             code at a time (sqEnter).
 const sqFresh = (tab) => ({
   tab, known: false, gone: false, err: '', asking: false, cerr: '', cbusy: false, via: 0, again: false,
-  busy: '', aerr: '', ierr: '', ignored: '', used: null, kick: null,
+  busy: '', aerr: '', ierr: '', serr: '', ignored: '', used: null, kick: null,
   ferr: '', fnote: '', fat: '', invited: new Map(),
   get snap() { return window.CC_SQUAD || null; },
 });
@@ -740,7 +741,7 @@ function sqLead() {
     : SQ_ENDED);
   return sq.gone ? sqNote(SQ_ENDED) : '';
 }
-/* ---- THE SQUAD ITSELF: forming, Ready and Start (design 5.1 states 3-5) ---
+/* ---- THE SQUAD ITSELF: forming and Ready (design 5.1 states 3-5) ----------
    sqMine(sn) draws the squad in the slot as FIVE nodes, the same five in every
    squad state, and sqPane follows them with the refusal, the one code field
    and Retry. morphChildren is positional, so a node with nothing to say is
@@ -751,8 +752,8 @@ function sqLead() {
               under a refused re-ask, the squad in two read-only lines
      2        the Seats line (the leader) or who decides (a member)
      3 .sqae  what the last squad action was refused with
-     4 .sqft  the footer: the mode readout and Start, or Ready and Leave, or
-              the leader's "Remove <name> from the squad?"
+     4 .sqft  the footer: the mode readout (or the countdown), Ready and
+              Leave, or the leader's "Remove <name> from the squad?"
    UNDER A REFUSED RE-ASK (sq.err) this socket may no longer hold its row -- a
    blip drops it and only a resume puts it back (task 5) -- so the squad is
    shown, and nothing in it is offered: Retry is the way back.
@@ -789,33 +790,13 @@ function sqRack(modeId) {
   if (!picks.length && has('ARM_DEFAULT')) picks = ARM_DEFAULT.slice();
   picks = picks.slice(0, m.draft);
   // GOLF ASKS FOR NO RACK, BUT ITS SEAT STILL CARRIES ONE: the server checks a
-  // golf member's Ready and the leader's Start against five distinct weapons
-  // (MODE_SEATS' `|| 5`), though golf never fires them. The bay shows golf only
-  // its bag and never the Armoury's picks, so a short stored rack would leave
-  // "Pick N more" opening a bag with nothing to pick. Golf's rack is the stored
-  // picks topped up from the standard draft, then the pool: always full, never
-  // shown, and the stored preference itself is left untouched.
+  // golf member's Ready (and an old client's Start) against five distinct
+  // weapons (MODE_SEATS' `|| 5`), though golf never fires them. The bay shows
+  // golf only its bag and never the Armoury's picks, so golf's rack is the
+  // stored picks topped up from the standard draft, then the pool: always
+  // full, never shown, and the stored preference itself is left untouched.
   if (m.id === 'golf') picks = topUp(picks, m.draft);
   return picks;
-}
-// THE SQUAD'S RACK IN THE ARMOURY (D-UI-3). The footer counts the rack against
-// the SQUAD's mode (sqRack), but the Armoury drafts for the mode this device
-// has ARMED -- so a member armed on Duel (five) in a Boss Fight squad (seven)
-// was told "Pick 2 more" by a dead button, and the Armoury would not take a
-// sixth. That button is now the way in: it opens the Armoury for the squad's
-// mode, whose footer goes back to the squad. Only from there. Reached from
-// Match setup's Edit or the Bay stations, the Armoury is the player's own
-// rack, for the armed mode, with Done; render() drops the flag the moment the
-// Armoury is left.
-let sqArm = false;
-const sqArmMode = () => (sqArm && sqLive(sq.snap) ? modeOf(sq.snap.mode) : null);
-function sqRackOpen() {
-  const sn = sq.snap;
-  if (!sqLive(sn)) return;
-  // The working copy starts as exactly what the footer counted.
-  rack = sqRack(sn.mode).slice();
-  sqArm = true;
-  go('armoury');
 }
 // What a squad action was refused with. Its own line and its own class: the
 // pane's first .sqe is the re-ask's refusal (sqPane), and a second sentence
@@ -837,13 +818,11 @@ const sqRid = (p) => (p && typeof p.rid === 'string' && p.rid ? p.rid : '');
 function sqRow(p, i, sn, ctl) {
   const you = i === sn.you, name = nameOf(p), lead = sqIsLead(sn, p);
   const lit = !!p.online && !p.dropped;
-  // THE LEADER'S ROW SAYS LEADER AND NOTHING ABOUT READY (fix wave E9): the
-  // leader has no Ready control, the footer's "Waiting for N" counts members
-  // only, and Start takes the leader's rack as their Ready -- so "Not ready"
-  // there was false for ever, and a tick left over from before a hand-off
-  // would be as false. Reconnecting still shows: it is not a Ready state.
+  // THE LEADER'S ROW SAYS READY OR NOT, LIKE EVERY ROW (U3; owner,
+  // 2026-10-06). Fix wave E9 took it off when the leader had no Ready and
+  // Start stood in for one; now the leader readies like everyone else, and
+  // the squad starts when every row carries the tick.
   const st = p.dropped ? '<span class="sqr dr">Reconnecting</span>'
-    : lead ? ''
     : p.ready ? '<span class="sqr on" role="img" aria-label="Ready" title="Ready">' + IC.tick + '</span>'
     : '<span class="sqr">Not ready</span>';
   const kick = ctl.lead && !you && !lead && !!sqRid(p);
@@ -878,20 +857,27 @@ function sqSeatsLine(sn, hide) {
 }
 // DESIGN 5.1 STATE 4. Where the leader has the Seats line, a member has the
 // one thing they need to know: who decides, and what happens to them then.
+// The leader picks the mode and no longer starts (U3): the last Ready does.
 function sqLeadNote(sn, hide) {
   const L = (sn.members || []).find((p) => sqIsLead(sn, p));
   return '<p class="sqnote' + (hide ? ' hidden' : '') + '">' + (L && named(L) ? esc(L.callsign) : 'The squad leader')
-    + ' picks the mode and starts. You will be placed in the room together.</p>';
+    + ' picks the mode. The match starts when everyone is ready.</p>';
 }
-// THE FOOTER. The leader's reads the mode and its seats, or -- in design
-// 5.1's order -- why Start is dead: seats first, because no Ready can fix a
-// squad the mode has no room for, and telling the leader who to wait for would
-// be a lie about what is wrong. A member's carries Ready and Leave. The Ready
-// toggle says its state with a tick and aria-pressed, not with a second word.
+// THE FOOTER. The leader's line reads the mode and its seats, or -- in design
+// 5.1's order -- why the squad cannot start: seats first, because no Ready can
+// fix a squad the mode has no room for, and then how many it is waiting for. A
+// member's reads the mode. While the squad counts down, both say so.
+// EVERYONE HAS READY AND LEAVE (U3; owner, 2026-10-06): the leader readies like
+// every member and nobody starts the match -- the last Ready does, after the
+// countdown every member sees. The Ready toggle says its state with a tick and
+// aria-pressed, not with a second word, and standing UP is dead while the
+// squad could not start (sqUpWhy); standing down never is.
+// A SHORT RACK NEEDS NOTHING FIRST: Ready fills it with standard weapons
+// (sqReady), the owner's rule for every start, so the Armoury's door that
+// stood here in Ready's place ("Pick N more", D-UI-3) has gone.
 function sqFoot(sn, ctl, hide) {
   const ms = sn.members || [], me = sqMe(sn), m = modeOf(sn.mode), seats = SQ_SEATS[m.id];
   const open = '<div class="sqft' + (hide ? ' hidden' : '') + '">';
-  const short = m.draft - sqRack(m.id).length;
   // THE LEADER'S OPEN QUESTION TAKES THE FOOTER while it is live (sqKickLive),
   // and names the row as it stands NOW: the handle is the row's, and a guest
   // who signed in since the question opened is shown by the name they have.
@@ -901,38 +887,24 @@ function sqFoot(sn, ctl, hide) {
       + '<button class="ghost" data-sq="kcancel"' + (sq.busy ? ' disabled' : '') + '>Cancel</button>'
       + '<button class="go" data-sq="kok"' + (ctl.on && !sq.busy ? '' : ' disabled') + '>' + (sq.busy === 'kick' ? 'Removing' : 'Remove') + '</button></div></div>';
   }
-  if (ctl.lead) {
-    const fit = !!(sn.fits && sn.fits[sn.mode]);
-    const waiting = ms.filter((p, i) => i !== sn.you && (!p.ready || p.dropped)).length;
-    const line = sq.busy === 'start' ? 'Rolling out'
-      : !fit ? esc(m.name) + ' &middot; seats ' + seats + ', squad ' + ms.length
-      : waiting ? 'Waiting for ' + waiting
-      : esc(m.name) + ' &middot; ' + seats;
-    const off = !ctl.on || !!sq.busy || !fit || waiting > 0 || short > 0;
-    // THE LEADER LEAVES TOO (D-UI-3). The design's Start-only footer left a
-    // leader no way out but joining another squad; the server's leave hands
-    // the lead to the earliest signed-in member (squads.js detach), or ends a
-    // squad nobody left in it can lead.
-    // A SHORT RACK HAS NO START: its place is the Armoury's door (sqRackDoor).
-    return open + '<p class="sqfl">' + line + '</p><div class="sqfb">'
-      + (short > 0 && sq.busy !== 'start' ? sqRackDoor(ctl, short, 'go')
-        : '<button class="go" data-sq="start"' + (off ? ' disabled' : '') + '>' + IC.play + 'Start</button>')
-      + sqLeaveBtn(ctl) + '</div></div>';
-  }
+  const fit = !!(sn.fits && sn.fits[sn.mode]);
+  const waiting = ms.filter((p, i) => i !== sn.you && (!p.ready || p.dropped)).length;
+  const left = sqCountLeft();
+  const line = left !== null ? (left > 0 ? 'Starting in ' + left : 'Starting')
+    : !ctl.lead ? esc(m.name) + ' &middot; ' + seats
+    : !fit ? esc(m.name) + ' &middot; seats ' + seats + ', squad ' + ms.length
+    : waiting ? 'Waiting for ' + waiting
+    : esc(m.name) + ' &middot; ' + seats;
   const ready = !!(me && me.ready && !me.dropped);
-  const need = short > 0 && !ready;               // standing DOWN never needs a rack
-  return open + '<p class="sqfl">' + esc(m.name) + ' &middot; ' + seats + '</p><div class="sqfb">'
-    + (need && sq.busy !== 'ready' ? sqRackDoor(ctl, short, 'go cy')
-      : '<button class="go cy' + (ready ? ' on' : '') + '" data-sq="ready" aria-pressed="' + ready + '"'
-        + (!ctl.on || sq.busy || need ? ' disabled' : '') + '>'
-        + (sq.busy === 'ready' ? 'Sending' : (ready ? IC.tick : '') + 'Ready') + '</button>')
+  // THE LEADER LEAVES TOO (D-UI-3). The server's leave hands the lead to the
+  // earliest signed-in member (squads.js detach), or ends a squad nobody left
+  // in it can lead.
+  return open + '<p class="sqfl">' + line + '</p><div class="sqfb">'
+    + '<button class="go cy' + (ready ? ' on' : '') + '" data-sq="ready" aria-pressed="' + ready + '"'
+      + (!ctl.on || sq.busy || (!ready && sqUpWhy(sn)) ? ' disabled' : '') + '>'
+      + (sq.busy === 'ready' ? 'Sending' : (ready ? IC.tick : '') + 'Ready') + '</button>'
     + sqLeaveBtn(ctl) + '</div></div>';
 }
-// "PICK N MORE" OPENS THE ARMOURY FOR THE SQUAD'S MODE (D-UI-3) and starts,
-// readies and sends nothing. It is a squad control like the rest, so it waits
-// for held === true (D-UI-1) and for no other action to be out.
-const sqRackDoor = (ctl, short, cls) => '<button class="' + cls + ' sqrk" data-sq="rack"' + (ctl.on && !sq.busy ? '' : ' disabled') + '>'
-  + 'Pick ' + short + ' more</button>';
 function sqLeaveBtn(ctl) {
   return '<button class="ghost" data-sq="leave"' + (!ctl.on || sq.busy ? ' disabled' : '') + '>'
     + (sq.busy === 'leave' ? 'Leaving' : 'Leave') + '</button>';
@@ -1019,7 +991,7 @@ function sqOne(frame, o) {
   const mine = sq;
   if (mine.busy) return false;              // one action at a time: the box has one footer
   sqLeftSpend();                            // a new action: "You left the squad." has been read
-  mine.aerr = ''; mine.ierr = ''; mine.ferr = ''; mine.fnote = '';
+  mine.aerr = ''; mine.ierr = ''; mine.ferr = ''; mine.fnote = ''; mine.serr = '';
   mine.busy = o.busy;
   socialTx(frame, o.type || 'squad', o.op, o.kind, (m, err) => {
     mine.busy = '';
@@ -1034,9 +1006,10 @@ function sqOne(frame, o) {
 // A START REFUSED FOR ONE MEMBER NAMES THEM, when the server points at one (`at`
 // rides on member_offline, member_busy and duplicate_member -- the second row of
 // the account that is on two) and the roster has a name for
-// that row. The roster reached the slot before this answer (the server pushes
-// it first), so `at` is read against the rows on screen. A row with no name is
-// never called "No callsign": the sentence falls back to "a player".
+// that row. The refusal arrives ahead of the roster that follows it (R6's
+// order, and the countdown's), so `at` is read against the rows on screen,
+// the roster the refusal counted. A row with no name is never called "No
+// callsign": the sentence falls back to "a player".
 // member_offline is ALSO what a live row gets while the server reads the blocks
 // of a player who has just signed in (task 6), so it never says anyone left.
 function sqStartSay(m, err) {
@@ -1047,32 +1020,25 @@ function sqStartSay(m, err) {
   if (m.error === 'duplicate_member') return who ? who + ' is in the squad twice. Remove one and try again.' : err;
   return err;
 }
-// READY, a member's toggle. THE CLIENT CHECKS FIRST AND THE SERVER RE-CHECKS
-// (design 4.3): standing down is always allowed and carries no rack; standing
-// up needs a full rack for the SQUAD's mode.
+// READY, EVERYONE'S TOGGLE (U3; owner, 2026-10-06: the leader readies too):
+// the box's, the home ribbon's and Match setup's, one function. THE CLIENT
+// CHECKS FIRST AND THE SERVER RE-CHECKS (design 4.3): standing down is always
+// allowed and carries no rack; standing up needs a squad that could start
+// (sqUpWhy) and a full rack for the SQUAD's mode -- the stored picks with any
+// empty slot filled with standard weapons and saved, exactly as Start Game
+// fills one (fillRack), so a short rack never refuses a Ready. -> true when a
+// frame went out.
 function sqReady() {
   const sn = sq.snap, me = sqMe(sn);
-  if (!sqLive(sn) || !me || sqIsLead(sn, me)) return;
-  const up = !(me.ready && !me.dropped), picks = sqRack(sn.mode);
-  if (up && picks.length < modeOf(sn.mode).draft) return;
-  sqOne(up ? { type: 'squad', op: 'ready', ready: true, loadout: picks } : { type: 'squad', op: 'ready', ready: false },
-    { op: 'ready', kind: 'squad.ready', busy: 'ready' });
-}
-// START, the leader's. THE GATES ARE IN THE HANDLER as well as on the button:
-// a disabled attribute is a hint about a DOM this client does not own for the
-// whole of its life, and a Start that outlived its snapshot must not ask the
-// server to seat a squad the mode has no room for. The server re-checks every
-// one of them; these keep a stale tap from spending a request on a refusal.
-function sqStart() {
-  const sn = sq.snap, ms = (sn && sn.members) || [];
-  if (!sqLive(sn) || !sqIsLead(sn, sqMe(sn))) return;
-  const picks = sqRack(sn.mode);
-  if (!(sn.fits && sn.fits[sn.mode] === true)) return;
-  if (picks.length < modeOf(sn.mode).draft) return;
-  if (ms.some((p, i) => i !== sn.you && (!p.ready || p.dropped))) return;
-  // The leader's rack rides on the frame: the server takes it as the leader's
-  // Ready for this start only (squadStart).
-  sqOne({ type: 'squad', op: 'start', loadout: picks }, { op: 'start', kind: 'squad.start', busy: 'start', say: sqStartSay });
+  if (!sqLive(sn) || !me) return false;
+  const o = { op: 'ready', kind: 'squad.ready', busy: 'ready' };
+  if (me.ready && !me.dropped) return sqOne({ type: 'squad', op: 'ready', ready: false }, o);
+  if (sqUpWhy(sn)) return false;
+  const m = modeOf(sn.mode);
+  if (!isGolf(m)) fillRack(m);
+  const picks = topUp(sqRack(m.id), m.draft);
+  if (picks.length < m.draft) return false;
+  return sqOne({ type: 'squad', op: 'ready', ready: true, loadout: picks }, o);
 }
 // THE LEADER'S REMOVE ASKS FIRST (C11): "Remove <name> from the squad?", with
 // Cancel and Remove, in the footer. WHAT IT ASKS ABOUT IS PINNED when it opens,
@@ -1129,8 +1095,8 @@ function sqCopyLink() {
 // LEADER's row (sqLive, D-UI-1), puts it to the squad. A member's tap stays
 // theirs: the server would answer 'not_leader' every time, so it is not sent.
 // COALESCED, AND ONLY WHAT DIFFERS. Every squad op spends from one bucket of
-// twenty a minute per socket (server/social.js LIMITS.squad), Start's included,
-// so a leader reading the boards a tap at a time must not spend Start's
+// twenty a minute per socket (server/social.js LIMITS.squad), Ready's included,
+// so a leader reading the boards a tap at a time must not spend Ready's
 // allowance: the send waits until the taps stop, reads what is armed THEN, and
 // goes only when the squad's own roster says something else. The answer to a
 // mode is the roster the server pushes to everyone; a refusal is said on the
@@ -1146,14 +1112,15 @@ function boardMode() {
 function sqModeSend() {
   const sn = sq.snap;
   if (!sqLive(sn) || !sqIsLead(sn, sqMe(sn)) || !wsReady()) return;
-  // THE SERVER'S SHAPE: tees for golf alone, a seat count for the free-for-all,
-  // null for the rest -- and a count is state()'s number, never a <select>'s
-  // string, which the server refuses as bad_max. Golf has no count to send any
-  // more (owner, 2026-10-06): the Players picker is gone, and the server sizes
-  // a squad's room to the squad (seat-squad.js).
+  // THE SERVER'S SHAPE: tees for golf alone, and no seat count for any mode
+  // (owner, 2026-10-06): the server sizes a squad's room to the squad
+  // (seat-squad.js), golf's Players picker is gone, and the free-for-all's
+  // count is the CPU count of a game against the computer -- sent to the squad
+  // it stood every member down for nothing (U3: every change clears every
+  // Ready).
   const s = state(), mode = s.mode.id;
   const tees = mode === 'golf' ? s.tees : null;
-  const max = mode === 'ffa' ? s.count : null;
+  const max = null;
   if (mode === sn.mode && tees === (sn.tees == null ? null : sn.tees) && max === (sn.max == null ? null : sn.max)) return;
   // Written to `mine`, the state that asked, as every squad answer is: an
   // account switch replaces `sq`, and the old account's refusal is not the
@@ -1175,8 +1142,8 @@ function sqModeSend() {
 // new squad, a mode the leader changed), and a leader's take them once after a
 // resume -- the reload after a match -- and are otherwise the leader's own
 // taps, which a roster landing before their mode frame must not undo. A
-// member's own tap still arms their own board (E5: they may launch a room of
-// their own) and stands until the squad next changes. Only while home or the
+// member's tap on another board no longer arms it (U3; it did under E5): the
+// leader picks the mode, and the tap is explained (sqLockWhy). Only while home or the
 // Mission board is being drawn (render calls this): a player in Match setup or
 // the Armoury keeps the mode they opened it for, and meets the squad's on
 // their way back home. The tee set and the free-for-all's count are written as
@@ -1410,8 +1377,6 @@ function sqAct(v) {
   // TASK 9: the squad's own controls.
   if (op === 'link') { sqCopyLink(); return; }
   if (op === 'ready') { sqReady(); return; }
-  if (op === 'start') { sqStart(); return; }
-  if (op === 'rack') { if (!sq.busy) sqRackOpen(); return; }
   // The server answers a leave with its own op, `left`.
   if (op === 'leave') { if (sqLive(sq.snap)) sqOne({ type: 'squad', op: 'leave' }, { op: 'left', kind: 'squad.leave', busy: 'leave' }); return; }
   if (op === 'join') { sqJoin(arg); return; }
@@ -2781,11 +2746,8 @@ SCREENS.friends = function () {
 // to whichever of the two opened it (the stack's own back). It never launches:
 // only Match setup starts a match, and a rack left short there is filled then.
 SCREENS.armoury = function () {
-  // `sm`: the squad's mode, when this Armoury was opened to fill the squad's
-  // rack (sqRackOpen, D-UI-3); otherwise null, and every line below reads
-  // exactly as it always has.
-  const s = state(), sm = sqArmMode(), m = sm || s.mode, n = m.draft, picks = rackPicks().slice(0, n), full = picks.length >= n;
-  if (isGolf(m)) return golfBagScreen(s, m, sm);
+  const s = state(), m = s.mode, n = m.draft, picks = rackPicks().slice(0, n), full = picks.length >= n;
+  if (isGolf(m)) return golfBagScreen(s, m);
   const pool = has('ARM_POOL') ? ARM_POOL : [];
   const cells = RACK_ORDER.map((id) => {
     const w = weaponInfo(id), on = picks.includes(id), pickable = pool.includes(id);
@@ -2808,24 +2770,20 @@ SCREENS.armoury = function () {
     + '</div>'
     + '<div class="rack">' + cells + info + '</div>'
     + '</div>';
-  // The squad's rack goes back to the squad: this is not a room of the
-  // player's own, so it offers no launch. Back is the way home in the header
-  // too (data-back), and the box's Ready or Start is what comes next.
-  // Done is never held back by a short rack: Start Game fills one (fillRack),
-  // and the hint says so while it is short.
-  const foot = sm
-    ? '<span class="hint">Loading for your squad&rsquo;s ' + esc(m.name) + '</span><span class="grow"></span>'
-      + '<button class="go" ' + (full ? 'data-back' : 'disabled') + '>' + (full ? 'Back to the squad' : 'Pick ' + (n - picks.length) + ' more') + '</button>'
-    : '<span class="hint">' + (full ? 'Everyone carries the Cannon &middot; the Railgun only drops in crates' : 'Empty slots are filled with standard weapons') + '</span><span class="grow"></span>'
-      + '<button class="go" data-back>Done</button>';
-  return chrome('Armoury', 'Load the rack &mdash; ' + n + ' weapons go into the field', sm ? 'Your squad' : 'Your rack', body, foot);
+  // Done is never held back by a short rack: Start Game and a squad's Ready
+  // fill one (fillRack), and the hint says so while it is short. THE SQUAD'S
+  // OWN ARMOURY HAS GONE (U3): it was the box's "Pick N more" door, for a rack
+  // too short to ready with, and a Ready now fills a short rack itself.
+  const foot = '<span class="hint">' + (full ? 'Everyone carries the Cannon &middot; the Railgun only drops in crates' : 'Empty slots are filled with standard weapons') + '</span><span class="grow"></span>'
+    + '<button class="go" data-back>Done</button>';
+  return chrome('Armoury', 'Load the rack &mdash; ' + n + ' weapons go into the field', 'Your rack', body, foot);
 };
 
-// 4, FOR GOLF — THE GOLF BAG. The Armoury's door (the Bay stations row, a
-// squad's) opens this instead when golf is the mode: the four clubs and what
-// each one does, read-only. Nothing is picked here and nothing has to be, so
-// Done is always live; like the Armoury's, it goes back where it came from.
-function golfBagScreen(s, m, sm) {
+// 4, FOR GOLF — THE GOLF BAG. The Armoury's door (the Bay stations row)
+// opens this instead when golf is the mode: the four clubs and what each one
+// does, read-only. Nothing is picked here and nothing has to be, so Done is
+// always live; like the Armoury's, it goes back where it came from.
+function golfBagScreen(s, m) {
   const card = (id) => {
     const w = weaponInfo(id);
     return '<div class="gclub"><span class="gct">' + wicon(id) + '<span class="gcn">' + esc(w.name) + '</span></span>'
@@ -2843,12 +2801,9 @@ function golfBagScreen(s, m, sm) {
     + '</div>'
     + '<div class="gbag">' + GOLF_BAG.map(card).join('') + '</div>'
     + '</div>';
-  const foot = sm
-    ? '<span class="hint">Your squad&rsquo;s ' + esc(m.name) + ' carries these four clubs</span><span class="grow"></span>'
-      + '<button class="go" data-back>Back to the squad</button>'
-    : '<span class="hint">No draft in golf &middot; every player carries these four clubs</span><span class="grow"></span>'
-      + '<button class="go" data-back>Done</button>';
-  return chrome('Golf bag', 'Four clubs &mdash; the same bag for every player', sm ? 'Your squad' : 'No draft', body, foot);
+  const foot = '<span class="hint">No draft in golf &middot; every player carries these four clubs</span><span class="grow"></span>'
+    + '<button class="go" data-back>Done</button>';
+  return chrome('Golf bag', 'Four clubs &mdash; the same bag for every player', 'No draft', body, foot);
 }
 
 // 5 — LOBBY. Fed by the game's own lobby messages (see the wrappers at the
@@ -3001,23 +2956,103 @@ const SETUP_TRIPS = ['armoury', 'paint', 'modes'];
 const sqTwoPlus = () => { const sn = sq.snap; return sqLive(sn) && Array.isArray(sn.members) && sn.members.length >= 2; };
 const setupSquad = () => sqTwoPlus() && setupWith !== 'cpu';
 const SQ_WITH_WHY = 'Needs a squad of 2 or more';
-// THE SQUAD'S READY, from Start Game while Your squad is the choice. TASK U3
-// builds that control -- every member readies up, and the last Ready counts
-// the match in -- and implements it here. Until then it does nothing and says
-// so by answering false: Start Game never makes a room of the player's own
-// while the squad is the choice.
-function squadReadyToggle() { return false; }
-// START GAME'S WORDS, from this one place. TASK U3 extends it: with Your squad
-// the choice (`withSquad`), the button becomes the squad's Ready and shows how
-// many are ready of how many.
-function startGameLabel(withSquad) { return 'Start Game' + IC.play; }
+// ---- THE SQUAD'S READY CONTROL (U3; owner, 2026-10-06) --------------------
+// "All players must ready up and then the game starts ... easy for new players
+// to pick up on straight away." In a squad of two or more the big orange
+// Launch on home, and Start Game in Match setup while Your squad is the
+// choice, BECOME the squad's Ready, and always say how many of the squad are
+// ready: "Ready up 0/2"; tapped, "Ready 1/2" and who it is waiting for; tapped
+// again, it stands down. The last Ready starts the server's countdown,
+// "Starting in 3, 2, 1", which every member sees, and anyone standing down
+// stops it. A squad of one is no squad: Launch and Start Game are the
+// ordinary ones.
+// What the control says while the squad could not start, as a reason in
+// words. The seats are the server's seat table, as SQ_SEATS spells them.
+const SQ_NEED = { duel: '2', ffa: '2 to 4', boss: '1 to 2', aliens: '1 to 2', golf: '1 to 4' };
+// A member as the waiting line names them: the callsign the server proved, and
+// never "No callsign" in a sentence.
+const sqWho = (p) => (named(p) ? p.callsign : p && p.guest ? 'a guest' : 'a player');
+// WHY THIS SQUAD CANNOT READY UP NOW, or '' when it can: no squad of two, a
+// mode the squad does not fit, or a member who is not there. The server would
+// count none of those in, so standing up is refused here with the reason on
+// screen, and standing down never is.
+function sqUpWhy(sn) {
+  const ms = (sn && sn.members) || [], me = sqMe(sn), m = modeOf(sn.mode);
+  if (ms.length < 2) return SQ_WITH_WHY;
+  if (!(sn.fits && sn.fits[sn.mode])) return m.name + ' needs ' + SQ_NEED[m.id] + ' players';
+  const away = ms.find((p) => p !== me && (p.dropped || p.online === false));
+  return away ? sqWho(away) + (away.dropped ? ' is reconnecting' : ' is offline') : '';
+}
+// THE COUNTDOWN, in whole seconds left (3, 2, 1, then 0 while the room is
+// built), or null when none runs. Counted from app.js's CC_SQUAD_STARTS, the
+// moment the roster arrived plus the time the server said was left, so a
+// device whose clock is wrong counts the same three seconds.
+function sqCountLeft() {
+  const at = window.CC_SQUAD_STARTS;
+  if (!sq.snap || !(typeof at === 'number' && at > 0)) return null;
+  return Math.max(0, Math.ceil((at - performance.now()) / 1000));
+}
+// THE CONTROL'S STATE, or null outside a squad of two or more (the ordinary
+// Launch and Start Game).
+//   label  the words on the button: "Ready up 1/2", "Ready 1/2", "Starting in 2"
+//   say    the line beneath them: who it is waiting for (you first, at most
+//          two names, then "+k"), why it cannot start, the last start's
+//          refusal, or that everyone is ready
+//   mine   this player is ready; dis: a tap would do nothing
+function sqReadyCtl() {
+  if (!sqTwoPlus()) return null;
+  const sn = sq.snap, ms = sn.members, me = sqMe(sn);
+  if (!me) return null;
+  const on = (p) => !!(p && p.ready && !p.dropped);
+  const n = ms.filter(on).length, mine = on(me), left = sqCountLeft();
+  const why = wsReady() ? sqUpWhy(sn) : 'Needs a connection';
+  const names = ms.filter((p) => !on(p)).map((p) => (p === me ? 'you' : sqWho(p)));
+  const waiting = names.length > 2 ? names.slice(0, 2).join(', ') + ' +' + (names.length - 2) : names.join(', ');
+  return {
+    mine, left, n, of: ms.length,
+    label: left !== null ? (left > 0 ? 'Starting in ' + left : 'Starting') : (mine ? 'Ready ' : 'Ready up ') + n + '/' + ms.length,
+    say: left !== null ? 'Everyone is ready' : why || sq.serr || (names.length ? 'Waiting for ' + waiting : 'Everyone is ready'),
+    dis: !wsReady() || !!sq.busy || (!mine && !!why),
+  };
+}
+// THE CONTROL AS A BUTTON, for the ribbon's .launch and Match setup's .go:
+// orange while it asks this player to ready up and while the squad counts
+// down, cyan with a tick once this player is ready, and the dead grey of every
+// disabled control while it cannot ready, so the three never look alike.
+// aria-pressed says the toggle's state; the words say the rest.
+function sqReadyBtn(base, attr, c) {
+  const st = c.left !== null ? 'cd' : c.mine ? 'on' : 'up';
+  return '<button class="' + base + ' rdy ' + st + '" ' + attr + ' aria-pressed="' + c.mine + '"' + (c.dis ? ' disabled' : '') + '>'
+    + '<span class="rdyt">' + (c.mine && c.left === null ? IC.tick : '') + esc(c.label) + '</span>'
+    + '<span class="rdys">' + esc(c.say) + '</span></button>';
+}
+// THE HOOK MATCH SETUP'S START GAME AND THE RIBBON CALL. -> true when the
+// squad's control took the tap (it may still send nothing, when the squad
+// cannot ready), false when there is no squad of two to ready in.
+function squadReadyToggle() {
+  const c = sqReadyCtl();
+  if (!c) return false;
+  if (!c.dis) sqReady();
+  return true;
+}
+// START GAME, from this one place: the squad's Ready while Your squad is the
+// choice (`withSquad`), the ordinary Start Game otherwise.
+function startGameBtn(withSquad) {
+  const c = withSquad ? sqReadyCtl() : null;
+  return c ? sqReadyBtn('go', 'data-launch', c) : '<button class="go" data-launch>Start Game' + IC.play + '</button>';
+}
 // THE TAP. Read when it lands, never when the button was drawn: a squad that
 // shrank under the screen is Computer or Solo again by now (setupSquad). A rack
 // short of the mode's draft is filled and saved first (fillRack), so Start
 // Game always works; golf drafts nothing. Then the exact old create path: the
 // legacy button's own handler, which sends the 'ai' frame or the Solo create.
+// PLAYING ALONE FROM A SQUAD STANDS THIS PLAYER DOWN FIRST (U3): a Ready left
+// standing would let the squad count this player into its match while they
+// are in their own, and the seating would then be refused for all of them.
 function startGame() {
   if (setupSquad()) { squadReadyToggle(); return; }
+  const me = sqTwoPlus() ? sqMe(sq.snap) : null;
+  if (me && me.ready && !me.dropped) sqOne({ type: 'squad', op: 'ready', ready: false }, { op: 'ready', kind: 'squad.ready', busy: 'ready' });
   const m = state().mode;
   if (!isGolf(m)) fillRack(m);
   const b = $('createBtn'); if (b) b.onclick();
@@ -3035,8 +3070,11 @@ SCREENS.setup = function () {
   // Computer only; golf has no seat count at all (alone is a round for one,
   // a squad is the whole squad), and keeps its tee set either way.
   const withSeg = seg('Play with', 'with', [['cpu', cpuMode ? 'Computer' : 'Solo'], ['squad', 'Your squad', squadOk ? '' : SQ_WITH_WHY]], withSq ? 'squad' : 'cpu', false);
+  // A MEMBER PLAYING WITH THE SQUAD IS SHOWN THE SQUAD'S TEE SET, live, and a
+  // tap on another one is explained (sqLockWhy): the leader picks it (U3).
+  const sn = sq.snap, teesOn = withSq && !sqIsLead(sn, sqMe(sn)) && SQ_TEES.includes(sn.tees) ? sn.tees : s.tees;
   const extra = seg('CPU commanders', 'count', [[3, '2'], [4, '3']], s.count, !(m.id === 'ffa' && vsCpu))
-    + seg('Tee set', 'tees', [['champ', 'Champ'], ['mens', 'Men&rsquo;s'], ['womens', 'Women&rsquo;s'], ['junior', 'Junior']], s.tees, m.id !== 'golf')
+    + seg('Tee set', 'tees', [['champ', 'Champ'], ['mens', 'Men&rsquo;s'], ['womens', 'Women&rsquo;s'], ['junior', 'Junior']], teesOn, m.id !== 'golf')
     + seg('Difficulty', 'diff', [['easy', 'Easy'], ['medium', 'Medium'], ['hard', 'Hard']], s.diff, !vsCpu);
   const withText = withSq ? 'Your squad' : vsCpu ? 'Computer &middot; ' + esc(cap(s.diff)) : 'Solo';
   const tall = m.id === 'ffa' && vsCpu;       // three visible option groups
@@ -3079,13 +3117,13 @@ SCREENS.setup = function () {
   const foot = '<button class="ghost" data-go="modes">Change mode</button>'
     + '<span class="hint">' + (isGolf(m) ? 'No draft in golf &middot; every player carries the same four clubs'
       : short ? 'Empty slots are filled with standard weapons' : 'Everyone carries the Cannon &middot; the Railgun only drops in crates') + '</span><span class="grow"></span>'
-    + '<button class="go" data-launch>' + startGameLabel(withSq) + '</button>';
+    + startGameBtn(withSq);
   // Two steps now: a mode (a home board or the Mission board), then this.
   return chrome(esc(m.name), 'Match setup', 'Step 2 of 2', body, foot);
 };
 
 SCREENS.home = function () {
-  const s = state(), m = s.mode;
+  const s = state(), m = s.mode, ready = sqReadyCtl();
   // LAUNCH MUST NEVER BE A SURPRISE: the Players readout says what it will do.
   // Launch opens Match setup, and setup opens on its default whenever it is
   // entered from here (setupWith), so this is the default and never a choice
@@ -3152,7 +3190,11 @@ SCREENS.home = function () {
     +   '<span class="ro"><span class="rk">Paint</span><span class="rv">' + esc(s.skin.name) + '</span></span>'
     +   '</button>'
     +   '<span class="grow"></span>'
-    +   '<button class="launch" data-go="setup">' + IC.play + 'Launch</button>'
+    // IN A SQUAD OF TWO OR MORE, LAUNCH IS THE SQUAD'S READY (U3): the count,
+    // and who it waits for, on the button itself. Match setup is still the
+    // readouts' door, and Play with there is where a player picks the
+    // computer, or a run alone, over the squad.
+    +   (ready ? sqReadyBtn('launch', 'data-rdy', ready) : '<button class="launch" data-go="setup">' + IC.play + 'Launch</button>')
     + '</div>'
     + '</div></div>';
 };
@@ -3230,8 +3272,6 @@ function render(name) {
   // Home and the Mission board draw the armed mode: for a squad's member it is
   // the squad's (sqFollow), set before the markup is built.
   if (next === 'home' || next === 'modes') sqFollow(next);
-  // The Armoury fills the squad's rack only for the visit sqRackOpen began.
-  if (next !== 'armoury') sqArm = false;
   // Match setup opens on its default unless the player is coming back from a
   // screen it sent them to (setupWith, SETUP_TRIPS); set before the markup.
   if (next === 'setup' && current !== 'setup' && !SETUP_TRIPS.includes(current)) setupWith = null;
@@ -3311,9 +3351,25 @@ function setField(k, v) {
   if (fn('syncCreateRow')) syncCreateRow();
 }
 
+// A MEMBER CANNOT CHANGE THE SQUAD'S MODE OR ITS SETTINGS (U3; owner,
+// 2026-10-06: the leader picks the mode and the settings, and everyone
+// follows). A member's boards show the squad's mode (sqFollow), and a tap on
+// another one is explained rather than armed: it once armed this device's own
+// board, which then disagreed with the squad's. -> the sentence, or '' when
+// the tap is this player's to make: a leader's, any tap outside a squad of
+// two, the squad's own mode (which opens its setup) and every setting of a
+// match the member plays alone (Computer or Solo in Match setup, allowed as
+// before).
+function sqLockWhy(k, v) {
+  const sn = sq.snap;
+  if (!sqTwoPlus() || sqIsLead(sn, sqMe(sn))) return '';
+  if (k === 'mode' && v !== sn.mode) return 'The squad leader picks the mode.';
+  if (k === 'tees' && setupSquad() && v !== sn.tees) return 'The squad leader picks the tee set.';
+  return '';
+}
 document.addEventListener('click', (e) => {
   const host = $('bay'); if (!host || !host.classList.contains('active')) return;
-  const t = e.target.closest('[data-go],[data-back],[data-set],[data-roll],[data-toggle],[data-launch],[data-pick],[data-old],[data-skin],[data-solo],[data-cs],[data-fr],[data-sq]');
+  const t = e.target.closest('[data-go],[data-back],[data-set],[data-roll],[data-toggle],[data-launch],[data-rdy],[data-pick],[data-old],[data-skin],[data-solo],[data-cs],[data-fr],[data-sq]');
   if (!t || !host.contains(t)) return;
   if (has('Audio')) Audio.ensure();
   // The lobby's Back IS Cancel. Leaving any other way strands a queued create
@@ -3336,15 +3392,22 @@ document.addEventListener('click', (e) => {
   }
   if (t.dataset.set) {
     const [k, v] = t.dataset.set.split('=');
+    // A MEMBER'S TAP ON THE SQUAD'S MODE OR SETTINGS IS EXPLAINED, NOT TAKEN.
+    const lock = sqLockWhy(k, v);
+    if (lock) { if (fn('showToast')) showToast(lock); return; }
     // A second tap on the mode that is already armed opens its setup -- and,
     // for a squad's leader, still puts that board to the squad: a squad starts
     // on Duel whatever was lit, and this is the only tap the lit board has.
     // boardMode() sends only what the squad's roster does not already say.
     if (k === 'mode' && current === 'home' && t.classList.contains('on')) { boardMode(); go('setup'); return; }
     setField(k, v);
-    // The mode, the golf tee set and the free-for-all's count are the squad's
-    // when this player leads it (D7); Match setup is where the last two change.
-    if (k === 'mode' || k === 'tees' || k === 'count') boardMode();
+    // The mode is the squad's when this player leads it (D7), and so is golf's
+    // tee set, changed in Match setup -- while Play with there is Your squad
+    // (U3). Every change stands the whole squad down now, so the settings of a
+    // match the leader plays alone, vs the computer or solo, stay theirs, and
+    // the free-for-all's CPU count is never the squad's: a squad's room is
+    // sized to the squad (sqModeSend).
+    if (k === 'mode' || (k === 'tees' && setupSquad())) boardMode();
     if (t.dataset.go) go(t.dataset.go); else render(current);
     return;
   }
@@ -3377,6 +3440,7 @@ document.addEventListener('click', (e) => {
     render(current); return;
   }
   if ('launch' in t.dataset) { startGame(); return; }   // Match setup's Start Game: one tap, the exact old path
+  if ('rdy' in t.dataset) { squadReadyToggle(); return; }   // home's Launch, in a squad of two or more (U3)
   if (t.dataset.go) go(t.dataset.go);
 });
 
@@ -3446,6 +3510,33 @@ document.addEventListener('cc:squad', () => {
   const host = $('bay');
   if (host && host.classList.contains('active') && current === 'modes') render('modes');
   sqNeed();
+  sqTick();
+});
+// THE COUNTDOWN TICKS ON SCREEN (U3): one repaint as each whole second of it
+// passes, and none while no countdown runs. Each roster re-arms it from the
+// time the server says is left, so it never drifts from the squad's.
+let sqTickT = 0;
+function sqTick() {
+  clearTimeout(sqTickT); sqTickT = 0;
+  const at = window.CC_SQUAD_STARTS;
+  if (!(typeof at === 'number' && at > 0)) return;
+  const left = at - performance.now();
+  if (left < -1000) return;                         // at nought: "Starting" until the room's own frames
+  sqTickT = setTimeout(() => { sqTickT = 0; sqPaint(); sqTick(); }, Math.max(20, (left % 1000 + 1000) % 1000 + 10));
+}
+// A SQUAD START REFUSED, PUSHED TO EVERY MEMBER (U3): a countdown that ended
+// in a refusal, or an old leader's Start the seating refused (R6). The squad
+// is shown stood down by the roster behind it; this says why, on the box's
+// action line and on the ready control, and as a toast anywhere the box is
+// not on screen. sqStartSay names the member at fault when the server points
+// at one.
+document.addEventListener('cc:squadrefused', (e) => {
+  const m = e.detail || {};
+  const say = sqStartSay(m, socErr('squad.start', typeof m.error === 'string' ? m.error : 'unavailable'));
+  sq.aerr = say; sq.serr = say;
+  sqPaint();
+  const host = $('bay');
+  if (!(host && host.classList.contains('active') && current === 'home') && fn('showToast')) showToast(say);
 });
 // BACK TO THIS TAB. An `ended: elsewhere`, a roster this tab was only shown
 // (`open`, D-UI-1), or any `gone`, may not be the last word: another tab of

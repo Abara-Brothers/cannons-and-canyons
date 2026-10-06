@@ -1573,6 +1573,13 @@ window.CC_SQUAD = null;
 // build does not know. Closed, so the server's word is never looked up
 // unchecked -- and 'open' is this client's word, never a server reason.
 window.CC_SQUAD_END = '';
+// WHEN THE SQUAD STARTS, ON THIS PAGE'S OWN CLOCK (U3): performance.now() plus
+// the `startsIn` of the roster in the slot, stamped as that frame ARRIVES, or 0
+// when no countdown runs. The server says how long is left, never a time of
+// day, so a phone whose clock is wrong still counts three, two, one; and
+// performance.now() does not jump when the device's clock is set. Written only
+// beside CC_SQUAD, by socialSquad().
+window.CC_SQUAD_STARTS = 0;
 // THE SQUAD INVITE THIS PLAYER JUST RECEIVED (task 9): `{ code, from:{ callsign },
 // size, max }`, or null. An invite is a PUSH, not a reply: the server sends it
 // unsolicited down every socket the invited player holds (design 4.3), with no
@@ -1666,6 +1673,11 @@ function socialReply(m) {
   // have left this client in a lobby whose room is gone (squadLobbyCheck).
   // Not returned from: the leader's answer still has its waiter to settle.
   if (m.type === 'squad' && m.op === 'start' && m.error) squadLobbyCheck();
+  // AND A PUSHED ONE IS NEWS FOR EVERY MEMBER (U3): a countdown that ended in a
+  // refusal is told to the whole squad, and so is a leader's Start the seating
+  // refused (R6). No request waits on it, so bay.js is handed it by event, to
+  // say why where the player is looking.
+  if (m.type === 'squad' && m.op === 'start' && m.error && m.id == null) document.dispatchEvent(new CustomEvent('cc:squadrefused', { detail: m }));
   // PRESENCE IS ALWAYS A PUSH, NEVER A REPLY, and it must not be matched like
   // one: `id` on this frame is the FRIEND's uuid (server/social.js's presence
   // fan-out), which is the very value BINDING resolution 3 puts in `id` on
@@ -1713,12 +1725,18 @@ function socialSquad(m) {
       window.CC_SQUAD = m;
       window.CC_SQUAD_END = '';
     }
+    // A number the server could have sent, or none: a countdown is seconds,
+    // never minutes, so anything else is not one.
+    const left = m.held !== false && typeof m.startsIn === 'number' && m.startsIn >= 0 && m.startsIn <= 60000 ? m.startsIn : -1;
+    window.CC_SQUAD_STARTS = left >= 0 ? performance.now() + left : 0;
   } else if (m.op === 'ended' || m.op === 'left') {
     window.CC_SQUAD = null;
     window.CC_SQUAD_END = m.op === 'left' ? 'left' : SQUAD_ENDS.includes(m.reason) ? m.reason : 'ended';
+    window.CC_SQUAD_STARTS = 0;
   } else if (m.op === 'gone') {
     window.CC_SQUAD = null;
     window.CC_SQUAD_END = '';
+    window.CC_SQUAD_STARTS = 0;
   } else return;
   document.dispatchEvent(new Event('cc:squad'));
 }
@@ -2031,6 +2049,7 @@ document.addEventListener('cc:account', () => {
   if (!leaving || (!window.CC_SQUAD && !window.CC_SQUAD_END)) return;
   window.CC_SQUAD = null;
   window.CC_SQUAD_END = '';
+  window.CC_SQUAD_STARTS = 0;
   document.dispatchEvent(new Event('cc:squad'));
 });
 // SET (design 5.6). The client validates nothing about the NAME:
