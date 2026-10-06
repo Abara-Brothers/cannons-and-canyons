@@ -485,6 +485,40 @@ for (const v of VIEWS) {
     for (const s of k.beside) if (k.cols.some(([l, r, t, b]) => rectsOverlap({ l, r, t, b }, s))) why.push(`it is over .${s.n} beside it`);
     if (why.length) inCard.push(`${n}: ${why.join(', ')}`);
   }
+  // e. MATCH SETUP FITS WITHOUT SCROLLING, in every mode as it opens (Computer
+  //    or Solo): its left column holds Play with, at most one row of options
+  //    and the crew card, and everything the card holds -- the tank row, the
+  //    rule, the rack with its Edit -- lies inside the card's border. The
+  //    free-for-all's CPU count and difficulty share one row; as a third row
+  //    they pushed the card below a scrolling fold.
+  const setupFit = [];
+  for (const m of MODES) {
+    await ev(`(() => { ccMode = ${JSON.stringify(m)}; Bay.show('home'); Bay.show('setup'); return true; })()`);
+    await sleep(40);
+    const s = await ev(`(() => {
+      const col = document.querySelector('#bay .cols > div'), card = col && col.querySelector(':scope > .card');
+      if (!card) return null;
+      const R = (e) => { const r = e.getBoundingClientRect(); return { t: r.top, b: r.bottom, l: r.left, r: r.right }; };
+      const cs = getComputedStyle(card), cr = R(card);
+      const inner = { t: cr.t + parseFloat(cs.borderTopWidth), b: cr.b - parseFloat(cs.borderBottomWidth) };
+      const kids = [...card.querySelectorAll(':scope > *, :scope .lbl, :scope .slots, :scope button')].filter((e) => e.getClientRects().length).map(R);
+      const opts = [...col.querySelectorAll('.b-opt:not(.hidden)')].map((e) => ({ n: e.querySelector('.lbl').textContent, ...R(e) }));
+      return { sh: col.scrollHeight, ch: col.clientHeight, inner, kids, opts };
+    })()`);
+    if (!s) { setupFit.push(`${m}: no crew card`); continue; }
+    const why = [];
+    if (s.sh > s.ch + 1) why.push(`the column scrolls (${s.sh} in ${s.ch})`);
+    const out = s.kids.filter((k) => k.t < s.inner.t - 0.5 || k.b > s.inner.b + 0.5);
+    if (out.length) why.push(`${out.length} of the card's boxes leave its border (${out.map((k) => f1((k.t - s.inner.t) / u) + '..' + f1((k.b - s.inner.t) / u) + 'u').join(', ')} in ${f1((s.inner.b - s.inner.t) / u)}u)`);
+    const rows = new Set(s.opts.map((o) => Math.round(o.t)));
+    if (rows.size > 2) why.push(`${rows.size} rows of options (${s.opts.map((o) => o.n).join(', ')})`);
+    if (m === 'ffa') {
+      const c = s.opts.find((o) => /CPU commanders/i.test(o.n)), d = s.opts.find((o) => /Difficulty/i.test(o.n));
+      if (!(c && d && near(c.t, d.t) && c.r <= d.l)) why.push('the CPU count and the difficulty are not side by side');
+    }
+    if (why.length) setupFit.push(`${m}: ${why.join('; ')}`);
+  }
+  check(`[${V}] Match setup fits as it opens in every mode: two rows of options at most, the column never scrolls, and the crew card holds its tank and rack inside its border`, setupFit.length === 0, setupFit.join('; '));
   await ev(`(() => { ccMode = 'duel'; Bay.show('home'); return true; })()`);
   check(`[${V}] the whole gun is in every tank image (home, Paint shop, Armoury, Match setup, Service record): nothing drawn on its top or right edge, the muzzle past the frame`, uncut.length === 0, uncut.join('; '));
   check(`[${V}] every tank's frame stands where its screen puts it, the size it always was`, placed.length === 0, placed.join('; '));

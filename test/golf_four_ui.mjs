@@ -158,7 +158,9 @@ const bag = await ev(`(async () => {
   const combatArt = () => COMBAT.filter((id) => ICONS[id] && $('bay').innerHTML.includes(norm(ICONS[id])));
   const clubs = (root) => root ? [...root.querySelectorAll('.slot')].map((sl) => CLUBS.find((id) => !!ICONS[id] && sl.innerHTML === norm(ICONS[id])) || '?').join() : null;
   const txt = (el) => (el ? el.textContent.replace(/\\s+/g, ' ').trim() : null);
-  const lblRow = (re) => { const l = [...document.querySelectorAll('#bay .card .lbl')].find((x) => re.test(x.textContent)); return l ? l.parentElement.parentElement : null; };
+  // The card's row that holds the label: the label's ancestor that is a direct
+  // child of the card, however deep the row nests it.
+  const lblRow = (re) => { const l = [...document.querySelectorAll('#bay .card .lbl')].find((x) => re.test(x.textContent)); return l ? l.closest('#bay .card > *') : null; };
   const screen = (mode) => {
     const o = {}; ccMode = mode;
     Bay.show('home');

@@ -418,8 +418,8 @@ const cap = (t) => String(t).charAt(0).toUpperCase() + String(t).slice(1);
 // choice exists and what it needs, but not pressable. Inside, not under the
 // row, because Match setup's column has no height to spare for another line.
 // An option with none is markup for markup what it always was.
-function seg(label, key, opts, cur, hidden) {
-  return '<div class="b-opt' + (hidden ? ' hidden' : '') + '"><span class="lbl">' + label + '</span><div class="segs">'
+function seg(label, key, opts, cur, hidden, style) {
+  return '<div class="b-opt' + (hidden ? ' hidden' : '') + '"' + (style ? ' style="' + style + '"' : '') + '><span class="lbl">' + label + '</span><div class="segs">'
     + opts.map((o) => '<button class="seg' + (String(cur) === String(o[0]) ? ' on' : '') + '" data-set="' + key + '=' + o[0] + '"' + (o[2] ? ' disabled' : '') + '>'
       + o[1] + (o[2] ? '<span class="b-why">' + o[2] + '</span>' : '') + '</button>').join('')
     + '</div></div>';
@@ -3220,21 +3220,29 @@ SCREENS.setup = function () {
   // A MEMBER PLAYING WITH THE SQUAD IS SHOWN THE SQUAD'S TEE SET, live, and a
   // tap on another one is explained (sqLockWhy): the leader picks it (U3).
   const sn = sq.snap, teesOn = withSq && !sqIsLead(sn, sqMe(sn)) && SQ_TEES.includes(sn.tees) ? sn.tees : s.tees;
-  const extra = seg('CPU commanders', 'count', [[3, '2'], [4, '3']], s.count, !(m.id === 'ffa' && vsCpu))
-    + seg('Tee set', 'tees', [['champ', 'Champ'], ['mens', 'Men&rsquo;s'], ['womens', 'Women&rsquo;s'], ['junior', 'Junior']], teesOn, m.id !== 'golf')
-    + seg('Difficulty', 'diff', [['easy', 'Easy'], ['medium', 'Medium'], ['hard', 'Hard']], s.diff, !vsCpu);
+  // THE CPU COUNT AND THE DIFFICULTY SHARE ONE ROW. Free-for-all against the
+  // computer is the one setup with both, and as a third row of buttons it
+  // pushed the crew card -- the player's tank and weapon rack -- below the
+  // fold of a scrolling column, so a new player never saw their weapons. Side
+  // by side (2 : 3, so every button is the same width) the column holds two
+  // rows of options in every mode and never scrolls. The row is always in the
+  // tree, hidden when neither group applies, so its column gap is not spent on
+  // nothing and the in-place patch still lands on the same siblings.
+  const cpuCount = m.id === 'ffa' && vsCpu;
+  const extra = '<div class="b-pair' + (cpuCount || vsCpu ? '' : ' hidden') + '" style="display:flex;gap:' + u(12) + '">'
+    +   seg('CPU commanders', 'count', [[3, '2'], [4, '3']], s.count, !cpuCount, 'flex:2;min-width:0')
+    +   seg('Difficulty', 'diff', [['easy', 'Easy'], ['medium', 'Medium'], ['hard', 'Hard']], s.diff, !vsCpu, 'flex:3;min-width:0')
+    + '</div>'
+    + seg('Tee set', 'tees', [['champ', 'Champ'], ['mens', 'Men&rsquo;s'], ['womens', 'Women&rsquo;s'], ['junior', 'Junior']], teesOn, m.id !== 'golf');
   const withText = withSq ? 'Your squad' : vsCpu ? 'Computer &middot; ' + esc(cap(s.diff)) : 'Solo';
-  const tall = m.id === 'ffa' && vsCpu;       // three visible option groups
   const short = !isGolf(m) && s.picks.length < m.draft;
 
   const body = '<div class="cols">'
-    // The column is a fixed 274u tall (.cols). One or two option groups leave
-    // the crew card room to stretch, exactly as before. Free-for-all + Computer
-    // shows THREE, which cannot fit at any viewport: only then does the column
-    // scroll and the card keep its own height (grow, never shrink) instead of
-    // spilling over the footer.
-    + '<div style="width:' + u(430) + ';display:flex;flex-direction:column;gap:' + u(12) + (tall ? ';min-height:0;overflow-y:auto;overflow-x:hidden' : '') + '">' + withSeg + extra
-    +   '<div class="card" style="flex:' + (tall ? '1 0 auto' : '1') + ';min-height:0;padding:0 ' + u(13) + ';display:flex;flex-direction:column;justify-content:space-evenly">'
+    // The column is a fixed 274u tall (.cols): Play with, at most one more row
+    // of options, then the crew card, which takes what is left. Nothing in it
+    // scrolls (test/home_fit.mjs check 8e holds every mode to that).
+    + '<div style="width:' + u(430) + ';display:flex;flex-direction:column;gap:' + u(12) + '">' + withSeg + extra
+    +   '<div class="card" style="flex:1;min-height:0;padding:' + u(4) + ' ' + u(13) + ';display:flex;flex-direction:column;justify-content:space-evenly">'
     // The tank stands 6u lower than its row centres it (tankImg): Duel and
     // Free-for-all leave the card no room to spare, so the row starts on the
     // card's top edge, and the gun reached 7.2u over a frame 4-5u under it.
@@ -3246,14 +3254,18 @@ SCREENS.setup = function () {
     +       '<span style="display:block;font-family:\'JetBrains Mono\',monospace;font-size:' + u(8.5) + ';font-weight:500;letter-spacing:.12em;text-transform:uppercase;color:#ffb46b;margin-top:' + u(4) + '">' + esc(s.skin.name) + ' paint</span></span>'
     +       '<button class="ghost" style="height:' + u(32) + ';font-size:' + u(13) + '" data-go="paint">Repaint</button></div>'
     +     '<div style="height:1px;background:rgba(140,168,214,.18)"></div>'
+    // THE RACK'S EDIT STANDS BESIDE ITS SLOTS, not on a line of its own above
+    // them: that line cost the card 28u, and with Play with and a row of
+    // options above it the card had none to spare -- its label sat on the top
+    // border and the slots ran past the bottom one.
     +     (isGolf(m)
       // Golf's row is its bag, read-only: no count of picks, and no Edit.
-      ?     '<div><div style="display:flex;align-items:center;gap:' + u(8) + '"><span class="lbl">Golf bag &middot; ' + GOLF_BAG.length + ' clubs</span></div>'
-      +       '<div class="slots" style="justify-content:flex-start;margin-top:' + u(9) + '">' + slots(GOLF_BAG, GOLF_BAG.length) + '</div></div>'
+      ?     '<div><span class="lbl">Golf bag &middot; ' + GOLF_BAG.length + ' clubs</span>'
+      +       '<div class="slots" style="justify-content:flex-start;margin-top:' + u(7) + '">' + slots(GOLF_BAG, GOLF_BAG.length) + '</div></div>'
       // Edit is the Armoury's one door from here; its Done comes back.
-      :     '<div><div style="display:flex;align-items:center;gap:' + u(8) + '"><span class="lbl">Weapon rack &middot; ' + s.picks.length + ' of ' + m.draft + ' drafted</span><span class="grow"></span>'
-      +       '<button class="ghost" style="height:' + u(28) + ';font-size:' + u(12) + ';padding:0 ' + u(11) + '" data-go="armoury">Edit</button></div>'
-      +       '<div class="slots" style="justify-content:flex-start;margin-top:' + u(9) + '">' + slots(s.picks, m.draft) + '</div></div>')
+      :     '<div><span class="lbl">Weapon rack &middot; ' + s.picks.length + ' of ' + m.draft + ' drafted</span>'
+      +       '<div style="display:flex;align-items:center;gap:' + u(8) + ';margin-top:' + u(7) + '"><div class="slots" style="justify-content:flex-start;margin-top:0">' + slots(s.picks, m.draft) + '</div><span class="grow"></span>'
+      +       '<button class="ghost" style="height:' + u(32) + ';font-size:' + u(12) + ';padding:0 ' + u(14) + '" data-go="armoury">Edit</button></div></div>')
     +   '</div>'
     + '</div>'
     + '<div class="brief" style="flex:1"><div class="bi"><img src="' + art(m.card) + '" alt=""><span class="g"></span><span>' + esc(m.name) + '</span></div>'
