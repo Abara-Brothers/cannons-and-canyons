@@ -418,6 +418,23 @@ export const WEAPONS = [
     shots: 1, spread: 0,  speedMul: 1.25, damage: 0, radius: 0, terrain: 'none',
     bounce: { rest: 0.50, fric: 0.88, rr: 0.062 },   // longest carry AND the longest roll-out
     desc: 'Off the tee: maximum carry, and it runs forever on the fairway.' },
+  // The Wedge (owner, 2026-10-06: "goes higher, acts like a golf wedge"). Three
+  // things make it one, and test/golf_hazards.mjs section 6 pins all three on
+  // flat ground at a 45 degree aim and full power:
+  //   - BUILT-IN LOFT: the ball leaves on the aim turned toward vertical by
+  //     loft.deg (see loftedAngle below), so the same aim flies higher;
+  //   - SHORT: speedMul is set so that lofted flight carries about half the
+  //     Iron's distance at the same aim;
+  //   - BACKSPIN: low restitution, a tangential keep of only fric, and a high
+  //     rolling resistance, so it checks up on the pitch mark and stays.
+  // rr is NEW here, not a retune of the clubs above: drawAim's putter
+  // pace-line does not read it, and the Wedge's full send rests in seconds,
+  // far inside the golf maxT (section 6 measures it too).
+  { id: 'wedge',     name: 'Wedge',           color: '#e8a467', ammo: 99, golfOnly: true,
+    shots: 1, spread: 0,  speedMul: 0.88, damage: 0, radius: 0, terrain: 'none',
+    loft: { deg: 25, from: 50 },
+    bounce: { rest: 0.12, fric: 0.22, rr: 0.40 },    // stops almost dead where it lands
+    desc: 'Launches steeper than you aim: high, short, and it stops almost dead.' },
   { id: 'putter',    name: 'Putter',          color: '#8affde', ammo: 99, golfOnly: true,
     shots: 1, spread: 0,  speedMul: 0.20, damage: 0, radius: 0, terrain: 'none',
     ground: true,                                     // struck along the turf — the ball NEVER lofts
@@ -427,6 +444,29 @@ export const WEAPONS = [
 
 export const WEAPON_BY_ID = Object.fromEntries(WEAPONS.map(w => [w.id, w]));
 
+// THE HEADING A LOFTED CLUB SENDS THE BALL ON, in degrees, from the aim in
+// degrees. Only the Wedge carries `loft`; every other weapon gets the aim back
+// unchanged, the same number, so its shot does not move by a bit. The ball
+// still leaves from the muzzle the barrel is drawn at; only its heading turns.
+//
+// The aim's ELEVATION (the aim itself, or 180 minus it for an aim past
+// straight up) gains loft.deg up to loft.from degrees, and above that the gain
+// shrinks in a straight line to nothing at vertical. That taper is the cap:
+// the loft alone never takes a ball to or past straight up, so a lofted shot
+// always carries forward, and unlike a hard cap it leaves no band of aims that
+// all fly the same shot -- every aim still lands somewhere different. Aims
+// past 90 are mirrored through the elevation, so a backwards wedge lofts
+// toward vertical too. public/app.js's loftedAngleC mirrors this for the aim
+// line; test/golf_marker.mjs holds the two to the same answers.
+export function loftedAngle(w, angle) {
+  const L = w && w.loft;
+  if (!L) return angle;
+  const back = angle > 90;
+  const e = back ? 180 - angle : angle;
+  const up = e <= L.from ? e + L.deg : e + (L.deg * (90 - e)) / (90 - L.from);
+  return back ? 180 - up : up;
+}
+
 // Public weapon info for the client UI (no physics numbers needed there).
 // One menu entry — includes the ballistic facts (speed/gravity multipliers,
 // pierce, apex-burst) so the client's aim preview can trace the EXACT arc the
@@ -435,7 +475,10 @@ export function menuEntry(w) {
   return { id: w.id, name: w.name, color: w.color, ammo: w.ammo, desc: w.desc,
            speedMul: w.speedMul, gravityMul: w.gravityMul || 1,
            pierce: !!w.pierce, apex: !!w.split, radius: w.radius || 0,
-           ground: !!w.ground };
+           ground: !!w.ground,
+           // Only a lofted club says so: every combat menu, and so every
+           // combat snapshot, stays byte for byte what it was.
+           ...(w.loft ? { loft: { deg: w.loft.deg, from: w.loft.from } } : {}) };
 }
 export function weaponMenu() {
   return WEAPONS.filter(w => !w.bossOnly && !w.golfOnly && !w.aiOnly).map(menuEntry);
@@ -463,6 +506,11 @@ export function loadoutSizeFor(mode) {
   if (mode === 'golf') return 0;
   return (mode === 'aliens' || mode === 'boss') ? 7 : 5;
 }
+// What golf carries instead: every seat swings the same four clubs, in the
+// order a real bag runs by loft. ONE list: the golf snapshot's weapons and
+// each golf seat's ammo are both built from it, so a club cannot be in the
+// bag on screen and missing from the ammo the dock's chips count.
+export const GOLF_BAG = Object.freeze(['driver', 'golfball', 'wedge', 'putter']);
 export function validLoadout(picks, n = LOADOUT_SIZE) {
   return Array.isArray(picks) && picks.length === n &&
     new Set(picks).size === n && picks.every(id => LOADOUT_POOL.includes(id));
@@ -1023,8 +1071,12 @@ export function simulateShot(state, shot) {
   for (let i = 0; i < nSub; i++) {
     const off = nSub === 1 ? 0 : (-w.spread / 2 + (w.spread * i) / (nSub - 1));
     const rad = ((angle + off) * Math.PI) / 180;
-    const vx = Math.cos(rad) * speed * dir;
-    const vy = -Math.sin(rad) * speed;
+    // The heading: the aim itself for everything but a lofted club (the
+    // Wedge), which turns it toward vertical. The muzzle below stays on `rad`,
+    // where the barrel is drawn.
+    const lrad = (loftedAngle(w, angle + off) * Math.PI) / 180;
+    const vx = Math.cos(lrad) * speed * dir;
+    const vy = -Math.sin(lrad) * speed;
     const sc = tank.scale || 1;
     const ox = tank.x + dir * BARREL_PIVOT_X * sc + Math.cos(rad) * dir * BARREL_LEN * sc;
     const oy = (tank.y - TANK_CY * sc) - Math.sin(rad) * BARREL_LEN * sc;

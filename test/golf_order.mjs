@@ -211,6 +211,35 @@ await playHole(4, '(c) four golfers');
 await playHole(2, '(g) two golfers');
 await playHole(3, '(h) three golfers');
 
+// ---- (w) the Wedge through the engine: in the bag, in the ammo, swung as itself --
+// The golf snapshot's weapons and every seat's ammo come from game-core's
+// GOLF_BAG; the menu entry carries the loft the client's aim line reads; and a
+// 'wedge' fire is flown as the Wedge (lofted), never quietly as the Iron.
+{
+  const ws = mkws(); golfCreate(ws, 1);
+  const room = roomOf(ws), start = frames(ws, 'start')[0];
+  const ids = start ? (start.weapons || []).map((w) => w.id).join() : null;
+  const we = start && (start.weapons || []).find((w) => w.id === 'wedge');
+  if (ids === 'driver,golfball,wedge,putter') ok('(w) the golf bag is Driver, Iron, Wedge, Putter'); else fail('(w) golf bag: ' + ids);
+  if (we && we.loft && we.loft.deg === 25 && we.loft.from === 50 && we.ammo === 99) ok('(w) the Wedge menu entry carries its loft for the aim line');
+  else fail('(w) wedge entry: ' + JSON.stringify(we));
+  const plain = start ? (start.weapons || []).filter((w) => w.id !== 'wedge' && 'loft' in w).map((w) => w.id) : ['no start'];
+  if (!plain.length) ok('(w) no other club carries a loft key'); else fail('(w) loft on: ' + plain.join());
+  if (room && room.ammo[0] && room.ammo[0].wedge === 99 && Object.keys(room.ammo[0]).join() === 'driver,golfball,wedge,putter') ok('(w) every golf seat holds 99 of each of the four clubs');
+  else fail('(w) golf ammo: ' + JSON.stringify(room && room.ammo[0]));
+  const before = frames(ws, 'shot').length;
+  handleClientMessage(ws, { type: 'fire', weapon: 'wedge', angle: 45, power: 50 });
+  await until(() => frames(ws, 'shot').length > before, 2000);
+  const shot = frames(ws, 'shot')[before];
+  const p = shot && shot.projectiles && shot.projectiles[0] && shot.projectiles[0].path;
+  // Heading of the first sampled step, gravity's 0.625u of drop over four
+  // Euler steps taken back out: a lofted 45 aim leaves at 70 degrees.
+  const head = p ? Math.atan2(-((p[1][1] - p[0][1]) - 0.625), p[1][0] - p[0][0]) * 180 / Math.PI : NaN;
+  if (shot && shot.weapon === 'wedge' && Math.abs(head - 70) < 0.1) ok(`(w) a wedge stroke is flown as the Wedge, heading ${head.toFixed(2)} degrees off a 45 aim`);
+  else fail('(w) wedge stroke: ' + JSON.stringify({ weapon: shot && shot.weapon, head }));
+  leave(ws);
+}
+
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall golf_order checks passed');
 if (escaped) { console.error('escaped exception: ' + escaped.message); process.exit(1); }
 process.exit(out.errors.length ? 1 : 0);

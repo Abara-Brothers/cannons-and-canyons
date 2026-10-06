@@ -1,4 +1,5 @@
-// Artillery Golf: the off-screen flag marker and its tap, in a real page.
+// Artillery Golf: the off-screen flag marker and its tap, in a real page,
+// and the Wedge in the dock, on the aim line and in flight (section 7).
 // A local solo round is started through the same in-page engine the offline
 // path uses, then the camera is placed by hand and cupMarker() read back in
 // the same synchronous evaluation, so the draw loop's easing cannot interfere.
@@ -173,6 +174,61 @@ if (pinch.oneDown.charging && pinch.oneDown.pointers === 1 && pinch.panX === 0 &
 const box = await ev(`(() => { const cup = S.golf.cup.x, span = view.cssW / cam.zoom; cam.cx = cup - span; const m = cupMarker();
   return { on: cupMarkerHit(m.ex - 40, m.ey + 10), above: cupMarkerHit(m.ex - 40, m.ey - 40), far: cupMarkerHit(m.ex - 120, m.ey) }; })()`);
 if (box.on && !box.above && !box.far) ok('the hit box covers the marker and its distance, not the space around'); else fail('hit box: ' + JSON.stringify(box));
+
+// 7. THE WEDGE IN THE DOCK AND ON THE AIM LINE (owner, 2026-10-06). The strip
+//    carries game-core's GOLF_BAG in its order, each club with its own art; the
+//    client's loftedAngleC gives game-core's loftedAngle's answer for every aim;
+//    and the aim line drawn for the Wedge is the REAL launch: every dot drawAim
+//    paints sits on the path game-core's simulateShot flies from the same tank,
+//    aim and power -- the lofted heading, not the barrel's. In flight it is the
+//    golf ball, and the lesson and the field manual name all four clubs.
+const wedge = await ev(`import('./game-core.js').then((gc) => {
+  const chips = [...document.querySelectorAll('#weaponStrip .wchip')].map((c) => c.dataset.wid);
+  const art = chips.every((id) => { const t = document.createElement('template'); t.innerHTML = ICONS[id] || ''; const want = t.innerHTML;
+    const c = document.querySelector('#weaponStrip .wchip[data-wid="' + id + '"] .wi'); return !!want && !!c && c.innerHTML === want; });
+  const entry = S.weapons.find((w) => w.id === 'wedge');
+  let mirror = null;
+  for (let a = -60; a <= 240; a += 0.5) {
+    const c = loftedAngleC(a, entry && entry.loft), g = gc.loftedAngle(gc.WEAPON_BY_ID.wedge, a);
+    if (c !== g) { mirror = { a, c, g }; break; }
+    if (loftedAngleC(a, undefined) !== a) { mirror = { a, plain: loftedAngleC(a, undefined) }; break; }
+  }
+  // The aim line, read off drawAim itself: every yellow square it fills.
+  const keep = { sel: S.selected, aim: { ...myAim() }, cx: cam.cx, cy: cam.cy, zoom: cam.zoom };
+  S.selected = 'wedge'; const a = myAim(); a.angle = 45; a.power = 40;
+  const me = S.tanks[S.you];
+  cam.zoom = 0.06; cam.cx = me.x + 2000; cam.cy = me.y - 2500;
+  const dots = [], orig = ctx.fillRect;
+  ctx.fillRect = function (x, y, w, h) { if (String(this.fillStyle).startsWith('rgba(255, 214, 70')) dots.push([x + w / 2, y + h / 2]); return orig.call(this, x, y, w, h); };
+  try { drawAim(); } finally { ctx.fillRect = orig; }
+  const shot = gc.simulateShot({ terrain: S.terrain.slice(), tanks: S.tanks.map((t) => ({ x: t.x, y: t.y })) },
+    { by: S.you, weapon: 'wedge', angle: 45, power: 40, dir: facingOf(S.you) });
+  const path = shot.projectiles[0].path.map((q) => [wx2s(q[0]), wy2s(q[1])]);
+  const plain = gc.simulateShot({ terrain: S.terrain.slice(), tanks: S.tanks.map((t) => ({ x: t.x, y: t.y })) },
+    { by: S.you, weapon: 'golfball', angle: 45, power: 40, dir: facingOf(S.you) }).projectiles[0].path.map((q) => [wx2s(q[0]), wy2s(q[1])]);
+  const near = (d, P) => P.reduce((m, q) => Math.min(m, Math.hypot(q[0] - d[0], q[1] - d[1])), Infinity);
+  const off = dots.map((d) => near(d, path));
+  const offIron = dots.map((d) => near(d, plain));
+  S.selected = keep.sel; Object.assign(myAim(), keep.aim); cam.cx = keep.cx; cam.cy = keep.cy; cam.zoom = keep.zoom;
+  // In flight every club strikes the same ball: the Wedge's round is the golf
+  // ball's sprite and trail, never the cannon shell the fallback would draw.
+  const ball = ordnanceKind({ m: { weapon: 'wedge' } }, { delay: 0 }) === 'golfball' && ORD_TRAIL.wedge === ORD_TRAIL.golfball;
+  // The words name all four clubs: the golf lesson's club step and the field
+  // manual's golf line.
+  const club = (COACH_GOLF.find((st) => st.id === 'club') || {}).body || '';
+  const manual = [...document.querySelectorAll('#helpModal .hm-txt')].map((e) => e.textContent).find((t) => /Artillery Golf/.test(t)) || '';
+  const named = (t) => ['Driver', 'Iron', 'Wedge', 'Putter'].every((c) => t.includes(c));
+  return { chips, bag: gc.GOLF_BAG.slice(), art, loft: entry && entry.loft, mirror, dots: dots.length, worst: Math.max(...off), ironBest: Math.max(...offIron),
+    ball, coach: named(club), manual: named(manual) && /four clubs/.test(manual) };
+})`);
+if (wedge.chips.join() === wedge.bag.join() && wedge.bag.join() === 'driver,golfball,wedge,putter') ok('the dock carries the bag in its order: Driver, Iron, Wedge, Putter'); else fail('dock bag: ' + JSON.stringify({ chips: wedge.chips, bag: wedge.bag }));
+if (wedge.art) ok('every club chip draws its own art, the Wedge included'); else fail('club chip art missing or wrong');
+if (wedge.loft && wedge.mirror === null) ok('loftedAngleC gives game-core\'s loftedAngle answer at every half degree from -60 to 240, and leaves an unlofted aim alone'); else fail('loft mirror: ' + JSON.stringify({ loft: wedge.loft, mirror: wedge.mirror }));
+if (wedge.dots >= 3 && wedge.worst < 0.5) ok(`the Wedge's aim line is the real launch: ${wedge.dots} dots, each within ${wedge.worst.toFixed(3)}px of game-core's lofted path`);
+else fail('wedge aim line: ' + JSON.stringify({ dots: wedge.dots, worst: wedge.worst }));
+if (wedge.ironBest > 5) ok(`and it is not the unlofted flight: the same dots sit up to ${Math.round(wedge.ironBest)}px off the Iron's path at the same aim`); else fail('wedge aim line matches the unlofted Iron flight: ' + wedge.ironBest);
+if (wedge.ball) ok('a Wedge stroke flies the golf ball sprite and trail'); else fail('wedge in flight is not drawn as the golf ball');
+if (wedge.coach && wedge.manual) ok('the golf lesson and the field manual both name Driver, Iron, Wedge and Putter'); else fail('club copy: ' + JSON.stringify({ coach: wedge.coach, manual: wedge.manual }));
 
 // 6. your own stroke clears the marker pan: panToCup's offset is tank-relative,
 //    so left in place it would frame cup + shot length after the ball moves.

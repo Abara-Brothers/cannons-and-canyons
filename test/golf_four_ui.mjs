@@ -1,6 +1,7 @@
 // Artillery Golf for four, in the real page: the Players choice in Match
 // setup reaches the create frame, the home readout says the count, the
 // boards say 1-4, and four seats render in the HUD cards and the scorecard.
+// And golf's menus show the golf bag, never a weapon (section 6).
 // Headless Chrome over CDP; skips without Chrome.
 import { spawn } from 'node:child_process';
 import net from 'node:net';
@@ -149,6 +150,89 @@ else fail('scorecard out row: ' + JSON.stringify(outCard.seats));
 if (outCard.hs && outCard.hs.rows === 3 && !/Dee/.test(outCard.hs.text)) ok('hole banner: the scuttled seat is left out of the hole score');
 else fail('hole banner: ' + JSON.stringify(outCard.hs));
 
+// 6. GOLF MENUS SHOW THE BAG (owner, 2026-10-06): with golf armed, every place
+// the bay shows weapons shows game-core's GOLF_BAG instead, read-only -- no
+// picking, no Edit, and not one combat weapon's art. Read on the real screens:
+// the home readout and station, the mission board card, Match setup's rack row,
+// brief and footer, and the golf bag screen the Armoury's door opens. A duel
+// keeps every one of them as it was.
+const bag = await ev(`(async () => {
+  const gc = await import('./game-core.js');
+  const norm = (h) => { const t = document.createElement('template'); t.innerHTML = h || ''; return t.innerHTML; };
+  const CLUBS = gc.GOLF_BAG.slice();
+  const COMBAT = gc.WEAPONS.filter((w) => !w.golfOnly && !w.bossOnly && !w.aiOnly).map((w) => w.id);
+  const combatArt = () => COMBAT.filter((id) => ICONS[id] && $('bay').innerHTML.includes(norm(ICONS[id])));
+  const clubs = (root) => root ? [...root.querySelectorAll('.slot')].map((sl) => CLUBS.find((id) => !!ICONS[id] && sl.innerHTML === norm(ICONS[id])) || '?').join() : null;
+  const txt = (el) => (el ? el.textContent.replace(/\\s+/g, ' ').trim() : null);
+  const lblRow = (re) => { const l = [...document.querySelectorAll('#bay .card .lbl')].find((x) => re.test(x.textContent)); return l ? l.parentElement.parentElement : null; };
+  const screen = (mode) => {
+    const o = {}; ccMode = mode;
+    Bay.show('home');
+    o.readout = txt(document.querySelector('#bay .lbar .ros'));
+    o.station = txt([...document.querySelectorAll('#bay .st')].find((b) => b.dataset.go === 'armoury'));
+    o.homeCombat = combatArt();
+    Bay.show('modes');
+    const card = [...document.querySelectorAll('#bay .mb')].find((b) => b.dataset.set === 'mode=' + mode);
+    o.card = card ? [...card.querySelectorAll('.tagm')].map((t) => t.textContent).join('|') : null;
+    o.blurb = card ? txt(card.querySelector('.mbb')) : null;
+    Bay.show('setup');
+    const row = lblRow(/Golf bag|Weapon rack/);
+    o.rackLabel = row ? txt(row.querySelector('.lbl')) : null;
+    o.rackClubs = clubs(row);
+    o.edit = [...document.querySelectorAll('#bay .card button')].some((b) => b.textContent.trim() === 'Edit');
+    o.brief = [...document.querySelectorAll('#bay .brief .brow')].map(txt).join('|');
+    o.setupCombat = combatArt();
+    o.setupGo = txt(document.querySelector('#bay .go[data-go="armoury"]'));
+    Bay.show('armoury');
+    o.gclubs = [...document.querySelectorAll('#bay .gclub .gcn')].map((n) => n.textContent).join();
+    o.gclubArt = [...document.querySelectorAll('#bay .gclub .gct')].map((g) => CLUBS.find((id) => !!ICONS[id] && !!g.querySelector('svg') && norm(g.querySelector('svg').outerHTML) === norm(ICONS[id])) || '?').join();
+    o.armSlots = clubs(document.querySelector('#bay .card'));
+    o.picks = document.querySelectorAll('#bay [data-pick]').length;
+    // Legible on a phone: in design units (the 932u stage), the words at 12u or
+    // more, the names at 13u or more, and no card cutting its words off.
+    const uPx = document.querySelector('#bay .stage').getBoundingClientRect().width / 932;
+    const fsU = (sel) => Math.min(...[...document.querySelectorAll(sel)].map((e) => parseFloat(getComputedStyle(e).fontSize) / uPx));
+    o.legible = document.querySelector('#bay .gclub') ? { body: fsU('#bay .gclub .gcd'), name: fsU('#bay .gclub .gcn'),
+      cut: [...document.querySelectorAll('#bay .gclub')].some((c) => c.scrollHeight > c.clientHeight + 1 || c.scrollWidth > c.clientWidth + 1) } : null;
+    const launch = document.querySelector('#bay [data-launch]');
+    o.launch = launch ? { t: txt(launch), dis: launch.disabled } : null;
+    o.armCombat = combatArt();
+    Bay.show('home');
+    return o;
+  };
+  const golf = screen('golf'), duel = screen('duel');
+  // A golf player whose saved rack is short: the bag screen still opens the doors.
+  let shortLaunch = null;
+  const kept = localStorage.getItem('cc_loadout');
+  try {
+    localStorage.setItem('cc_loadout', JSON.stringify(['mortar']));
+    ccMode = 'golf'; Bay.show('armoury');
+    const l = document.querySelector('#bay [data-launch]'); shortLaunch = l ? { t: txt(l), dis: l.disabled } : null;
+  } finally { if (kept === null) localStorage.removeItem('cc_loadout'); else localStorage.setItem('cc_loadout', kept); ccMode = 'duel'; Bay.show('home'); }
+  return { golf, duel, shortLaunch, bag: CLUBS.join() };
+})()`);
+const g = bag.golf, d = bag.duel;
+if (bag.bag === 'driver,golfball,wedge,putter') ok('game-core\'s golf bag is Driver, Iron, Wedge, Putter'); else fail('GOLF_BAG: ' + bag.bag);
+if (/Golf bag\s*4 clubs/i.test(g.readout) && !/Weapon draft/i.test(g.readout) && /Golf bag\s*4 clubs/i.test(g.station)) ok('home: the readout and the Bay stations row both say Golf bag, 4 clubs');
+else fail('home golf: ' + JSON.stringify({ readout: g.readout, station: g.station }));
+if (g.card === '1-4 players|4 clubs' && /Driver, Iron, Wedge, Putter\./.test(g.blurb)) ok('mission board: the golf card says 4 clubs and its blurb names all four');
+else fail('golf card: ' + JSON.stringify({ card: g.card, blurb: g.blurb }));
+if (/^Golf bag . 4 clubs$/.test(g.rackLabel) && g.rackClubs === bag.bag && !g.edit) ok('setup: the rack row is the golf bag, the four clubs in order, and no Edit');
+else fail('setup golf rack: ' + JSON.stringify({ label: g.rackLabel, clubs: g.rackClubs, edit: g.edit }));
+if (/Clubs in the bag\s*4/.test(g.brief) && !/Weapons to draft/.test(g.brief) && /golf bag/i.test(g.setupGo)) ok('setup: the brief says Clubs in the bag 4, and the door is To the golf bag');
+else fail('setup golf brief: ' + JSON.stringify({ brief: g.brief, go: g.setupGo }));
+if (g.gclubs === 'Driver,Iron,Wedge,Putter' && g.gclubArt === bag.bag && g.armSlots === bag.bag && g.picks === 0 && g.launch && !g.launch.dis && /Open the bay doors/.test(g.launch.t))
+  ok('golf bag screen: the four clubs with their own art and words, nothing to pick, and the bay doors open');
+else fail('golf bag screen: ' + JSON.stringify({ names: g.gclubs, art: g.gclubArt, slots: g.armSlots, picks: g.picks, launch: g.launch }));
+if (g.legible && g.legible.body >= 12 && g.legible.name >= 13 && !g.legible.cut) ok(`golf bag screen: words at ${g.legible.body.toFixed(1)}u, names at ${g.legible.name.toFixed(1)}u, nothing cut off`);
+else fail('golf bag legibility: ' + JSON.stringify(g.legible));
+if (bag.shortLaunch && !bag.shortLaunch.dis) ok('golf bag screen: a short saved rack still opens the bay doors for golf'); else fail('golf short rack: ' + JSON.stringify(bag.shortLaunch));
+if (!g.homeCombat.length && !g.setupCombat.length && !g.armCombat.length) ok('no combat weapon\'s art on home, Match setup or the golf bag screen while golf is armed');
+else fail('combat art under golf: ' + JSON.stringify({ home: g.homeCombat, setup: g.setupCombat, bag: g.armCombat }));
+if (/Weapon draft\s*5 picks/i.test(d.readout) && /Armoury/.test(d.station) && /\d+ weapons$/.test(d.card) && /^Weapon rack/.test(d.rackLabel) && d.edit && /Weapons to draft\s*5/.test(d.brief)
+    && d.picks > 0 && !d.gclubs && /armoury/i.test(d.setupGo)) ok('duel: every one of those still shows the weapon draft, the rack with Edit and the Armoury');
+else fail('duel menus: ' + JSON.stringify(d));
+
 // 5. the ONLINE lobby, driven through the page's own create path (the real
 // intent, on this suite's own server) rather than the stub used in check 1:
 // golf for three tells the host to tee off, and a one-seat room never becomes
@@ -160,6 +244,11 @@ await sleep(250);                                  // the 'lobby' frame re-rende
 const bayTxt = await ev(`$('bay').textContent.replace(/\\s+/g, ' ')`).catch(() => '');
 if (lobbyUp && /Tee off whenever you have enough players/.test(bayTxt)) ok('lobby: a golf room for three tells the host to tee off when ready');
 else fail('golf lobby copy: up=' + lobbyUp + ' text=' + String(bayTxt).slice(0, 220));
+// ...and its rack box is the golf bag: the four clubs, no Change, no weapons loaded.
+const lobbyBag = await ev(`(() => { const l = [...document.querySelectorAll('#bay .ldt .lbl')].find((x) => /Golf bag/.test(x.textContent)); const box = l && l.closest('.ldt');
+  return { slots: box ? box.querySelectorAll('.slot.f').length : -1, change: !!(box && box.querySelector('[data-go="armoury"]')), text: $('bay').textContent.replace(/\\s+/g, ' ') }; })()`).catch((e) => ({ err: e.message }));
+if (lobbyBag.slots === 4 && !lobbyBag.change && /4 clubs in the bag/.test(lobbyBag.text) && !/weapons loaded/.test(lobbyBag.text)) ok('lobby: the golf room shows the golf bag, four clubs and no Change');
+else fail('golf lobby bag: ' + JSON.stringify({ slots: lobbyBag.slots, change: lobbyBag.change, err: lobbyBag.err }));
 // Leave it the way the page does: the lobby's Cancel carries data-old="cancelBtn".
 await ev(`(document.querySelector('#bay [data-old="cancelBtn"]').click(), true)`);
 let home = false;

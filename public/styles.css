@@ -2579,6 +2579,18 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
 #bay .wp.fixed:hover{transform:none;border-color:rgba(140,168,214,.2);background:rgba(16,21,31,.62)}
 #bay .wp.fixed.on{background:rgba(84,200,255,.08);border-color:rgba(84,200,255,.35);box-shadow:none}
 #bay .wp.fixed.on .b-wn{color:#9fd8ff}
+/* THE GOLF BAG (bay.js golfBagScreen): the four clubs in a two-by-two grid in
+   the rack's place, each with its name and what it does. Read-only, so no
+   hover lift. Sized for a phone: the name is 17u and the words 12.5u, never
+   the rack cells' 8u, because here the words are the whole point. */
+#bay .gbag{flex:1;display:grid;grid-template-columns:1fr 1fr;grid-auto-rows:1fr;gap:calc(8 * var(--u));min-width:0}
+#bay .gclub{border-radius:calc(5 * var(--u));border:1px solid rgba(140,168,214,.2);background:rgba(16,21,31,.62);
+  padding:calc(11 * var(--u)) calc(12 * var(--u));min-width:0;overflow:hidden}
+#bay .gclub .gct{display:flex;align-items:center;gap:calc(9 * var(--u))}
+#bay .gclub .gct svg{width:calc(32 * var(--u));height:calc(32 * var(--u));flex:none}
+#bay .gclub .gcn{font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:calc(17 * var(--u));text-transform:uppercase;
+  letter-spacing:.03em;color:#eef3ff;line-height:1}
+#bay .gclub .gcd{display:block;font-size:calc(12.5 * var(--u));color:#b3c0de;line-height:1.38;margin-top:calc(8 * var(--u));font-weight:500}
 
 /* ---- reduced motion, IN-APP override: exact mirrors of the OS-driven blocks above.
    Generated from them; the toggle in Bay controls sets body.reduce-motion. ---- */

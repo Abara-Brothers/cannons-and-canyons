@@ -1473,6 +1473,31 @@ try {
         && (await ev('ccMode')) === 'duel')
       ok(`${V}: seven picks fill a Boss Fight squad's rack on a device armed on Duel, and Start carries all seven`);
     else fail(`${V}: full seven-pick rack ${JSON.stringify({ start: a4c && a4c.start, sent: a4f })}`);
+    // AND GOLF ASKS FOR NO RACK (owner, 2026-10-06: golf menus show the bag,
+    // never a weapon). One stored pick and a golf squad: the leader is offered
+    // Start, not "Pick 4 more", and a member Ready -- and each frame carries a
+    // full five, the stored pick first and then the standard draft, because the
+    // server still checks a golf seat's rack. The stored preference is untouched.
+    const GOLF5 = ['buster', 'mortar', 'cluster', 'napalm', 'airstrike'];
+    await t9rack(['buster']);
+    await t9state({ mode: 'golf', tees: 'mens', max: 2, members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
+    const a4g = await t9box();
+    await clearTx(); await t9click('#bay [data-sq="start"]'); await sleep(40);
+    const a4gf = await squads();
+    if (a4gf.length) await reply({ op: 'start', error: 'capacity' });
+    await t9state({ leader: T9_MULE, mode: 'golf', tees: 'mens', max: 2, members: [T9YOU({ ready: false }), T9MULE({ ready: true })] });
+    const a4gm = await t9box();
+    await clearTx(); await t9click('#bay [data-sq="ready"]'); await sleep(40);
+    const a4gr = await squads();
+    if (a4gr.length) await reply({ op: 'ready', error: 'unavailable' });
+    const a4gStored = await ev(`localStorage.getItem('cc_loadout')`);
+    await t9rack(FIVE);
+    await ev(`(ccMode = 'duel', true)`);
+    if (a4g && !a4g.rack && a4g.start && !a4g.start.dis && a4gf.length === 1 && a4gf[0].op === 'start' && JSON.stringify(a4gf[0].loadout) === JSON.stringify(GOLF5)
+        && a4gm && !a4gm.rack && a4gm.ready && !a4gm.ready.dis && a4gr.length === 1 && a4gr[0].op === 'ready' && a4gr[0].ready === true
+        && JSON.stringify(a4gr[0].loadout) === JSON.stringify(GOLF5) && a4gStored === '["buster"]')
+      ok(`${V}: a golf squad never asks for a rack: one stored pick still gives the leader Start and a member Ready, each sending a full five`);
+    else fail(`${V}: golf rack ${JSON.stringify({ lead: a4g && { rack: a4g.rack, start: a4g.start }, sent: a4gf, member: a4gm && { rack: a4gm.rack, ready: a4gm.ready }, readied: a4gr, stored: a4gStored })}`);
 
     // ---- A5. THE MEMBER'S BOX (design 5.1 state 4): no Start, no Seats line,
     //      a cyan Ready toggle that carries its state as aria-pressed, Leave,

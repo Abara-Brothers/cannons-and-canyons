@@ -29,9 +29,10 @@ ws.on('message', (raw) => {
     if (!m.golf) return fail('start snapshot has no golf payload'), finish();
     if (m.golf.hole !== 1) fail(`expected hole 1, got ${m.golf.hole}`);
     const ids = (m.weapons || []).map(w => w.id);
-    // Bag order since 8.22: Driver, Iron (golfball), Putter.
-    if (ids.join() !== 'driver,golfball,putter') {
-      fail(`golf weapons should be [driver, golfball, putter], got ${JSON.stringify(ids)}`);
+    // Bag order since 8.22: Driver, Iron (golfball), Putter; the Wedge joins
+    // between the Iron and the Putter (owner, 2026-10-06).
+    if (ids.join() !== 'driver,golfball,wedge,putter') {
+      fail(`golf weapons should be [driver, golfball, wedge, putter], got ${JSON.stringify(ids)}`);
     }
     cup = m.golf.cup; par = m.golf.par;
     myX = m.tanks[m.you].x;

@@ -180,12 +180,15 @@ const ICONS = {
   buster: `<svg viewBox="0 0 24 24"><path d="M10.4 1.6h3.2v3.2h-3.2z" fill="#c98a4b"/><path d="M8.9 1.6h1.5v3.6L8 6.6zM15.1 1.6h-1.5v3.6L16 6.6z" fill="#7a5a30"/><rect x="10.2" y="4.6" width="3.6" height="6.2" fill="#c98a4b"/><rect x="10.2" y="4.6" width="1.3" height="6.2" fill="#e0a668"/><path d="M10.2 10.6h3.6L12 15.4z" fill="#8e969f"/><path d="M2.6 12.4h6.5l2.4 4.6-1.6 4.9H2.6z" fill="#6b5a34"/><path d="M21.4 12.4h-6.5l-2.4 4.6 1.6 4.9h7.3z" fill="#6b5a34"/><path d="M2.6 12.4h6.5l1 1.9H2.6zM21.4 12.4h-6.5l-1 1.9h7.5z" fill="#a6d878"/></svg>`,
   wall: `<svg viewBox="0 0 24 24"><path d="M1.4 20.4c1.9 0 3.1-2.6 4.6-5.6C7.9 10.9 9.6 6.6 12 6.6s4.1 4.3 6 8.2c1.5 3 2.7 5.6 4.6 5.6z" fill="#8a5a2b"/><path d="M1.4 20.4c1.9 0 3.1-2.6 4.6-5.6C7.9 10.9 9.6 6.6 12 6.6v13.8z" fill="#a06b35"/><path d="M12 6.6c-1.2 0-2.2 1.1-3.1 2.6h6.2C14.2 7.7 13.2 6.6 12 6.6z" fill="#6fb04a"/><g stroke="#6b451f" stroke-width=".9" stroke-linecap="round" fill="none" opacity=".65"><path d="M6.9 16.4h3.4"/><path d="M13.7 16.4h3.4"/><path d="M9.6 12.6h4.8"/></g><path d="M1.4 20.4h21.2v1.9H1.4z" fill="#5d3c1c"/></svg>`,
   minigun: `<svg viewBox="0 0 24 24"><g fill="#aeb9c9"><rect x="6" y="8.2" width="13" height="1.9" rx=".9"/><rect x="6" y="11" width="15" height="1.9" rx=".9"/><rect x="6" y="13.8" width="13" height="1.9" rx=".9"/></g><rect x="3.4" y="7.4" width="4.4" height="9.2" rx="1.6" fill="#5b6572"/><rect x="1.6" y="10.4" width="2.4" height="3.2" rx=".8" fill="#39424e"/><g fill="#ffd9a0"><rect x="20" y="8.4" width="2.4" height="1.4" rx=".7"/><rect x="21.4" y="11.2" width="2.4" height="1.4" rx=".7"/><rect x="20" y="14" width="2.4" height="1.4" rx=".7"/></g></svg>`,
-  // The three clubs read as the REAL club heads (Jordan, 8.22): iron = angled
+  // The four clubs read as the REAL club heads (Jordan, 8.22): iron = angled
   // grooved blade on a hosel, driver = big round-crowned wood, putter = flat
-  // mallet with an alignment stripe. Shared anatomy: dark grip cap top-right,
-  // steel shaft running down-left into the head.
+  // mallet with an alignment stripe, and the wedge (owner, 2026-10-06) = a
+  // taller, open-faced copper blade with a wide sole and three grooves, so it
+  // reads as the lofted club beside the steel iron. Shared anatomy: dark grip
+  // cap top-right, steel shaft running down-left into the head.
   golfball: `<svg viewBox="0 0 24 24"><path d="M20.2 1.6 18.4 4" stroke="#7c8698" stroke-width="2.8" stroke-linecap="round"/><path d="M18.7 3.6 10.2 14.8" stroke="#c9cfd8" stroke-width="1.6" stroke-linecap="round"/><path d="M10.6 14.2c-.7 0-1.3.4-1.7 1l-2.6 3.9c2.2 1.6 5.6 1.9 8.2.7 1.5-.7 2.4-1.9 2.3-3.1-.1-1.3-1.3-2.2-3-2.4z" fill="#c9cfd8" stroke="#7c8698" stroke-width=".9"/><path d="M8.6 17.4l6.2.7M7.8 18.7l6.4.7" stroke="#7c8698" stroke-width=".8" stroke-linecap="round"/></svg>`,
   driver: `<svg viewBox="0 0 24 24"><path d="M20.2 1.6 18.4 4" stroke="#7c8698" stroke-width="2.8" stroke-linecap="round"/><path d="M18.7 3.6 10.9 13.6" stroke="#c9cfd8" stroke-width="1.6" stroke-linecap="round"/><path d="M4.4 17.1c0-2.6 2.5-4.6 5.7-4.6 3.6 0 6.3 2.1 6.3 4.7 0 2.6-2.7 4.2-6 4.2-3.4 0-6-1.7-6-4.3z" fill="#3d4550" stroke="#20262e" stroke-width=".9"/><path d="M5.3 15.5c.8-1.2 2.6-2 4.8-2" stroke="#e8ecf2" stroke-width=".9" fill="none" stroke-linecap="round"/><path d="M4.5 16.4c-.3.5-.4 1.1-.3 1.7" stroke="#e8ecf2" stroke-width="1.1" fill="none" stroke-linecap="round"/></svg>`,
+  wedge: `<svg viewBox="0 0 24 24"><path d="M20.2 1.6 18.4 4" stroke="#7c8698" stroke-width="2.8" stroke-linecap="round"/><path d="M18.7 3.6 11.4 12.6" stroke="#c9cfd8" stroke-width="1.6" stroke-linecap="round"/><path d="M11.8 12.2c-.8.1-1.5.6-1.9 1.3L5.8 19.4c2.4 1.9 6.3 2.3 9.1 1.1 1.6-.7 2.5-2 2.4-3.4-.2-2.3-1.9-4.6-5.5-4.9z" fill="#e8a467" stroke="#9a6534" stroke-width=".9"/><path d="M9.2 15.6l5.8.3M8.1 17.2l6.8.4M7.1 18.8l6.9.4" stroke="#9a6534" stroke-width=".8" stroke-linecap="round"/><path d="M7.6 20.4c2 .8 4.5.9 6.5.3" stroke="#ffe0bd" stroke-width=".8" fill="none" stroke-linecap="round"/></svg>`,
   putter: `<svg viewBox="0 0 24 24"><path d="M18.6 1.6 17 4.1" stroke="#7c8698" stroke-width="2.8" stroke-linecap="round"/><path d="M17.4 3.7 12.4 15.6" stroke="#c9cfd8" stroke-width="1.6" stroke-linecap="round"/><rect x="5.4" y="15.8" width="12.4" height="4.2" rx="1.5" fill="#8affde" stroke="#3f9a7c" stroke-width=".9"/><path d="M5.6 16.6c-.2.3-.2 2.4 0 2.7" stroke="#e8fffa" stroke-width="1" stroke-linecap="round"/><path d="M11.6 15.9v1.8" stroke="#0a1020" stroke-width="1.3" stroke-linecap="round"/></svg>`,
   teleport: `<svg viewBox="0 0 24 24"><path d="M2.6 12l3.3-5.4L9.2 12l-3.3 5.4z" fill="none" stroke="#c86bff" stroke-width="1.7" stroke-linejoin="round" opacity=".8"/><path d="M14.8 12l3.3-5.4L21.4 12l-3.3 5.4z" fill="#c86bff"/><path d="M10.6 8.7L13.9 12l-3.3 3.3" fill="none" stroke="#6be7ff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 20.6h16" stroke="#8a93a8" stroke-width="1.5" stroke-linecap="round"/></svg>`,
   nuke: `<svg viewBox="0 0 24 24"><path d="M8.4 18.1L5.2 22.5h3.2zM15.6 18.1l3.2 4.4h-3.2z" fill="#2b323c"/><path d="M8.7 17.4h6.6l1.6 5.1H7.1z" fill="#3d4652"/><path d="M12 1.5c3.4 3.4 5.3 7.1 5.3 10.4 0 2.4-.8 4.4-1.9 5.9H8.6c-1.1-1.5-1.9-3.5-1.9-5.9C6.7 8.6 8.6 4.9 12 1.5z" fill="#aeb9c9"/><path d="M12 1.5C8.6 4.9 6.7 8.6 6.7 11.9c0 1.6.4 3.1 1 4.3V5.4z" fill="#d7e0ec"/><path d="M6.9 8.5h10.2v6.6H6.9z" fill="#26350f"/><g fill="#b6ff5a"><path d="M12 11.8l-1.6-3.1a3.6 3.6 0 013.2 0z"/><path d="M12 11.8l-1.6-3.1a3.6 3.6 0 013.2 0z" transform="rotate(120 12 11.8)"/><path d="M12 11.8l-1.6-3.1a3.6 3.6 0 013.2 0z" transform="rotate(240 12 11.8)"/><circle cx="12" cy="11.8" r=".9"/></g></svg>`,
@@ -204,6 +207,9 @@ const TRAJ = {
   minigun: `<svg viewBox="0 0 24 14"><g stroke="#ffd9a0" stroke-width="1.3" fill="none"><path d="M2 11 Q9 4 16 7.5"/><path d="M2 12.5 Q10 6.5 17.5 9.5"/><path d="M3 13.5 Q11 9 19 11.5"/></g></svg>`,
   golfball: `<svg viewBox="0 0 24 14"><path d="M2 12 Q7 3 11 8 Q13 10.5 15 9.5 Q18 8 21 11.5" stroke="#aeb9d6" stroke-width="1.5" fill="none"/><circle cx="21.2" cy="11.6" r="1.6" fill="#f4f6f2"/></svg>`,
   driver: `<svg viewBox="0 0 24 14"><path d="M2 12 Q8 1 14 6 Q18 9.4 22 11.6" stroke="#aeb9d6" stroke-width="1.5" fill="none"/><circle cx="22" cy="11.6" r="1.6" fill="#f4f6f2"/></svg>`,
+  // The Wedge: a tall arc that comes down steeply and short, then a backspin
+  // curl beside the ball where it checks up.
+  wedge: `<svg viewBox="0 0 24 14"><path d="M2 12.6 Q8 -9 14 11.6" stroke="#aeb9d6" stroke-width="1.5" fill="none"/><circle cx="14.6" cy="11.6" r="1.6" fill="#f4f6f2"/><path d="M19.6 10.2a2.3 2.3 0 1 0-1.2 3" stroke="#e8a467" stroke-width="1.2" fill="none" stroke-linecap="round"/><path d="M19.6 8.4v2.1h-2" stroke="#e8a467" stroke-width="1.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   putter: `<svg viewBox="0 0 24 14"><path d="M2 11.6h17" stroke="#aeb9d6" stroke-width="1.5" stroke-dasharray="3 2.4" fill="none"/><circle cx="21" cy="11.6" r="1.6" fill="#f4f6f2"/></svg>`,
   teleport: `<svg viewBox="0 0 24 14"><path d="M3 12 Q11 0 18 9.5" stroke="#aeb9d6" stroke-width="1.6" fill="none"/><path d="M3 12l2.1-3 2.1 3-2.1 3z" fill="none" stroke="#c86bff" stroke-width="1.2" stroke-linejoin="round"/><path d="M18 9.5l2.1-3 2.1 3-2.1 3z" fill="#c86bff"/><path d="M9.4 3.4l2.2 2.2-2.2 2.2" fill="none" stroke="#6be7ff" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   nuke: `<svg viewBox="0 0 24 14"><path d="M2 12 Q10 0 17 8" stroke="#aeb9d6" stroke-width="1.6" fill="none"/><circle cx="18" cy="9" r="4" fill="#b6ff5a" opacity=".4"/><circle cx="18" cy="9" r="1.8" fill="#b6ff5a"/></svg>`,
@@ -3682,7 +3688,7 @@ function buildWeaponStrip() {
     chip.onclick = () => {
       if (!(left > 0 && canAim())) return;
       // `left` is 99 for every club because room-engine seeds per-seat golf ammo
-      // as {golfball:99, driver:99, putter:99} and it is copied into S.ammo — not
+      // as 99 of each club in game-core's GOLF_BAG and it is copied into S.ammo — not
       // because of the `?? w.ammo` fallthrough above. Capture BEFORE assigning:
       // re-tapping the club already in hand is not "picking a club", and the
       // golf lesson must not clear on it. Own-turn gate: in online golf canAim()
@@ -3811,6 +3817,18 @@ function relayAim() {
   lastAimSent = now;
   const a = myAim();
   sendMsg({ type: 'aim', angle: a.angle, power: a.power, weapon: S.selected });
+}
+// Mirror of loftedAngle() in game-core.js, fed the `loft` a club's menu entry
+// carries (only the Wedge has one; anything else gets its aim back unchanged).
+// drawAim draws the ball's REAL heading with it, so the aim line shows the
+// lofted launch the server will fly. test/golf_marker.mjs holds the two to the
+// same answers across the whole aim range.
+function loftedAngleC(angle, L) {
+  if (!L) return angle;
+  const back = angle > 90;
+  const e = back ? 180 - angle : angle;
+  const up = e <= L.from ? e + L.deg : e + (L.deg * (90 - e)) / (90 - L.from);
+  return back ? 180 - up : up;
 }
 // Mirror of clampAim() in game-core.js. UX only — the server re-clamps every
 // shot in simulateShot(), so a drift here can never desync the physics.
@@ -4022,7 +4040,9 @@ const COACH_COMBAT = [
     body: 'Drive left or right on your turn. It spends fuel, and the fuel bar refills every turn.' },
 ];
 // Copy checked against game-core.js: the Driver carries furthest and rolls
-// longest; the Iron bites on landing; the Putter is ground:true and never lofts.
+// longest; the Iron bites on landing; the Wedge lofts the aim (loftedAngle),
+// carries about half the Iron at the same aim and checks up on landing; the
+// Putter is ground:true and never lofts.
 // No Iron number is stated on purpose — its speedMul is a 1.0038 trim, not 1.0.
 const COACH_GOLF = [
   { id: 'pull', title: 'Touch anywhere. Pull back.',
@@ -4030,7 +4050,7 @@ const COACH_GOLF = [
   { id: 'fire', title: 'Now fire.',
     body: 'Tap the CONTROLS tab to bring the panel up, then hit FIRE. One stroke each turn — no clock, take your time.' },
   { id: 'club', title: 'Pick your club.',
-    body: 'Driver for maximum carry off the tee. Iron for a shot that bites on landing. Putter never leaves the turf — it only rolls, exactly as far as you dare.' },
+    body: 'Driver for maximum carry off the tee. Iron for a shot that bites on landing. Wedge flies high and short and stops dead. Putter never leaves the turf — it only rolls, exactly as far as you dare.' },
 ];
 // A function, not a constant: S.mode is assigned long after this script loads.
 const coachSteps = () => (S.mode === 'golf' ? COACH_GOLF : COACH_COMBAT);
@@ -5680,9 +5700,10 @@ const HELP_WEAPONS = [
   { id: 'teleport', name: 'Teleport',      note: '2 charges',        desc: 'Warp your tank to wherever the shell lands. No blast — pick your ground.' },
   { id: 'nuke',     name: 'Tactical Nuke', note: '1 warhead',        desc: 'The big one. Leaves a fallout cloud over the crater that keeps hurting.' },
   { id: 'railgun',  name: 'Railgun',       note: 'supply drops only', desc: 'A flat hypervelocity slug that punches straight through hills. Only found in supply crates.' },
-  // Bag order — matches the in-game strip (8.22): Driver, Iron, Putter.
+  // Bag order — matches the in-game strip (8.22): Driver, Iron, Wedge, Putter.
   { id: 'driver',   name: 'Driver',        note: 'Golf mode',        desc: 'Maximum carry and it keeps running after it lands. Off the tee, nothing else comes close.' },
   { id: 'golfball', name: 'Iron',          note: 'Golf mode',        desc: 'The all-rounder: honest carry, bites on landing, modest release.' },
+  { id: 'wedge',    name: 'Wedge',         note: 'Golf mode',        desc: 'Launches steeper than you aim: high and short, about half the carry of the Iron, and it stops almost dead where it lands.' },
   { id: 'putter',   name: 'Putter',        note: 'Golf mode',        desc: 'Never leaves the turf — a pure roll whose pace you set. The closer, the deadlier.' },
 ];
 let helpBuilt = false;
@@ -7781,7 +7802,11 @@ function drawAim() {
     }
     const speed = aim.power * 52 * (selW.speedMul || 1);   // mirrors game-core SPEED_PER_POWER
     const G = 900 * (selW.gravityMul || 1), DTs = 1 / 120;
-    let px = mox, py = moy, vx = Math.cos(rad) * dir * speed, vy = -Math.sin(rad) * speed;
+    // The ball leaves the muzzle (on `rad`, where the barrel is drawn) on its
+    // REAL heading: a lofted club, the Wedge, turns it toward vertical exactly
+    // as game-core's simulateShot does. For every other weapon lrad is rad.
+    const lrad = loftedAngleC(aim.angle, selW.loft) * Math.PI / 180;
+    let px = mox, py = moy, vx = Math.cos(lrad) * dir * speed, vy = -Math.sin(lrad) * speed;
     let landed = null, burst = null, prevVy = vy;
     const dots = [];
     for (let i = 0; i < 3120; i++) {                 // 26 s cap, same as the sim
@@ -8195,7 +8220,7 @@ function ordnanceKind(A, pr) {
   if (w === 'a_plasma')  return 'plasma';
   if (w === 'a_pods')    return pr.delay > 0 ? 'spore' : 'podshell';
   if (w === 'a_lance')   return 'lance';
-  if (w === 'driver' || w === 'putter') return 'golfball';   // every club strikes the same ball
+  if (w === 'driver' || w === 'wedge' || w === 'putter') return 'golfball';   // every club strikes the same ball
   return ORD[w] ? w : 'cannon';          // cannon is the sensible default round
 }
 // R0 above took the full 50% cut for every fat payload round (mortar, nuke,
@@ -8213,7 +8238,7 @@ const ORD_SPIN  = { bomblet: 0.16, firebomb: 0.10, wall: 0.07,
                     spore: 0.12,
                     magmagob: 0.15 };   // radians per path point
 const ORD_TRAIL = {
-  golfball: 'rgba(244,246,242,.5)', driver: 'rgba(244,246,242,.5)', putter: 'rgba(244,246,242,.5)',
+  golfball: 'rgba(244,246,242,.5)', driver: 'rgba(244,246,242,.5)', wedge: 'rgba(244,246,242,.5)', putter: 'rgba(244,246,242,.5)',
   minigun: 'rgba(255,217,160,.55)',
   cannon: 'rgba(255,220,150,.5)', mortar: 'rgba(255,190,110,.5)', volley: 'rgba(180,170,255,.55)',
   railgun: 'rgba(60,232,143,.75)', cluster: 'rgba(255,210,63,.45)', napalm: 'rgba(255,120,70,.55)',

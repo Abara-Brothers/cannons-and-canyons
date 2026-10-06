@@ -27,7 +27,7 @@ import {
   laneBounds,
   generateTerrain, generateTrees, spawnTanks, surfaceAt, simulateShot, terrainDiff,
   weaponMenu, menuEntry, startingAmmo, WEAPON_BY_ID, tickHazards, burnTick, aiShot, mergeScorch,
-  LOADOUT_POOL, validLoadout, loadoutAmmo, loadoutSizeFor,
+  LOADOUT_POOL, validLoadout, loadoutAmmo, loadoutSizeFor, GOLF_BAG,
   fireDamage, FIRE_TICK,
   BIOMES, BIOME_IDS, biomeLavaY, generateProps, generateRuins, prepareGolfHole,
   isGeneratedCallsign, callsignFromSeed, isProfane,
@@ -705,9 +705,11 @@ function snapshot(room, seat) {
     trees: room.trees,
     tanks: room.tanks.map(t => ({ x: Math.round(t.x * 10) / 10, y: Math.round(t.y * 10) / 10 })),
     weapons: room.mode === 'golf'
-      // Bag order: Driver, Iron, Putter (Jordan, 8.22). The client still
-      // defaults the selection to the Iron — order is presentation only.
-      ? ['driver', 'golfball', 'putter'].map((id) => ({ ...menuEntry(WEAPON_BY_ID[id]), ammo: 99 }))
+      // Bag order: Driver, Iron, Wedge, Putter (Jordan, 8.22; the Wedge joins
+      // between the Iron and the Putter, owner 2026-10-06, the order a real bag
+      // runs by loft). The client still defaults the selection to the Iron —
+      // order is presentation only.
+      ? GOLF_BAG.map((id) => ({ ...menuEntry(WEAPON_BY_ID[id]), ammo: 99 }))
       : weaponMenu(),
     golf: room.golf ? {
       hole: room.golf.hole, holes: GOLF_HOLES.length, par: room.golf.par, cup: room.golf.cup, tee: room.golf.tee,
@@ -848,7 +850,7 @@ function startGolf(room) {
   };
   room.hp = new Array(n).fill(MAX_HP);
   room.hpMax = new Array(n).fill(MAX_HP);
-  room.ammo = Array.from({ length: n }, () => ({ golfball: 99, driver: 99, putter: 99 }));
+  room.ammo = Array.from({ length: n }, () => Object.fromEntries(GOLF_BAG.map((id) => [id, 99])));
   room.shield = new Array(n).fill(0);
   room.crates = []; room.props = []; room.ruins = null; room.guard = null;
   room.facing = new Array(n).fill(1);            // every course plays left -> right
@@ -915,7 +917,7 @@ function golfShot(room, seat, msg) {
   const g = room.golf;
   if (g.done[seat]) return;
   room.shotPending = true;          // one swing per turn (see handleFire)
-  // Three clubs, one ball: any golfOnly weapon id is a legal swing; anything
+  // Four clubs, one ball: any golfOnly weapon id is a legal swing; anything
   // else (or nothing) falls back to the iron.
   const clubW = WEAPON_BY_ID[msg.weapon];
   const club = clubW && clubW.golfOnly ? clubW.id : 'golfball';

@@ -67,7 +67,7 @@ const MODES = [
     blurb: 'Escalating waves of xeno saucers. See how long you last.',
     art: 'ruins-wide',    card: 'ruins-mid',     draft: 7 },
   { id: 'golf',   name: 'Artillery Golf', players: '1-4',       tag: 'Nine holes, no damage',
-    blurb: 'Driver, Iron, Putter. Real rolling physics and a scorecard.',
+    blurb: 'Driver, Iron, Wedge, Putter. Real rolling physics and a scorecard.',
     art: 'ice-wide',      card: 'ice-mid',       draft: 5 },
 ];
 const modeOf = (id) => MODES.find((m) => m.id === id) || MODES[0];
@@ -173,6 +173,14 @@ const IC = {
        '<rect x="10" y="14.6" width="3" height="6.4" rx="1.4"/></svg>',
   shell:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.1c2.3 2.5 3.4 4.8 3.4 7.1v1.6H8.6V9.2c0-2.3 1.1-4.6 3.4-7.1z"/>' +
        '<rect x="8.2" y="11.6" width="7.6" height="6.6" rx="1.1"/><rect x="7.2" y="19" width="9.6" height="2.6" rx="1.3"/></svg>',
+  // THE GOLF BAG, the Bay stations row golf shows in the Armoury's place: a
+  // tall bag with a pocket and three club heads standing out of the collar.
+  bag:'<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' +
+       '<path fill-rule="evenodd" d="M8.4 10.8h7.2l-.5 10.4c0 .9-.8 1.6-1.7 1.6h-2.8c-.9 0-1.7-.7-1.7-1.6zM10.2 14.4v4.2h3.6v-4.2z"/>' +
+       '<rect x="7.6" y="8.4" width="8.8" height="2.2" rx="1"/>' +
+       '<path d="M9.4 8.4 8 4.6l1.4-.5 1.5 4.3z"/><ellipse cx="8.2" cy="3.6" rx="2.1" ry="1.5" transform="rotate(-20 8.2 3.6)"/>' +
+       '<path d="M11.3 8.4V3.6h1.4v4.8z"/><rect x="10.4" y="2.2" width="4.4" height="1.8" rx=".5"/>' +
+       '<path d="M14.4 8.4l1.5-4.3 1.3.5-1.4 3.8z"/><path d="M15.6 2.8l3.2 1-.5 1.7-3.2-1z"/></svg>',
   medal:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7.4 2.2h3.1l2.1 5.7-2.9 1.3z" opacity=".65"/>' +
        '<path d="M16.6 2.2h-3.1l-2.1 5.7 2.9 1.3z" opacity=".65"/><circle cx="12" cy="15.6" r="6"/>' +
        '<circle cx="12" cy="15.6" r="2.6" fill="#0a0e18"/></svg>',
@@ -366,6 +374,18 @@ function loadout(picks, n, label, extra) {
   return '<div class="ldt"><div style="display:flex;align-items:center;gap:' + u(8) + '"><span class="lbl">' + label + '</span><span class="grow"></span>' + (extra || '') + '</div>'
     + '<div class="slots" style="justify-content:flex-start;margin-top:' + u(9) + '">' + slots(picks, n) + '</div></div>';
 }
+
+/* ---- the golf bag ----------------------------------------------------------------
+   GOLF DRAFTS NOTHING (owner, 2026-10-06): every seat swings the same four
+   clubs, so wherever the bay shows weapons for golf -- the home readout and
+   station, the mode card, Match setup, the Armoury, the lobby -- it shows the
+   bag instead, read-only: no picking and no Edit. The ids and their order
+   mirror game-core's GOLF_BAG, which builds the golf strip in the match (this
+   is a classic script and cannot import it; test/golf_four_ui.mjs holds the
+   two together). Names, words and art are HELP_WEAPONS' and ICONS', the ones
+   the dock and the field manual draw. */
+const GOLF_BAG = ['driver', 'golfball', 'wedge', 'putter'];
+const isGolf = (m) => !!m && m.id === 'golf';
 
 /* ---- the rack: the player's PREFERRED loadout ----------------------------------
    The real draft happens when the server asks (a `pick` message once the lobby
@@ -720,7 +740,21 @@ function sqRack(modeId) {
     if (Array.isArray(p)) picks = p.filter((id, i) => pool.includes(id) && p.indexOf(id) === i);
   } catch {}
   if (!picks.length && has('ARM_DEFAULT')) picks = ARM_DEFAULT.slice();
-  return picks.slice(0, m.draft);
+  picks = picks.slice(0, m.draft);
+  // GOLF ASKS FOR NO RACK, BUT ITS SEAT STILL CARRIES ONE: the server checks a
+  // golf member's Ready and the leader's Start against five distinct weapons
+  // (MODE_SEATS' `|| 5`), though golf never fires them. The bay shows golf only
+  // its bag and never the Armoury's picks, so a short stored rack would leave
+  // "Pick N more" opening a bag with nothing to pick. Golf's rack is the stored
+  // picks topped up from the standard draft, then the pool: always full, never
+  // shown, and the stored preference itself is left untouched.
+  if (m.id === 'golf') {
+    for (const id of [...(has('ARM_DEFAULT') ? ARM_DEFAULT : []), ...pool]) {
+      if (picks.length >= m.draft) break;
+      if (!picks.includes(id)) picks.push(id);
+    }
+  }
+  return picks;
 }
 // THE SQUAD'S RACK IN THE ARMOURY (D-UI-3). The footer counts the rack against
 // the SQUAD's mode (sqRack), but the Armoury drafts for the mode this device
@@ -2701,6 +2735,7 @@ SCREENS.armoury = function () {
   // rack (sqRackOpen, D-UI-3); otherwise null, and every line below reads
   // exactly as it always has.
   const s = state(), sm = sqArmMode(), m = sm || s.mode, n = m.draft, picks = rackPicks().slice(0, n), full = picks.length >= n;
+  if (isGolf(m)) return golfBagScreen(s, m, sm);
   const pool = has('ARM_POOL') ? ARM_POOL : [];
   const cells = RACK_ORDER.map((id) => {
     const w = weaponInfo(id), on = picks.includes(id), pickable = pool.includes(id);
@@ -2733,6 +2768,36 @@ SCREENS.armoury = function () {
       + '<button class="go" ' + (full ? 'data-launch' : 'disabled') + '>' + (full ? 'Open the bay doors' + IC.play : 'Pick ' + (n - picks.length) + ' more') + '</button>';
   return chrome('Armoury', 'Load the rack &mdash; ' + n + ' weapons go into the field', sm ? 'Your squad' : 'Step 3 of 3', body, foot);
 };
+
+// 4, FOR GOLF — THE GOLF BAG. The Armoury's door (Match setup, the Bay
+// stations row, a squad's) opens this instead when golf is the mode: the four
+// clubs and what each one does, read-only. Nothing is picked here and nothing
+// has to be, so the bay doors are always open from it.
+function golfBagScreen(s, m, sm) {
+  const card = (id) => {
+    const w = weaponInfo(id);
+    return '<div class="gclub"><span class="gct">' + wicon(id) + '<span class="gcn">' + esc(w.name) + '</span></span>'
+      + '<span class="gcd">' + esc(w.desc) + '</span></div>';
+  };
+  const body = '<div class="cols">'
+    + '<div class="card" style="width:' + u(262) + ';position:relative;overflow:hidden">'
+    +   '<div style="position:absolute;left:' + u(12) + ';right:' + u(12) + ';top:' + u(11) + ';z-index:2"><span class="lbl">Golf bag</span>'
+    +     '<div style="font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:' + u(19) + ';text-transform:uppercase;letter-spacing:.03em;margin-top:' + u(4) + ';color:#eef3ff">' + esc(m.name) + '</div></div>'
+    +   stage(s.skinId, { cx: 131, cy: 224, w: 164 })
+    +   '<div style="position:absolute;left:0;right:0;bottom:' + u(10) + ';padding:0 ' + u(12) + ';z-index:2">'
+    +     '<div style="display:flex;align-items:flex-end;justify-content:space-between"><span class="lbl" style="padding-bottom:' + u(3) + '">Clubs</span>'
+    +       '<span class="b-cnt" style="color:#3ce88f">' + GOLF_BAG.length + '</span></div>'
+    +     '<div class="slots">' + slots(GOLF_BAG, GOLF_BAG.length) + '</div></div>'
+    + '</div>'
+    + '<div class="gbag">' + GOLF_BAG.map(card).join('') + '</div>'
+    + '</div>';
+  const foot = sm
+    ? '<span class="hint">Your squad&rsquo;s ' + esc(m.name) + ' carries these four clubs</span><span class="grow"></span>'
+      + '<button class="go" data-back>Back to the squad</button>'
+    : '<span class="hint">No draft in golf &middot; every player carries these four clubs</span><span class="grow"></span>'
+      + '<button class="go" data-launch>Open the bay doors' + IC.play + '</button>';
+  return chrome('Golf bag', 'Four clubs &mdash; the same bag for every player', sm ? 'Your squad' : 'Step 3 of 3', body, foot);
+}
 
 // 5 — LOBBY. Fed by the game's own lobby messages (see the wrappers at the
 // bottom); every button calls the existing handler so the wire is untouched.
@@ -2818,7 +2883,8 @@ SCREENS.lobby = function () {
     + '<span class="ro"><span class="rk">Paint</span><span class="rv">' + esc(s.skin.name) + '</span></span></div>';
   const right = '<span class="lbl">' + (solo ? 'Deploying' : 'Roster') + '</span>' + roster
     + '<button class="ghost' + (nudgeHidden || solo || searching || pending || oneSeat ? ' hidden' : '') + '" style="width:100%;margin-top:' + u(10) + ';height:' + u(34) + ';font-size:' + u(13) + ';justify-content:center" data-old="notifyBtn">Nudge me when they join</button>'
-    + '<div style="margin-top:' + u(12) + '">' + loadout(rackPicks().slice(0, mode.draft), mode.draft, 'Rack loaded', pending || solo ? '' : '<button class="ghost" style="height:' + u(28) + ';font-size:' + u(12) + ';padding:0 ' + u(11) + '" data-go="armoury">Change</button>') + '</div>';
+    + '<div style="margin-top:' + u(12) + '">' + (isGolf(mode) ? loadout(GOLF_BAG, GOLF_BAG.length, 'Golf bag', '')
+      : loadout(rackPicks().slice(0, mode.draft), mode.draft, 'Rack loaded', pending || solo ? '' : '<button class="ghost" style="height:' + u(28) + ';font-size:' + u(12) + ';padding:0 ' + u(11) + '" data-go="armoury">Change</button>')) + '</div>';
   const title = pending ? (st === 'offline' ? 'No connection' : st === 'connecting' ? 'Reaching the server' : 'Cannot reach the server')
     : solo ? 'Solo run' : searching ? 'Searching' : oneSeat ? 'Teeing off' : filled >= max ? 'Bay doors opening' : 'Bay doors sealed';
   const count = solo ? '' : ' (' + filled + ')';
@@ -2830,7 +2896,8 @@ SCREENS.lobby = function () {
     + (pending
       ? (st === 'connecting' ? '' : '<button class="go" data-solo>' + (mode.id === 'duel' || mode.id === 'ffa' ? 'Play vs Computer' : 'Play solo') + IC.play + '</button>')
       : '<button class="go' + (canStart && !oneSeat ? '' : ' hidden') + '" ' + (filled < minSeats ? 'disabled' : 'data-old="startMatchBtn"') + '>' + startLabel + IC.play + '</button>');
-  return chrome(title, esc(mode.name) + ' &middot; ' + rackPicks().slice(0, mode.draft).length + ' weapons loaded', pending ? (st === 'offline' ? 'Offline' : st === 'connecting' ? 'Waiting room' : 'Retrying') : solo ? 'Solo drop' : searching ? 'Quick match' : oneSeat ? 'Solo round' : 'Waiting room',
+  const loaded = isGolf(mode) ? GOLF_BAG.length + ' clubs in the bag' : rackPicks().slice(0, mode.draft).length + ' weapons loaded';
+  return chrome(title, esc(mode.name) + ' &middot; ' + loaded, pending ? (st === 'offline' ? 'Offline' : st === 'connecting' ? 'Waiting room' : 'Retrying') : solo ? 'Solo drop' : searching ? 'Quick match' : oneSeat ? 'Solo round' : 'Waiting room',
     '<div class="doors"><span class="door" style="left:0"></span><span class="door" style="right:0"></span></div>'
     + '<div class="cols" style="align-items:center;padding:0 ' + u(34) + '"><div style="width:' + u(420) + '">' + left + summary + '</div><div style="flex:1">' + right + '</div></div>', foot);
 };
@@ -2846,7 +2913,7 @@ SCREENS.modes = function () {
       +   '<span class="mbicn">' + MODE_IC[x.id] + '</span><span class="mbn">' + esc(x.name) + '</span></span>'
       + '<span class="mbc"><span class="mbt' + (on ? '' : ' mbt2') + '">' + (on ? 'Armed &middot; ' : '') + esc(x.tag) + '</span>'
       +   '<span class="mbb">' + esc(x.blurb) + '</span>'
-      +   '<span class="mbf"><span class="tagm">' + esc(x.players) + ' players</span><span class="tagm">' + x.draft + ' weapons</span></span></span></button>';
+      +   '<span class="mbf"><span class="tagm">' + esc(x.players) + ' players</span><span class="tagm">' + (isGolf(x) ? GOLF_BAG.length + ' clubs' : x.draft + ' weapons') + '</span></span></span></button>';
   }).join('');
   return chrome('Mission board', 'Five ways to bring down a mountain', 'Step 1 of 3', '<div class="mrow">' + cards + '</div>', '');
 };
@@ -2891,20 +2958,28 @@ SCREENS.setup = function () {
     +       '<span style="display:block;font-family:\'JetBrains Mono\',monospace;font-size:' + u(8.5) + ';font-weight:500;letter-spacing:.12em;text-transform:uppercase;color:#ffb46b;margin-top:' + u(4) + '">' + esc(s.skin.name) + ' paint</span></span>'
     +       '<button class="ghost" style="height:' + u(32) + ';font-size:' + u(13) + '" data-go="paint">Repaint</button></div>'
     +     '<div style="height:1px;background:rgba(140,168,214,.18)"></div>'
-    +     '<div><div style="display:flex;align-items:center;gap:' + u(8) + '"><span class="lbl">Weapon rack &middot; ' + s.picks.length + ' of ' + m.draft + ' drafted</span><span class="grow"></span>'
-    +       '<button class="ghost" style="height:' + u(28) + ';font-size:' + u(12) + ';padding:0 ' + u(11) + '" data-go="armoury">Edit</button></div>'
-    +       '<div class="slots" style="justify-content:flex-start;margin-top:' + u(9) + '">' + slots(s.picks, m.draft) + '</div></div>'
+    +     (isGolf(m)
+      // Golf's row is its bag, read-only: no count of picks, and no Edit.
+      ?     '<div><div style="display:flex;align-items:center;gap:' + u(8) + '"><span class="lbl">Golf bag &middot; ' + GOLF_BAG.length + ' clubs</span></div>'
+      +       '<div class="slots" style="justify-content:flex-start;margin-top:' + u(9) + '">' + slots(GOLF_BAG, GOLF_BAG.length) + '</div></div>'
+      :     '<div><div style="display:flex;align-items:center;gap:' + u(8) + '"><span class="lbl">Weapon rack &middot; ' + s.picks.length + ' of ' + m.draft + ' drafted</span><span class="grow"></span>'
+      +       '<button class="ghost" style="height:' + u(28) + ';font-size:' + u(12) + ';padding:0 ' + u(11) + '" data-go="armoury">Edit</button></div>'
+      +       '<div class="slots" style="justify-content:flex-start;margin-top:' + u(9) + '">' + slots(s.picks, m.draft) + '</div></div>')
     +   '</div>'
     + '</div>'
     + '<div class="brief" style="flex:1"><div class="bi"><img src="' + art(m.card) + '" alt=""><span class="g"></span><span>' + esc(m.name) + '</span></div>'
     +   '<div class="bb">' + esc(m.blurb) + '</div>'
     +   '<div class="brow"><span class="lbl">Players</span><b>' + esc(m.players) + '</b></div>'
-    +   '<div class="brow"><span class="lbl">Weapons to draft</span><b class="cy">' + m.draft + '</b></div>'
+    +   (isGolf(m) ? '<div class="brow"><span class="lbl">Clubs in the bag</span><b class="cy">' + GOLF_BAG.length + '</b></div>'
+      : '<div class="brow"><span class="lbl">Weapons to draft</span><b class="cy">' + m.draft + '</b></div>')
     +   '<div class="brow"><span class="lbl">Opponent</span><b>' + oppText + '</b></div></div>'
     + '</div>';
   const foot = '<button class="ghost" data-go="modes">Change mode</button>'
-    + '<span class="hint">The bay doors stay shut until your loadout is drafted</span><span class="grow"></span>'
-    + '<button class="go" data-go="armoury">To the armoury' + IC.play + '</button>';
+    + (isGolf(m)
+      ? '<span class="hint">No draft in golf &middot; every player carries the same four clubs</span><span class="grow"></span>'
+        + '<button class="go" data-go="armoury">To the golf bag' + IC.play + '</button>'
+      : '<span class="hint">The bay doors stay shut until your loadout is drafted</span><span class="grow"></span>'
+        + '<button class="go" data-go="armoury">To the armoury' + IC.play + '</button>');
   return chrome(esc(m.name), 'Match setup', 'Step 2 of 3', body, foot);
 };
 
@@ -2931,7 +3006,10 @@ SCREENS.home = function () {
 
   const stations = [
     ['paint',   IC.roller, 'Paint shop',     esc(s.skin.name) + ' fitted'],
-    ['armoury', IC.shell,  'Armoury',        s.picks.length + ' of ' + m.draft + ' drafted'],
+    // Golf's station is its bag, and it opens the golf bag screen (the
+    // Armoury's door, drawn for golf): the clubs and what each one does.
+    isGolf(m) ? ['armoury', IC.bag, 'Golf bag', GOLF_BAG.length + ' clubs']
+      : ['armoury', IC.shell,  'Armoury',        s.picks.length + ' of ' + m.draft + ' drafted'],
     ['career',  IC.medal,  'Service record', s.wins + ' wins'],
   ].map((t) => '<button class="st" data-go="' + t[0] + '"><span class="sti">' + t[1] + '</span>'
     + '<span class="stt"><span class="stn">' + t[2] + '</span><span class="std">' + t[3] + '</span></span></button>').join('');
@@ -2966,7 +3044,8 @@ SCREENS.home = function () {
     // armoury's word for the real create.
     +   '<button class="ros" data-go="setup" title="Match setup">'
     +   '<span class="ro"><span class="rk">Players</span><span class="rv">' + esc(players) + '</span></span>'
-    +   '<span class="ro"><span class="rk">Weapon draft</span><span class="rv"><em>' + m.draft + '</em> picks</span></span>'
+    +   (isGolf(m) ? '<span class="ro"><span class="rk">Golf bag</span><span class="rv"><em>' + GOLF_BAG.length + '</em> clubs</span></span>'
+      : '<span class="ro"><span class="rk">Weapon draft</span><span class="rv"><em>' + m.draft + '</em> picks</span></span>')
     +   '<span class="ro"><span class="rk">Paint</span><span class="rv">' + esc(s.skin.name) + '</span></span>'
     +   '</button>'
     +   '<span class="grow"></span>'

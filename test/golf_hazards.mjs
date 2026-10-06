@@ -6,7 +6,9 @@
 //     point at the approach bank; and
 //   - a full-send Driver still comes to REST inside the golf maxT after the
 //     roll retune (a truncated roll reads as a phantom OOB).
-import { prepareGolfHole, simulateShot, generateTerrain } from '../public/game-core.js';
+// And the Wedge's contract (owner, 2026-10-06): built-in loft, high and
+// short, and it stops almost dead (section 6).
+import { prepareGolfHole, simulateShot, generateTerrain, loftedAngle, WEAPON_BY_ID, WEAPONS } from '../public/game-core.js';
 
 let failures = 0;
 const fail = (m) => { console.error('FAIL ' + m); failures++; };
@@ -139,6 +141,69 @@ const ok = (m) => console.log('  ok — ' + m);
   if (!rest) fail('wall return: ball left the world instead of resting at the boundary');
   else if (rest[0] < 200) fail(`wall return: rest at ${rest[0]} is outside the course`);
   else ok(`wall return: ball rests on-course at ${Math.round(rest[0])} (never exits the left edge)`);
+}
+
+// ---- 6. The Wedge: lofted, high and short, and it stops almost dead -------------
+// The owner's words (2026-10-06): it launches steeper than aimed, flies high
+// and short (about half the Iron's full-power distance) and stops almost dead
+// (backspin), and the aim line shows the real path. Measured on flat ground,
+// full power, the SAME aim for both clubs: 45 degrees, the aim a match opens
+// on. Carry is the first touchdown, apex the highest point before it, roll
+// everything after it to the rest.
+{
+  const G = 9000, TX = 8000;
+  const fly = (weapon, angle, power = 100) => {
+    const r = simulateShot({ terrain: new Array(260001).fill(G), tanks: [{ x: TX, y: G }] }, { by: 0, weapon, angle, power });
+    const p = r.projectiles[0].path;
+    let land = null, top = Infinity;
+    for (let i = 1; i < p.length && land === null; i++) { top = Math.min(top, p[i][1]); if (p[i][1] >= G) land = p[i][0]; }
+    const rest = r.golf && r.golf.rest;
+    return { p, carry: land === null ? NaN : land - TX, apex: G - top, roll: rest && land !== null ? rest[0] - land : NaN,
+             rest, secs: p.length / 30 };
+  };
+  const iron = fly('golfball', 45), wedge = fly('wedge', 45);
+  const k = wedge.carry / iron.carry;
+  if (!(k >= 0.40 && k <= 0.60)) fail(`wedge: full-power carry is ${(k * 100).toFixed(1)}% of the Iron's at 45 (want 40-60%): ${Math.round(wedge.carry)} vs ${Math.round(iron.carry)}`);
+  else ok(`wedge: full-power carry ${Math.round(wedge.carry)} is ${(k * 100).toFixed(1)}% of the Iron's ${Math.round(iron.carry)} at the same 45 aim`);
+  if (!(wedge.apex > iron.apex)) fail(`wedge: apex ${Math.round(wedge.apex)} is not above the Iron's ${Math.round(iron.apex)} at the same aim`);
+  else ok(`wedge: apex ${Math.round(wedge.apex)} flies higher than the Iron's ${Math.round(iron.apex)} at the same aim`);
+  // "Far shorter": a tenth of the Iron's roll at most. It measures under 2%.
+  if (!(wedge.roll >= 0 && wedge.roll <= iron.roll / 10)) fail(`wedge: rolls ${Math.round(wedge.roll)} after landing, the Iron ${Math.round(iron.roll)} (want at most a tenth)`);
+  else ok(`wedge: checks up — ${Math.round(wedge.roll)} of roll after landing against the Iron's ${Math.round(iron.roll)}`);
+  // A stop-dead club must also STOP: it rests, and in seconds, far inside maxT.
+  if (!wedge.rest || wedge.secs > 30) fail(`wedge: full send ${wedge.rest ? 'rests at ' + wedge.secs.toFixed(1) + 's' : 'never rested'} (want a rest inside 30s)`);
+  else ok(`wedge: full send rests in ${wedge.secs.toFixed(1)}s of sim`);
+
+  // THE LAUNCH IS THE LOFTED ONE, from the muzzle the barrel is drawn at. The
+  // ball starts exactly where the Iron's does at the same aim, and its first
+  // sampled step heads at loftedAngle(45) = 70 degrees: four Euler steps of
+  // gravity (900 u/s^2 at 1/120 s) add 0.625u of drop, taken back out here.
+  const d = [wedge.p[1][0] - wedge.p[0][0], wedge.p[1][1] - wedge.p[0][1]];
+  const head = Math.atan2(-(d[1] - 0.625), d[0]) * 180 / Math.PI;
+  const lofted = loftedAngle(WEAPON_BY_ID.wedge, 45);
+  if (lofted !== 70) fail(`wedge: loftedAngle(45) is ${lofted}, want 70 (25 degrees of loft below the taper)`);
+  if (JSON.stringify(wedge.p[0]) !== JSON.stringify(iron.p[0])) fail(`wedge: the ball leaves from ${JSON.stringify(wedge.p[0])}, not the Iron's muzzle ${JSON.stringify(iron.p[0])} at the same aim`);
+  else if (!(Math.abs(head - lofted) < 0.1)) fail(`wedge: the ball heads off at ${head.toFixed(2)} degrees, not the lofted ${lofted}`);
+  else ok(`wedge: leaves the barrel's muzzle heading ${head.toFixed(2)} degrees for a 45 aim`);
+
+  // THE LOFT FUNCTION ON ITS OWN, over the whole aim range in half degrees:
+  // steeper than the aim (toward vertical, mirrored past 90), never reaching or
+  // passing vertical unless aimed there, rising with the aim with no flat spot
+  // (every aim a different shot), and a no-op for every club or weapon
+  // without a loft.
+  let bad = null, prev = -Infinity;
+  for (let a = -60; a <= 240; a += 0.5) {
+    const l = loftedAngle(WEAPON_BY_ID.wedge, a);
+    const toward = a < 90 ? (l > a && l < 90) : a > 90 ? (l < a && l > 90) : l === 90;
+    if (!toward) { bad = `aim ${a} -> ${l} is not between the aim and vertical`; break; }
+    if (!(l > prev)) { bad = `aim ${a} -> ${l} does not rise past ${prev}`; break; }
+    prev = l;
+    const mirror = loftedAngle(WEAPON_BY_ID.wedge, 180 - a);
+    if (Math.abs(mirror - (180 - l)) > 1e-9) { bad = `aim ${a} and its mirror ${180 - a} disagree`; break; }
+  }
+  if (bad) fail('wedge loft: ' + bad); else ok('wedge loft: steeper than every aim, short of vertical, rising with no flat spot, mirrored past 90');
+  const plain = WEAPONS.filter((w) => w.id !== 'wedge').find((w) => [-60, 0, 45, 90, 135, 240].some((a) => loftedAngle(w, a) !== a));
+  if (plain) fail(`loft: ${plain.id} has no loft but loftedAngle moves its aim`); else ok('loft: every other weapon flies its aim unchanged');
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL GOOD');
