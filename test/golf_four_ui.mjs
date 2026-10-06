@@ -1,6 +1,8 @@
-// Artillery Golf for four, in the real page: the Players choice in Match
-// setup reaches the create frame, the home readout says the count, the
-// boards say 1-4, and four seats render in the HUD cards and the scorecard.
+// Artillery Golf for four, in the real page: Match setup's golf has no Players
+// picker any more (owner, 2026-10-06: alone is a round for one, a squad is the
+// whole squad), Start Game sends a one-seat create, the home readout says
+// Solo, the boards say 1-4, and four seats render in the HUD cards and the
+// scorecard.
 // And golf's menus show the golf bag, never a weapon (section 6).
 // Headless Chrome over CDP; skips without Chrome.
 import { spawn } from 'node:child_process';
@@ -69,43 +71,35 @@ if (!ready) { fail('page never became ready'); cleanup(); process.exit(1); }
 await ev(`(() => { window.showToast = () => {}; try { localStorage.setItem('cc_dock_learned', '1'); } catch {} return true; })()`);
 
 try {
-// 1. Match setup for golf offers Players 1..4 and the choice reaches the create frame
+// 1. Match setup for golf: no Players picker, the Tee set kept, and Start Game
+// sends a one-seat create carrying the tee set. CHANGED (owner, 2026-10-06):
+// this used to pin Players 1..4 defaulting to 2, a tap arming three seats and
+// the create carrying max 3, and the launch bar reading Players 3.
 const setup = await ev(`(() => {
-  Bay.state && Bay.show('home');
+  Bay.show('home');
   ccMode = 'golf'; Bay.show('setup');
-  const findSeg = () => [...document.querySelectorAll('#bay .b-opt')].find((o) => o.querySelector('.lbl') && o.querySelector('.lbl').textContent === 'Players');
-  const seg = findSeg();
-  const opts = seg ? [...seg.querySelectorAll('.seg')].map((b) => b.textContent.trim()) : null;
-  const hidden = seg ? seg.classList.contains('hidden') : null;
+  const groups = [...document.querySelectorAll('#bay .b-opt')].map((o) => o.querySelector('.lbl') && o.querySelector('.lbl').textContent);
   const tee = [...document.querySelectorAll('#bay .b-opt')].find((o) => o.querySelector('.lbl') && o.querySelector('.lbl').textContent === 'Tee set');
   const teeShown = !!tee && !tee.classList.contains('hidden');
-  if (!seg) { ccMode = 'duel'; Bay.show('home'); return { opts, hidden, teeShown }; }   // RED: no segment yet
-  const before = seg.querySelector('.seg.on') && seg.querySelector('.seg.on').textContent.trim();   // the default, read before any tap
+  const gcount = document.querySelectorAll('#bay [data-set^="gcount="]').length;
   window.__sent = []; const orig = intent; window.intent = (m) => { __sent.push(m); };
-  seg.querySelector('[data-set="gcount=3"]').click();
-  const after = ccGolfMax;
-  $('createBtn').onclick(); const frame = __sent.pop();
-  ccMode = 'ffa'; ccFfaOpp = 'friend'; $('createBtn').onclick(); const ffaFrame = __sent.pop();
-  ccMode = 'golf'; window.intent = orig;
+  document.querySelector('#bay [data-set="tees=champ"]').click();
+  document.querySelector('#bay .pfoot [data-launch]').click(); const frame = __sent.pop();
+  window.intent = orig; soloRoom = false;
+  document.querySelector('#bay [data-set="tees=mens"]').click();
   Bay.show('home'); const readout = document.querySelector('#bay .lbar .ros').textContent;
   const board = [...document.querySelectorAll('#bay .board')].find((b) => b.title === 'Artillery Golf');
   const bpl = board ? board.querySelector('.bpl').textContent : null;
-  Bay.show('setup');
-  const seg2 = findSeg();                                   // re-query: the base-screen change re-rendered the tree
-  const on = seg2 && seg2.querySelector('.seg.on') && seg2.querySelector('.seg.on').textContent.trim();
-  ccMode = 'duel'; ccGolfMax = 2; Bay.show('home');
-  return { opts, hidden, teeShown, before, after, frame, ffaFrame, readout, bpl, on };
+  ccMode = 'duel'; Bay.show('home');
+  return { groups, teeShown, gcount, frame, readout, bpl };
 })()`);
-if (setup.opts && setup.opts.join(',') === '1,2,3,4' && setup.hidden === false && setup.teeShown) ok('setup: golf shows Players 1,2,3,4 beside the Tee set'); else fail('setup segment: ' + JSON.stringify(setup));
-if (setup.before === '2') ok('setup: golf defaults to 2 players'); else fail('golf default: ' + setup.before);
-if (setup.after === 3 && setup.on === '3') ok('setup: tapping 3 arms three seats'); else fail('setup: after tap ' + JSON.stringify({ after: setup.after, on: setup.on }));
-if (setup.frame && setup.frame.type === 'create' && setup.frame.mode === 'golf' && setup.frame.max === 3 && setup.frame.tees) ok('launch: the golf create frame carries max 3 and the tee set'); else fail('golf frame: ' + JSON.stringify(setup.frame));
-if (setup.ffaFrame && setup.ffaFrame.mode === 'ffa' && setup.ffaFrame.max === 4) ok('launch: the free-for-all count is untouched by the golf choice'); else fail('ffa frame: ' + JSON.stringify(setup.ffaFrame));
-if (setup.readout && /Players\s*3/.test(setup.readout.replace(/\s+/g, ' '))) ok('home: the launch bar reads Players 3 for golf'); else fail('home readout: ' + String(setup.readout).slice(0, 80));
+if (!setup.groups.includes('Players') && setup.gcount === 0 && setup.teeShown) ok('setup: golf has no Players picker, and keeps its Tee set'); else fail('setup golf groups: ' + JSON.stringify(setup));
+if (setup.frame && setup.frame.type === 'create' && setup.frame.mode === 'golf' && setup.frame.max === 1 && setup.frame.tees === 'champ') ok('launch: Start Game for golf sends a one-seat create carrying the tee set'); else fail('golf frame: ' + JSON.stringify(setup.frame));
+if (setup.readout && /Players\s*Solo/.test(setup.readout.replace(/\s+/g, ' '))) ok('home: the launch bar reads Players Solo for golf'); else fail('home readout: ' + String(setup.readout).slice(0, 80));
 if (setup.bpl === '1-4') ok('home: the golf board says 1-4'); else fail('golf board players: ' + setup.bpl);
-// 2. No other mode shows the golf Players segment (free-for-all has its own count segment under a different label).
-const hiddenFor = await ev(`(() => { const out = {}; for (const m of ['duel', 'ffa', 'boss', 'aliens']) { ccMode = m; Bay.show('setup'); const seg = [...document.querySelectorAll('#bay .b-opt')].find((o) => o.querySelector('.lbl') && o.querySelector('.lbl').textContent === 'Players'); out[m] = seg ? seg.classList.contains('hidden') : 'absent'; Bay.show('home'); } ccMode = 'duel'; return out; })()`);
-if (['duel', 'ffa', 'boss', 'aliens'].every((m) => hiddenFor[m] === true)) ok('setup: the golf Players segment is hidden for duel, free-for-all, boss and aliens'); else fail('Players segment hidden: ' + JSON.stringify(hiddenFor));
+// 2. No mode's Match setup has a Players segment at all (free-for-all's CPU count has its own label).
+const hiddenFor = await ev(`(() => { const out = {}; for (const m of ['duel', 'ffa', 'boss', 'aliens', 'golf']) { ccMode = m; Bay.show('setup'); const seg = [...document.querySelectorAll('#bay .b-opt')].find((o) => o.querySelector('.lbl') && o.querySelector('.lbl').textContent === 'Players'); out[m] = seg ? 'present' : 'absent'; Bay.show('home'); } ccMode = 'duel'; return out; })()`);
+if (['duel', 'ffa', 'boss', 'aliens', 'golf'].every((m) => hiddenFor[m] === 'absent')) ok('setup: no mode has a Players segment, golf included'); else fail('Players segment: ' + JSON.stringify(hiddenFor));
 
 // 3. four golf seats in the HUD cards: strokes, IN for a holed seat, OUT for a
 // seat scuttled by a forfeit, no hp bar.
@@ -182,7 +176,8 @@ const bag = await ev(`(async () => {
     o.edit = [...document.querySelectorAll('#bay .card button')].some((b) => b.textContent.trim() === 'Edit');
     o.brief = [...document.querySelectorAll('#bay .brief .brow')].map(txt).join('|');
     o.setupCombat = combatArt();
-    o.setupGo = txt(document.querySelector('#bay .go[data-go="armoury"]'));
+    o.setupGo = txt(document.querySelector('#bay .pfoot [data-launch]'));
+    o.setupDoor = !!document.querySelector('#bay [data-go="armoury"]');
     Bay.show('armoury');
     o.gclubs = [...document.querySelectorAll('#bay .gclub .gcn')].map((n) => n.textContent).join();
     o.gclubArt = [...document.querySelectorAll('#bay .gclub .gct')].map((g) => CLUBS.find((id) => !!ICONS[id] && !!g.querySelector('svg') && norm(g.querySelector('svg').outerHTML) === norm(ICONS[id])) || '?').join();
@@ -194,20 +189,21 @@ const bag = await ev(`(async () => {
     const fsU = (sel) => Math.min(...[...document.querySelectorAll(sel)].map((e) => parseFloat(getComputedStyle(e).fontSize) / uPx));
     o.legible = document.querySelector('#bay .gclub') ? { body: fsU('#bay .gclub .gcd'), name: fsU('#bay .gclub .gcn'),
       cut: [...document.querySelectorAll('#bay .gclub')].some((c) => c.scrollHeight > c.clientHeight + 1 || c.scrollWidth > c.clientWidth + 1) } : null;
-    const launch = document.querySelector('#bay [data-launch]');
+    const launch = document.querySelector('#bay [data-launch]'), done = document.querySelector('#bay .pfoot [data-back]');
     o.launch = launch ? { t: txt(launch), dis: launch.disabled } : null;
+    o.done = done ? { t: txt(done), dis: done.disabled } : null;
     o.armCombat = combatArt();
     Bay.show('home');
     return o;
   };
   const golf = screen('golf'), duel = screen('duel');
-  // A golf player whose saved rack is short: the bag screen still opens the doors.
+  // A golf player whose saved rack is short: the bag screen's Done is still live.
   let shortLaunch = null;
   const kept = localStorage.getItem('cc_loadout');
   try {
     localStorage.setItem('cc_loadout', JSON.stringify(['mortar']));
     ccMode = 'golf'; Bay.show('armoury');
-    const l = document.querySelector('#bay [data-launch]'); shortLaunch = l ? { t: txt(l), dis: l.disabled } : null;
+    const l = document.querySelector('#bay .pfoot [data-back]'); shortLaunch = l ? { t: txt(l), dis: l.disabled } : null;
   } finally { if (kept === null) localStorage.removeItem('cc_loadout'); else localStorage.setItem('cc_loadout', kept); ccMode = 'duel'; Bay.show('home'); }
   return { golf, duel, shortLaunch, bag: CLUBS.join() };
 })()`);
@@ -219,69 +215,53 @@ if (g.card === '1-4 players|4 clubs' && /Driver, Iron, Wedge, Putter\./.test(g.b
 else fail('golf card: ' + JSON.stringify({ card: g.card, blurb: g.blurb }));
 if (/^Golf bag . 4 clubs$/.test(g.rackLabel) && g.rackClubs === bag.bag && !g.edit) ok('setup: the rack row is the golf bag, the four clubs in order, and no Edit');
 else fail('setup golf rack: ' + JSON.stringify({ label: g.rackLabel, clubs: g.rackClubs, edit: g.edit }));
-if (/Clubs in the bag\s*4/.test(g.brief) && !/Weapons to draft/.test(g.brief) && /golf bag/i.test(g.setupGo)) ok('setup: the brief says Clubs in the bag 4, and the door is To the golf bag');
-else fail('setup golf brief: ' + JSON.stringify({ brief: g.brief, go: g.setupGo }));
-if (g.gclubs === 'Driver,Iron,Wedge,Putter' && g.gclubArt === bag.bag && g.armSlots === bag.bag && g.picks === 0 && g.launch && !g.launch.dis && /Open the bay doors/.test(g.launch.t))
-  ok('golf bag screen: the four clubs with their own art and words, nothing to pick, and the bay doors open');
-else fail('golf bag screen: ' + JSON.stringify({ names: g.gclubs, art: g.gclubArt, slots: g.armSlots, picks: g.picks, launch: g.launch }));
+// CHANGED (owner, 2026-10-06): Match setup's button was "To the golf bag";
+// it is Start Game now, and setup has no door to the bag at all.
+if (/Clubs in the bag\s*4/.test(g.brief) && !/Weapons to draft/.test(g.brief) && /^Start Game$/i.test(g.setupGo) && !g.setupDoor) ok('setup: the brief says Clubs in the bag 4, its button is Start Game, and it has no door to the golf bag');
+else fail('setup golf brief: ' + JSON.stringify({ brief: g.brief, go: g.setupGo, door: g.setupDoor }));
+// CHANGED (owner, 2026-10-06): the bag screen opened the bay doors; it is a
+// side trip from the Bay stations row now, and its button is Done.
+if (g.gclubs === 'Driver,Iron,Wedge,Putter' && g.gclubArt === bag.bag && g.armSlots === bag.bag && g.picks === 0 && !g.launch && g.done && g.done.t === 'Done' && !g.done.dis)
+  ok('golf bag screen: the four clubs with their own art and words, nothing to pick, no launch, and Done');
+else fail('golf bag screen: ' + JSON.stringify({ names: g.gclubs, art: g.gclubArt, slots: g.armSlots, picks: g.picks, launch: g.launch, done: g.done }));
 if (g.legible && g.legible.body >= 12 && g.legible.name >= 13 && !g.legible.cut) ok(`golf bag screen: words at ${g.legible.body.toFixed(1)}u, names at ${g.legible.name.toFixed(1)}u, nothing cut off`);
 else fail('golf bag legibility: ' + JSON.stringify(g.legible));
-if (bag.shortLaunch && !bag.shortLaunch.dis) ok('golf bag screen: a short saved rack still opens the bay doors for golf'); else fail('golf short rack: ' + JSON.stringify(bag.shortLaunch));
+if (bag.shortLaunch && bag.shortLaunch.t === 'Done' && !bag.shortLaunch.dis) ok('golf bag screen: a short saved rack never holds its Done back'); else fail('golf short rack: ' + JSON.stringify(bag.shortLaunch));
 if (!g.homeCombat.length && !g.setupCombat.length && !g.armCombat.length) ok('no combat weapon\'s art on home, Match setup or the golf bag screen while golf is armed');
 else fail('combat art under golf: ' + JSON.stringify({ home: g.homeCombat, setup: g.setupCombat, bag: g.armCombat }));
 if (/Weapon draft\s*5 picks/i.test(d.readout) && /Armoury/.test(d.station) && /\d+ weapons$/.test(d.card) && /^Weapon rack/.test(d.rackLabel) && d.edit && /Weapons to draft\s*5/.test(d.brief)
-    && d.picks > 0 && !d.gclubs && /armoury/i.test(d.setupGo)) ok('duel: every one of those still shows the weapon draft, the rack with Edit and the Armoury');
+    && d.picks > 0 && !d.gclubs && /^Start Game$/i.test(d.setupGo) && d.setupDoor) ok('duel: every one of those still shows the weapon draft, the rack with Edit (its door to the Armoury) and the Armoury');
 else fail('duel menus: ' + JSON.stringify(d));
 
-// 5. the ONLINE lobby, driven through the page's own create path (the real
-// intent, on this suite's own server) rather than the stub used in check 1:
-// golf for three tells the host to tee off, and a one-seat room never becomes
-// a lobby at all — the server starts the round the moment it is created.
-await ev(`(() => { ccMode = 'golf'; ccGolfMax = 3; Bay.show('setup'); $('createBtn').onclick(); return true; })()`);
-let lobbyUp = false;
-for (let i = 0; i < 60; i++) { if (await ev(`!!(S.code && S.code.length === 4 && /Tee off/.test($('bay').textContent))`).catch(() => false)) { lobbyUp = true; break; } await sleep(100); }
-await sleep(250);                                  // the 'lobby' frame re-renders the bay with the real max
-const bayTxt = await ev(`$('bay').textContent.replace(/\\s+/g, ' ')`).catch(() => '');
-if (lobbyUp && /Tee off whenever you have enough players/.test(bayTxt)) ok('lobby: a golf room for three tells the host to tee off when ready');
-else fail('golf lobby copy: up=' + lobbyUp + ' text=' + String(bayTxt).slice(0, 220));
-// ...and its rack box is the golf bag: the four clubs, no Change, no weapons loaded.
-const lobbyBag = await ev(`(() => { const l = [...document.querySelectorAll('#bay .ldt .lbl')].find((x) => /Golf bag/.test(x.textContent)); const box = l && l.closest('.ldt');
-  return { slots: box ? box.querySelectorAll('.slot.f').length : -1, change: !!(box && box.querySelector('[data-go="armoury"]')), text: $('bay').textContent.replace(/\\s+/g, ' ') }; })()`).catch((e) => ({ err: e.message }));
-if (lobbyBag.slots === 4 && !lobbyBag.change && /4 clubs in the bag/.test(lobbyBag.text) && !/weapons loaded/.test(lobbyBag.text)) ok('lobby: the golf room shows the golf bag, four clubs and no Change');
-else fail('golf lobby bag: ' + JSON.stringify({ slots: lobbyBag.slots, change: lobbyBag.change, err: lobbyBag.err }));
-// Leave it the way the page does: the lobby's Cancel carries data-old="cancelBtn".
-await ev(`(document.querySelector('#bay [data-old="cancelBtn"]').click(), true)`);
-let home = false;
-for (let i = 0; i < 60; i++) { if (await ev(`!S.code && $('bay').dataset.scr === 'home'`).catch(() => false)) { home = true; break; } await sleep(100); }
-if (!home) fail('lobby: Cancel never returned the bay to home');
-// The one-seat room is started by the server right after the lobby frame, so
-// the lobby paint can be gone before the next poll: watch the bay instead.
-// Only frames painted from the NEW room's own lobby payload count. The
-// 'created' handler shows the lobby screen one task earlier, before any
-// payload has landed, and that frame still carries the PREVIOUS room (or, on
-// a cold create, the 2-seat default) — its seat count gives it away, and no
-// copy inside SCREENS.lobby can reach it.
+// 5. the ONLINE one-seat round, driven through the page's own Start Game on
+// this suite's own server: it tees off on its own -- no Tee off tap, one
+// seat -- and every lobby frame painted on the way says Teeing off and shows
+// the golf bag (four clubs, no Change, no weapons loaded), never a code, a
+// "Standing by" or an open seat. CHANGED (owner, 2026-10-06): a golf room for
+// three, and its "Tee off whenever you have enough players" lobby, cannot be
+// made any more -- golf alone is a round for one.
 await ev(`(() => {
-  window.__lobbyText = null;
+  window.__lobby = [];
   window.__lobbyObs = new MutationObserver(() => {
-    if (window.__lobbyText) return;
-    const t = $('bay').textContent.replace(/\\s+/g, ' ');
-    if (!/Players\\s*1\\s*\\/\\s*1/.test(t)) return;          // not this room's payload yet
-    if (/Teeing off|Share this code/.test(t)) window.__lobbyText = t;
+    const bay = $('bay'); if (bay.dataset.scr !== 'lobby') return;
+    const t = bay.textContent.replace(/\\s+/g, ' ');
+    const l = [...document.querySelectorAll('#bay .ldt .lbl')].find((x) => /Golf bag/.test(x.textContent)); const box = l && l.closest('.ldt');
+    __lobby.push({ teeing: /Teeing off/.test(t), code: /Share this code|Copy code|Copy link|Standing by|Bay doors sealed/.test(t), wait: !!document.querySelector('#bay .seat.wait'),
+      clubs: box ? box.querySelectorAll('.slot.f').length : -1, change: !!(box && box.querySelector('[data-go="armoury"]')), bagText: /4 clubs in the bag/.test(t) && !/weapons loaded/.test(t) });
   });
-  window.__lobbyObs.observe($('bay'), { childList: true, subtree: true, characterData: true });
+  __lobbyObs.observe($('bay'), { childList: true, subtree: true, characterData: true, attributes: true });
+  ccMode = 'golf'; Bay.show('home'); document.querySelector('#bay .launch').click(); document.querySelector('#bay .pfoot [data-launch]').click();
   return true;
 })()`);
-await ev(`(() => { ccGolfMax = 1; Bay.show('setup'); $('createBtn').onclick(); return true; })()`);
 let solo = null;
-for (let i = 0; i < 30; i++) { solo = await ev(`({ playing: !!S.playing, n: S.n, mode: S.mode })`).catch(() => null); if (solo && solo.playing && solo.n === 1) break; await sleep(100); }
-if (solo && solo.playing === true && solo.n === 1 && solo.mode === 'golf') ok('lobby: a one-seat golf room tees off on its own — no Tee off tap, one seat, already playing');
+for (let i = 0; i < 30; i++) { solo = await ev(`({ playing: !!S.playing, n: S.n, mode: S.mode, local: S.local })`).catch(() => null); if (solo && solo.playing && solo.n === 1) break; await sleep(100); }
+const lob = await ev(`(window.__lobbyObs.disconnect(), window.__lobby)`).catch(() => null);
+if (solo && solo.playing === true && solo.n === 1 && solo.mode === 'golf' && solo.local === false) ok('lobby: a one-seat golf room from Start Game tees off on its own — no Tee off tap, one seat, already playing');
 else fail('one-seat golf online: ' + JSON.stringify(solo));
-const lobbyText = await ev(`window.__lobbyText`).catch(() => null);
-await ev(`(window.__lobbyObs && window.__lobbyObs.disconnect(), true)`).catch(() => null);
-if (lobbyText && /Teeing off/.test(lobbyText) && !/Share this code/.test(lobbyText)) ok('lobby: the one-seat golf room paints Teeing off, never the share-a-code lobby');
-else fail('one-seat lobby paint: ' + JSON.stringify(lobbyText && String(lobbyText).slice(0, 220)));
-await ev(`(() => { ccMode = 'duel'; ccGolfMax = 2; return true; })()`);
+if (Array.isArray(lob) && lob.length > 0 && lob.every((x) => x.teeing && !x.code && !x.wait && x.clubs === 4 && !x.change && x.bagText))
+  ok('lobby: every frame of the one-seat room paints Teeing off with the golf bag, four clubs and no Change — never a code or an open seat');
+else fail('one-seat lobby paint: ' + JSON.stringify(lob));
+await ev(`(() => { localStorage.removeItem('cc_resume'); ccMode = 'duel'; return true; })()`);
 } catch (e) { fail('harness: ' + e.message); }
 
 clearTimeout(watchdog);

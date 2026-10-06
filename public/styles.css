@@ -2309,6 +2309,14 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .seg:hover{border-color:rgba(255,180,107,.6);color:#fff;background:rgba(38,27,17,.7)}
   #bay .seg.on{background:linear-gradient(180deg,#ffa055,#ee6a1f);border-color:#ffb46b;color:#2a1102;
      box-shadow:0 calc(10 * var(--u)) calc(22 * var(--u)) calc(-10 * var(--u)) rgba(255,122,46,.75)}
+  /* An option that is shown but cannot be chosen yet (Match setup's Your squad
+     outside a squad of two or more): dashed and dimmed by colour, never by
+     opacity, so the line inside it saying why (.b-why) keeps its contrast. It
+     sits under the option's name at 12u, so a phone can read it. */
+  #bay .seg[disabled]{border-style:dashed;border-color:rgba(140,168,214,.3);cursor:not-allowed;background:rgba(16,21,31,.4);color:#6f7fa6;
+     align-content:center;row-gap:calc(2 * var(--u))}
+  #bay .seg .b-why{display:block;font-family:Barlow,system-ui,sans-serif;font-size:calc(12 * var(--u));line-height:1.15;font-weight:500;
+     letter-spacing:0;text-transform:none;color:#9fb0d2;white-space:nowrap}
   #bay .crew{display:flex;align-items:center;gap:calc(11 * var(--u));padding:calc(9 * var(--u)) calc(11 * var(--u));border-radius:calc(6 * var(--u));
      border:1px solid rgba(140,168,214,.2);background:rgba(16,21,31,.55);flex:none}
   #bay .crew img{width:calc(56 * var(--u));flex:none}

@@ -275,7 +275,10 @@ const PROBE = (screen) => `(() => {
       // right-hand panel gets its own key, or nothing would measure it.
       pnlR:     r('#bay .pnl:not(.hidden):not(.sqx)'),
       tankw:    r('#bay .tankw'),
-      launch:   r('#bay .launch, #bay [data-launch]'),   // home's Launch, or the armoury's bay-doors button
+      // Home's Launch, or the Armoury's main button: it opened the bay doors
+      // (data-launch) until 2026-10-06, and is Done (the footer's data-back)
+      // since the Armoury stopped being a launch step.
+      launch:   r('#bay .launch, #bay [data-launch], #bay .pfoot .go[data-back]'),
     },
     // Type size is the thing that degrades invisibly when a design frame is
     // scaled down: the boxes can all be in proportion while the words become

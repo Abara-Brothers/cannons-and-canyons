@@ -135,33 +135,76 @@ const NEED = { duel: 'Duel needs a connection', boss: 'Boss Fight needs a connec
 const LABEL = { duel: 'Play vs Computer', ffa: 'Play vs Computer', boss: 'Play solo', aliens: 'Play solo', golf: 'Play solo' };
 
 try {
-  // ---- 0. the two launch paths and the predicates, online ------------------
+  // ---- 0. Match setup's Start Game and the predicates, online ---------------
+  // START GAME IS THE MATCH (owner, 2026-10-06): no Armoury step, no friend
+  // room, no opponent remembered. Each mode is launched the way a player does
+  // it -- home's Launch, then Start Game -- with intent() recording instead of
+  // sending, and every screen the bay drew on the way is read off #bay's own
+  // data-scr records, so an Armoury visit cannot hide.
   await fresh();
   const r0 = await ev(`(() => {
     window.__sent = []; const orig = intent; window.intent = (m) => { __sent.push(m); };
-    const snap = () => __sent.pop();
-    ccMode = 'ffa'; ccFfaOpp = 'cpu'; ccMax = 4; $('createBtn').onclick(); const a = snap();
-    ccFfaOpp = 'friend'; $('createBtn').onclick(); const b = snap();
-    ccMode = 'duel'; ccOpp = 'cpu'; $('createBtn').onclick(); const c = snap();
-    ccMode = 'ffa'; ccFfaOpp = 'friend'; $('createBtn').onclick(); const d = snap();   // ccOpp is still 'cpu': must not leak
-    ccFfaOpp = 'cpu'; Bay.show('armoury'); document.querySelector('#bay [data-launch]').click(); const e = snap();
-    Bay.show('home'); document.querySelector('#bay .launch').click(); const launchScr = $('bay').dataset.scr; Bay.show('home');
-    const home = (() => { Bay.show('home'); return document.querySelector('#bay .lbar').textContent; })();
+    const bay = $('bay'), ob = new MutationObserver(() => {});
+    ob.observe(bay, { attributes: true, attributeFilter: ['data-scr'], attributeOldValue: true });
+    const txt = (sel) => { const e = document.querySelector(sel); return e ? e.textContent.replace(/\\s+/g, ' ').trim() : null; };
+    const start = (mode, before) => {
+      ccMode = mode; Bay.show('home');
+      const readout = txt('#bay .lbar .ros');
+      ob.takeRecords();
+      document.querySelector('#bay .launch').click();
+      if (before) before();
+      const o = { readout, at: bay.dataset.scr, meta: txt('#bay .pm'), label: txt('#bay .pfoot [data-launch]'),
+        play: [...document.querySelectorAll('#bay .b-opt')].filter((x) => x.querySelector('.lbl') && x.querySelector('.lbl').textContent === 'Play with')
+          .map((x) => [...x.querySelectorAll('.seg')].map((b) => b.firstChild.textContent.trim() + (b.disabled ? '(off:' + (b.querySelector('.b-why') || {}).textContent + ')' : '') + (b.classList.contains('on') ? '*' : '')).join('|')).join(),
+        groups: [...document.querySelectorAll('#bay .b-opt:not(.hidden) .lbl')].map((l) => l.textContent).join('|'),
+        sets: [...document.querySelectorAll('#bay [data-set]')].map((b) => b.dataset.set.split('=')[0]).filter((k, i, a) => a.indexOf(k) === i).join('|'),
+        friend: /friend|by code/i.test(bay.textContent),
+        why: (() => { const w = document.querySelector('#bay .seg .b-why'); if (!w) return null; const uPx = document.querySelector('#bay .stage').getBoundingClientRect().width / 932;
+          return { fs: +(parseFloat(getComputedStyle(w).fontSize) / uPx).toFixed(1), cut: w.scrollWidth > w.clientWidth + 1 || w.parentElement.scrollWidth > w.parentElement.clientWidth + 1 }; })() };
+      soloRoom = false;
+      document.querySelector('#bay .pfoot [data-launch]').click();
+      o.seen = ob.takeRecords().map((r) => r.oldValue).concat(bay.dataset.scr);
+      o.f = __sent.pop(); o.extra = __sent.length; o.solo = soloRoom; soloRoom = false;
+      return o;
+    };
+    const duel = start('duel'), ffa = start('ffa'), ffa2 = start('ffa', () => document.querySelector('#bay [data-set="count=3"]').click());
+    ccMax = 4;
+    const boss = start('boss'), aliens = start('aliens'), golf = start('golf');
+    Bay.show('modes'); const modesMeta = txt('#bay .pm');
+    ob.disconnect(); Bay.show('home');
     const p = { offBoss: soloOfferable({ type: 'create', mode: 'boss' }), offGolf: soloOfferable({ type: 'create', mode: 'golf' }), offDuel: soloOfferable({ type: 'create', mode: 'duel' }),
       offAi: soloOfferable({ type: 'ai', mode: 'ffa' }), byAi: soloByConstruction({ type: 'ai' }), byCreate: soloByConstruction({ type: 'create', mode: 'golf' }),
       frame: soloFrameFor({ type: 'create', mode: 'ffa', max: 3, name: 'T', skin: 'olive' }), frameBoss: soloFrameFor({ type: 'create', mode: 'boss', max: 2 }),
       frameDuel: soloFrameFor({ type: 'create', mode: 'duel', max: 2, name: 'T', skin: 'olive' }) };
-    ccMode = 'duel'; ccOpp = 'friend'; ccFfaOpp = 'friend'; window.intent = orig;
-    return { a, b, c, d, e, p, home, launchScr };
+    ccMode = 'duel'; window.intent = orig;
+    return { duel, ffa, ffa2, boss, aliens, golf, modesMeta, p };
   })()`);
-  const isAiFfa = (m) => m && m.type === 'ai' && m.mode === 'ffa' && m.max === 4 && typeof m.difficulty === 'string' && typeof m.name === 'string' && typeof m.skin === 'string';
-  if (isAiFfa(r0.a)) ok('0: Launch with FFA + Computer sends the ai frame with mode and max'); else fail('0: ffa+cpu frame was ' + JSON.stringify(r0.a));
-  if (r0.b && r0.b.type === 'create' && r0.b.mode === 'ffa' && r0.b.max === 4) ok('0: FFA + Friends sends a create, as before'); else fail('0: ffa+friend frame was ' + JSON.stringify(r0.b));
-  if (r0.c && r0.c.type === 'ai' && !('mode' in r0.c) && !('max' in r0.c)) ok('0: Duel + Computer sends the historical ai frame, no mode or max keys'); else fail('0: duel+cpu frame was ' + JSON.stringify(r0.c));
-  if (r0.d && r0.d.type === 'create') ok("0: a Duel 'Computer' choice does not leak into a Free-for-all Launch"); else fail('0: leak — ' + JSON.stringify(r0.d));
-  if (isAiFfa(r0.e)) ok("0: the armoury's bay-doors button reaches the same predicate"); else fail('0: armoury launch frame was ' + JSON.stringify(r0.e));
-  if (r0.launchScr === 'setup') ok('0: the home Launch button opens Match setup, like a second tap on the mode card (owner, 2026-09-18)'); else fail('0: home Launch went to ' + r0.launchScr);
-  if (/You \+ 3 CPU/.test(r0.home)) ok("0: with Computer picked the home launch bar says 'You + 3 CPU'"); else fail('0: home launch bar read: ' + r0.home.slice(0, 80));
+  const isAiFfa = (m, max) => m && m.type === 'ai' && m.mode === 'ffa' && m.max === max && typeof m.difficulty === 'string' && typeof m.name === 'string' && typeof m.skin === 'string';
+  const isSolo = (m, mode) => m && m.type === 'create' && m.mode === mode && m.max === 1 && typeof m.tees === 'string' && typeof m.name === 'string';
+  const R0 = [['duel', r0.duel], ['ffa', r0.ffa], ['ffa2', r0.ffa2], ['boss', r0.boss], ['aliens', r0.aliens], ['golf', r0.golf]];
+  if (R0.every(([, o]) => o.at === 'setup' && o.meta === 'Step 2 of 2' && /^Start Game$/i.test(o.label || '') && o.extra === 0 && o.seen.every((x) => x === 'setup' || x === 'home') && o.seen[o.seen.length - 1] === 'setup'))
+    ok("0: in every mode home's Launch opens Match setup (Step 2 of 2), and its Start Game sends one frame without the bay ever drawing the Armoury");
+  else fail('0: start paths ' + JSON.stringify(R0.map(([k, o]) => [k, o.at, o.meta, o.label, o.extra, o.seen])));
+  if (r0.duel.f && r0.duel.f.type === 'ai' && !('mode' in r0.duel.f) && !('max' in r0.duel.f) && r0.duel.solo === false) ok('0: Duel + Computer sends the historical ai frame, no mode or max keys'); else fail('0: duel frame was ' + JSON.stringify(r0.duel.f));
+  if (isAiFfa(r0.ffa.f, 4) && isAiFfa(r0.ffa2.f, 3)) ok('0: Free-for-all + Computer sends the ai frame with its mode and the CPU count (3 CPUs: max 4; 2 CPUs: max 3)'); else fail('0: ffa frames were ' + JSON.stringify([r0.ffa.f, r0.ffa2.f]));
+  if (isSolo(r0.boss.f, 'boss') && isSolo(r0.aliens.f, 'aliens') && isSolo(r0.golf.f, 'golf') && r0.boss.solo && r0.aliens.solo && r0.golf.solo)
+    ok('0: Boss Fight, Alien Invasion and golf send a Solo create, one seat asked for, marked as a room for one (soloRoom)');
+  else fail('0: solo frames were ' + JSON.stringify([r0.boss, r0.aliens, r0.golf].map((o) => [o.f, o.solo])));
+  if (/Players\s*You vs CPU/.test(r0.duel.readout) && /Players\s*You \+ 3 CPU/.test(r0.ffa.readout) && [r0.boss, r0.aliens, r0.golf].every((o) => /Players\s*Solo/.test(o.readout)))
+    ok("0: home's Players readout says what Launch will do: You vs CPU, You + 3 CPU, Solo");
+  else fail('0: readouts ' + JSON.stringify(R0.map(([k, o]) => [k, o.readout])));
+  const OFF = '(off:Needs a squad of 2 or more)';
+  if (r0.duel.play === 'Computer*|Your squad' + OFF && r0.ffa.play === 'Computer*|Your squad' + OFF
+      && [r0.boss, r0.aliens, r0.golf].every((o) => o.play === 'Solo*|Your squad' + OFF))
+    ok('0: Play with is Computer or Your squad for Duel and Free-for-all, Solo or Your squad for the rest; with no squad, Computer/Solo is on and Your squad is greyed out with its reason');
+  else fail('0: play with ' + JSON.stringify(R0.map(([k, o]) => [k, o.play])));
+  if (R0.every(([, o]) => !o.friend && !/opp|ffaOpp|gcount/.test(o.sets)) && r0.golf.groups === 'Play with|Tee set' && !/Players/.test(r0.golf.groups)
+      && r0.duel.groups === 'Play with|Difficulty' && r0.ffa.groups === 'Play with|CPU commanders|Difficulty' && r0.boss.groups === 'Play with')
+    ok('0: Friend by code is gone from every mode, golf has its Tee set and no Players picker, and Computer keeps the CPU count and Difficulty');
+  else fail('0: setup groups ' + JSON.stringify(R0.map(([k, o]) => [k, o.groups, o.sets, o.friend])));
+  if (r0.modesMeta === 'Step 1 of 2') ok('0: the Mission board is step 1 of 2'); else fail('0: mission meta ' + r0.modesMeta);
+  if (R0.every(([, o]) => o.why && o.why.fs >= 12 && !o.why.cut)) ok(`0: Your squad's reason is legible on a phone: ${r0.duel.why.fs}u, never cut off`);
+  else fail('0: reason legibility ' + JSON.stringify(R0.map(([k, o]) => [k, o.why])));
   // The offline badges: one per board, derived from the same predicates, so
   // what a board says and what a tap does can only ever agree.
   const badges = await ev(`(() => { Bay.show('home'); const home = [...document.querySelectorAll('#bay .board .bof')].map((e) => e.textContent);
@@ -178,6 +221,166 @@ try {
   if (fd && fd.type === 'ai' && !('mode' in fd) && !('max' in fd) && typeof fd.difficulty === 'string' && fd.name === 'T' && fd.skin === 'olive') ok("0: soloFrameFor swaps a Duel create for the historical ai frame — no mode, no max");
   else fail('0: duel solo frame was ' + JSON.stringify(fd));
   if (p.frame.type === 'ai' && p.frame.mode === 'ffa' && p.frame.max === 3 && p.frameBoss.type === 'create') ok('0: soloFrameFor swaps an ffa create for the ai frame and leaves the others alone'); else fail('0: soloFrameFor gave ' + JSON.stringify([p.frame, p.frameBoss]));
+
+  // ---- 0b. the Armoury is a side trip, and a short rack never stops a match --
+  // Reached only by Edit in Match setup and by the Bay stations row, its button
+  // is Done and goes back where it came from; it never launches. A rack short
+  // of the mode's draft is filled with standard weapons at Start Game and saved
+  // as the player's (owner, 2026-10-06). A FRESH page, so the Armoury's working
+  // copy starts from storage: the first check reads it before any fill.
+  await fresh();
+  const r0b = await ev(`(async () => {
+    const gc = await import('./game-core.js');
+    window.__sent = []; const orig = intent; window.intent = (m) => { __sent.push(m); };
+    const bay = $('bay'), txt = (sel) => { const e = document.querySelector(sel); return e ? e.textContent.replace(/\\s+/g, ' ').trim() : null; };
+    const stored = () => JSON.parse(localStorage.getItem('cc_loadout') || 'null');
+    const put = (v) => (v === null ? localStorage.removeItem('cc_loadout') : localStorage.setItem('cc_loadout', JSON.stringify(v)));
+    const armoury = () => ({ scr: bay.dataset.scr, meta: txt('#bay .pm'), hint: txt('#bay .pfoot .hint'), full: document.querySelectorAll('#bay .card .slots .slot.f').length,
+      foot: [...document.querySelectorAll('#bay .pfoot button')].map((b) => ({ t: b.textContent.trim(), back: b.hasAttribute('data-back'), dis: b.disabled })),
+      launch: !!document.querySelector('#bay [data-launch]') });
+    const startIn = (mode) => { ccMode = mode; Bay.show('home'); document.querySelector('#bay .launch').click(); document.querySelector('#bay .pfoot [data-launch]').click(); return __sent.pop(); };
+    const o = {};
+    // THE WORKING COPY FOLLOWS THE FILL: one pick stored, the Armoury opened
+    // and left, Start Game, then the Armoury again shows the filled rack, and a
+    // toggle there stores the filled rack less that pick -- not the short one.
+    put(['mortar']); ccMode = 'duel'; Bay.show('home'); document.querySelector('#bay .launch').click();
+    o.setupShort = txt('#bay .pfoot .hint');
+    document.querySelector('#bay .card [data-go="armoury"]').click();
+    o.short = armoury();
+    document.querySelector('#bay .pfoot [data-back]').click(); o.back = bay.dataset.scr;
+    document.querySelector('#bay .pfoot [data-launch]').click(); __sent.pop();
+    document.querySelector('#bay .card [data-go="armoury"]').click();
+    o.filled = armoury();
+    document.querySelector('#bay [data-pick="volley"]').click(); o.toggled = stored();
+    // Each short rack, filled: the player's picks first, then the standard
+    // draft, then the pool; never a pick twice; golf left alone.
+    const fill = (mode, v) => { put(v); startIn(mode); const r = stored(); return { r, valid: r && mode !== 'golf' ? gc.validLoadout(r, gc.loadoutSizeFor(mode)) : null }; };
+    o.duel1 = fill('duel', ['mortar']);
+    o.boss1 = fill('boss', ['mortar']);
+    o.none = fill('duel', null);
+    o.seven = fill('duel', ['wall', 'teleport', 'minigun', 'gas', 'buster', 'mortar', 'volley']);
+    o.dup = fill('duel', ['gas', 'gas', 'minigun']);
+    o.dupFull = fill('duel', ['gas', 'gas', 'minigun', 'mortar', 'cluster', 'napalm']);
+    o.golf = fill('golf', ['mortar']);
+    // The Bay stations row's Armoury, and golf's bag behind the same door: Done
+    // goes home, and neither offers a launch.
+    put(['mortar', 'cluster', 'napalm', 'airstrike', 'volley']);
+    ccMode = 'duel'; Bay.show('home'); document.querySelector('#bay .st[data-go="armoury"]').click();
+    o.station = armoury(); document.querySelector('#bay .pfoot [data-back]').click(); o.stationBack = bay.dataset.scr;
+    ccMode = 'golf'; Bay.show('home'); document.querySelector('#bay .st[data-go="armoury"]').click();
+    o.bag = armoury(); document.querySelector('#bay .pfoot [data-back]').click(); o.bagBack = bay.dataset.scr;
+    o.sent = __sent.length;
+    ccMode = 'duel'; window.intent = orig; Bay.show('home');
+    return o;
+  })()`);
+  const DONE = [{ t: 'Done', back: true, dis: false }];
+  const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  if (r0b.short.scr === 'armoury' && r0b.short.meta === 'Your rack' && r0b.short.full === 1 && eq(r0b.short.foot, DONE) && !r0b.short.launch && r0b.back === 'setup'
+      && /Empty slots are filled with standard weapons/i.test(r0b.setupShort || '') && /Empty slots are filled with standard weapons/i.test(r0b.short.hint || '')
+      && /Railgun only drops in crates/.test(r0b.filled.hint || ''))
+    ok("0b: Edit opens the Armoury (Your rack), whose only button is Done -- live on a short rack, never a launch -- and Done goes back to Match setup; both say a short rack's empty slots are filled");
+  else fail('0b: armoury from setup ' + JSON.stringify({ short: r0b.short, back: r0b.back, hint: r0b.setupShort, filled: r0b.filled.hint }));
+  if (r0b.filled.full === 5 && eq(r0b.toggled, ['mortar', 'cluster', 'napalm', 'airstrike']))
+    ok("0b: after Start Game fills the rack, the Armoury shows it full and edits the filled rack, never the short one");
+  else fail('0b: working copy ' + JSON.stringify({ filled: r0b.filled, toggled: r0b.toggled }));
+  if (eq(r0b.duel1.r, ['mortar', 'cluster', 'napalm', 'airstrike', 'volley']) && r0b.duel1.valid
+      && eq(r0b.boss1.r, ['mortar', 'cluster', 'napalm', 'airstrike', 'volley', 'gas', 'buster']) && r0b.boss1.valid
+      && eq(r0b.none.r, ['mortar', 'cluster', 'napalm', 'airstrike', 'volley']) && r0b.none.valid
+      && eq(r0b.dup.r, ['gas', 'minigun', 'mortar', 'cluster', 'napalm']) && r0b.dup.valid)
+    ok('0b: a short rack is filled and saved -- the picks, then the standard draft, then the pool -- a valid rack every time, a repeat counted once, nothing stored filled with the standard draft');
+  else fail('0b: fills ' + JSON.stringify([r0b.duel1, r0b.boss1, r0b.none, r0b.dup]));
+  if (eq(r0b.seven.r, ['wall', 'teleport', 'minigun', 'gas', 'buster', 'mortar', 'volley']) && eq(r0b.golf.r, ['mortar']))
+    ok('0b: a rack already full for the mode is left exactly as stored, and golf, which drafts nothing, touches no rack');
+  else fail('0b: untouched racks ' + JSON.stringify([r0b.seven, r0b.golf]));
+  if (eq(r0b.dupFull.r, ['gas', 'minigun', 'mortar', 'cluster', 'napalm']) && r0b.dupFull.valid)
+    ok('0b: a stored rack with a repeat is saved without it, so the match never submits a rack the server refuses');
+  else fail('0b: stored repeat ' + JSON.stringify(r0b.dupFull));
+  if (r0b.station.scr === 'armoury' && eq(r0b.station.foot, DONE) && !r0b.station.launch && r0b.stationBack === 'home'
+      && r0b.bag.scr === 'armoury' && r0b.bag.meta === 'No draft' && eq(r0b.bag.foot, DONE) && !r0b.bag.launch && r0b.bagBack === 'home' && r0b.sent === 0)
+    ok("0b: from the Bay stations row the Armoury and golf's bag both offer Done, which goes home, and neither starts anything");
+  else fail('0b: from home ' + JSON.stringify({ station: r0b.station, back: r0b.stationBack, bag: r0b.bag, bagBack: r0b.bagBack, sent: r0b.sent }));
+
+  // ---- 0s. a room for one, and the rooms that are not ----------------------
+  // Driven through app.js's own handle() with sendMsg recording. A Solo
+  // create's room is started by this page once its lobby frame lands -- only a
+  // room it hosts with a seat past its own -- and drawn as a run for one; a
+  // room somebody else made (an older build's ?room= link) is drawn Standing
+  // by, with no code to share and no Armoury door. A 'created' never wears the
+  // previous room's payload. The legacy rack's button names what it starts.
+  await fresh();
+  const r0s = await ev(`(() => {
+    const sent = [], orig = sendMsg; window.sendMsg = (m) => { sent.push(m.type); };
+    const bay = $('bay'), txt = () => bay.textContent.replace(/\\s+/g, ' ');
+    const lob = (o) => Object.assign({ type: 'lobby', code: 'QQQQ', mode: 'boss', max: 2, you: 0, host: 0, players: [{ name: 'T' }, null] }, o);
+    const look = () => ({ title: (document.querySelector('#bay .pt') || {}).textContent, meta: (document.querySelector('#bay .pm') || {}).textContent,
+      code: /Share this code|Copy code|Copy link|QQQQ|ZZZZ/.test(txt()), door: !!document.querySelector('#bay [data-go="armoury"]'),
+      start: !!document.querySelector('#bay .pfoot [data-old="startMatchBtn"]:not(.hidden)'), wait: !!document.querySelector('#bay .seat.wait'), text: txt().slice(0, 300) });
+    const run = (solo, o) => { sent.length = 0; soloRoom = solo; handle(lob(o)); return Object.assign({ starts: sent.filter((t) => t === 'startMatch').length }, look()); };
+    const out = {};
+    ccMode = 'boss';
+    out.mine = run(true);
+    out.notSolo = run(false);
+    out.notHost = run(true, { mode: 'ffa', max: 4, you: 1, players: [{ name: 'H' }, { name: 'T' }, null, null] });
+    out.oneSeat = run(true, { mode: 'golf', max: 1, players: [{ name: 'T' }] });
+    // A 'created' for a Solo raid, landing while the bay still holds the joined
+    // room's payload (mode ffa, somebody else the host).
+    handle(lob({ mode: 'ffa', max: 4, you: 1, players: [{ name: 'H' }, { name: 'T' }, null, null] }));
+    soloRoom = true; handle({ type: 'created', code: 'ZZZZ', mode: 'boss', max: 2 });
+    out.created = look();
+    soloRoom = true; handle({ type: 'joinError', reason: 'The server is at capacity. Try again shortly.' }); out.afterRefusal = soloRoom;
+    soloRoom = true; $('cancelBtn').onclick(); out.afterCancel = soloRoom;
+    window.sendMsg = orig;
+    const legacy = (mode) => { ccMode = mode; syncCreateRow(); return [$('createBtn').textContent, $('diffWrap').classList.contains('hidden')]; };
+    out.legacy = { duel: legacy('duel'), ffa: legacy('ffa'), boss: legacy('boss'), golf: legacy('golf') };
+    ccMode = 'duel'; syncCreateRow(); soloRoom = false;
+    return out;
+  })()`);
+  if (r0s.mine.starts === 1 && r0s.mine.title === 'Deploying' && r0s.mine.meta === 'Solo run' && !r0s.mine.wait && !r0s.mine.code && /Players\s*1\s*Paint/.test(r0s.mine.text)
+      && r0s.oneSeat.starts === 0 && r0s.oneSeat.title === 'Teeing off')
+    ok("0s: a Solo create's raid room is started by this page the moment its lobby lands, drawn as Deploying (Solo run) with no open seat; a one-seat golf room, which the server starts, is not sent a second start");
+  else fail('0s: solo rooms ' + JSON.stringify({ mine: r0s.mine, oneSeat: r0s.oneSeat }));
+  if (r0s.notHost.starts === 0 && r0s.notHost.title === 'Standing by' && r0s.notHost.meta === 'Friend room' && /Joined\s*STAND BY\s*Waiting for the host to start the battle/.test(r0s.notHost.text)
+      && !r0s.notHost.code && !r0s.notHost.door && !r0s.notHost.start
+      && r0s.notSolo.starts === 0 && r0s.notSolo.title === 'Standing by' && /Your room\s*STAND BY\s*Start whenever you are ready\./.test(r0s.notSolo.text) && !r0s.notSolo.code && r0s.notSolo.start)
+    ok('0s: a room somebody else hosts is never started or called solo: it reads Standing by, Waiting for the host, with no code to share and no Armoury door; a host room not asked as Solo keeps its Start and offers no code either');
+  else fail('0s: other rooms ' + JSON.stringify({ notHost: r0s.notHost, notSolo: r0s.notSolo }));
+  if (r0s.created.title === 'Deploying' && !r0s.created.wait && !r0s.created.code && /Boss Fight/.test(r0s.created.text))
+    ok("0s: a Solo raid's 'created' is drawn as its own Deploying run, never in the previous room's payload");
+  else fail('0s: created ' + JSON.stringify(r0s.created));
+  if (r0s.afterRefusal === false && r0s.afterCancel === false) ok('0s: a refusal and a Cancel both end the room-for-one mark'); else fail('0s: mark ' + JSON.stringify([r0s.afterRefusal, r0s.afterCancel]));
+  const LEG = { duel: ['START VS COMPUTER', false], ffa: ['START VS COMPUTER', false], boss: ['START SOLO', true], golf: ['START SOLO', true] };
+  if (JSON.stringify(r0s.legacy) === JSON.stringify(LEG)) ok('0s: the hidden legacy button names what the create path now starts, with Difficulty for the computer modes only');
+  else fail('0s: legacy rack ' + JSON.stringify(r0s.legacy));
+
+  // ---- 0c. a Solo raid online: the room is started the moment it exists ----
+  // A raid is always seated at two, so the room this page asks for as one seat
+  // would wait on its host's start with a seat open -- the waiting room the
+  // owner removed. The page starts it itself; what the bay drew on the way is
+  // recorded, and nothing of a lobby with an open seat or a code may appear.
+  await fresh();
+  await ev(`(() => {
+    localStorage.setItem('cc_loadout', JSON.stringify(['mortar']));
+    window.__lob = []; const bay = $('bay');
+    window.__lobObs = new MutationObserver(() => {
+      if (bay.dataset.scr !== 'lobby') return;
+      const t = bay.textContent.replace(/\\s+/g, ' ');
+      __lob.push({ title: (document.querySelector('#bay .pt') || {}).textContent, meta: (document.querySelector('#bay .pm') || {}).textContent, one: /Players\\s*1\\s*Paint/.test(t),
+        wait: !!document.querySelector('#bay .seat.wait'), code: /Share this code|Copy code|Copy link|Bay doors sealed|Standing by/.test(t) });
+    });
+    __lobObs.observe(bay, { childList: true, subtree: true, characterData: true, attributes: true });
+    ccMode = 'boss'; Bay.show('home'); document.querySelector('#bay .launch').click(); document.querySelector('#bay .pfoot [data-launch]').click();
+    return true;
+  })()`);
+  const up0c = await until(`S.playing === true && S.mode === 'boss'`, 6000);
+  const r0c = await ev(`(() => { __lobObs.disconnect(); return { local: S.local, n: S.n, lob: __lob, modal: $('armouryModal').classList.contains('hidden'),
+    toasts: __toasts.slice(), solo: soloRoom, rack: JSON.parse(localStorage.getItem('cc_loadout') || 'null') }; })()`);
+  await ev(`(localStorage.removeItem('cc_resume'), localStorage.removeItem('cc_loadout'), true)`);
+  if (up0c && r0c.local === false && r0c.lob.length > 0 && r0c.lob.every((x) => x.title === 'Deploying' && x.meta === 'Solo run' && x.one && !x.wait && !x.code) && r0c.solo === false)
+    ok('0c: Start Game for a Solo Boss Fight online starts the run on the server at once, drawn as Deploying, never as a lobby with an open seat or a code');
+  else fail('0c: solo raid online ' + JSON.stringify({ up0c, r0c }));
+  if (r0c.modal && r0c.toasts.some((t) => /^Rack loaded/.test(t)) && Array.isArray(r0c.rack) && r0c.rack.length === 7)
+    ok("0c: the one-pick rack was filled to the raid's seven and submitted at once: no draft raised over the battlefield");
+  else fail('0c: draft ' + JSON.stringify({ modal: r0c.modal, toasts: r0c.toasts, rack: r0c.rack }));
 
   // ---- 1. an invite room never converts while offline -----------------------
   for (const mode of ['duel', 'boss', 'aliens', 'golf', 'ffa']) {
@@ -200,19 +403,27 @@ try {
   else fail('2: ffa vs computer did not start locally: ' + JSON.stringify(await state()));
 
   // ---- 3. server unreachable: grace, then an offer, then the real room ------
+  // CHANGED (owner, 2026-10-06): the create is Match setup's own, a Solo Boss
+  // Fight from Start Game, and when the server answers it becomes a run that
+  // STARTS -- the waiting room with a code it used to become is gone.
   await fresh(); await cut({ offline: false });
-  await ev(`(intent(${createFrame('boss')}), true)`);
+  await ev(`(ccMode = 'boss', Bay.show('home'), document.querySelector('#bay .launch').click(), document.querySelector('#bay .pfoot [data-launch]').click(), true)`);
   await sleep(1000);
   let s = await state();
   if (s.text.includes('Reaching the server') && !s.solo && !s.local && s.lw === 'connecting') ok("3: during the grace the lobby says 'Reaching the server' with no offer yet"); else fail('3: at 1 s — ' + JSON.stringify({ solo: s.solo, lw: s.lw, local: s.local, text: s.text.slice(0, 100) }));
   await sleep(4200);
   s = await state();
   if (s.solo && s.text.includes('Cannot reach the server') && !s.local && !s.playing && s.lw === 'unreachable') ok('3: after 4 s it offers Play solo and has started nothing'); else fail('3: at 5 s — ' + JSON.stringify({ solo: s.solo, lw: s.lw, local: s.local, playing: s.playing, text: s.text.slice(0, 100) }));
+  if (s.text.includes('Your solo run starts as soon as the server can be reached. We keep trying in the background.') && !s.text.includes('second commander'))
+    ok('3: the offer says the Solo run waits for the server, never that it needs a second commander');
+  else fail('3: solo copy — ' + s.text.slice(0, 220));
   resumeServer();
-  if (await until(`S.connected === true && /^[A-Z0-9]{4}$/.test(S.code || '') && lobbyWait === null && document.getElementById('bay').textContent.includes(S.code)`, 10000)) ok('3: when the server answers, the queued create becomes a real room with a code (queue-and-tell kept)');
-  else fail('3: the queued create never became a real room: ' + JSON.stringify(await state()));
+  if (await until(`S.connected === true && S.playing === true && S.mode === 'boss' && /^[A-Z0-9]{4}$/.test(S.code || '') && lobbyWait === null`, 10000)) ok('3: when the server answers, the queued Solo create becomes a real run on the server and starts at once (queue-and-tell kept)');
+  else fail('3: the queued create never became a real run: ' + JSON.stringify(await state()));
   s = await state();
-  if (!s.local && !s.solo) ok('3: the real room is not a local one and the offer is gone'); else fail('3: after flush local=' + s.local + ' solo=' + s.solo);
+  if (!s.local && !s.solo && !s.waitSeen) ok('3: the real run is not a local one, the offer is gone, and no open seat was ever drawn'); else fail('3: after flush local=' + s.local + ' solo=' + s.solo + ' waitSeen=' + s.waitSeen);
+  // The run is live on the server: the next fresh page must not resume it.
+  await ev(`(localStorage.removeItem('cc_resume'), true)`);
 
   // ---- 4. Play solo is one tap, for every mode ------------------------------
   for (const mode of ['duel', 'boss', 'aliens', 'golf', 'ffa']) {
@@ -284,6 +495,29 @@ try {
   await until('S.playing === true', 6000);
   const rooms = await ev('engineMod && engineMod.rooms ? engineMod.rooms.size : -1');
   if (rooms === 1) ok('9: two taps, one room'); else fail(`9: engine rooms after a double tap: ${rooms}`);
+
+  // ---- 9b. Start Game with no connection --------------------------------------
+  // Computer (Duel, Free-for-all) starts on this device at once. Solo (Boss,
+  // Aliens, golf) is a create, so it waits in the pending lobby, which says the
+  // run waits for the server -- never that it needs a second player -- counts
+  // one seat of one, and offers Play solo, which starts it here.
+  await fresh(); await cut({ offline: true });
+  await ev(`(ccMode = 'duel', Bay.show('home'), document.querySelector('#bay .launch').click(), document.querySelector('#bay .pfoot [data-launch]').click(), true)`);
+  if (await until(`S.local === true && S.playing === true && S.mode === 'duel'`, 4000)) ok('9b: Start Game for Duel with no connection starts against the computer on this device at once');
+  else fail('9b: duel offline start — ' + JSON.stringify(await state()));
+  for (const [mode, line] of [['boss', 'Your solo run starts as soon as the server can be reached.'], ['golf', 'Your solo round starts as soon as the server can be reached.']]) {
+    await fresh(); await cut({ offline: true });
+    await ev(`(ccMode = '${mode}', Bay.show('home'), document.querySelector('#bay .launch').click(), document.querySelector('#bay .pfoot [data-launch]').click(), true)`);
+    await sleep(800);
+    s = await state();
+    const seats = await ev(`[...document.querySelectorAll('#bay .ro')].map((r) => r.textContent).join('|')`);
+    if (s.lw === 'offline' && s.pend === mode && s.solo && s.text.includes(line) && !/second commander|invite other players/.test(s.text) && !s.waitSeen && /Players1 \/ 1/.test(seats))
+      ok(`9b: ${mode} Start Game with no connection — the pending lobby says the solo run waits for the server, counts 1 / 1 and offers Play solo`);
+    else fail(`9b: ${mode} offline — ` + JSON.stringify({ lw: s.lw, pend: s.pend, solo: s.solo, waitSeen: s.waitSeen, seats, text: s.text.slice(0, 200) }));
+    await ev(`(document.querySelector('#bay [data-solo]').click(), true)`);
+    if (await until(`S.local === true && S.playing === true && S.mode === '${mode}'`, 6000)) ok(`9b: ${mode} — Play solo starts it on this device`);
+    else fail(`9b: ${mode} Play solo — ` + JSON.stringify(await state()));
+  }
 
   // ---- 10. a solo room never touches the online resume record (last: storage persists)
   await fresh();

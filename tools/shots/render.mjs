@@ -258,13 +258,14 @@ await shot('07-home');
 // ---------------------------------------------------------------- duel vs CPU
 log('duel');
 await tap('#bay .board[data-set="mode=duel"]');
-// Opponent lives in Setup now. Duel is the default mode, so tapping its board
-// (already armed) opens Setup directly; if it merely armed it, the launch bar's
-// readouts are the way in. Optional covers both.
+// Who to play with lives in Setup. Duel is the default mode, so tapping its
+// board (already armed) opens Setup directly; if it merely armed it, the launch
+// bar's readouts are the way in. Optional covers both. Setup opens on Computer
+// outside a squad (owner, 2026-10-06), and Start Game launches from Setup
+// itself: the Armoury is no longer a step.
 await tap('#bay .ros', { optional: true });
-await tap('#bay .seg[data-set="opp=cpu"]');
-await tap('#bay .pfoot .go[data-go="armoury"]');
-await tap('#bay .pfoot .go[data-launch]');            // "Open the bay doors" = launch
+await tap('#bay .seg[data-set="with=cpu"]');
+await tap('#bay .pfoot .go[data-launch]');            // "Start Game" = launch
 await sleep(1400);
 await armoury();
 

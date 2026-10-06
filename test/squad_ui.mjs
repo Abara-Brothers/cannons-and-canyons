@@ -2829,7 +2829,7 @@ try {
     // depend on whether the real socket had opened first; the account button's
     // state is set by setWho, which is what acctState() reads.
     await stubSocket(); await setWho('in');
-    await ev(`(ccMode = 'duel', ccMax = 4, ccGolfMax = 2, ccTees = 'mens', true)`);
+    await ev(`(ccMode = 'duel', ccMax = 4, ccTees = 'mens', true)`);
     // Introduced, then answered: this account holds no squad. The box KNOWS.
     await clearTx(); await ev('sendHello(S.ws).then(() => true)'); await sleep(60);
     await reply({ op: 'gone' });
@@ -2979,8 +2979,11 @@ try {
 
     // ---- M1. THE LEADER'S BOARDS ARE THE SQUAD'S MODE CONTROL (D7). This page
     //      leads (you 0, leader ME, held). Golf is tapped, and once the taps
-    //      stop the server is asked ONCE, with the tee set and the seat count --
-    //      a NUMBER, never a string (the server refuses '2' as bad_max).
+    //      stop the server is asked ONCE, with the tee set and NO seat count:
+    //      golf's Players picker is gone (owner, 2026-10-06) and the server
+    //      sizes a squad's room to the squad. CHANGED FROM max 2 with that
+    //      picker. The free-for-all still sends one, and it is a NUMBER, never a
+    //      string (the server refuses '4' as bad_max): M1b.
     const t11board = (...idx) => ev(`(() => { const b = () => [...document.querySelectorAll('#bay .board')]; for (const i of ${JSON.stringify(idx)}) b()[i].click(); return true; })()`);
     const t11modes = async () => (await squads()).filter((f) => f.op === 'mode');
     const t11aerr = () => ev(`(() => { Bay.show('home'); const e = document.querySelector('#sqPane-squad .sqml ~ .sqae'); return e && !e.classList.contains('hidden') ? e.textContent : ''; })()`);
@@ -2989,11 +2992,25 @@ try {
     await clearTx();
     await t11board(4); await sleep(MODE_WAIT);
     const m1 = await t11modes();
-    if (m1.length === 1 && m1[0].mode === 'golf' && m1[0].tees === 'mens' && m1[0].max === 2 && typeof m1[0].id === 'number')
-      ok(`${V}: the leader arming golf sends one squad mode frame carrying the tee set and the seat count as a number`);
+    if (m1.length === 1 && m1[0].mode === 'golf' && m1[0].tees === 'mens' && m1[0].max === null && typeof m1[0].id === 'number')
+      ok(`${V}: the leader arming golf sends one squad mode frame carrying the tee set and no seat count`);
     else fail(`${V}: leader mode ${JSON.stringify(m1)}`);
     await reply({ op: 'mode', ok: true });
-    await t11state({ mode: 'golf', tees: 'mens', max: 2, members: [T11YOU(), T11MULE()] });
+    await t11state({ mode: 'golf', tees: 'mens', max: null, members: [T11YOU(), T11MULE()] });
+    // ---- M1b. THE FREE-FOR-ALL'S COUNT IS STILL SENT, AS A NUMBER, and golf
+    //      is put back for M2.
+    await clearTx();
+    await t11board(1); await sleep(MODE_WAIT);
+    const m1b = await t11modes();
+    await reply({ op: 'mode', ok: true });
+    await t11state({ mode: 'ffa', max: 4, members: [T11YOU(), T11MULE()] });
+    await clearTx();
+    await t11board(4); await sleep(MODE_WAIT);
+    await reply({ op: 'mode', ok: true });
+    await t11state({ mode: 'golf', tees: 'mens', max: null, members: [T11YOU(), T11MULE()] });
+    if (m1b.length === 1 && m1b[0].mode === 'ffa' && m1b[0].tees === null && m1b[0].max === 4)
+      ok(`${V}: the leader arming the free-for-all sends its seat count as the number 4, and no tee set`);
+    else fail(`${V}: leader ffa mode ${JSON.stringify(m1b)}`);
     // ---- M2. A RUN OF TAPS IS ONE FRAME, the last one. Every squad op spends
     //      from one bucket of twenty a minute (server/social.js LIMITS.squad),
     //      Start's included, so reading the boards must not spend it.
@@ -3022,23 +3039,25 @@ try {
     await t11board(4); await sleep(MODE_WAIT);
     const m4 = await t11modes(), m4scr = await ev(`$('bay').dataset.scr`);
     await ev(`(Bay.show('home'), true)`);
-    if (m4.length === 1 && m4[0].mode === 'golf' && m4[0].tees === 'mens' && m4[0].max === 2 && m4scr === 'setup')
+    // CHANGED (owner, 2026-10-06): golf carries no seat count (max null, was 2).
+    if (m4.length === 1 && m4[0].mode === 'golf' && m4[0].tees === 'mens' && m4[0].max === null && m4scr === 'setup')
       ok(`${V}: a second tap on the lit board opens Match setup and puts that board to the squad`);
     else fail(`${V}: lit board ${JSON.stringify({ m4, m4scr })}`);
     await reply({ op: 'mode', ok: true });
-    await t11state({ mode: 'golf', tees: 'mens', max: 2, members: [T11YOU(), T11MULE()] });
-    // ---- M5. MATCH SETUP'S TEE SET AND SEAT COUNT ARE THE SQUAD'S TOO, and the
-    //      only place they change: one frame for both.
+    await t11state({ mode: 'golf', tees: 'mens', max: null, members: [T11YOU(), T11MULE()] });
+    // ---- M5. MATCH SETUP'S TEE SET IS THE SQUAD'S TOO, and the only place it
+    //      changes. CHANGED (owner, 2026-10-06): golf's Players picker, whose
+    //      count rode in the same frame, is gone from Match setup.
     await clearTx();
-    await ev(`(() => { Bay.show('setup'); document.querySelector('#bay [data-set="tees=champ"]').click(); document.querySelector('#bay [data-set="gcount=4"]').click(); return true; })()`);
+    const m5gcount = await ev(`(() => { Bay.show('setup'); const g = document.querySelectorAll('#bay [data-set^="gcount="]').length; document.querySelector('#bay [data-set="tees=champ"]').click(); return g; })()`);
     await sleep(MODE_WAIT);
     const m5 = await t11modes();
     await ev(`(Bay.show('home'), true)`);
-    if (m5.length === 1 && m5[0].mode === 'golf' && m5[0].tees === 'champ' && m5[0].max === 4)
-      ok(`${V}: the tee set and seat count chosen in Match setup reach the squad in one frame`);
-    else fail(`${V}: setup push ${JSON.stringify(m5)}`);
+    if (m5.length === 1 && m5[0].mode === 'golf' && m5[0].tees === 'champ' && m5[0].max === null && m5gcount === 0)
+      ok(`${V}: the tee set chosen in Match setup reaches the squad in one frame, and there is no golf seat count to send`);
+    else fail(`${V}: setup push ${JSON.stringify({ m5, m5gcount })}`);
     await reply({ op: 'mode', ok: true });
-    await t11state({ mode: 'golf', tees: 'champ', max: 4, members: [T11YOU(), T11MULE()] });
+    await t11state({ mode: 'golf', tees: 'champ', max: null, members: [T11YOU(), T11MULE()] });
     // ---- M6. A MEMBER'S BOARDS ARE THEIR OWN. The server would answer
     //      'not_leader' every time, so the tap is never sent.
     await t11state({ leader: T11_MULE, members: [T11YOU(), T11MULE()] });
@@ -3100,7 +3119,7 @@ try {
     const m9 = await t11aerr(), m9armed = await ev('Bay.state().mode.id');
     if (m9 === '' && m9armed === 'boss') ok(`${V}: a leader's tap with the socket down arms this device and leaves no refusal behind`);
     else fail(`${V}: offline tap ${JSON.stringify({ m9, m9armed })}`);
-    await ev(`(ccMode = 'duel', ccGolfMax = 2, ccTees = 'mens', Bay.show('home'), true)`);
+    await ev(`(ccMode = 'duel', ccTees = 'mens', Bay.show('home'), true)`);
     // ---- R1. THE SQUAD'S RACK (D-UI-3). A member armed on Duel, five picks
     //      stored, in a Boss Fight squad, which drafts seven. The box counted
     //      that rack right and said "Pick 2 more" -- on a dead button, while the
@@ -3154,17 +3173,21 @@ try {
         && r3f.length === 1 && r3f[0].ready === true && JSON.stringify(r3f[0].loadout) === JSON.stringify(SEVEN11) && (await ev('ccMode')) === 'boss')
       ok(`${V}: back in the box the member's Ready is live and sends all seven picks, with the device now armed on the squad's Boss (fix wave E3)`);
     else fail(`${V}: ready after the squad rack ${JSON.stringify({ r3scr, r3, sent: r3f })}`);
-    // ---- R4. THE ARMOURY OF THE LAUNCH FLOW IS UNTOUCHED: from Match setup it
-    //      drafts for the armed mode, step 3 of 3, and launches.
+    // ---- R4. THE ARMOURY REACHED FROM MATCH SETUP drafts for the armed mode.
+    //      CHANGED (owner, 2026-10-06): it is Edit's side trip, not step 3 of
+    //      3, and it never launches -- its Done goes back to Match setup.
     await ev(`(Bay.show('setup'), true)`);
-    await click('#bay .pfoot [data-go="armoury"]'); await sleep(80);
+    await click('#bay .card [data-go="armoury"]'); await sleep(80);
     const r4 = await t11arm();
+    await click('#bay .pfoot [data-back]'); await sleep(80);
+    const r4back = await ev(`$('bay').dataset.scr`);
     await ev(`(Bay.show('home'), true)`);
     // CHANGED BY FIX WAVE W2 (E3): a member's device follows the squad's mode,
     // so the armed mode here is the squad's Boss. Proved red with sqFollow off.
-    if (r4.scr === 'armoury' && r4.title === 'Boss Fight' && r4.slots === 7 && r4.meta === 'Step 3 of 3' && r4.launch)
-      ok(`${V}: the Armoury reached from Match setup still drafts for the armed mode and launches`);
-    else fail(`${V}: launch-flow armoury ${JSON.stringify(r4)}`);
+    if (r4.scr === 'armoury' && r4.title === 'Boss Fight' && r4.slots === 7 && r4.meta === 'Your rack' && !r4.launch
+        && JSON.stringify(r4.foot) === JSON.stringify([{ t: 'Done', dis: false, back: true }]) && r4back === 'setup')
+      ok(`${V}: the Armoury reached from Match setup's Edit drafts for the armed mode, never launches, and its Done goes back to Match setup`);
+    else fail(`${V}: launch-flow armoury ${JSON.stringify({ r4, r4back })}`);
     // ---- R5. THE LEADER'S SHORT START IS THE SAME DOOR, and it opens on the
     //      rack the footer COUNTED -- the stored one, which another tab may have
     //      changed -- not on a copy this page cached earlier (it holds seven
@@ -3206,12 +3229,97 @@ try {
     await ev(`(Bay.show('home'), true)`);
     // CHANGED BY FIX WAVE W2 (E3): the armed mode is the squad's Boss now, so
     // the launch flow's own Armoury is Boss's; what this pins is that it is the
-    // LAUNCH flow's (Step 3 of 3, no way back to a squad), not the squad's.
-    if (r6a.title === 'Boss Fight' && r6.scr === 'armoury' && r6.title === 'Boss Fight' && r6.slots === 7 && r6.meta === 'Step 3 of 3'
-        && Array.isArray(r6.foot) && !r6.foot.some((f) => f.back))
+    // player's own (Your rack, and Done -- no way back to a squad), not the
+    // squad's. CHANGED (owner, 2026-10-06): that Armoury's meta was Step 3 of
+    // 3 and its button launched; now it is Your rack, and Done goes back.
+    if (r6a.title === 'Boss Fight' && r6.scr === 'armoury' && r6.title === 'Boss Fight' && r6.slots === 7 && r6.meta === 'Your rack'
+        && JSON.stringify(r6.foot) === JSON.stringify([{ t: 'Done', dis: false, back: true }]))
       ok(`${V}: an Armoury opened for a squad that then ends draws the armed mode's own Armoury on the next pick`);
     else fail(`${V}: squad armoury after the squad ${JSON.stringify({ r6a: r6a.title, r6 })}`);
     await t11rack(FIVE11);
+    // ---- S1. MATCH SETUP'S PLAY WITH (owner, 2026-10-06). Friend games are
+    //      squads only: Computer (or Solo) and Your squad. Setup opens on Your
+    //      squad in a squad of two or more and on Computer otherwise, on every
+    //      entry from home; a choice survives Edit's Armoury, Repaint's Paint
+    //      shop and Change mode's Mission board, and never a visit. Your squad
+    //      is shown but disabled, with its one line, outside a squad of two.
+    //      While it is the choice Start Game is the squad's Ready -- TASK U3's
+    //      hook, a no-op until then -- and never makes a room of its own.
+    const s1with = () => ev(`(() => {
+      const o = [...document.querySelectorAll('#bay .b-opt')].find((x) => x.querySelector('.lbl') && x.querySelector('.lbl').textContent === 'Play with');
+      const st = document.querySelector('#bay .pfoot [data-launch]');
+      return { scr: $('bay').dataset.scr, opts: o ? [...o.querySelectorAll('.seg')].map((b) => ({ t: b.firstChild.textContent.trim(), on: b.classList.contains('on'), dis: b.disabled,
+        why: b.querySelector('.b-why') ? b.querySelector('.b-why').textContent : null })) : null,
+        play: (document.querySelector('#bay .brief .brow:last-child b') || {}).textContent || null, start: st ? st.textContent.trim() : null };
+    })()`);
+    const s1on = (r) => (r.opts || []).filter((o) => o.on).map((o) => o.t).join();
+    const s1readout = () => ev(`(() => { Bay.show('home'); return document.querySelector('#bay .lbar .ros').textContent.replace(/\\s+/g, ' '); })()`);
+    await ev(`(ccMode = 'duel', true)`);
+    await t11state({ members: [T11YOU(), T11MULE()] });
+    const s1 = {};
+    s1.readout2 = await s1readout();
+    await click('#bay .launch'); await sleep(60);
+    s1.open = await s1with();
+    await click('#bay [data-set="with=cpu"]'); await sleep(40);
+    s1.cpu = await s1with();
+    await click('#bay .card [data-go="armoury"]'); await sleep(40); await click('#bay .pfoot [data-back]'); await sleep(40);
+    s1.armoury = await s1with();
+    await click('#bay [data-go="paint"]'); await sleep(40); await click('#bay .go[data-back]'); await sleep(40);
+    s1.paint = await s1with();
+    await click('#bay .pfoot [data-go="modes"]'); await sleep(40); await click('#bay .mb[data-set="mode=duel"]'); await sleep(40);
+    s1.modes = await s1with();
+    // START GAME WITH COMPUTER, IN A SQUAD: the player's own vs-Computer game.
+    await ev(`(window.__s1sent = [], window.__s1intent = intent, window.intent = (m) => { __s1sent.push(m); }, true)`);
+    await clearTx(); await click('#bay .pfoot [data-launch]'); await sleep(40);
+    s1.cpuStart = { sent: await ev('__s1sent.slice()'), squad: (await squads()).length };
+    // AND BACK ON HOME, A NEW VISIT OPENS ON THE SQUAD AGAIN.
+    await ev(`(Bay.show('home'), true)`);
+    await click('#bay .launch'); await sleep(60);
+    s1.again = await s1with();
+    await ev(`(__s1sent.length = 0, true)`); await clearTx();
+    await click('#bay .pfoot [data-launch]'); await sleep(40);
+    s1.sqStart = { sent: await ev('__s1sent.slice()'), squad: (await squads()).length, scr: await ev(`$('bay').dataset.scr`) };
+    // A SQUAD'S FREE-FOR-ALL HAS NO CPU COUNT AND NO DIFFICULTY: the server
+    // sizes its room to the squad, and nobody is the computer.
+    s1.ffa = await ev(`(() => { ccMode = 'ffa'; Bay.show('home'); document.querySelector('#bay .launch').click();
+      const g = [...document.querySelectorAll('#bay .b-opt:not(.hidden) .lbl')].map((l) => l.textContent).join('|');
+      ccMode = 'duel'; Bay.show('home'); document.querySelector('#bay .launch').click(); return g; })()`);
+    // THE SQUAD DROPS TO ONE UNDER THE SCREEN: Your squad greys out, with its
+    // line, and the untouched default is Computer; it comes back when a second
+    // player does.
+    await t11state({ members: [T11YOU()] });
+    s1.one = await s1with();
+    await t11state({ members: [T11YOU(), T11MULE()] });
+    s1.two = await s1with();
+    await t11state({ members: [T11YOU()] });
+    s1.readout1 = await s1readout();
+    await ev(`(window.intent = window.__s1intent, true)`);
+    const S1SQ = [{ t: 'Computer', on: false, dis: false, why: null }, { t: 'Your squad', on: true, dis: false, why: null }];
+    const S1CPU = [{ t: 'Computer', on: true, dis: false, why: null }, { t: 'Your squad', on: false, dis: false, why: null }];
+    const S1OFF = [{ t: 'Computer', on: true, dis: false, why: null }, { t: 'Your squad', on: false, dis: true, why: 'Needs a squad of 2 or more' }];
+    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    if (s1.open.scr === 'setup' && same(s1.open.opts, S1SQ) && s1.open.play === 'Your squad' && s1.open.start === 'Start Game' && /Players\s*Squad of 2/.test(s1.readout2))
+      ok(`${V}: in a squad of two, home's Players reads Squad of 2 and Match setup opens on Your squad, with Start Game`);
+    else fail(`${V}: setup squad default ${JSON.stringify({ open: s1.open, readout: s1.readout2 })}`);
+    if (same(s1.cpu.opts, S1CPU) && s1.cpu.play === 'Computer \u00b7 Medium' && s1on(s1.armoury) === 'Computer' && s1.armoury.scr === 'setup'
+        && s1on(s1.paint) === 'Computer' && s1.paint.scr === 'setup' && s1on(s1.modes) === 'Computer' && s1.modes.scr === 'setup')
+      ok(`${V}: Computer, once chosen, survives Edit's Armoury, Repaint's Paint shop and Change mode's Mission board`);
+    else fail(`${V}: setup choice round trips ${JSON.stringify({ cpu: s1.cpu, armoury: s1.armoury, paint: s1.paint, modes: s1.modes })}`);
+    if (s1.cpuStart.sent.length === 1 && s1.cpuStart.sent[0].type === 'ai' && s1.cpuStart.squad === 0)
+      ok(`${V}: Start Game with Computer, in a squad, starts the player's own game against the computer and sends the squad nothing`);
+    else fail(`${V}: computer start in a squad ${JSON.stringify(s1.cpuStart)}`);
+    if (same(s1.again.opts, S1SQ))
+      ok(`${V}: the next visit from home opens on Your squad again: nothing remembered the choice`);
+    else fail(`${V}: setup reset ${JSON.stringify(s1.again)}`);
+    if (s1.ffa === 'Play with') ok(`${V}: a squad's Free-for-all shows no CPU count and no Difficulty`);
+    else fail(`${V}: squad ffa groups ${s1.ffa}`);
+    if (s1.sqStart.sent.length === 0 && s1.sqStart.squad === 0 && s1.sqStart.scr === 'setup')
+      ok(`${V}: Start Game with Your squad goes to the squad's Ready hook and makes no room of its own`);
+    else fail(`${V}: squad start ${JSON.stringify(s1.sqStart)}`);
+    if (same(s1.one.opts, S1OFF) && s1.one.play === 'Computer \u00b7 Medium' && same(s1.two.opts, S1SQ) && /Players\s*You vs CPU/.test(s1.readout1))
+      ok(`${V}: a squad of one greys Your squad out with "Needs a squad of 2 or more" and the default is Computer, live; a second player brings Your squad back`);
+    else fail(`${V}: squad of one ${JSON.stringify({ one: s1.one, two: s1.two, readout: s1.readout1 })}`);
+    await ev(`(Bay.show('home'), true)`);
     // ---- C1. THE ONE CODE FIELD IS TASK 8's (#sqCode, X8); what it still owed
     //      is here. ONE CODE AT A TIME (review T8-R1-10): two presses before the
     //      server has answered are one code frame, the Enter button is held
@@ -3453,13 +3561,16 @@ try {
 
   // ---- W3. A MEMBER'S BOARDS FOLLOW THE SQUAD'S MODE (E3).
   await stubSocket(); await setWho('in'); await w2hello(); await reply({ op: 'gone' });
-  await ev(`(ccMode = 'duel', ccTees = 'mens', ccGolfMax = 2, true)`);
+  // CHANGED (owner, 2026-10-06): golf has no seat count on this client any
+  // more, so a golf squad's `max` (an older leader's build may still send one)
+  // is not followed; the lit board and the tee set are.
+  await ev(`(ccMode = 'duel', ccTees = 'mens', true)`);
   await w2state({ leader: W2_MULE, you: 1, mode: 'golf', tees: 'womens', max: 3,
     members: [w2m(W2_MULE, 'Steel Mule', 'c1'), w2m(ME, 'Dusty Crag', 'a1')] });
   await ev(`(Bay.show('home'), true)`); await sleep(60);
-  const w3 = await ev('({ mode: ccMode, tees: ccTees, max: ccGolfMax })');
-  if (w3.mode === 'golf' && w3.tees === 'womens' && w3.max === 3)
-    ok(`${V}: a member's lit board, tees and seat count follow the squad's mode`);
+  const w3 = await ev('({ mode: ccMode, tees: ccTees, golfMax: typeof ccGolfMax })');
+  if (w3.mode === 'golf' && w3.tees === 'womens' && w3.golfMax === 'undefined')
+    ok(`${V}: a member's lit board and tees follow the squad's mode, and a golf seat count is written nowhere`);
   else fail(`${V}: member follows squad ${JSON.stringify(w3)}`);
 
   // ---- W4. A READY REFUSED 'dropped' SAYS SO (E9), and names no block.

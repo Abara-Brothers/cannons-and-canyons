@@ -20,11 +20,9 @@ const G = {
   get ccMode()        { return typeof ccMode        !== 'undefined' ? ccMode        : undefined; },
   get CC_SOCIAL()     { return typeof CC_SOCIAL     !== 'undefined' ? CC_SOCIAL     : undefined; },
   get CALLSIGN_MAX()  { return typeof CALLSIGN_MAX  !== 'undefined' ? CALLSIGN_MAX  : undefined; },
-  get ccOpp()         { return typeof ccOpp         !== 'undefined' ? ccOpp         : undefined; },
-  get ccFfaOpp()      { return typeof ccFfaOpp      !== 'undefined' ? ccFfaOpp      : undefined; },
   get pendingIntent() { return typeof pendingIntent !== 'undefined' ? pendingIntent : undefined; },
+  get soloRoom()      { return typeof soloRoom      !== 'undefined' ? soloRoom      : undefined; },
   get ccMax()         { return typeof ccMax         !== 'undefined' ? ccMax         : undefined; },
-  get ccGolfMax()     { return typeof ccGolfMax     !== 'undefined' ? ccGolfMax     : undefined; },
   get ccTees()        { return typeof ccTees        !== 'undefined' ? ccTees        : undefined; },
   get cpuDifficulty() { return typeof cpuDifficulty !== 'undefined' ? cpuDifficulty : undefined; },
   get HELP_WEAPONS()  { return typeof HELP_WEAPONS  !== 'undefined' ? HELP_WEAPONS  : undefined; },
@@ -51,8 +49,10 @@ const has = (name) => G[name] !== undefined || !!fn(name);
 
 /* ---- data: the five modes, as the concept wrote them --------------------- */
 const MODES = [
+  // No friend joins a duel by code any more (owner, 2026-10-06): it is the
+  // computer, or a squad of two.
   { id: 'duel',   name: 'Duel',           players: '2',         tag: 'Head to head',
-    blurb: 'Starts the moment your friend joins. First to bring the other down.',
+    blurb: 'One on one, against the computer or a squad mate. First to bring the other down.',
     art: 'alpine-wide',   card: 'alpine-hero',   draft: 5 },
   // FFA SEATS 2-4 (the engine's MODE_SEATS, and the Seats line), so the card
   // says so too (fix wave E4): '3-4' beside a squad of two's "Needs 2 players"
@@ -136,13 +136,20 @@ let kbdOn = null;                                   // the viewport listener, on
 let kbdSel = '#bay .csx';
 let csFocus = 0;                                    // the deferred focus/watch, cancelled if the editor closes first
 // What the pending lobby says for an invite-room mode: why it needs a
-// connection, and what one player can still do on this device.
+// connection, and what one player can still do on this device. `solo` is what
+// it says instead of `need` for a Solo create (app.js soloRoom), the only
+// create Match setup sends: that room invites nobody, it waits for the server.
+// Duel and Free-for-all have none, because their Solo is an 'ai' frame, which
+// never waits in this lobby: it starts on this device when there is no server.
 const SOLO_COPY = {
   duel:   { need: 'Duel needs a connection to bring in your friend.', can: 'You can fight a CPU commander on this device.' },
-  boss:   { need: 'Boss Fight needs a connection to bring in a second commander.', can: 'You can take on WARLORD-7 alone on this device.' },
-  aliens: { need: 'Alien Invasion needs a connection to bring in a second commander.', can: 'You can hold the line alone on this device.' },
+  boss:   { need: 'Boss Fight needs a connection to bring in a second commander.', can: 'You can take on WARLORD-7 alone on this device.',
+            solo: 'Your solo run starts as soon as the server can be reached.' },
+  aliens: { need: 'Alien Invasion needs a connection to bring in a second commander.', can: 'You can hold the line alone on this device.',
+            solo: 'Your solo run starts as soon as the server can be reached.' },
   ffa:    { need: 'Free-for-all needs a connection to invite commanders.', can: 'You can fight CPU commanders on this device.' },
-  golf:   { need: 'Artillery Golf needs a connection to invite other players.', can: 'You can play a solo round on this device.' },
+  golf:   { need: 'Artillery Golf needs a connection to invite other players.', can: 'You can play a solo round on this device.',
+            solo: 'Your solo round starts as soon as the server can be reached.' },
 };
 const SHORT = { duel: 'Duel', ffa: 'FFA', boss: 'Boss', aliens: 'Aliens', golf: 'Golf' };
 const art = (k) => 'bay/' + k + '.jpg';
@@ -255,11 +262,8 @@ function state() {
   if (!picks.length && has('ARM_DEFAULT')) picks = ARM_DEFAULT.slice(0, m.draft);
   return {
     mode: m, skinId, skin, picks,
-    opp: has('ccOpp') ? ccOpp : 'friend',
-    ffaOpp: has('ccFfaOpp') ? ccFfaOpp : 'friend',
     diff: has('cpuDifficulty') ? cpuDifficulty : 'medium',
     count: has('ccMax') ? ccMax : 4,
-    gcount: has('ccGolfMax') ? ccGolfMax : 2,     // golf seats, 1..4
     tees: has('ccTees') ? ccTees : 'mens',
     name: has('myName') ? myName() : 'Commander',
     social: has('CC_SOCIAL') ? CC_SOCIAL : null,      // the last social snapshot, or null before the first
@@ -360,9 +364,15 @@ function chrome(title, sub, meta, body, foot) {
 const tankImg = (skinId, w, alt) => { const src = tankURL(skinId, w); return src ? '<img src="' + src + '" alt="' + (alt || '') + '" style="width:' + u(w) + '">' : ''; };
 const wicon = (id) => (G.ICONS && ICONS[id]) || (G.UI_IC && UI_IC[id]) || '';
 const cap = (t) => String(t).charAt(0).toUpperCase() + String(t).slice(1);
+// An option with a third entry is drawn DISABLED, and that entry is the one
+// line saying why, inside the option itself: shown, so the player can see the
+// choice exists and what it needs, but not pressable. Inside, not under the
+// row, because Match setup's column has no height to spare for another line.
+// An option with none is markup for markup what it always was.
 function seg(label, key, opts, cur, hidden) {
   return '<div class="b-opt' + (hidden ? ' hidden' : '') + '"><span class="lbl">' + label + '</span><div class="segs">'
-    + opts.map((o) => '<button class="seg' + (String(cur) === String(o[0]) ? ' on' : '') + '" data-set="' + key + '=' + o[0] + '">' + o[1] + '</button>').join('')
+    + opts.map((o) => '<button class="seg' + (String(cur) === String(o[0]) ? ' on' : '') + '" data-set="' + key + '=' + o[0] + '"' + (o[2] ? ' disabled' : '') + '>'
+      + o[1] + (o[2] ? '<span class="b-why">' + o[2] + '</span>' : '') + '</button>').join('')
     + '</div></div>';
 }
 function slots(picks, n) {
@@ -400,6 +410,43 @@ function weaponInfo(id) {
 }
 let rack = null;                 // the working copy, initialised from state().picks
 function rackPicks() { if (!rack) rack = state().picks.slice(); return rack; }
+// THE STANDARD WEAPONS A SHORT RACK IS TOPPED UP WITH, in one order wherever a
+// rack is topped up: the standard draft (ARM_DEFAULT), then the rest of the
+// pool, each in its own order, never a pick twice. Only the Armoury's pool,
+// so no golf, boss or CPU-only weapon can ever be put in a rack.
+function topUp(picks, n) {
+  const pool = has('ARM_POOL') ? ARM_POOL : [], out = picks.slice();
+  for (const id of [...(has('ARM_DEFAULT') ? ARM_DEFAULT : []), ...pool]) {
+    if (out.length >= n) break;
+    if (pool.includes(id) && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+// START GAME ALWAYS WORKS (owner, 2026-10-06). The player's rack is the picks
+// they have stored, the pool's ids only and a repeat counted once. Fewer of
+// them than the mode drafts -- none stored at all included, which the screens
+// show as the standard draft -- and the empty slots are filled with standard
+// weapons (topUp). That rack is SAVED as the player's, because the match's
+// draft is submitted straight from storage the moment it opens (applySnapshot)
+// and reads the first picks as stored: a short rack there raised the draft
+// over the battlefield, and a stored repeat sent a rack the server refuses.
+// A rack already full with no repeat is left exactly as stored, longer ones
+// included, since a seven-weapon raid rack is a five-weapon duel rack's first
+// five.
+function fillRack(m) {
+  const n = m.draft, pool = has('ARM_POOL') ? ARM_POOL : [];
+  let stored = null, have = [];
+  try {
+    stored = JSON.parse(localStorage.getItem('cc_loadout') || 'null');
+    if (Array.isArray(stored)) have = stored.filter((id, i) => pool.includes(id) && stored.indexOf(id) === i);
+  } catch {}
+  const full = topUp(have, n);
+  if (JSON.stringify(full) === JSON.stringify(stored)) return;
+  try { localStorage.setItem('cc_loadout', JSON.stringify(full)); } catch {}
+  // The Armoury's working copy is what its next toggle saves, so it carries the
+  // filled rack too: left behind, one tap would store the short one again.
+  rack = full.slice();
+}
 function togglePick(id) {
   // The Armoury's own draft: the squad's mode while it fills the squad's rack
   // (sqArmMode, D-UI-3), the armed mode otherwise.
@@ -748,12 +795,7 @@ function sqRack(modeId) {
   // "Pick N more" opening a bag with nothing to pick. Golf's rack is the stored
   // picks topped up from the standard draft, then the pool: always full, never
   // shown, and the stored preference itself is left untouched.
-  if (m.id === 'golf') {
-    for (const id of [...(has('ARM_DEFAULT') ? ARM_DEFAULT : []), ...pool]) {
-      if (picks.length >= m.draft) break;
-      if (!picks.includes(id)) picks.push(id);
-    }
-  }
+  if (m.id === 'golf') picks = topUp(picks, m.draft);
   return picks;
 }
 // THE SQUAD'S RACK IN THE ARMOURY (D-UI-3). The footer counts the rack against
@@ -761,10 +803,10 @@ function sqRack(modeId) {
 // has ARMED -- so a member armed on Duel (five) in a Boss Fight squad (seven)
 // was told "Pick 2 more" by a dead button, and the Armoury would not take a
 // sixth. That button is now the way in: it opens the Armoury for the squad's
-// mode, whose footer goes back to the squad rather than launching a room of
-// the player's own. Only from there. Reached from Match setup or the Bay
-// stations, the Armoury is the launch flow's, for the armed mode, exactly as
-// before; render() drops the flag the moment the Armoury is left.
+// mode, whose footer goes back to the squad. Only from there. Reached from
+// Match setup's Edit or the Bay stations, the Armoury is the player's own
+// rack, for the armed mode, with Done; render() drops the flag the moment the
+// Armoury is left.
 let sqArm = false;
 const sqArmMode = () => (sqArm && sqLive(sq.snap) ? modeOf(sq.snap.mode) : null);
 function sqRackOpen() {
@@ -1104,12 +1146,14 @@ function boardMode() {
 function sqModeSend() {
   const sn = sq.snap;
   if (!sqLive(sn) || !sqIsLead(sn, sqMe(sn)) || !wsReady()) return;
-  // THE SERVER'S SHAPE: tees for golf alone, a seat count for the two modes
-  // that take one, null for the rest -- and a count is state()'s number, never
-  // a <select>'s string, which the server refuses as bad_max.
+  // THE SERVER'S SHAPE: tees for golf alone, a seat count for the free-for-all,
+  // null for the rest -- and a count is state()'s number, never a <select>'s
+  // string, which the server refuses as bad_max. Golf has no count to send any
+  // more (owner, 2026-10-06): the Players picker is gone, and the server sizes
+  // a squad's room to the squad (seat-squad.js).
   const s = state(), mode = s.mode.id;
   const tees = mode === 'golf' ? s.tees : null;
-  const max = mode === 'ffa' ? s.count : mode === 'golf' ? s.gcount : null;
+  const max = mode === 'ffa' ? s.count : null;
   if (mode === sn.mode && tees === (sn.tees == null ? null : sn.tees) && max === (sn.max == null ? null : sn.max)) return;
   // Written to `mine`, the state that asked, as every squad answer is: an
   // account switch replaces `sq`, and the old account's refusal is not the
@@ -1135,9 +1179,10 @@ function sqModeSend() {
 // their own) and stands until the squad next changes. Only while home or the
 // Mission board is being drawn (render calls this): a player in Match setup or
 // the Armoury keeps the mode they opened it for, and meets the squad's on
-// their way back home. The tee set and seat counts are written as setField
-// writes them, but the tee set is NOT saved as this player's preference: it is
-// the squad's.
+// their way back home. The tee set and the free-for-all's count are written as
+// setField writes them, but the tee set is NOT saved as this player's
+// preference: it is the squad's. A golf squad's seat count is not followed:
+// golf has none on this client any more (sqModeSend).
 let sqFollowKey = '', sqLeadFollow = false;
 const SQ_TEES = ['champ', 'mens', 'womens', 'junior'];
 function sqFollow(scr) {
@@ -1151,7 +1196,6 @@ function sqFollow(scr) {
   sqLeadFollow = false; sqFollowKey = k;
   if (has('ccMode')) ccMode = sn.mode;
   if (sn.mode === 'golf' && SQ_TEES.includes(sn.tees) && has('ccTees')) { ccTees = sn.tees; if ($('teeSel')) $('teeSel').value = sn.tees; }
-  if (sn.mode === 'golf' && Number.isInteger(sn.max) && sn.max >= 1 && sn.max <= 4 && has('ccGolfMax')) ccGolfMax = sn.max;
   if (sn.mode === 'ffa' && (sn.max === 3 || sn.max === 4) && has('ccMax')) { ccMax = sn.max; if ($('countSel')) $('countSel').value = String(sn.max); }
   if (fn('syncCreateRow')) syncCreateRow();
 }
@@ -1468,9 +1512,11 @@ document.addEventListener('visibilitychange', () => sqCarry(document.hidden));
 // listener at the foot of this file).
 let sqAcctSeen = false;
 function sqReset() { sq = sqFresh(sq.tab); }
+// Match setup too: its Your squad is live only in a squad of two or more
+// (sqTwoPlus), so it follows the squad while the screen is up.
 function sqPaint() {
   const host = $('bay');
-  if (host && host.classList.contains('active') && current === 'home') render('home');
+  if (host && host.classList.contains('active') && (current === 'home' || current === 'setup')) render(current);
 }
 // ASKED ONCE PER INTRODUCTION, THEN LEFT ALONE. sqNeed() is idempotent: it asks
 // only if nothing has been asked under this socket's introduction (app.js's
@@ -2729,7 +2775,11 @@ SCREENS.friends = function () {
   return chrome('Friends', sub, on ? esc(s.name) : 'Needs a connection', body, '');
 };
 
-// 4 — ARMOURY. Load the rack: n weapons go into the field.
+// 4 — ARMOURY. Load the rack: n weapons go into the field. NOT A STEP ANY MORE
+// (owner, 2026-10-06): it is reached only by Edit on Match setup's weapon rack
+// and by the Bay stations row on home, and its button is Done, which goes back
+// to whichever of the two opened it (the stack's own back). It never launches:
+// only Match setup starts a match, and a rack left short there is filled then.
 SCREENS.armoury = function () {
   // `sm`: the squad's mode, when this Armoury was opened to fill the squad's
   // rack (sqRackOpen, D-UI-3); otherwise null, and every line below reads
@@ -2761,18 +2811,20 @@ SCREENS.armoury = function () {
   // The squad's rack goes back to the squad: this is not a room of the
   // player's own, so it offers no launch. Back is the way home in the header
   // too (data-back), and the box's Ready or Start is what comes next.
+  // Done is never held back by a short rack: Start Game fills one (fillRack),
+  // and the hint says so while it is short.
   const foot = sm
     ? '<span class="hint">Loading for your squad&rsquo;s ' + esc(m.name) + '</span><span class="grow"></span>'
       + '<button class="go" ' + (full ? 'data-back' : 'disabled') + '>' + (full ? 'Back to the squad' : 'Pick ' + (n - picks.length) + ' more') + '</button>'
-    : '<span class="hint">Everyone carries the Cannon &middot; the Railgun only drops in crates</span><span class="grow"></span>'
-      + '<button class="go" ' + (full ? 'data-launch' : 'disabled') + '>' + (full ? 'Open the bay doors' + IC.play : 'Pick ' + (n - picks.length) + ' more') + '</button>';
-  return chrome('Armoury', 'Load the rack &mdash; ' + n + ' weapons go into the field', sm ? 'Your squad' : 'Step 3 of 3', body, foot);
+    : '<span class="hint">' + (full ? 'Everyone carries the Cannon &middot; the Railgun only drops in crates' : 'Empty slots are filled with standard weapons') + '</span><span class="grow"></span>'
+      + '<button class="go" data-back>Done</button>';
+  return chrome('Armoury', 'Load the rack &mdash; ' + n + ' weapons go into the field', sm ? 'Your squad' : 'Your rack', body, foot);
 };
 
-// 4, FOR GOLF — THE GOLF BAG. The Armoury's door (Match setup, the Bay
-// stations row, a squad's) opens this instead when golf is the mode: the four
-// clubs and what each one does, read-only. Nothing is picked here and nothing
-// has to be, so the bay doors are always open from it.
+// 4, FOR GOLF — THE GOLF BAG. The Armoury's door (the Bay stations row, a
+// squad's) opens this instead when golf is the mode: the four clubs and what
+// each one does, read-only. Nothing is picked here and nothing has to be, so
+// Done is always live; like the Armoury's, it goes back where it came from.
 function golfBagScreen(s, m, sm) {
   const card = (id) => {
     const w = weaponInfo(id);
@@ -2795,8 +2847,8 @@ function golfBagScreen(s, m, sm) {
     ? '<span class="hint">Your squad&rsquo;s ' + esc(m.name) + ' carries these four clubs</span><span class="grow"></span>'
       + '<button class="go" data-back>Back to the squad</button>'
     : '<span class="hint">No draft in golf &middot; every player carries these four clubs</span><span class="grow"></span>'
-      + '<button class="go" data-launch>Open the bay doors' + IC.play + '</button>';
-  return chrome('Golf bag', 'Four clubs &mdash; the same bag for every player', sm ? 'Your squad' : 'Step 3 of 3', body, foot);
+      + '<button class="go" data-back>Done</button>';
+  return chrome('Golf bag', 'Four clubs &mdash; the same bag for every player', sm ? 'Your squad' : 'No draft', body, foot);
 }
 
 // 5 — LOBBY. Fed by the game's own lobby messages (see the wrappers at the
@@ -2810,7 +2862,6 @@ SCREENS.lobby = function () {
   // not answered. Nothing exists yet; the copy says so and offers Play solo.
   const st = lobby.mode;
   const pending = st === 'offline' || st === 'connecting' || st === 'unreachable';
-  const code = (m && m.code) || (G.S && S.code) || '';
   const isHost = m ? m.you === m.host : true;
   const filled = m ? m.players.filter(Boolean).length : 1;
   // While pending, the QUEUED create is the truth about the mode and the seat
@@ -2819,11 +2870,18 @@ SCREENS.lobby = function () {
   const qi = pending && G.pendingIntent && G.pendingIntent.type === 'create' ? G.pendingIntent : null;
   const max = m ? m.max : (qi && qi.max) || 2;
   const mode = m ? modeOf(m.mode) : qi ? modeOf(qi.mode) : s.mode;
-  // A one-seat online golf room is a round for one: the server starts it the
-  // moment it is created, so the share-a-code lobby would be a lie even for
-  // the single frame it is painted on.
-  const oneSeat = !pending && !solo && !searching && mode.id === 'golf' && max === 1;
+  // A ROOM FOR ONE, online: a one-seat golf room, which the server starts the
+  // moment it is created, and any room this page asked for as a Solo create
+  // (app.js soloRoom), which it starts itself the moment the room exists. Both
+  // are drawn as what they are, a run for one, from the 'created' frame on --
+  // never as a lobby with an open seat, even for the frame it is painted on.
+  // ONLY ITS HOST'S: a room somebody else hosts is never ours to call solo.
+  const soloAsk = G.soloRoom === true;
+  const oneSeat = !pending && !solo && !searching && isHost && (soloAsk || (mode.id === 'golf' && max === 1));
   const cp = SOLO_COPY[mode.id] || SOLO_COPY.boss;
+  // A queued Solo create waits for nobody, so its pending copy says what it
+  // does wait for -- the server -- and never that it needs a second player.
+  const need = soloAsk && cp.solo ? cp.solo : cp.need;
   const roster = (() => {
     if (pending) return '';                       // nothing has been created yet
     if (searching) return '<div class="seat wait"><span class="b-dot" style="background:#6f7fa6;margin-left:' + u(16) + '"></span><span class="sn">Searching for an opponent</span><span class="spin"></span></div>';
@@ -2840,7 +2898,7 @@ SCREENS.lobby = function () {
         // So: a menu where there is a handle, and nowhere else.
         + (!you && p.handle ? menuBtn(p.handle, 'handle', p.name, false) : '')
         + '</div>';
-      else if (!solo) out += '<div class="seat wait"><span class="b-dot" style="background:#6f7fa6;margin-left:' + u(16) + '"></span><span class="sn">' + (mode.id === 'duel' ? 'Waiting for a commander' : 'Open slot') + '</span><span class="spin"></span></div>';
+      else if (!solo && !oneSeat) out += '<div class="seat wait"><span class="b-dot" style="background:#6f7fa6;margin-left:' + u(16) + '"></span><span class="sn">' + (mode.id === 'duel' ? 'Waiting for a commander' : 'Open slot') + '</span><span class="spin"></span></div>';
     }
     return out;
   })();
@@ -2854,8 +2912,8 @@ SCREENS.lobby = function () {
     ? '<span class="lbl">' + (st === 'offline' ? 'No connection' : st === 'connecting' ? 'One moment' : 'Server not responding') + '</span>'
       + big(st === 'offline' ? 'OFFLINE' : st === 'connecting' ? 'LINKING' : 'NO LINK', false)
       + note(st === 'connecting' ? 'Setting up your room. This can take a few seconds after an update.'
-        : st === 'unreachable' ? esc(cp.need) + ' We keep trying in the background. ' + esc(cp.can)
-        : esc(cp.need) + ' ' + esc(cp.can))
+        : st === 'unreachable' ? esc(need) + ' We keep trying in the background. ' + esc(cp.can)
+        : esc(need) + ' ' + esc(cp.can))
     : solo
     ? '<span class="lbl">Solo run</span>' + big('OFFLINE', true)
       + note('Nobody can join this room. Closing the app ends the run.')
@@ -2863,30 +2921,31 @@ SCREENS.lobby = function () {
     ? '<span class="lbl">Quick match</span><div class="b-code" style="font-size:' + u(44) + ';letter-spacing:.05em">SEARCHING</div>'
       + '<div style="margin-top:' + u(14) + ';font-size:' + u(11.5) + ';color:#8798bd;line-height:1.45;max-width:' + u(270) + ';font-weight:500">We&rsquo;ll drop you into a battle the moment someone else is looking too.</div>'
     : oneSeat
-    ? '<span class="lbl">Solo round</span>' + big('TEEING OFF', true)
-      + note('A round for one. It starts in a moment.')
-    : '<span class="lbl">Share this code</span><div class="b-code">' + esc(code) + '</div>'
-      + '<div style="display:flex;gap:' + u(8) + ';margin-top:' + u(16) + '"><button class="go cy" style="height:' + u(36) + ';font-size:' + u(15) + ';padding:0 ' + u(16) + '" data-old="copyLinkBtn">' + IC.copy + 'Copy link</button>'
-      + '<button class="ghost" style="height:' + u(36) + ';font-size:' + u(13) + '" data-old="copyCodeBtn">Copy code</button></div>'
-      + '<div style="margin-top:' + u(14) + ';font-size:' + u(11.5) + ';color:#8798bd;line-height:1.45;max-width:' + u(270) + ';font-weight:500">'
-      // Golf with 3 or 4 seats is host-started like a free-for-all: the room
-      // auto-starts only when the LAST seat fills, so the old "starts the
-      // moment they join" line was false for those counts.
-      + (mode.id === 'ffa' && isHost ? 'Send the link. Start whenever you have enough players &mdash; you don&rsquo;t have to wait for a full lobby.'
-        : mode.id === 'golf' && isHost && max > 2 ? 'Send the link. Tee off whenever you have enough players &mdash; the round also starts when the last seat fills.'
-        : hostStarts && !isHost ? (mode.id === 'golf' ? 'Waiting for the host to tee off&hellip;' : 'Waiting for the host to start the battle&hellip;')
-        : mode.id === 'golf' ? 'The round starts the moment they join &mdash; no lobby countdown.'
-        : 'The battle starts the moment they join &mdash; no lobby countdown.') + '</div>';
+    ? (isGolf(mode) ? '<span class="lbl">Solo round</span>' + big('TEEING OFF', true) + note('A round for one. It starts in a moment.')
+      : '<span class="lbl">Solo run</span>' + big('DEPLOYING', true) + note('A run for one. It starts in a moment.'))
+    // A ROOM WITH SEATS TO FILL. This page no longer makes one (friend games are
+    // squads only, owner 2026-10-06), and the waiting room that shared its code
+    // -- "Bay doors sealed", Share this code, Copy link, Copy code -- is gone
+    // with it: nothing here offers a game code. What can still arrive is a
+    // room somebody else made: a ?room= link from a friend on an older build,
+    // joined from the address bar, which survives a reload. Its seats and its
+    // host's Start are drawn as they always were.
+    : '<span class="lbl">' + (isHost ? 'Your room' : 'Joined') + '</span>' + big('STAND BY', false)
+      + note(isHost ? (hostStarts ? (mode.id === 'golf' ? 'Tee off whenever you are ready.' : 'Start whenever you are ready.') : 'Nobody else can join this room.')
+        : hostStarts ? (mode.id === 'golf' ? 'Waiting for the host to tee off&hellip;' : 'Waiting for the host to start the battle&hellip;')
+        : 'The battle starts in a moment.');
   const summary = '<div style="display:flex;gap:' + u(26) + ';margin-top:' + u(16) + ';padding-top:' + u(13) + ';border-top:1px solid rgba(140,168,214,.2)">'
     + '<span class="ro"><span class="rk">Mode</span><span class="rv">' + esc(mode.name) + '</span></span>'
-    + '<span class="ro"><span class="rk">Players</span><span class="rv">' + (solo ? filled : filled + ' / ' + max) + '</span></span>'
+    + '<span class="ro"><span class="rk">Players</span><span class="rv">' + (solo || oneSeat ? filled : filled + ' / ' + max) + '</span></span>'
     + '<span class="ro"><span class="rk">Paint</span><span class="rv">' + esc(s.skin.name) + '</span></span></div>';
   const right = '<span class="lbl">' + (solo ? 'Deploying' : 'Roster') + '</span>' + roster
     + '<button class="ghost' + (nudgeHidden || solo || searching || pending || oneSeat ? ' hidden' : '') + '" style="width:100%;margin-top:' + u(10) + ';height:' + u(34) + ';font-size:' + u(13) + ';justify-content:center" data-old="notifyBtn">Nudge me when they join</button>'
+    // No Change on the rack: the Armoury is reached from Match setup's Edit and
+    // the Bay stations row only (owner, 2026-10-06), and its Done goes back.
     + '<div style="margin-top:' + u(12) + '">' + (isGolf(mode) ? loadout(GOLF_BAG, GOLF_BAG.length, 'Golf bag', '')
-      : loadout(rackPicks().slice(0, mode.draft), mode.draft, 'Rack loaded', pending || solo ? '' : '<button class="ghost" style="height:' + u(28) + ';font-size:' + u(12) + ';padding:0 ' + u(11) + '" data-go="armoury">Change</button>')) + '</div>';
+      : loadout(rackPicks().slice(0, mode.draft), mode.draft, 'Rack loaded', '')) + '</div>';
   const title = pending ? (st === 'offline' ? 'No connection' : st === 'connecting' ? 'Reaching the server' : 'Cannot reach the server')
-    : solo ? 'Solo run' : searching ? 'Searching' : oneSeat ? 'Teeing off' : filled >= max ? 'Bay doors opening' : 'Bay doors sealed';
+    : solo ? 'Solo run' : searching ? 'Searching' : oneSeat ? (isGolf(mode) ? 'Teeing off' : 'Deploying') : filled >= max ? 'Bay doors opening' : 'Standing by';
   const count = solo ? '' : ' (' + filled + ')';
   const startLabel = filled < minSeats ? 'Start (need ' + minSeats + ')' : mode.id === 'boss' ? 'Engage the WARLORD' + count : mode.id === 'golf' ? 'Tee off' + count : 'Start battle' + count;
   // While the server is being reached there is nothing to offer yet; once it
@@ -2897,7 +2956,7 @@ SCREENS.lobby = function () {
       ? (st === 'connecting' ? '' : '<button class="go" data-solo>' + (mode.id === 'duel' || mode.id === 'ffa' ? 'Play vs Computer' : 'Play solo') + IC.play + '</button>')
       : '<button class="go' + (canStart && !oneSeat ? '' : ' hidden') + '" ' + (filled < minSeats ? 'disabled' : 'data-old="startMatchBtn"') + '>' + startLabel + IC.play + '</button>');
   const loaded = isGolf(mode) ? GOLF_BAG.length + ' clubs in the bag' : rackPicks().slice(0, mode.draft).length + ' weapons loaded';
-  return chrome(title, esc(mode.name) + ' &middot; ' + loaded, pending ? (st === 'offline' ? 'Offline' : st === 'connecting' ? 'Waiting room' : 'Retrying') : solo ? 'Solo drop' : searching ? 'Quick match' : oneSeat ? 'Solo round' : 'Waiting room',
+  return chrome(title, esc(mode.name) + ' &middot; ' + loaded, pending ? (st === 'offline' ? 'Offline' : st === 'connecting' ? 'Waiting room' : 'Retrying') : solo ? 'Solo drop' : searching ? 'Quick match' : oneSeat ? (isGolf(mode) ? 'Solo round' : 'Solo run') : 'Friend room',
     '<div class="doors"><span class="door" style="left:0"></span><span class="door" style="right:0"></span></div>'
     + '<div class="cols" style="align-items:center;padding:0 ' + u(34) + '"><div style="width:' + u(420) + '">' + left + summary + '</div><div style="flex:1">' + right + '</div></div>', foot);
 };
@@ -2915,42 +2974,81 @@ SCREENS.modes = function () {
       +   '<span class="mbb">' + esc(x.blurb) + '</span>'
       +   '<span class="mbf"><span class="tagm">' + esc(x.players) + ' players</span><span class="tagm">' + (isGolf(x) ? GOLF_BAG.length + ' clubs' : x.draft + ' weapons') + '</span></span></span></button>';
   }).join('');
-  return chrome('Mission board', 'Five ways to bring down a mountain', 'Step 1 of 3', '<div class="mrow">' + cards + '</div>', '');
+  return chrome('Mission board', 'Five ways to bring down a mountain', 'Step 1 of 2', '<div class="mrow">' + cards + '</div>', '');
 };
 
-// 3 — MATCH SETUP. Opponent, the per-mode option, who you are rolling out as,
-// and the rack. Drives the same variables the old create row did.
+// 3 — MATCH SETUP. Who you play with, the per-mode option, who you are rolling
+// out as, and the rack -- and START GAME, which starts the match from here
+// (owner, 2026-10-06): the Armoury is no longer a step, only Edit's side trip.
+// Drives the same variables the old create row did.
+//
+// WHO YOU PLAY WITH, chosen again on every visit (owner, 2026-10-06). Friend
+// games are squads only, so there are two answers: Computer (Duel,
+// Free-for-all) or Solo (Boss Fight, Alien Invasion, golf), and Your squad.
+// setupWith is null until the player taps one, and null means the DEFAULT:
+// Your squad in a squad of two or more, otherwise Computer or Solo -- read
+// live, so a squad that fills or empties under the screen moves an untouched
+// choice with it. It is reset to null whenever setup is entered from anywhere
+// but the three screens it sends the player to and back from (SETUP_TRIPS:
+// Edit's Armoury, Repaint's Paint shop, Change mode's Mission board), so a
+// choice survives those round trips and never a visit. Nothing remembers it
+// between visits, in this page or in storage.
+let setupWith = null;
+const SETUP_TRIPS = ['armoury', 'paint', 'modes'];
+// A squad Your squad can mean: this socket holds the row (sqLive, D-UI-1) and
+// two or more are in it. A squad of one is not one (owner: setup defaults to
+// Computer, and ready-up appears once a second player joins).
+const sqTwoPlus = () => { const sn = sq.snap; return sqLive(sn) && Array.isArray(sn.members) && sn.members.length >= 2; };
+const setupSquad = () => sqTwoPlus() && setupWith !== 'cpu';
+const SQ_WITH_WHY = 'Needs a squad of 2 or more';
+// THE SQUAD'S READY, from Start Game while Your squad is the choice. TASK U3
+// builds that control -- every member readies up, and the last Ready counts
+// the match in -- and implements it here. Until then it does nothing and says
+// so by answering false: Start Game never makes a room of the player's own
+// while the squad is the choice.
+function squadReadyToggle() { return false; }
+// START GAME'S WORDS, from this one place. TASK U3 extends it: with Your squad
+// the choice (`withSquad`), the button becomes the squad's Ready and shows how
+// many are ready of how many.
+function startGameLabel(withSquad) { return 'Start Game' + IC.play; }
+// THE TAP. Read when it lands, never when the button was drawn: a squad that
+// shrank under the screen is Computer or Solo again by now (setupSquad). A rack
+// short of the mode's draft is filled and saved first (fillRack), so Start
+// Game always works; golf drafts nothing. Then the exact old create path: the
+// legacy button's own handler, which sends the 'ai' frame or the Solo create.
+function startGame() {
+  if (setupSquad()) { squadReadyToggle(); return; }
+  const m = state().mode;
+  if (!isGolf(m)) fillRack(m);
+  const b = $('createBtn'); if (b) b.onclick();
+}
 SCREENS.setup = function () {
   const s = state(), m = s.mode;
   const cpuMode = m.id === 'duel' || m.id === 'ffa';
-  const oppKey = m.id === 'ffa' ? 'ffaOpp' : 'opp';
-  const oppVal = m.id === 'ffa' ? s.ffaOpp : s.opp;
-  const vsCpu = cpuMode && oppVal === 'cpu';
+  const squadOk = sqTwoPlus(), withSq = setupSquad();
+  const vsCpu = cpuMode && !withSq;
   // Every group is always in the tree, hidden when it does not apply, so a
   // change never reshapes the siblings and the in-place patch lands cleanly.
-  // Duel and Free-for-all offer the computer; each remembers its own choice.
-  // With Computer picked, the count control keeps its values (ccMax 3 / 4)
-  // and only its labels change to the number of CPUs that implies.
-  // What "a friend by code" means depends on how many seats the mode opens:
-  // golf with one seat invites nobody at all, and golf for 3-4 invites several.
-  const byCode = m.id === 'golf' ? (s.gcount === 1 ? 'Solo round' : s.gcount > 2 ? 'Friends by code' : 'Friend by code') : m.id === 'ffa' ? 'Friends by code' : 'Friend by code';
-  const oppSeg = seg('Opponent', oppKey, [['friend', byCode], ['cpu', 'Computer']], oppVal, !cpuMode);
-  const extra = seg(vsCpu ? 'CPU commanders' : 'Commanders on the ridge', 'count', vsCpu ? [[3, '2'], [4, '3']] : [[3, '3'], [4, '4']], s.count, m.id !== 'ffa')
-    // Golf seats 1..4 (owner, 2026-09-18): the host opens that many; one is a
-    // solo round, exactly the old Play solo path.
-    + seg('Players', 'gcount', [[1, '1'], [2, '2'], [3, '3'], [4, '4']], s.gcount, m.id !== 'golf')
+  // Your squad is always shown, and disabled with one line saying why while
+  // there is no squad of two or more to play with (seg). A squad is sized by the
+  // server, so the free-for-all's count is the CPU count, shown with
+  // Computer only; golf has no seat count at all (alone is a round for one,
+  // a squad is the whole squad), and keeps its tee set either way.
+  const withSeg = seg('Play with', 'with', [['cpu', cpuMode ? 'Computer' : 'Solo'], ['squad', 'Your squad', squadOk ? '' : SQ_WITH_WHY]], withSq ? 'squad' : 'cpu', false);
+  const extra = seg('CPU commanders', 'count', [[3, '2'], [4, '3']], s.count, !(m.id === 'ffa' && vsCpu))
     + seg('Tee set', 'tees', [['champ', 'Champ'], ['mens', 'Men&rsquo;s'], ['womens', 'Women&rsquo;s'], ['junior', 'Junior']], s.tees, m.id !== 'golf')
     + seg('Difficulty', 'diff', [['easy', 'Easy'], ['medium', 'Medium'], ['hard', 'Hard']], s.diff, !vsCpu);
-  const oppText = vsCpu ? 'Computer &middot; ' + esc(cap(s.diff)) : byCode;
+  const withText = withSq ? 'Your squad' : vsCpu ? 'Computer &middot; ' + esc(cap(s.diff)) : 'Solo';
   const tall = m.id === 'ffa' && vsCpu;       // three visible option groups
+  const short = !isGolf(m) && s.picks.length < m.draft;
 
   const body = '<div class="cols">'
     // The column is a fixed 274u tall (.cols). One or two option groups leave
     // the crew card room to stretch, exactly as before. Free-for-all + Computer
     // shows THREE, which cannot fit at any viewport: only then does the column
     // scroll and the card keep its own height (grow, never shrink) instead of
-    // spilling over the footer. The two-group markup is byte-identical.
-    + '<div style="width:' + u(430) + ';display:flex;flex-direction:column;gap:' + u(12) + (tall ? ';min-height:0;overflow-y:auto;overflow-x:hidden' : '') + '">' + oppSeg + extra
+    // spilling over the footer.
+    + '<div style="width:' + u(430) + ';display:flex;flex-direction:column;gap:' + u(12) + (tall ? ';min-height:0;overflow-y:auto;overflow-x:hidden' : '') + '">' + withSeg + extra
     +   '<div class="card" style="flex:' + (tall ? '1 0 auto' : '1') + ';min-height:0;padding:0 ' + u(13) + ';display:flex;flex-direction:column;justify-content:space-evenly">'
     +     '<div class="crew" style="border:0;background:none;padding:0">' + tankImg(s.skinId, 56, 'Your tank')
     +       '<span class="ct"><span class="lbl">Rolling out as</span>'
@@ -2962,6 +3060,7 @@ SCREENS.setup = function () {
       // Golf's row is its bag, read-only: no count of picks, and no Edit.
       ?     '<div><div style="display:flex;align-items:center;gap:' + u(8) + '"><span class="lbl">Golf bag &middot; ' + GOLF_BAG.length + ' clubs</span></div>'
       +       '<div class="slots" style="justify-content:flex-start;margin-top:' + u(9) + '">' + slots(GOLF_BAG, GOLF_BAG.length) + '</div></div>'
+      // Edit is the Armoury's one door from here; its Done comes back.
       :     '<div><div style="display:flex;align-items:center;gap:' + u(8) + '"><span class="lbl">Weapon rack &middot; ' + s.picks.length + ' of ' + m.draft + ' drafted</span><span class="grow"></span>'
       +       '<button class="ghost" style="height:' + u(28) + ';font-size:' + u(12) + ';padding:0 ' + u(11) + '" data-go="armoury">Edit</button></div>'
       +       '<div class="slots" style="justify-content:flex-start;margin-top:' + u(9) + '">' + slots(s.picks, m.draft) + '</div></div>')
@@ -2972,26 +3071,30 @@ SCREENS.setup = function () {
     +   '<div class="brow"><span class="lbl">Players</span><b>' + esc(m.players) + '</b></div>'
     +   (isGolf(m) ? '<div class="brow"><span class="lbl">Clubs in the bag</span><b class="cy">' + GOLF_BAG.length + '</b></div>'
       : '<div class="brow"><span class="lbl">Weapons to draft</span><b class="cy">' + m.draft + '</b></div>')
-    +   '<div class="brow"><span class="lbl">Opponent</span><b>' + oppText + '</b></div></div>'
+    +   '<div class="brow"><span class="lbl">Play with</span><b>' + withText + '</b></div></div>'
     + '</div>';
+  // START GAME IS THE MATCH (data-launch, the Armoury's old word for the real
+  // create): it never waits on the rack, so the hint says what happens to a
+  // short one rather than that the doors stay shut.
   const foot = '<button class="ghost" data-go="modes">Change mode</button>'
-    + (isGolf(m)
-      ? '<span class="hint">No draft in golf &middot; every player carries the same four clubs</span><span class="grow"></span>'
-        + '<button class="go" data-go="armoury">To the golf bag' + IC.play + '</button>'
-      : '<span class="hint">The bay doors stay shut until your loadout is drafted</span><span class="grow"></span>'
-        + '<button class="go" data-go="armoury">To the armoury' + IC.play + '</button>');
-  return chrome(esc(m.name), 'Match setup', 'Step 2 of 3', body, foot);
+    + '<span class="hint">' + (isGolf(m) ? 'No draft in golf &middot; every player carries the same four clubs'
+      : short ? 'Empty slots are filled with standard weapons' : 'Everyone carries the Cannon &middot; the Railgun only drops in crates') + '</span><span class="grow"></span>'
+    + '<button class="go" data-launch>' + startGameLabel(withSq) + '</button>';
+  // Two steps now: a mode (a home board or the Mission board), then this.
+  return chrome(esc(m.name), 'Match setup', 'Step 2 of 2', body, foot);
 };
 
 SCREENS.home = function () {
   const s = state(), m = s.mode;
-  // The one-tap Launch must never be a surprise: with Computer picked, the
-  // Players readout says so. In the default state (both opponents 'friend',
-  // neither persisted) this markup is byte-identical to before.
-  const vsCpu = (m.id === 'duel' && s.opp === 'cpu') || (m.id === 'ffa' && s.ffaOpp === 'cpu');
-  const players = vsCpu ? (m.id === 'ffa' ? 'You + ' + (s.count - 1) + ' CPU' : 'You vs CPU')
-    : m.id === 'golf' ? String(s.gcount)             // the seats the host chose, 1..4
-    : m.players;
+  // LAUNCH MUST NEVER BE A SURPRISE: the Players readout says what it will do.
+  // Launch opens Match setup, and setup opens on its default whenever it is
+  // entered from here (setupWith), so this is the default and never a choice
+  // made on an earlier visit: the squad, in a squad of two or more; otherwise
+  // the computer, or a run alone.
+  const players = sqTwoPlus() ? 'Squad of ' + sq.snap.members.length
+    : m.id === 'duel' ? 'You vs CPU'
+    : m.id === 'ffa' ? 'You + ' + (s.count - 1) + ' CPU'
+    : 'Solo';
   const arc = [[-6, 14], [-3, 5], [0, 0], [3, 5], [6, 14]];
   const boards = MODES.map((x, i) =>
     '<button class="board' + (x.id === m.id ? ' on' : '') + (noFit(x.id) ? ' nofit' : '') + '" style="transform:rotate(' + arc[i][0] + 'deg) translateY(' + u(arc[i][1]) + ')" '
@@ -3039,9 +3142,9 @@ SCREENS.home = function () {
     +   '<span style="display:block"><span class="lnm">' + esc(m.name) + '</span><span class="ltg">' + esc(m.tag) + '</span></span>'
     +   '<span class="lsep"></span>'
     // Launch AND the readouts open Match setup (owner, 2026-09-18): the one-tap
-    // create is gone from home, and the bay doors open from the armoury, so
-    // every launch passes the mode brief and the rack. data-launch stays the
-    // armoury's word for the real create.
+    // create is gone from home, so every launch passes the mode brief and the
+    // rack. data-launch is Match setup's Start Game now (owner, 2026-10-06),
+    // the only control that starts a match.
     +   '<button class="ros" data-go="setup" title="Match setup">'
     +   '<span class="ro"><span class="rk">Players</span><span class="rv">' + esc(players) + '</span></span>'
     +   (isGolf(m) ? '<span class="ro"><span class="rk">Golf bag</span><span class="rv"><em>' + GOLF_BAG.length + '</em> clubs</span></span>'
@@ -3129,6 +3232,9 @@ function render(name) {
   if (next === 'home' || next === 'modes') sqFollow(next);
   // The Armoury fills the squad's rack only for the visit sqRackOpen began.
   if (next !== 'armoury') sqArm = false;
+  // Match setup opens on its default unless the player is coming back from a
+  // screen it sent them to (setupWith, SETUP_TRIPS); set before the markup.
+  if (next === 'setup' && current !== 'setup' && !SETUP_TRIPS.includes(current)) setupWith = null;
   // Leaving Bay controls closes the field: it belongs to that screen only, the
   // keyboard lift with it, and .stage is rebuilt outright on a screen change.
   // Leaving Bay controls closes the field -- and so does LOSING THE ACCOUNT while
@@ -3197,11 +3303,10 @@ function back() { render(stack.pop() || 'home'); }
 // hidden native <select>s in step, so every existing `.value` read stays true.
 function setField(k, v) {
   if (k === 'mode' && has('ccMode')) { ccMode = v; }
-  else if (k === 'opp' && has('ccOpp')) { ccOpp = v; }
-  else if (k === 'ffaOpp' && has('ccFfaOpp')) { ccFfaOpp = v; }
+  // Match setup's Play with is the bay's own, and lives only for this visit.
+  else if (k === 'with') { setupWith = v === 'squad' ? 'squad' : 'cpu'; }
   else if (k === 'diff' && has('cpuDifficulty')) { cpuDifficulty = v; try { localStorage.setItem('pt_diff', v); } catch {} if ($('diffSel')) $('diffSel').value = v; }
   else if (k === 'count' && has('ccMax')) { ccMax = +v; if ($('countSel')) $('countSel').value = String(v); }
-  else if (k === 'gcount' && has('ccGolfMax')) { ccGolfMax = Math.max(1, Math.min(4, +v || 2)); }
   else if (k === 'tees' && has('ccTees')) { ccTees = v; try { localStorage.setItem('cc_tees', v); } catch {} if ($('teeSel')) $('teeSel').value = v; }
   if (fn('syncCreateRow')) syncCreateRow();
 }
@@ -3237,9 +3342,9 @@ document.addEventListener('click', (e) => {
     // boardMode() sends only what the squad's roster does not already say.
     if (k === 'mode' && current === 'home' && t.classList.contains('on')) { boardMode(); go('setup'); return; }
     setField(k, v);
-    // The mode, the golf tee set and both seat counts are the squad's when this
-    // player leads it (D7); Match setup is where the last three change.
-    if (k === 'mode' || k === 'tees' || k === 'count' || k === 'gcount') boardMode();
+    // The mode, the golf tee set and the free-for-all's count are the squad's
+    // when this player leads it (D7); Match setup is where the last two change.
+    if (k === 'mode' || k === 'tees' || k === 'count') boardMode();
     if (t.dataset.go) go(t.dataset.go); else render(current);
     return;
   }
@@ -3271,7 +3376,7 @@ document.addEventListener('click', (e) => {
     else if (k === 'notify') { const b = $('notifyBtn'); if (b && !b.classList.contains('hidden')) b.onclick(); }
     render(current); return;
   }
-  if ('launch' in t.dataset) { const b = $('createBtn'); if (b) b.onclick(); return; }   // one tap: the exact old path
+  if ('launch' in t.dataset) { startGame(); return; }   // Match setup's Start Game: one tap, the exact old path
   if (t.dataset.go) go(t.dataset.go);
 });
 
@@ -3499,7 +3604,12 @@ applyMotion();
 // sees every message, then let them run unchanged (they also call showScreen,
 // which routes 'lobby' to the bay under the flag).
 if (fn('renderLobby')) { const orig = renderLobby; renderLobby = function (m) { lobby.m = m; lobby.mode = 'host'; return orig.apply(this, arguments); }; }
-if (fn('showLobby'))   { const orig = showLobby;   showLobby   = function (mode) { lobby.mode = mode; if (mode !== 'host') lobby.m = null; return orig.apply(this, arguments); }; }
+// EVERY showLobby DROPS THE LAST PAYLOAD, 'host' included: app.js calls it with
+// 'host' only for 'created', a NEW room whose own lobby frame has not landed
+// yet, and the payload still held is the previous room's -- its mode, its
+// seats and who hosted it -- which drew a Solo create's room for that frame as
+// whatever room came before.
+if (fn('showLobby'))   { const orig = showLobby;   showLobby   = function (mode) { lobby.mode = mode; lobby.m = null; return orig.apply(this, arguments); }; }
 
 // BOOT. The bay is the menu: take the route in, once.
 if (has('showScreen')) showScreen('home');

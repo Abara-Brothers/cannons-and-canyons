@@ -2559,6 +2559,16 @@ function offlineKind(modeId) {
   return 'online';
 }
 let soloAutoStart = false;   // a Play solo on a lobby-mode frame: start the round as soon as the local room exists
+// A ROOM FOR ONE (owner, 2026-10-06: friend games are squads only, so every
+// create Match setup sends is a Solo one). Golf's one seat is started by the
+// server the moment it is created, but a raid is always seated at two
+// (MODE_SEATS), so its room would wait on the host's startMatch with a seat
+// open -- the waiting room the owner removed. So this client sends that
+// startMatch itself, the moment the room's first lobby frame arrives: the same
+// frame Play solo sends offline (soloAutoStart). True from the Solo create's
+// tap until its match starts, or it is cancelled or refused; bay.js reads it
+// to draw the room as a run for one, never as a lobby with an open seat.
+let soloRoom = false;
 let lobbyWait = null;        // 'offline' | 'connecting' | 'unreachable' while a queued create is shown on the lobby screen
 
 let localStarting = false;
@@ -2727,9 +2737,15 @@ function handle(m) {
       // startMatch -> start are all delivered from queued microtasks, so the
       // solo lobby is written to the DOM but never painted.
       if (S.local && soloAutoStart) { soloAutoStart = false; sendMsg({ type: 'startMatch' }); }
+      // A Solo create's room: the host's own start, sent once the room exists.
+      // Only a room this socket hosts with seats past its own -- a one-seat
+      // golf room is already being started by the server, and a room somebody
+      // else hosts is never ours to start.
+      else if (soloRoom && m.you === m.host && m.max > 1) sendMsg({ type: 'startMatch' });
       break;
     case 'queued': showLobby('search'); break;
     case 'joinError':
+      soloRoom = false;
       $('homeError').textContent = m.reason;
       // #homeError is inside the hidden legacy rack. A refusal (capacity) after
       // a queued create flushed would otherwise leave 'Reaching the server' up
@@ -2743,7 +2759,7 @@ function handle(m) {
       showToast(m.reason || 'That rematch is no longer available');
       { const rb = $('rematchBtn'); if (rb) rb.style.display = 'none'; }
       break;
-    case 'start': applySnapshot(m); saveResume(m.code, m.token); break;
+    case 'start': soloRoom = false; applySnapshot(m); saveResume(m.code, m.token); break;
     case 'hole':
       applySnapshot(m); saveResume(m.code, m.token);
       // The between-holes banner carries the finished hole's card AND the
@@ -3057,14 +3073,14 @@ $('armouryCloseBtn').onclick = () => {
   showToast('Locked in — waiting for the others…');
 };
 
+// The armed mode, and the free-for-all's seats: the player plus ccMax - 1
+// CPU commanders. There is no opponent choice to remember any more, and no
+// golf seat count (owner, 2026-10-06): friend games are squads only, so a
+// match this page creates is always for one player -- against the computer in
+// Duel and Free-for-all, alone in the rest -- and a squad's room is sized to
+// the squad by the server. Who to play with is Match setup's choice, made
+// again on every visit (bay.js, setupWith).
 let ccMode = 'duel', ccMax = 4;
-let ccGolfMax = 2;           // golf seats the host opens, 1..4 (owner, 2026-09-18); a pair by default
-let ccOpp = 'friend';        // duel opponent: 'friend' (code/link) or 'cpu'
-// The free-for-all's own opponent memory: 'friend' (lobby + code) or 'cpu'
-// (CPUs fill the ridge and the match starts now). Separate from ccOpp on
-// purpose — a Duel 'Computer' choice must never make a Free-for-all Launch
-// start a bot match. Not persisted, as ccOpp is not.
-let ccFfaOpp = 'friend';
 (function initMode() {
   const mr = $('modeRow');
   mr.addEventListener('click', (e) => {
@@ -3085,39 +3101,35 @@ $('createBtn').onclick = () => {
   // A vs-Computer game is an 'ai' frame: Duel exactly as it always was
   // (no mode, no max — key for key the frame every shipped client sends), and
   // since item A a Free-for-all too, carrying its mode and seat count. BOTH
-  // launch paths reach this onclick: the bay's Launch and the legacy button.
-  // There were three; the recent-match chip was removed with its panel on
-  // 2026-09-30.
-  const vsCpu = (ccMode === 'duel' && ccOpp === 'cpu') || (ccMode === 'ffa' && ccFfaOpp === 'cpu');
-  if (vsCpu) {
+  // launch paths reach this onclick: Match setup's Start Game and the legacy
+  // button. There were three; the recent-match chip was removed with its
+  // panel on 2026-09-30.
+  if (ccMode === 'duel' || ccMode === 'ffa') {
     intent({ type: 'ai', difficulty: cpuDifficulty, name: myName(), skin: mySkin(),
       ...(ccMode === 'ffa' ? { mode: 'ffa', max: ccMax } : {}) });
     return;
   }
-  intent({ type: 'create', name: myName(), skin: mySkin(), mode: ccMode, max: ccMode === 'ffa' ? ccMax : ccMode === 'golf' ? ccGolfMax : 2, tees: ccTees });
+  // Boss Fight, Alien Invasion and golf alone: a room for ONE, asked for as
+  // one seat. The server seats golf at exactly that and starts it; a raid is
+  // always seated at two, so this client starts it once it exists (soloRoom).
+  // Nobody is ever invited into it: friend rooms are gone (owner, 2026-10-06).
+  soloRoom = true;
+  intent({ type: 'create', name: myName(), skin: mySkin(), mode: ccMode, max: 1, tees: ccTees });
 };
 
 // Single-player vs CPU, with a difficulty selector.
 let cpuDifficulty = localStorage.getItem('pt_diff') || 'medium';
 $('diffSel').value = cpuDifficulty;
 $('diffSel').onchange = () => { cpuDifficulty = $('diffSel').value; localStorage.setItem('pt_diff', cpuDifficulty); };
-// Duel's opponent choice: a friend via code/link, or the CPU right here.
+// The legacy rack's options, kept in step with what the create above sends:
+// Duel and Free-for-all are always against the computer now.
 function syncCreateRow() {
   const cpuMode = ccMode === 'duel' || ccMode === 'ffa';
-  const vsCpu = (ccMode === 'duel' && ccOpp === 'cpu') || (ccMode === 'ffa' && ccFfaOpp === 'cpu');
-  $('oppBtns').classList.toggle('hidden', !cpuMode);
-  $('diffWrap').classList.toggle('hidden', !vsCpu);
+  $('diffWrap').classList.toggle('hidden', !cpuMode);
   $('countWrap').classList.toggle('hidden', ccMode !== 'ffa');
   $('teeWrap').classList.toggle('hidden', ccMode !== 'golf');
-  $('createBtn').textContent = vsCpu ? 'START VS COMPUTER' : 'CREATE GAME';
+  $('createBtn').textContent = cpuMode ? 'START VS COMPUTER' : 'START SOLO';
 }
-// Opponent is two buttons now (Friend/online vs the Computer), not a dropdown.
-$('oppBtns').addEventListener('click', (e) => {
-  const b = e.target.closest('.opp'); if (!b) return;
-  ccOpp = b.dataset.opp;
-  for (const el of $('oppBtns').querySelectorAll('.opp')) el.classList.toggle('active', el === b);
-  syncCreateRow();
-});
 
 // Custom in-game dropdowns: a game-styled menu driving each hidden native
 // <select>, so every existing `.value` read and `.onchange` handler is untouched.
@@ -3220,7 +3232,7 @@ $('codeInput').addEventListener('input', (e) => { e.target.value = e.target.valu
 $('cancelBtn').onclick = () => {
   sendMsg({ type: 'leave' }); sendMsg({ type: 'cancelQuick' });
   pendingIntent = null; clearTimeout(localFallback); localFallback = null;
-  soloAutoStart = false; lobbyWait = null;
+  soloAutoStart = false; soloRoom = false; lobbyWait = null;
   S.code = null; S.quick = false; endLocal(); showScreen('home');
 };
 
