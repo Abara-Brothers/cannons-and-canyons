@@ -468,6 +468,18 @@ function aimZoom() {
   return Math.max(minMapZoom(), Math.min(0.14, zFit));
 }
 
+// AIM FOCUS: while it is your turn to aim, ease the camera in a little so
+// your tank reads bigger. This scales the zoom target only. The existing
+// survey blend in cameraTarget() then shifts the frame toward your tank in
+// proportion, and that is what keeps the opponent on screen. Keep it mild:
+// Jordan rejected 2.4x as far too much.
+const AIM_FOCUS_ZOOM = 1.35;
+function aimFocusActive() {
+  return MOTION_OK && S.playing && !S.anim && S.turn === S.you
+    && S.mode !== 'golf' && S.alive[S.you] !== false && !!S.tanks[S.you]
+    && !(S.warp && S.warp.seat === S.you && S.warp.t < S.warp.dur);
+}
+
 // The camera NEVER follows shots. It frames YOUR tank; you control the zoom.
 // Every output is finite-guarded — a zero-sized stage (hidden screen) or any
 // transient NaN can never poison the camera.
@@ -476,6 +488,7 @@ function cameraTarget() {
     return { tz: finite(cam.zoom, 0.05), tx: finite(cam.cx, WW() / 2), ty: finite(cam.cy, WH() * 0.72) };
   }
   let tz = aimZoom() * S.userZoom;
+  if (aimFocusActive()) tz *= AIM_FOCUS_ZOOM;
   tz = Math.min(0.32, Math.max(minMapZoom(), tz));
   const focus = S.tanks[S.you] || S.tanks[0];
   const vw = view.cssW / tz, vh = view.cssH / tz;
@@ -7938,14 +7951,21 @@ function drawAim() {
 
   const col = pct < 0.5 ? lerpColor([76, 232, 143], [255, 210, 63], pct / 0.5)
     : lerpColor([255, 210, 63], [255, 90, 82], (pct - 0.5) / 0.5);
-  const ringR = 12;
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = 'rgba(255,255,255,.14)';
-  ctx.beginPath(); ctx.arc(sx, sy + 6, ringR, 0, Math.PI * 2); ctx.stroke();
-  ctx.strokeStyle = col; ctx.lineCap = 'round';
-  const start = -Math.PI / 2;
-  ctx.beginPath(); ctx.arc(sx, sy + 6, ringR, start, start + pct * Math.PI * 2); ctx.stroke();
-  ctx.lineCap = 'butt';
+  // Power cradle (replaces the 12 px ring, which was twice the tank's width
+  // and drawn across it): an arc under the tracks, sized off the tank so it
+  // scales with zoom. Its ends sit outside the hull (+/-1.71r against +/-1.35r)
+  // and below the tracks, so it never crosses the tank.
+  {
+    const ts = tankScreen(S.you);
+    const cR = Math.max(16, 1.9 * ts.r), ccy = ts.sy - 0.55 * ts.r;
+    const s0 = Math.PI * 0.86, e0 = Math.PI * 0.14;      // left end, right end
+    ctx.lineWidth = 3.2; ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(255,255,255,.20)';           // track: readable on dark dirt
+    ctx.beginPath(); ctx.arc(ts.sx, ccy, cR, e0, s0); ctx.stroke();
+    ctx.strokeStyle = col;                               // fills left to right with power
+    ctx.beginPath(); ctx.arc(ts.sx, ccy, cR, s0, s0 - (s0 - e0) * pct, true); ctx.stroke();
+    ctx.lineCap = 'butt';
+  }
 
   if (S.charging) {
     ctx.fillStyle = col; ctx.font = '900 15px system-ui, sans-serif';

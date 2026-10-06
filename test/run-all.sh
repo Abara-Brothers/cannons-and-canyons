@@ -320,6 +320,12 @@ else
   # and the next golf hole leave the dock alone. Real matches against its own
   # server, real taps on the tab. Skips without Chrome.
   run dock node test/dock.mjs
+  # The aim focus camera and the power cradle (owner, 2026-10-06, "Option E",
+  # mild): the camera eases in 1.35x on your own turn only, never in golf or
+  # under reduced motion, eases out when you fire, and the cradle under your
+  # tank never crosses it. Real vs-CPU matches against its own server, a real
+  # FIRE press and a real pinch. Skips without Chrome.
+  run aim_focus node test/aim_focus.mjs
   # SEVENTH client-side suite: the Bay's Set callsign control — the row with Roll
   # and Set, the inline field, every error sentence, the exact frames that reach
   # the socket, what a guest is told, and the landscape keyboard lift. The socket
