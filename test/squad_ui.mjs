@@ -3854,19 +3854,38 @@ if (want('u3')) try {
     //      device clock a day out still shows 3, 2, 1. The box's line says it
     //      too. A tap during it stands down; the roster that stops it takes
     //      the countdown off every line.
-    await ev(`(window.__u3now = Date.now, Date.now = () => window.__u3now() + 86400000, true)`);
-    await u3state({ startsIn: 2500, members: [U3YOU({ ready: true }), U3MULE({ ready: true })] });
-    const u3a = await u3launch();
-    await ev(`(Date.now = window.__u3now, true)`);
-    const u3line = await u3winLine();
-    await sleep(900);
-    const u3b = await u3launch();
-    await sleep(1000);
-    const u3c = await u3launch();
-    const u3cancel = await u3tap();
-    await reply({ op: 'ready', ok: true });
-    await u3state({ members: [U3YOU(), U3MULE({ ready: true })] });
-    const u3d = await u3launch(), u3dline = await u3winLine();
+    //      THE PAGE'S CLOCK IS HELD, AND MOVED BY HAND. The countdown runs on
+    //      performance.now(), stamped as the roster arrives (app.js
+    //      CC_SQUAD_STARTS). On the real clock, "1" had to be read before
+    //      2.5 s while 1980 ms of sleeps and five CDP round trips went by, so
+    //      a loaded machine read "Starting" and failed the suite. Held, the
+    //      roster arrives at t0 and the clock is set to t0 + 0.9 s and then
+    //      t0 + 1.9 s: "2" and "1" exactly, however slow the machine. The
+    //      repaint is still the page's own once-a-second tick (bay.js sqTick,
+    //      on real timers), so each read waits for the tick to show its step.
+    //      The clock is let go only once the roster without a countdown is in.
+    const u3hold = await ev(`(() => { const t = performance.now(); window.__u3clock = t; performance.now = () => window.__u3clock; return t; })()`);
+    const u3at = async (ms, label) => {
+      await ev(`(window.__u3clock = ${u3hold} + ${ms}, true)`);
+      for (let k = 0; k < 100 && (await ev(`((document.querySelector('#bay .lbar .launch .rdyt') || {}).textContent || null)`)) !== label; k++) await sleep(50);
+      return u3launch();
+    };
+    let u3a, u3line, u3b, u3c, u3cancel, u3d, u3dline;
+    try {
+      await ev(`(window.__u3now = Date.now, Date.now = () => window.__u3now() + 86400000, true)`);
+      await u3state({ startsIn: 2500, members: [U3YOU({ ready: true }), U3MULE({ ready: true })] });
+      u3a = await u3launch();
+      await ev(`(Date.now = window.__u3now, true)`);
+      u3line = await u3winLine();
+      u3b = await u3at(900, 'Starting in 2');
+      u3c = await u3at(1900, 'Starting in 1');
+      u3cancel = await u3tap();
+      await reply({ op: 'ready', ok: true });
+      await u3state({ members: [U3YOU(), U3MULE({ ready: true })] });
+      u3d = await u3launch(); u3dline = await u3winLine();
+    } finally {
+      await ev(`(delete performance.now, Date.now = window.__u3now || Date.now, true)`).catch(() => {});
+    }
     await sleep(1200);
     const u3e = await u3launch();
     if (u3a && u3a.label === 'Starting in 3' && u3a.say === 'Everyone is ready' && / cd\b/.test(u3a.cls) && !u3a.dis && u3a.orange && u3line === 'Starting in 3'

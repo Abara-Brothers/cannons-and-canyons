@@ -174,15 +174,33 @@ try {
   await load();
 
   // ---- 1. duel, your turn: the camera is 1.35x in, and only the zoom moved ----
-  await launch('duel');
-  if (!(await until(MY_TURN, 30000))) throw new Error('duel: the first turn never came round to the player');
   // The opening zoom (START_ZOOM, 0.62x the fit-all view): the focus is on,
   // and every opponent is still on screen. At this zoom the survey blend is
   // fully on, so the focus only tightens the frame around the whole battle.
-  await settle();
-  const open = await ev(`(() => { const t = cameraTarget(), tz = ${TZ};
-    const opp = []; for (let i = 0; i < S.n; i++) if (i !== S.you && S.alive[i] !== false && S.tanks[i]) opp.push(wx2s(S.tanks[i].x));
-    return { focus: aimFocusActive(), tz: t.tz, on: tz(true), off: tz(false), z: cam.zoom, uz: S.userZoom, start: START_ZOOM, opp, w: view.cssW }; })()`);
+  // A MAP WHERE THE FACTOR CAN SHOW. The check below tells the focused target
+  // from the unfocused one, so it proves the focus only where the two differ.
+  // On about one duel map in 200 they do not: the spawns stand 6.7k or more
+  // world units apart vertically (seed 119641, volcanic, tanks at y 476 and
+  // 7753), aimZoom() x 0.62 x 1.35 is already under the whole-map floor, and
+  // both targets clamp to minMapZoom(). A camera with no focus at all passes
+  // there, and the strict on > off failed the suite for the map, not the
+  // code. So such a map is left for a fresh one. The test's own formula
+  // decides, never the camera under test, and a run whose every map clamps
+  // fails: that is a broken aimZoom(), not luck (one in 200^6 by chance).
+  const ROLLS = 6;
+  let open = null;
+  for (let roll = 1; ; roll++) {
+    if (roll > 1) await leave();
+    await launch('duel');
+    if (!(await until(MY_TURN, 30000))) throw new Error('duel: the first turn never came round to the player');
+    await settle();
+    open = await ev(`(() => { const t = cameraTarget(), tz = ${TZ};
+      const opp = []; for (let i = 0; i < S.n; i++) if (i !== S.you && S.alive[i] !== false && S.tanks[i]) opp.push(wx2s(S.tanks[i].x));
+      return { focus: aimFocusActive(), tz: t.tz, on: tz(true), off: tz(false), floor: minMapZoom(), z: cam.zoom, uz: S.userZoom, start: START_ZOOM, opp, w: view.cssW }; })()`);
+    if (open.on > open.off && !near(open.on, open.off)) break;
+    if (roll >= ROLLS) throw new Error(`duel: all ${ROLLS} maps clamp both opening targets to the whole-map floor ` + JSON.stringify(open));
+    console.log(`  .. 1: map ${roll} clamps both opening targets to the whole-map floor (${open.on.toFixed(6)} = ${open.off.toFixed(6)}), so the factor cannot show on it; launching another`);
+  }
   if (open.focus && open.uz === open.start && near(open.tz, open.on) && open.on > open.off)
     ok(`1: on your turn at the opening zoom the focus is on and the target is aimZoom x ${open.start} x 1.35, clamped (${open.on.toFixed(5)} against ${open.off.toFixed(5)} unfocused)`);
   else fail('1: opening zoom target ' + JSON.stringify(open));
