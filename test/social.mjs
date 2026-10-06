@@ -2967,6 +2967,56 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     if (!junk.length) ok('(dc) decline: an id that is not one is no_such_request with no store call at all');
     else fail('(dc) decline, malformed ids: ' + JSON.stringify(junk));
   }
+
+  // ---- (hq) a hidden row's cleanup holds up no frame behind it --------------
+  // The cleanup of a hidden row goes after the answer ((wd) iv, (dc)), and it
+  // must not go IN FRONT OF the caller's next frame either: handle() runs one
+  // socket's social frames in order, so a cleanup the op awaited held that
+  // frame for the delete's round trip, where after a genuine miss it is
+  // answered at once, and a cheap frame sent straight behind the op timed the
+  // block (D-BLOCK-4, D-BLOCK-5). Here the delete is HELD, a store that has
+  // not come back, and the probe behind the op (a withdraw of an id that is
+  // not one, answered before the store) must be answered while it is still
+  // held, after the very store calls that had come back behind a genuine
+  // miss. Released, the hidden row still goes, and B hears nothing.
+  {
+    const world = async (op, hidden) => {
+      const st = memStore(ROWS);
+      let back = 0, release = null;
+      const held = new Promise((r) => { release = r; });
+      const at = [];
+      const S = createSocial({ store: st, terms: [], now: () => CLOCK,
+        send: (ws, f) => { if (f.id === 'p') at.push({ back, calls: st.calls.slice() }); ws.rx.push(f); } });
+      const wa = mkws(A), wb = mkws(B);
+      S.onAuth(wa); S.onAuth(wb);
+      if (hidden) { await (op === 'withdraw' ? st.addRequest(A, B) : st.addRequest(B, A)); await st.addBlock(B, A); }
+      await sleep(60);
+      wa.rx.length = 0; wb.rx.length = 0; st.calls.length = 0;
+      for (const m of [...WD_READS, 'deleteRequest']) {
+        const real = st[m];
+        st[m] = async function (...a) { try { if (m === 'deleteRequest') await held; return await real.apply(st, a); } finally { back++; } };
+      }
+      const p1 = S.handle(wa, op === 'withdraw' ? { type: 'friend', op, to: B, id: 'q' } : { type: 'friend', op, from: B, id: 'q' });
+      const p2 = S.handle(wa, { type: 'friend', op: 'withdraw', to: 'not-a-uuid', id: 'p' });
+      await sleep(60);
+      const early = { a: JSON.stringify(wa.rx), at: at.slice(), rows: [...st.requests] };
+      release();
+      await Promise.all([p1, p2]);
+      await sleep(60);
+      return { ...early, after: [...st.requests], b: wb.rx.length };
+    };
+    const bad = [];
+    for (const op of ['withdraw', 'decline']) {
+      const miss = await world(op, false), hid = await world(op, true);
+      const want = JSON.stringify([{ type: 'friend', op, error: 'no_such_request', id: 'q' }, { type: 'friend', op: 'withdraw', error: 'no_such_request', id: 'p' }]);
+      if (!(miss.a === want && hid.a === want && same(miss.at, [{ back: 2, calls: WD_READS }]) && same(hid.at, miss.at)
+          && hid.rows.length === 1 && !hid.after.length && !hid.b && !miss.b))
+        bad.push({ op, miss, hid });
+    }
+    if (!bad.length)
+      ok('(hq) withdraw and decline: a frame sent behind a hidden row is answered while the row\'s delete is still out, after the same store calls as behind a genuine miss, and the row still goes when the delete lands');
+    else fail('(hq) a frame queued behind a hidden row\'s cleanup: ' + JSON.stringify(bad));
+  }
 }
 
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall social checks passed');

@@ -1830,8 +1830,8 @@ export function createSocial({
   // countdownCheck first. A Ready taken back, a join, a drop and a change of
   // mode or tee set (which stands every Ready down, see squadMode) each stop
   // it, because the squad is no longer all ready. A leave or a kick changes
-  // the ROWS, which the countdown was started for (countdownSig: each row's
-  // handle, in order): that countdown stops, and when the members left are
+  // the ROWS, which the countdown was started for (countdownSig, below, its
+  // rows in order): that countdown stops, and when the members left are
   // all still ready, a new one starts from the top, so nobody is counted
   // into a match that changed under them with less than the full time to say
   // no. A sign-in door opening stops it as well (openDoor), because that row
@@ -1850,7 +1850,18 @@ export function createSocial({
   // when it ends, stops or its squad goes. Keyed by the object, not the code,
   // so a code minted again for a later squad can never meet an old countdown.
   const countdowns = new Map();
-  const countdownSig = (sq) => sq.members.map(rowRid).join();
+  // THE SQUAD A COUNTDOWN COUNTS IN, taken as it is armed: the mode and tee
+  // set, and for each row in order its handle, its key and its Ready. A key
+  // is an account id or, for a guest, a socket OBJECT, so the signature is a
+  // list compared item by item with ===, never a string: a socket has no
+  // spelling that tells two of them apart. A row re-keyed under a countdown
+  // (a guest adopted at sign-in, or resumed on another socket) is not the
+  // seat that was counted in, so it counts again from the top. The same
+  // signature is what the push keeps a countdown for (countdownCheck) and
+  // what its end seats (countdownEnd), so the two can never disagree about
+  // which squad counted.
+  const countdownSig = (sq) => [sq.mode, sq.tees, ...sq.members.flatMap((m) => [rowRid(m), m.key, m.ready])];
+  const sameSig = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
 
   // -> true when a countdown was running and has stopped.
   function dropCountdown(sq) {
@@ -1870,7 +1881,7 @@ export function createSocial({
       const live = squads.get(sq.code) === sq;
       const r = live && sq.members.length >= 2 ? startRefusal(sq, null) : { error: 'none' };
       const cur = countdowns.get(sq);
-      if (!r && cur && cur.sig === countdownSig(sq)) return;
+      if (!r && cur && sameSig(cur.sig, countdownSig(sq))) return;
       dropCountdown(sq);
       if (r) {
         // EVERYONE IS READY AND ONE ROW IS HELD AT THE SIGN-IN DOOR by a read
@@ -1894,11 +1905,26 @@ export function createSocial({
   // gone, seats nobody, even from a timer that fires after its cancel. And a
   // seating that THROWS is a refusal like any other: every member is told,
   // rather than left watching a count that reached nought.
+  //
+  // ONLY THE SQUAD THAT WAS COUNTED IN IS SEATED. The push stops a countdown
+  // whose squad changed, but a change can land BEFORE its push: a join or a
+  // create takes the caller off this squad at once, then awaits the NEW
+  // squad's push (a name read) before this one is pushed at all. A timer
+  // firing in that gap found the same countdown on a squad its members'
+  // rosters had never shown changing, and seated whoever was left with no
+  // fresh three seconds — or, a duel left with one, refused every member
+  // wont_fit and stood every Ready down. So a squad that is not the one
+  // armed is seated by nobody and PUSHED instead, here and now: the members
+  // are shown the change their rosters had not shown yet, that push's
+  // countdownCheck starts a fresh countdown when the members left are still
+  // all ready and fit, exactly as after a leave or a kick, and the push the
+  // join or create still owes them then finds that one and keeps it.
   function countdownEnd(sq, entry) {
     try {
       if (countdowns.get(sq) !== entry) return;
       countdowns.delete(sq);
       if (squads.get(sq.code) !== sq) return;
+      if (!sameSig(entry.sig, countdownSig(sq))) { pushSquad(sq, null, null).catch(() => {}); return; }
       launchSquad(sq, null, null, null).catch(() => countdownRefused(sq, { error: 'unavailable' }).catch(() => {}));
     } catch { /* one lost countdown, never the process */ }
   }
@@ -2869,6 +2895,13 @@ export function createSocial({
   // timing. A failed cleanup is swallowed: the answer is already out, the
   // row stays hidden, and the store's 30-day sweep collects it.
   //
+  // AND IT IS NEVER AWAITED. The op runs inside handle()'s per-socket queue,
+  // so a cleanup it awaited would hold the caller's NEXT social frame for the
+  // write's round trip — up to the store's eight-second timeout in an outage
+  // — where after a genuine miss that frame is answered at once. Any cheap
+  // frame sent straight behind the op would then time the same tell. So the
+  // op returns as a genuine miss returns, and the write finishes on its own.
+  //
   // `side` is the caller's side of the row: 'incoming' (other > caller) or
   // 'outgoing' (caller > other). Answers 'shown', 'hidden' or null.
   async function requestRow(me, other, side) {
@@ -2876,6 +2909,8 @@ export function createSocial({
     if (!reqs[side].includes(other)) return null;
     return blocks.blocked.includes(other) || blocks.blockedBy.includes(other) ? 'hidden' : 'shown';
   }
+  // NEVER REJECTS (a store that throws as it is called is caught too), so
+  // the ops below can leave it running unawaited with no unhandled rejection.
   async function dropHiddenRequest(from, to) {
     try { await store.deleteRequest(from, to); } catch { /* the sweep collects it */ }
   }
@@ -2891,7 +2926,7 @@ export function createSocial({
     const row = await requestRow(ws.userId, from, 'incoming');
     if (row !== 'shown') {
       none();
-      if (row === 'hidden') await dropHiddenRequest(from, ws.userId);
+      if (row === 'hidden') dropHiddenRequest(from, ws.userId);
       return;
     }
     await store.deleteRequest(from, ws.userId);
@@ -2922,7 +2957,7 @@ export function createSocial({
     const row = await requestRow(ws.userId, to, 'outgoing');
     if (row !== 'shown') {
       none();
-      if (row === 'hidden') await dropHiddenRequest(ws.userId, to);
+      if (row === 'hidden') dropHiddenRequest(ws.userId, to);
       return;
     }
     await store.deleteRequest(ws.userId, to);

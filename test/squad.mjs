@@ -9935,6 +9935,54 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     else fail('(rdy-h) late timer: ' + JSON.stringify({ armed: t.armed, fired, calls: t.calls.length, a: t.w[0].rx }));
   }
 
+  // ---- (rdy-i) ONLY THE SQUAD THAT WAS COUNTED IN IS SEATED ----------------
+  // A join or a create takes the caller off their squad AT ONCE, and pushes
+  // the squad they left only after the NEW squad's push, which waits on a
+  // name read. The old squad's countdown can run out in that gap, before any
+  // push has stopped it. Here that read is HELD (the store double's gate) and
+  // the countdown's timer fired inside it.
+  // i. An FFA of three, the third joining another squad: the two left are
+  // not seated by the old countdown. They are pushed at once, without the
+  // leaver, with a fresh 3 s countdown; the push the join owes them keeps
+  // that one; and it is that one that seats the two.
+  {
+    const t = await armed3(3, { mode: 'ffa' });
+    const wd = up6(t.S, D);
+    const codeD = await create6(t.S, wd);
+    clear6(...t.w, wd);
+    const h = t.st.hold('profilesByIds');
+    const p = t.S.handle(t.w[2], { type: 'squad', op: 'join', code: codeD, name: 'Mover', skin: 'olive' });
+    await h.inside;
+    const fired = t.cw.fire(); await turn3();
+    const l = t.cw.live();
+    const during = { fired, calls: t.calls.length, fresh: l.length === 1 && l[0] !== t.first, ids: ids6(st3(t.w[0])), left: [left3(t.w[0]), left3(t.w[1])],
+      start: got6(t.w[0], 'squad', 'start').length + got6(t.w[1], 'squad', 'start').length };
+    h.release(); await p; await turn3();
+    const kept = same6(t.cw.live(), l) && left3(t.w[0]) === 3000 && same6(ids6(st3(t.w[2])), [D, C]);
+    t.cw.fire(); await turn3();
+    const seated = t.calls.map((c) => ({ ws: c.seats.map((s) => t.w.indexOf(s.ws)), mode: c.opts.mode }));
+    if (t.armed && same6(during, { fired: 1, calls: 0, fresh: true, ids: [A, B], left: [3000, 3000], start: 0 }) && kept && same6(seated, [{ ws: [0, 1], mode: 'ffa' }]))
+      ok('(rdy-i) a countdown running out while a join is still pushing the leaver\'s new squad seats nobody: the two left are shown without the leaver and given a fresh 3 s, which the join\'s own push keeps and which then seats them');
+    else fail('(rdy-i) countdown end inside a join: ' + JSON.stringify({ armed: t.armed, during, kept, seated }));
+  }
+  // ii. A duel, the member creating a squad of their own: the leader, left
+  // alone, is refused nothing and stood down from nothing. A squad of one
+  // counts nothing, as after a leave.
+  {
+    const t = await armed3(2);
+    const h = t.st.hold('profilesByIds');
+    const p = t.S.handle(t.w[1], { type: 'squad', op: 'create' });
+    await h.inside;
+    const fired = t.cw.fire(); await turn3();
+    const during = { fired, calls: t.calls.length, live: t.cw.live().length, start: got6(t.w[0], 'squad', 'start'), ids: ids6(st3(t.w[0])), r: readies3(t.w[0]), left: left3(t.w[0]) };
+    h.release(); await p; await turn3();
+    const after = { live: t.cw.live().length, start: got6(t.w[0], 'squad', 'start').length, r: readies3(t.w[0]), left: left3(t.w[0]) };
+    if (t.armed && same6(during, { fired: 1, calls: 0, live: 0, start: [], ids: [A], r: [true], left: 'none' })
+        && same6(after, { live: 0, start: 0, r: [true], left: 'none' }))
+      ok('(rdy-i) a duel\'s countdown running out while its member\'s create is still pushing seats nobody and refuses nobody: the leader is shown alone, still ready, with no countdown');
+    else fail('(rdy-i) countdown end inside a create: ' + JSON.stringify({ armed: t.armed, during, after }));
+  }
+
   // ---- (end of task 6 checks) ----
   if (prevPushMs === undefined) delete process.env.SOCIAL_PUSH_MS; else process.env.SOCIAL_PUSH_MS = prevPushMs;
   if (prevPresenceMs === undefined) delete process.env.SOCIAL_PRESENCE_MS; else process.env.SOCIAL_PRESENCE_MS = prevPresenceMs;
