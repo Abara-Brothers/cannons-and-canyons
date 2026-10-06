@@ -431,8 +431,14 @@ const sqat = (ws, op) => sqlast(ws, op) || {};
 // as server.js wires them (task 3). Nothing here is a stand-in: if the numbers
 // the room enforces change, `fits`, the mode vetting and the rack check change
 // with them. `extra` can take them away again, to see the defaults fail closed.
+// A TIMER THAT NEVER FIRES, unless a check passes its own: since U3 a squad
+// whose every member is ready COUNTS DOWN on `schedule` and then seats itself,
+// and many worlds below ready every member, the leader included. A real timer
+// would fire three seconds later in whichever world was running by then, on
+// a busy machine. The ready-up checks drive the countdown on a clock of their
+// own (rdy-*), and nothing here waits on the drop window's real minute.
 const sqSocial = (store, extra = {}) => createSocial({
-  seats: MODE_SEATS, teeIds: TEE_IDS, validRack: validRackFor,
+  seats: MODE_SEATS, teeIds: TEE_IDS, validRack: validRackFor, schedule: () => () => {},
   ...extra, store, terms: [], now: sqnow,
   send: (ws, frame) => { if (ws && ws.readyState === 1) ws.rx.push(JSON.parse(JSON.stringify(frame))); },
 });
@@ -2436,8 +2442,13 @@ const FITS_BY_SIZE = [
 // Ready means "my rack is full for the ARMED mode". When the leader arms a
 // mode whose rack is a different size, a rack readied for the old one is not
 // a rack the new room would keep, and a start would send that member to the
-// pick screen. So the switch stands exactly those members down, and nobody
-// whose rack still fits.
+// pick screen.
+// CHANGED BY U3 (owner, 2026-10-06: "every change clears every ready"): this
+// used to pin that the switch stood down ONLY those members, so five picks
+// readied for a duel stayed ready into a free-for-all. A Ready now counts the
+// squad into its match on its own, so every change stands every member down,
+// a rack that still fits included; (rdy-c) pins that a frame changing nothing
+// stands nobody down.
 {
   const S = sqSocial(sqstore());
   const wa = sqUp(S, sqws(SQA)), wb = sqUp(S, sqws(SQB)), g = sqws(null);
@@ -2457,8 +2468,8 @@ const FITS_BY_SIZE = [
   const r3 = readies();
   await S.handle(wa, { type: 'squad', op: 'mode', mode: 'golf' });
   const r4 = readies();
-  if (same([r0, r1, r2, r3, r4], [[true, true, true], [true, true, true], [false, false, false], [false, false, true], [false, false, false]]))
-    ok('(s3i) arming a mode stands down exactly the members whose rack it would not keep — five to five stays, five to seven and seven to five do not');
+  if (same([r0, r1, r2, r3, r4], [[true, true, true], [false, false, false], [false, false, false], [false, false, false], [false, false, false]]))
+    ok('(s3i) arming another mode stands every member down — five to five, five to seven and seven to five alike');
   else fail('(s3i) readies across mode changes: ' + JSON.stringify([r0, r1, r2, r3, r4]));
   // The ready op agrees: a rack for the old mode is refused under the new.
   await S.handle(wb, { type: 'squad', op: 'ready', ready: true, loadout: RACK7, id: 'q' });
@@ -9550,6 +9561,378 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     if (same6(lead, { type: 'squad', op: 'start', error: 'unavailable', id: 'w' }) && same6(member, [{ type: 'squad', op: 'start', error: 'unavailable' }]))
       ok('(err) a code the list does not name is sent as unavailable, to the leader and to every member');
     else fail('(err) an unlisted code: ' + JSON.stringify({ lead, member }));
+  }
+
+  // ==== U3 — THE READY-UP COUNTDOWN (owner, 2026-10-06) ====================
+  // "All players must ready up and then the game starts. The leader does not
+  // need to initiate the game start." The leader readies like everyone else;
+  // the last Ready of a squad of two or more that could be seated starts a
+  // 3 s countdown that every member's roster shows as `startsIn`, and its end
+  // seats the squad by the path a leader's Start takes. Anything that changes
+  // the squad stops it. Builds 6 and 7 still send the leader's Start, which
+  // must go on working exactly as it did.
+  //
+  // THE COUNTDOWN'S TIMER IS INJECTED (createSocial's `schedule`, the drop
+  // window's seam) and fired by hand: nothing here waits on wall time. A
+  // countdown is told apart from a drop window by its length, which pins
+  // production's three seconds as well. `brokenCancel` is a timer that fires
+  // although it was cancelled — a late timer — for (rdy-h).
+  const mkCw3 = ({ brokenCancel = false } = {}) => {
+    const all = [];
+    const schedule = (fn, ms) => { const t = { fn, ms, off: false, ran: false }; all.push(t); return () => { if (!brokenCancel) t.off = true; }; };
+    const counts = () => all.filter((t) => t.ms === 3000);
+    const live = () => counts().filter((t) => !t.off && !t.ran);
+    const fire = () => { const l = live(); for (const t of l) { t.ran = true; t.fn(); } return l.length; };
+    return { all, schedule, counts, live, fire };
+  };
+  // A few macrotask turns: the countdown's end runs a seating that awaits a
+  // name read before it pushes.
+  const turn3 = async () => { for (let i = 0; i < 6; i++) await new Promise((r) => setImmediate(r)); };
+  const RB3 = LOADOUT_POOL.slice(1, 6);
+  // A squad of `n` led by A (then B, C, D), the mode armed, frames cleared.
+  // The seating is a recorder that answers `verdict` (or what it returns).
+  const world3 = async (n, { mode = 'duel', tees = null, verdict = { ok: true, code: 'RM3U' }, cw = mkCw3() } = {}) => {
+    const st = t6store(ROWS6);
+    const calls = [];
+    const S = mkSocial6(st, {
+      schedule: cw.schedule,
+      seatSquad: (seats, opts) => { calls.push({ seats, opts }); return typeof verdict === 'function' ? verdict(seats, opts) : verdict; },
+    });
+    const w = [A, B, C, D].slice(0, n).map((id) => up6(S, id));
+    const code = await create6(S, w[0]);
+    for (let i = 1; i < n; i++) await join6(S, w[i], code, 'Member ' + i);
+    if (mode !== 'duel' || tees) await S.handle(w[0], { type: 'squad', op: 'mode', mode, tees });
+    clear6(...w);
+    return { st, S, w, code, cw, calls };
+  };
+  const rack3 = (mode) => (mode === 'boss' || mode === 'aliens' ? RACK7 : RACK5);
+  const ready3 = (S, w, on = true, loadout = RACK5) => S.handle(w, on ? { type: 'squad', op: 'ready', ready: true, loadout } : { type: 'squad', op: 'ready', ready: false });
+  const st3 = (w) => last6(w, 'squad', 'state');
+  // A world whose every member is ready: the countdown is running. `rids` is
+  // the leader's roster's handles, read before the frames are cleared.
+  const armed3 = async (n, opts = {}) => {
+    const t = await world3(n, opts);
+    for (let i = n - 1; i >= 0; i--) await ready3(t.S, t.w[i], true, rack3(opts.mode || 'duel'));
+    t.rids = ((st3(t.w[0]) || {}).members || []).map((m) => m.rid);
+    t.first = t.cw.live()[0] || null;
+    t.armed = t.cw.live().length === 1 && !!st3(t.w[0]) && st3(t.w[0]).startsIn === 3000;
+    clear6(...t.w);
+    return t;
+  };
+  // What a roster says about the countdown: the time left, or 'none' when
+  // the frame carries no such key at all.
+  const left3 = (w) => { const f = st3(w); return !f ? null : 'startsIn' in f ? f.startsIn : 'none'; };
+  const readies3 = (w) => ((st3(w) || {}).members || []).map((m) => m.ready);
+
+  // ---- (rdy-a) THE LAST READY, THE LEADER'S AMONG THEM, STARTS THE COUNT ----
+  {
+    const t = await world3(2);
+    await ready3(t.S, t.w[1]);
+    const one = { live: t.cw.live().length, a: left3(t.w[0]), b: left3(t.w[1]) };
+    await ready3(t.S, t.w[0]);
+    const l = t.cw.live();
+    if (one.live === 0 && one.a === 'none' && one.b === 'none' && l.length === 1 && l[0].ms === 3000
+        && left3(t.w[0]) === 3000 && left3(t.w[1]) === 3000 && same6(readies3(t.w[1]), [true, true]) && t.calls.length === 0)
+      ok('(rdy-a) a member\'s Ready starts nothing, the leader\'s Ready as the last one starts one 3 s countdown, and both rosters say startsIn 3000; nobody is seated yet');
+    else fail('(rdy-a) arming a duel: ' + JSON.stringify({ one, live: l.map((x) => x.ms), a: left3(t.w[0]), b: left3(t.w[1]), calls: t.calls.length }));
+  }
+  // The same for three and four, readied last-joined first: every Ready but
+  // the last starts nothing.
+  for (const n of [3, 4]) {
+    const t = await world3(n, { mode: 'ffa' });
+    const seen = [];
+    for (let i = n - 1; i >= 0; i--) { await ready3(t.S, t.w[i]); seen.push(t.cw.live().length); }
+    const want = Array.from({ length: n }, (_, i) => (i === n - 1 ? 1 : 0));
+    if (same6(seen, want) && t.w.every((w) => left3(w) === 3000)) ok(`(rdy-a) a squad of ${n}: only the last of the ${n} Readies starts the countdown, and all ${n} rosters show it`);
+    else fail(`(rdy-a) a squad of ${n}: ` + JSON.stringify({ seen, left: t.w.map(left3) }));
+  }
+
+  // ---- (rdy-b) THE COUNTDOWN'S END SEATS EXACTLY WHAT A LEADER'S START DOES -
+  // Twin worlds. X: both ready, the countdown runs out. Y: builds 6 and 7 —
+  // the member ready, the leader never, and the leader's Start carrying the
+  // rack the leader readied with in X. One seating path, so the seating is
+  // handed the same thing, and every member is told the same room.
+  {
+    const x = await world3(2), y = await world3(2);
+    await ready3(x.S, x.w[1], true, RB3); await ready3(x.S, x.w[0], true, RACK5);
+    await ready3(y.S, y.w[1], true, RB3);
+    const yLive = y.cw.live().length;
+    clear6(...x.w, ...y.w);
+    const fired = x.cw.fire();
+    await turn3();
+    await y.S.handle(y.w[0], { type: 'squad', op: 'start', loadout: RACK5, id: 's' });
+    const norm = (t) => t.calls.map((c) => ({ seats: c.seats.map((s) => ({ ...s, ws: t.w.indexOf(s.ws) })), opts: { ...c.opts, squad: c.opts.squad === t.code ? '-' : c.opts.squad } }));
+    const DONE = { type: 'squad', op: 'start', ok: true, code: 'RM3U' };
+    if (fired === 1 && yLive === 0 && same6(norm(x), norm(y)) && norm(x).length === 1
+        && same6(norm(x)[0], { seats: [{ ws: 0, name: '', skin: null, loadout: RACK5 }, { ws: 1, name: 'Member 1', skin: 'olive', loadout: RB3 }], opts: { mode: 'duel', tees: null, squad: '-' } }))
+      ok('(rdy-b) the countdown\'s end hands the seating exactly what the leader\'s Start does — the leader first, each rack, the mode and the squad — and a Ready from all but the leader counts nobody in');
+    else fail('(rdy-b) seating: ' + JSON.stringify({ fired, yLive, x: norm(x), y: norm(y) }));
+    if (same6(got6(x.w[0], 'squad', 'start'), [DONE]) && same6(got6(x.w[1], 'squad', 'start'), [DONE])
+        && same6(got6(y.w[1], 'squad', 'start'), [DONE]) && same6(ans6(y.w[0], 's'), { ...DONE, id: 's' })
+        && same6(readies3(x.w[0]), [false, false]) && left3(x.w[0]) === 'none' && left3(x.w[1]) === 'none')
+      ok('(rdy-b) and every member is told the room as a Start tells them, then shown the Readies spent and no countdown');
+    else fail('(rdy-b) frames: ' + JSON.stringify({ x0: x.w[0].rx, x1: x.w[1].rx, y0: ans6(y.w[0], 's') }));
+    const again = x.cw.fire();
+    await turn3();
+    if (again === 0 && x.calls.length === 1) ok('(rdy-b) and nothing is left counting: one countdown, one seating');
+    else fail('(rdy-b) a second seating: ' + JSON.stringify({ again, calls: x.calls.length }));
+  }
+
+  // ---- (rdy-c) ANY CHANGE STOPS IT ------------------------------------------
+  // i. A Ready taken back.
+  {
+    const t = await armed3(2);
+    await ready3(t.S, t.w[1], false);
+    const fired = t.cw.fire(); await turn3();
+    if (t.armed && t.first.off && fired === 0 && t.calls.length === 0 && left3(t.w[0]) === 'none' && left3(t.w[1]) === 'none')
+      ok('(rdy-c) a Ready taken back stops the countdown, every roster stops showing it, and nobody is seated');
+    else fail('(rdy-c) unready: ' + JSON.stringify({ armed: t.armed, off: t.first && t.first.off, fired, calls: t.calls.length, a: left3(t.w[0]) }));
+  }
+  // ii. A leave. The countdown stops; the two left are still all ready, so a
+  // NEW one starts, from the top — a second into the old one, the new one
+  // still has its full three. A duel left with one member counts nothing.
+  {
+    const t = await armed3(3, { mode: 'ffa' });
+    const t0 = CLOCK6;
+    CLOCK6 = t0 + 1000;
+    await t.S.handle(t.w[2], { type: 'squad', op: 'leave' });
+    const l = t.cw.live();
+    const fresh = l.length === 1 && l[0] !== t.first && t.first.off;
+    const left = [left3(t.w[0]), left3(t.w[1])];
+    CLOCK6 = t0;
+    t.cw.fire(); await turn3();
+    const d = await armed3(2);
+    await d.S.handle(d.w[1], { type: 'squad', op: 'leave' });
+    if (t.armed && fresh && same6(left, [3000, 3000]) && t.calls.length === 1 && same6(t.calls[0].seats.map((s) => t.w.indexOf(s.ws)), [0, 1])
+        && d.armed && d.first.off && d.cw.live().length === 0 && left3(d.w[0]) === 'none')
+      ok('(rdy-c) a leave stops the countdown; the members left, all ready, get a new one with the full 3 s and only they are seated; a duel left alone counts nothing');
+    else fail('(rdy-c) leave: ' + JSON.stringify({ armed: t.armed, fresh, left, seats: t.calls.map((c) => c.seats.map((s) => t.w.indexOf(s.ws))), duel: { armed: d.armed, off: d.first && d.first.off, live: d.cw.live().length, a: left3(d.w[0]) } }));
+  }
+  // iii. A join: the newcomer is not ready.
+  {
+    const t = await armed3(2, { mode: 'ffa' });
+    const wd = up6(t.S, D);
+    await join6(t.S, wd, t.code, 'Late');
+    const fired = t.cw.fire(); await turn3();
+    if (t.armed && t.first.off && fired === 0 && t.calls.length === 0 && left3(t.w[0]) === 'none' && left3(wd) === 'none' && same6(readies3(wd), [true, true, false]))
+      ok('(rdy-c) a join stops the countdown: the newcomer is not ready, and nobody is seated');
+    else fail('(rdy-c) join: ' + JSON.stringify({ armed: t.armed, fired, calls: t.calls.length, a: left3(t.w[0]), d: readies3(wd) }));
+  }
+  // iv. A drop: the socket closes, and a dropped member is not ready.
+  {
+    const t = await armed3(2);
+    t.w[1].readyState = 3; t.S.onClose(t.w[1]);
+    await turn3();
+    const fired = t.cw.fire(); await turn3();
+    const f = st3(t.w[0]);
+    if (t.armed && t.first.off && fired === 0 && t.calls.length === 0 && f && f.members[1].dropped === true && left3(t.w[0]) === 'none')
+      ok('(rdy-c) a member dropping stops the countdown, and the squad is shown them dropped with no countdown');
+    else fail('(rdy-c) drop: ' + JSON.stringify({ armed: t.armed, fired, calls: t.calls.length, f }));
+  }
+  // v, vi. The leader changes the mode, or golf's tee set: every Ready goes
+  // and the countdown with them.
+  {
+    const t = await armed3(3, { mode: 'ffa' });
+    await t.S.handle(t.w[0], { type: 'squad', op: 'mode', mode: 'golf', tees: 'mens' });
+    const g = await armed3(2, { mode: 'golf', tees: 'mens' });
+    await g.S.handle(g.w[0], { type: 'squad', op: 'mode', mode: 'golf', tees: 'champ' });
+    if (t.armed && t.first.off && t.cw.live().length === 0 && same6(readies3(t.w[1]), [false, false, false]) && left3(t.w[2]) === 'none'
+        && g.armed && g.first.off && g.cw.live().length === 0 && same6(readies3(g.w[1]), [false, false]) && left3(g.w[1]) === 'none')
+      ok('(rdy-c) the leader changing the mode, or only the tee set, stands every member down and stops the countdown');
+    else fail('(rdy-c) mode/tees: ' + JSON.stringify({ mode: { armed: t.armed, live: t.cw.live().length, r: readies3(t.w[1]) }, tees: { armed: g.armed, live: g.cw.live().length, r: readies3(g.w[1]) } }));
+  }
+  // vii, viii. What a countdown keeps: a mode frame that changes nothing, and
+  // a Ready sent again — the same timer, the Readies standing, and the time
+  // left as each frame is built (1.2 s in, 1800 left).
+  {
+    const g = await armed3(2, { mode: 'golf', tees: 'mens' });
+    await g.S.handle(g.w[0], { type: 'squad', op: 'mode', mode: 'golf', tees: 'mens', id: 'm' });
+    const t = await armed3(2);
+    const t0 = CLOCK6;
+    CLOCK6 = t0 + 1200;
+    await ready3(t.S, t.w[1]);
+    const left = [left3(t.w[0]), left3(t.w[1])];
+    CLOCK6 = t0;
+    if (g.armed && !g.first.off && same6(g.cw.live(), [g.first]) && same6(readies3(g.w[1]), [true, true]) && left3(g.w[1]) === 3000
+        && same6(ans6(g.w[0], 'm'), { type: 'squad', op: 'mode', ok: true, id: 'm' })
+        && t.armed && !t.first.off && same6(t.cw.live(), [t.first]) && same6(left, [1800, 1800]))
+      ok('(rdy-c) a mode frame that changes nothing and a Ready sent again keep the same countdown and every Ready, and the time left is the time left as the frame is built');
+    else fail('(rdy-c) kept: ' + JSON.stringify({ g: { armed: g.armed, off: g.first && g.first.off, r: readies3(g.w[1]), left: left3(g.w[1]) }, t: { armed: t.armed, off: t.first && t.first.off, left } }));
+  }
+  // ix. A kick, like a leave: the countdown restarts for the members left.
+  {
+    const t = await armed3(3, { mode: 'ffa' });
+    await t.S.handle(t.w[0], { type: 'squad', op: 'kick', rid: t.rids[2] });
+    const l = t.cw.live();
+    if (t.armed && t.first.off && l.length === 1 && l[0] !== t.first && left3(t.w[1]) === 3000 && same6(got6(t.w[2], 'squad'), [{ type: 'squad', op: 'ended', reason: 'kicked' }]))
+      ok('(rdy-c) a kick stops the countdown and, the two left being ready, starts a fresh one; the kicked player is told only the kick');
+    else fail('(rdy-c) kick: ' + JSON.stringify({ armed: t.armed, live: l.length, b: left3(t.w[1]), c: t.w[2].rx }));
+  }
+  // x. The sign-in door. A guest member signs in: until the account's blocks
+  // are read the row is not past the door (D-BLOCK-3 F), so the countdown
+  // stops and every member is shown it stopped; the read letting the row in
+  // starts a new one.
+  {
+    const st = t6store(ROWS6), cw = mkCw3(), calls = [];
+    const S = mkSocial6(st, { schedule: cw.schedule, seatSquad: (seats) => { calls.push(seats); return { ok: true, code: 'RM3U' }; } });
+    const wa = up6(S, A), g = t6ws(null);
+    const code = await create6(S, wa);
+    await join6(S, g, code, 'Guest');
+    await ready3(S, g); await ready3(S, wa);
+    const first = cw.live()[0] || null, before = left3(wa);
+    clear6(wa, g);
+    const h = st.hold('blockIdsOf');
+    g.userId = E; g.isGuest = false; S.onAuth(g);
+    await turn3();
+    const during = { live: cw.live().length, a: left3(wa), g: left3(g), fired: cw.fire() };
+    await turn3();
+    h.release();
+    await turn3();
+    const l = cw.live();
+    if (first && before === 3000 && first.off && same6(during, { live: 0, a: 'none', g: 'none', fired: 0 }) && calls.length === 0
+        && l.length === 1 && left3(wa) === 3000 && (st3(wa).members[1] || {}).id === E)
+      ok('(rdy-c) a member\'s sign-in door stops the countdown and everyone is shown so; nobody is seated while the read is out; the read letting them in counts again');
+    else fail('(rdy-c) door: ' + JSON.stringify({ first: !!first, before, off: first && first.off, during, calls: calls.length, live: l.length, a: left3(wa) }));
+  }
+
+  // xi. The squad ends under the countdown: the leader leaves and only a
+  // guest, who cannot lead, is left (detach ends it). Its countdown goes with it.
+  {
+    const st = t6store(ROWS6), cw = mkCw3(), calls = [];
+    const S = mkSocial6(st, { schedule: cw.schedule, seatSquad: (seats) => { calls.push(seats); return { ok: true, code: 'RM3U' }; } });
+    const wa = up6(S, A), g = t6ws(null);
+    const code = await create6(S, wa);
+    await join6(S, g, code, 'Guest');
+    await ready3(S, g); await ready3(S, wa);
+    const first = cw.live()[0] || null;
+    await S.handle(wa, { type: 'squad', op: 'leave' });
+    const fired = cw.fire(); await turn3();
+    if (first && first.off && fired === 0 && calls.length === 0 && same6(last6(g, 'squad', 'ended'), { type: 'squad', op: 'ended', reason: 'no_leader' }))
+      ok('(rdy-c) a squad that ends under its countdown takes the countdown with it, and seats nobody');
+    else fail('(rdy-c) squad ended: ' + JSON.stringify({ first: !!first, off: first && first.off, fired, calls: calls.length, g: g.rx.slice(-2) }));
+  }
+
+  // ---- (rdy-d) A COUNTDOWN THAT ENDS IN A REFUSAL TELLS EVERY MEMBER --------
+  // i. The seating refuses (R6's case). Every member gets the frame R6 sends
+  // a member — the twin old-client world proves it the same frame — then the
+  // roster, with every Ready stood down so the same seating is not tried
+  // again three seconds later, and no countdown.
+  {
+    const verdict = { ok: false, error: 'member_busy', at: 1 };
+    const t = await armed3(2, { verdict });
+    t.cw.fire(); await turn3();
+    const y = await world3(2, { verdict });
+    await ready3(y.S, y.w[1]);
+    clear6(...y.w);
+    await y.S.handle(y.w[0], { type: 'squad', op: 'start', loadout: RACK5, id: 's' });
+    const R6 = got6(y.w[1], 'squad', 'start');
+    const WHY = { type: 'squad', op: 'start', error: 'member_busy', at: 1 };
+    const kinds = t.w[1].rx.map((f) => f.op);
+    if (t.armed && t.calls.length === 1 && same6(R6, [WHY]) && same6(got6(t.w[0], 'squad', 'start'), [WHY]) && same6(got6(t.w[1], 'squad', 'start'), [WHY])
+        && same6(kinds, ['start', 'state']) && same6(readies3(t.w[0]), [false, false]) && left3(t.w[1]) === 'none' && t.cw.live().length === 0)
+      ok('(rdy-d) a seating refused at the countdown\'s end tells every member in R6\'s own frame, then shows the squad stood down with no countdown left');
+    else fail('(rdy-d) refused seating: ' + JSON.stringify({ armed: t.armed, calls: t.calls.length, R6, a: t.w[0].rx, b: t.w[1].rx, live: t.cw.live().length }));
+  }
+  // ii. A gate refuses at the end: a member's socket is closing (its close
+  // has not run yet). Nobody is seated, and the member who is there is told
+  // who is missing.
+  {
+    const t = await armed3(2);
+    t.w[1].readyState = 2;
+    t.cw.fire(); await turn3();
+    if (t.armed && t.calls.length === 0 && same6(got6(t.w[0], 'squad', 'start'), [{ type: 'squad', op: 'start', error: 'member_offline', at: 1 }])
+        && same6(readies3(t.w[0]), [false, false]) && left3(t.w[0]) === 'none' && t.cw.live().length === 0)
+      ok('(rdy-d) a gate refusing at the countdown\'s end seats nobody and tells the squad who is not there, Readies stood down');
+    else fail('(rdy-d) gate at the end: ' + JSON.stringify({ armed: t.armed, calls: t.calls.length, a: t.w[0].rx }));
+  }
+  // iii. A seating that THROWS is a refusal like any other, and the timer's
+  // callback never lets it out (an unhandled rejection would end this file).
+  {
+    const t = await armed3(2, { verdict: () => { throw new Error('engine fault'); } });
+    t.cw.fire(); await turn3();
+    const U = { type: 'squad', op: 'start', error: 'unavailable' };
+    if (t.armed && same6(got6(t.w[0], 'squad', 'start'), [U]) && same6(got6(t.w[1], 'squad', 'start'), [U]) && same6(readies3(t.w[1]), [false, false]) && t.cw.live().length === 0)
+      ok('(rdy-d) a seating that throws at the countdown\'s end is told to every member as unavailable, and the squad stands down');
+    else fail('(rdy-d) throwing seating: ' + JSON.stringify({ armed: t.armed, a: t.w[0].rx, b: t.w[1].rx }));
+  }
+
+  // ---- (rdy-e) OLD CLIENTS AND MIXED SQUADS ---------------------------------
+  // The member's Ready and the leader's Start are the only frames builds 6
+  // and 7 send; (rdy-b)'s Y world is that squad starting. Here: a new leader
+  // who has readied pressing an old Start mid-countdown (a second, older
+  // device) seats once, at once, and the countdown seats nobody after it.
+  {
+    const t = await armed3(2);
+    await t.S.handle(t.w[0], { type: 'squad', op: 'start', loadout: RACK5, id: 's' });
+    const now1 = t.calls.length;
+    const fired = t.cw.fire(); await turn3();
+    if (t.armed && now1 === 1 && fired === 0 && t.calls.length === 1 && same6(ans6(t.w[0], 's'), { type: 'squad', op: 'start', ok: true, code: 'RM3U', id: 's' }) && left3(t.w[1]) === 'none')
+      ok('(rdy-e) a leader\'s Start during the countdown seats the squad at once, and the countdown seats nobody after it');
+    else fail('(rdy-e) start mid-countdown: ' + JSON.stringify({ armed: t.armed, now1, fired, calls: t.calls.length }));
+  }
+
+  // ---- (rdy-f) BLOCKS: NO COUNTDOWN SEATS A PAIR THE DOORS KEEP APART -------
+  // i. A row whose sign-in door's read FAILED stays out of Start (D-BLOCK-3 H
+  // amended), so it stops a countdown from starting at all; every push while
+  // the rest are ready runs its door again, and a read that lets it in
+  // starts the count.
+  {
+    const st = t6store(ROWS6), cw = mkCw3(), calls = [];
+    const S = mkSocial6(st, { schedule: cw.schedule, seatSquad: (seats) => { calls.push(seats); return { ok: true, code: 'RM3U' }; } });
+    const wa = up6(S, A), g = t6ws(null);
+    const code = await create6(S, wa);
+    await join6(S, g, code, 'Guest');
+    st.boom.add('blockIdsOf');
+    g.userId = E; g.isGuest = false; S.onAuth(g);
+    await turn3();
+    const reads = () => st.calls.filter((m) => m === 'blockIdsOf').length;
+    const r0 = reads();
+    await ready3(S, g); await ready3(S, wa);
+    await turn3();
+    const shut = { live: cw.live().length, a: left3(wa), r: reads() - r0 };
+    st.boom.delete('blockIdsOf');
+    await ready3(S, g);
+    await turn3();
+    const l = cw.live();
+    cw.fire(); await turn3();
+    if (same6(shut, { live: 0, a: 'none', r: 1 }) && l.length === 1 && calls.length === 1 && calls[0].length === 2)
+      ok('(rdy-f) a row held at a failed sign-in door keeps the squad from counting down, its door runs again as the squad readies, and a read that lets it in starts the count');
+    else fail('(rdy-f) failed door: ' + JSON.stringify({ shut, live: l.length, calls: calls.length }));
+  }
+  // ii. The leader blocks a member mid-countdown: the block parts the pair
+  // (a kick, D-BLOCK 1), the countdown restarts for the two left, and the
+  // blocked player is not among the seats.
+  {
+    const t = await armed3(3, { mode: 'ffa' });
+    await t.S.handle(t.w[0], { type: 'block', op: 'add', id: B });
+    await turn3();
+    const l = t.cw.live();
+    t.cw.fire(); await turn3();
+    const seated = t.calls.length === 1 ? t.calls[0].seats.map((s) => t.w.indexOf(s.ws)) : null;
+    if (t.armed && t.first.off && l.length === 1 && same6(seated, [0, 2]) && same6(got6(t.w[1], 'squad', 'ended'), [{ type: 'squad', op: 'ended', reason: 'kicked' }]))
+      ok('(rdy-f) a block mid-countdown parts the pair, the countdown starts again for the members left, and the blocked player is never seated with the blocker');
+    else fail('(rdy-f) block mid-countdown: ' + JSON.stringify({ armed: t.armed, live: l.length, seated, b: t.w[1].rx }));
+  }
+
+  // ---- (rdy-g) A SQUAD OF ONE NEVER COUNTS, AND ITS OLD START STILL SEATS ---
+  {
+    const t = await world3(1, { mode: 'boss' });
+    await ready3(t.S, t.w[0], true, RACK7);
+    const live = t.cw.live().length, left = left3(t.w[0]);
+    await t.S.handle(t.w[0], { type: 'squad', op: 'start', loadout: RACK7, id: 's' });
+    if (live === 0 && left === 'none' && t.calls.length === 1 && same6(ans6(t.w[0], 's'), { type: 'squad', op: 'start', ok: true, code: 'RM3U', id: 's' }))
+      ok('(rdy-g) a squad of one that readies counts nothing down, and a leader\'s Start still seats it');
+    else fail('(rdy-g) squad of one: ' + JSON.stringify({ live, left, calls: t.calls.length }));
+  }
+
+  // ---- (rdy-h) A STOPPED COUNTDOWN SEATS NOBODY, EVEN IF ITS TIMER FIRES ----
+  {
+    const t = await armed3(2, { cw: mkCw3({ brokenCancel: true }) });
+    await ready3(t.S, t.w[1], false);
+    const fired = t.cw.fire(); await turn3();
+    if (t.armed && fired === 1 && t.calls.length === 0 && left3(t.w[0]) === 'none' && got6(t.w[0], 'squad', 'start').length === 0)
+      ok('(rdy-h) a countdown stopped by an un-ready seats nobody when a late timer fires anyway, and tells nobody anything');
+    else fail('(rdy-h) late timer: ' + JSON.stringify({ armed: t.armed, fired, calls: t.calls.length, a: t.w[0].rx }));
   }
 
   // ---- (end of task 6 checks) ----

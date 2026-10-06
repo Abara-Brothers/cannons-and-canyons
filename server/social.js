@@ -1237,7 +1237,7 @@ export function createSocial({
       try { names = await store.profilesByIds(ids); }
       catch { /* every name null; every row kept */ }
     }
-    return {
+    const frame = {
       type: 'squad', op: 'state', code: sq.code, leader: sq.leader,
       mode: sq.mode, tees: sq.tees, max: sq.max,
       members: sq.members.map((m) => ({
@@ -1251,6 +1251,16 @@ export function createSocial({
       })),
       fits: fitsFor(sq.members.length),
     };
+    // THE COUNTDOWN, AS TIME LEFT AND NOT AS A TIME OF DAY (U3). Every member
+    // is ready, so the squad starts in this many milliseconds (see the
+    // countdown below), and a client counts down from the moment this frame
+    // ARRIVES: a phone whose clock is a minute out still shows three, two,
+    // one. Read AFTER the name read, so it is the time left as the frame is
+    // built. ADDED ONLY WHILE ONE RUNS, so every other frame is exactly what
+    // it always was, and builds 6 and 7, which know no such field, ignore it.
+    const c = countdowns.get(sq);
+    if (c) frame.startsIn = Math.max(0, c.at - now());
+    return frame;
   }
 
   // A GUEST ROW'S RESUME SECRET, `gk` (E1, the whole-branch fix wave). A
@@ -1318,7 +1328,13 @@ export function createSocial({
   // exists for — and a throw must not cost the rest of the squad the roster
   // the operation has already changed under them. The snapshot itself no
   // longer rejects (see squadSnapshot), so this is the only throw left.
+  //
+  // EVERY ROSTER GOES OUT THROUGH HERE, SO THE COUNTDOWN IS ASKED HERE (U3):
+  // whatever changed — a Ready, a join, a leave, a kick, a drop, a mode — the
+  // squad is pushed, and the push first starts, keeps or stops the countdown
+  // for the squad as it now stands, before the frames are built.
   async function pushSquad(sq, actor, msg) {
+    countdownCheck(sq);
     const base = await squadSnapshot(sq);
     for (const m of sq.members) {
       if (m.ws && m.ws !== actor) safeSend(m.ws, { ...base, ...ownFields(sq, m.ws) });
@@ -1331,6 +1347,8 @@ export function createSocial({
   // so exactly this can be done.
   async function pushSquadAfterExit(sq) {
     if (squads.has(sq.code)) return pushSquad(sq, null, null);
+    // A squad that has gone counts nobody in (U3).
+    dropCountdown(sq);
     // It is gone. Anyone still on the list is there because the last account
     // left and only guests remained: nobody can lead, the squad ended under
     // them, and a box still rendering it is a Start button that answers
@@ -1584,17 +1602,25 @@ export function createSocial({
       if (!(Number.isInteger(msg.max) && msg.max >= lim.min && msg.max <= lim.max)) return no('bad_max');
       max = msg.max;
     }
+    // Read BEFORE the write: whether this frame changes anything the squad
+    // readied for.
+    const changed = sq.mode !== mode || sq.tees !== tees || sq.max !== max;
     // sq.leader: ledSquad has established that this caller IS the leader.
     // As in squadKick, THE MACHINE'S LEADER CHECK ALWAYS PASSES FOR THIS
     // CALLER AND GUARDS NOTHING HERE — ledSquad is the only leadership check
     // on this path, and nothing may lean on setMode()'s.
     const res = squads.setMode(sq.code, sq.leader, mode, tees, max);
     if (!res.ok) return no(res.error);
-    // READY MEANS "MY RACK IS FULL FOR THE ARMED MODE". A rack readied for
-    // the old mode that the new one would not keep is a member the start
-    // would send to the pick screen, so exactly those members stand down —
-    // five picks survive duel to ffa; they do not survive duel to boss.
-    for (const m of res.squad.members) if (m.ready && !validRack(mode, m.loadout)) squads.setReady(m.key, false, null);
+    // EVERY CHANGE CLEARS EVERY READY (owner, 2026-10-06). A Ready is a
+    // player saying yes to THIS match, and the last Ready now starts it on
+    // its own (the countdown below), so a squad readied for Duel must not be
+    // counted into a Boss Fight, or onto another tee set, that nobody agreed
+    // to. A frame that changes nothing — the leader's box sends only what
+    // differs, but a client may repeat itself — stands nobody down.
+    // AND READY STILL MEANS "MY RACK IS FULL FOR THE ARMED MODE": with
+    // nothing changed, a rack the mode would not keep stands its member down
+    // as it always has.
+    for (const m of res.squad.members) if (m.ready && (changed || !validRack(mode, m.loadout))) squads.setReady(m.key, false, null);
     await pushSquad(res.squad, ws, null);
     squadReply(ws, msg, 'mode', { ok: true });
   }
@@ -1604,6 +1630,16 @@ export function createSocial({
   // changes nothing — no room, no ready flag, no rack — save the one gate that
   // finds a Ready the room would not honour, which stands that member down so
   // the box shows the squad the reason.
+  //
+  // THE OLD WAY IN, KEPT WORD FOR WORD (U3). Since the owner's ready-up
+  // (2026-10-06) a squad starts itself when its last member readies — the
+  // countdown below — and this build's client never sends Start. Builds 6
+  // and 7, and a cached web page, still do: their leader never readies and
+  // presses Start once the others have, with the rack on the frame. So this
+  // op answers exactly what it always answered, through the same seating
+  // path the countdown uses (launchSquad), and a squad mixing old and new
+  // clients starts either way: an old leader's Start once the others are
+  // ready, or the countdown once a new leader readies too.
   //
   // LEADER ONLY, THROUGH ledSquad, and no sign-in gate of its own: mode's
   // rule, and for mode's reason (a guest can never lead, so a guest member is
@@ -1638,7 +1674,22 @@ export function createSocial({
     // seated one clears every rack anyway.
     const sent = msg.loadout != null;
     if (sent && !validRack(sq.mode, msg.loadout)) return no('no_rack');
-    const rackOf = (m) => (m === lead && sent ? msg.loadout : m.loadout);
+    return launchSquad(sq, sent ? msg.loadout : null, ws, msg);
+  }
+
+  // THE GATES EVERY START PASSES, the leader's Start and the countdown's alike
+  // (U3), and the countdown's test for whether it may run at all: one function,
+  // so what the countdown waits for and what the seating then demands can never
+  // drift apart. PURE: it reads the squad and changes nothing, so it can be
+  // asked on every push. `leadRack` is the rack a leader's Start carried, which
+  // stands in for the leader's Ready, or null.
+  // -> null when the squad may be seated now; else { error } or { error, at }
+  //    (`at` on duplicate_member and member_offline, the roster row at fault),
+  //    or { error: 'not_ready', stale } when every member is ready but a rack
+  //    the room would not keep is among them (see launchSquad).
+  function startRefusal(sq, leadRack) {
+    const lead = sq.members.find((m) => m.key === sq.leader);
+    const rackOf = (m) => (m === lead && leadRack ? leadRack : m.loadout);
     // EACH ACCOUNT IS SEATED EXACTLY ONCE (task 5's fix pass). The engine's
     // join checks the socket, never the account, so one account on two rows
     // would be two seats — and in a duel, the account against itself. The
@@ -1653,11 +1704,11 @@ export function createSocial({
       const ids = new Set([m.userId, m.ws ? identityKey(m.ws) : null].filter((v) => typeof v === 'string' && v));
       for (const a of ids) { if (twice < 0 && whose.has(a) && whose.get(a) !== i) twice = i; whose.set(a, whose.has(a) ? whose.get(a) : i); }
     });
-    if (twice >= 0) return squadReply(ws, msg, 'start', { error: 'duplicate_member', at: twice });
+    if (twice >= 0) return { error: 'duplicate_member', at: twice };
     // THE SAME `fits` THE BOX AND THE BOARDS ARE SHOWING: fitsFor over the
     // engine's own seat table, minimum AND maximum (plan X6). A squad of one
     // does not start a duel; three do not start one either.
-    if (!fitsFor(sq.members.length)[sq.mode]) return no('wont_fit');
+    if (!fitsFor(sq.members.length)[sq.mode]) return { error: 'wont_fit' };
     // A LIVE SOCKET FOR EVERY MEMBER. The engine's join does not look at a
     // socket's state, so a closed one would be SEATED: a ghost seat, marked
     // connected, that the match would one day hand the turn to. Nothing is
@@ -1672,25 +1723,52 @@ export function createSocial({
     // A ROW THE SIGN-IN DOOR IS STILL READING FOR is not there yet either
     // (D-BLOCK-3 F): its account's blocks are unread, and seating it could
     // seat a blocked pair together. Nor is one whose read FAILED (H
-    // amended), and refusing it runs its door again (reopenDoor).
+    // amended), and refusing it runs its door again (launchSquad, and the
+    // countdown's own check).
     const off = sq.members.findIndex((m) => !(m.ws && m.ws.readyState === 1 && m.dropAt == null) || doorOut.has(m) || doorShut(m));
-    if (off >= 0) {
-      reopenDoor(sq.members[off]);
-      return squadReply(ws, msg, 'start', { error: 'member_offline', at: off });
-    }
-    if (!sq.members.every((m) => (m === lead && sent) || m.ready === true)) return no('not_ready');
+    if (off >= 0) return { error: 'member_offline', at: off };
+    if (!sq.members.every((m) => (m === lead && leadRack) || m.ready === true)) return { error: 'not_ready' };
     // THE LAST GATE ON THE RACKS. Arming a mode stands down every member
     // whose rack it would not keep (squadMode, above), but this is the last
     // line before a room is built and it does not trust that that happened: a
     // rack the room would not keep sends that seat to the pick screen, and the
     // squad's match with it. Such a member is not ready by the rule ready
-    // itself states, so they are stood down HERE, the squad is shown it, and
-    // the start is refused for the reason the box can now see.
+    // itself states.
     const stale = sq.members.filter((m) => !validRack(sq.mode, rackOf(m)));
-    if (stale.length) {
-      for (const m of stale) squads.setReady(m.key, false, null);
-      await pushSquad(sq, ws, null);
-      return no('not_ready');
+    if (stale.length) return { error: 'not_ready', stale };
+    return null;
+  }
+
+  // THE ONE PATH THAT SEATS A SQUAD (U3): the leader's Start, which builds 6
+  // and 7 still send, and the countdown's end, which nobody sends. ONE PATH,
+  // so the two can never seat by different rules: the same gates
+  // (startRefusal), the same order, the same seating, the same telling.
+  // `leadRack` is the rack the leader's Start carried, or null. `ws` and `msg`
+  // are that Start's socket and frame, answered as a Start always was; for the
+  // countdown both are null, and every member is told instead (see
+  // countdownRefused).
+  //
+  // A START PRESSED WHILE THE SQUAD COUNTS DOWN needs nothing of its own: the
+  // countdown runs only while these same gates pass, so that Start passes
+  // them too, and every way it then ends pushes the squad — seated, its
+  // Readies spent, or refused by the seating with every Ready standing — and
+  // the push stops the countdown or lets it run.
+  async function launchSquad(sq, leadRack, ws, msg) {
+    const lead = sq.members.find((m) => m.key === sq.leader);
+    const rackOf = (m) => (m === lead && leadRack ? leadRack : m.loadout);
+    const r = startRefusal(sq, leadRack);
+    if (r) {
+      const why = r.at !== undefined ? { error: r.error, at: r.at } : { error: r.error };
+      // A row behind the sign-in door's failed read is held out of Start
+      // until a door lets it in, and each refusal at it runs that door again
+      // (D-BLOCK-3 H amended): one read in flight per row, no timer, no loop.
+      if (r.error === 'member_offline') reopenDoor(sq.members[r.at]);
+      // A Ready the room would not honour is stood down HERE, so the box
+      // shows the squad the reason the start was refused.
+      if (r.stale) for (const m of r.stale) squads.setReady(m.key, false, null);
+      if (!ws) return countdownRefused(sq, why);
+      if (r.stale) await pushSquad(sq, ws, null);
+      return squadReply(ws, msg, 'start', why);
     }
     // R5: THE ORDER IS THE ORDER THE ROOM FILLS IN. The leader first, because
     // the create makes them the host seat; everyone else in roster order, and
@@ -1721,6 +1799,7 @@ export function createSocial({
       const blames = error === 'member_busy' || error === 'member_offline';
       const row = blames && Number.isInteger(seated.at) && seated.at >= 0 ? sq.members.indexOf(ordered[seated.at]) : -1;
       const why = row >= 0 ? { error, at: row } : { error };
+      if (!ws) return countdownRefused(sq, why);
       for (const m of sq.members) if (m.ws && m.ws !== ws) safeSend(m.ws, { type: 'squad', op: 'start', ...why });
       await pushSquad(sq, ws, null);
       return squadReply(ws, msg, 'start', why);
@@ -1729,11 +1808,113 @@ export function createSocial({
     // created), and the racks with them — clearReady's order, AFTER the seats
     // took their copies. Every member already has the engine's own frames for
     // the room; this tells their box which room, and then what it now holds.
+    // A countdown has no caller, so every member gets `done`.
     squads.clearReady(sq.code);
     const done = { type: 'squad', op: 'start', ok: true, code: seated.code };
     for (const m of sq.members) if (m.ws && m.ws !== ws) safeSend(m.ws, done);
     await pushSquad(sq, ws, null);
-    squadReply(ws, msg, 'start', { ok: true, code: seated.code });
+    if (ws) squadReply(ws, msg, 'start', { ok: true, code: seated.code });
+  }
+
+  // ---- the ready-up countdown (U3; owner, 2026-10-06) -----------------------
+  // "All players must ready up and then the game starts. The leader does not
+  // need to initiate the game start." So the leader readies like everyone
+  // else, and the moment every member of a squad of two or more is ready, and
+  // the squad could be seated (startRefusal: it fits the mode, every member is
+  // online and past the sign-in door, every rack is one the room keeps), the
+  // squad COUNTS DOWN: COUNTDOWN_MS on the injected timer, shown to every
+  // member as `startsIn` on the state frame, and at its end the squad is
+  // seated by the very path a leader's Start takes (launchSquad).
+  //
+  // ANY CHANGE STOPS IT. Every change to a squad is pushed, and pushSquad asks
+  // countdownCheck first. A Ready taken back, a join, a drop and a change of
+  // mode or tee set (which stands every Ready down, see squadMode) each stop
+  // it, because the squad is no longer all ready. A leave or a kick changes
+  // the ROWS, which the countdown was started for (countdownSig: each row's
+  // handle, in order): that countdown stops, and when the members left are
+  // all still ready, a new one starts from the top, so nobody is counted
+  // into a match that changed under them with less than the full time to say
+  // no. A sign-in door opening stops it as well (openDoor), because that row
+  // is not past the door any more. What a countdown keeps is a Ready sent
+  // again, or a mode frame that changes nothing: a repeat cannot hold a
+  // squad from starting by restarting it.
+  //
+  // A SQUAD OF ONE NEVER COUNTS (owner: "a squad of one behaves as no
+  // squad"). Its client offers the ordinary Launch; a leader's Start from
+  // builds 6 and 7 still seats it.
+  //
+  // Read PER INSTANCE, the house pattern for a time knob (DROP_MS below).
+  const envCount = Number(process.env.SQUAD_COUNTDOWN_MS);
+  const COUNTDOWN_MS = Number.isFinite(envCount) && envCount >= 0 ? envCount : 3000;
+  // squad OBJECT -> { sig, at, cancel }: at most one per live squad, deleted
+  // when it ends, stops or its squad goes. Keyed by the object, not the code,
+  // so a code minted again for a later squad can never meet an old countdown.
+  const countdowns = new Map();
+  const countdownSig = (sq) => sq.members.map(rowRid).join();
+
+  // -> true when a countdown was running and has stopped.
+  function dropCountdown(sq) {
+    const c = countdowns.get(sq);
+    if (!c) return false;
+    countdowns.delete(sq);
+    c.cancel();
+    return true;
+  }
+
+  // Starts, keeps or stops the countdown for `sq` as it stands now. The push
+  // that called it then tells every member what it decided. Synchronous, and
+  // WRAPPED: it runs at the head of every push, and a throw here must cost the
+  // squad its countdown, never its roster.
+  function countdownCheck(sq) {
+    try {
+      const live = squads.get(sq.code) === sq;
+      const r = live && sq.members.length >= 2 ? startRefusal(sq, null) : { error: 'none' };
+      const cur = countdowns.get(sq);
+      if (!r && cur && cur.sig === countdownSig(sq)) return;
+      dropCountdown(sq);
+      if (r) {
+        // EVERYONE IS READY AND ONE ROW IS HELD AT THE SIGN-IN DOOR by a read
+        // that failed: the countdown is the start that is refused at it, so
+        // the door runs again, as a refused Start runs it (reopenDoor: one
+        // read in flight per row; a failed read pushes nothing, so this
+        // cannot loop). Its success pushes the squad, and that push counts.
+        if (r.error === 'member_offline' && sq.members.every((m) => m.ready === true)) reopenDoor(sq.members[r.at]);
+        return;
+      }
+      const entry = { sig: countdownSig(sq), at: now() + COUNTDOWN_MS, cancel: () => {} };
+      countdowns.set(sq, entry);
+      entry.cancel = schedule(() => countdownEnd(sq, entry), COUNTDOWN_MS);
+    } catch { /* this squad's countdown only */ }
+  }
+
+  // THE COUNTDOWN'S END, WRAPPED BY HAND for the drop window's reason:
+  // `schedule` is a bare timer, and a throw out of it would reach
+  // 'uncaughtException', whose handler shuts the server down and every live
+  // match with it. A countdown stopped or replaced since, or a squad that has
+  // gone, seats nobody, even from a timer that fires after its cancel. And a
+  // seating that THROWS is a refusal like any other: every member is told,
+  // rather than left watching a count that reached nought.
+  function countdownEnd(sq, entry) {
+    try {
+      if (countdowns.get(sq) !== entry) return;
+      countdowns.delete(sq);
+      if (squads.get(sq.code) !== sq) return;
+      launchSquad(sq, null, null, null).catch(() => countdownRefused(sq, { error: 'unavailable' }).catch(() => {}));
+    } catch { /* one lost countdown, never the process */ }
+  }
+
+  // A COUNTDOWN THAT ENDS IN A REFUSAL (U3). Every member is told why, in the
+  // frame R6 sends every member after a refused Start, and then the roster.
+  // EVERY READY IS STOOD DOWN FIRST, which R6 does not do: R6 waits for the
+  // leader to press Start again, but a countdown's squad left all ready would
+  // count down again at once and try the same seating every three seconds for
+  // as long as the cause lasts — a busy member's lobby built and torn down
+  // over and over. So the squad sees the reason and readies again.
+  async function countdownRefused(sq, why) {
+    squads.clearReady(sq.code);
+    const f = { type: 'squad', op: 'start', ...why, error: squadError('start', why.error) };
+    for (const m of sq.members) if (m.ws) safeSend(m.ws, f);
+    await pushSquad(sq, null, null);
   }
 
   // ---- the drop window (task 5, design 4.3) --------------------------------
@@ -2000,6 +2181,11 @@ export function createSocial({
   function openDoor(ws, id, row) {
     const mark = {};
     doorOut.set(row, mark);
+    // A ROW AT THE DOOR IS NOT PAST IT (U3), so a squad counting down stops,
+    // and is told: nothing else is pushed until the read lands. The read's
+    // own push, when it lets the row in, counts again.
+    const f = squads.memberOf(row.key);
+    if (f && f.member === row && dropCountdown(f.squad)) pushSquad(f.squad, null, null).catch(() => {});
     doorCheck(ws, id, row, mark);
   }
   // ONLY A GUEST ROW HAS A DOOR (T6-R2-3). A row keyed by an account was made
