@@ -1177,9 +1177,12 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     if ((last(wa2, 'friend') || {}).error === 'no_such_request' && st2.friends.size === 0)
       ok('(e2) accept: a pending request from someone who has since blocked YOU is refused too, as a request that is gone (D-BLOCK-4)');
     else fail('(e2) accept while blocked: ' + JSON.stringify(last(wa2, 'friend')) + ' rows ' + JSON.stringify([...st2.friends]));
+    // The panel does not show this row (e3): their block hides it. So decline
+    // answers it as a request that is gone, and still clears the row, so
+    // nothing is stranded in the table either (dc).
     await S2.handle(wa2, { type: 'friend', op: 'decline', from: B });
-    if ((last(wa2, 'friend') || {}).ok === true && st2.requests.size === 0)
-      ok('(e2) decline: clearing the row still works — a block must not strand a request in the panel');
+    if ((last(wa2, 'friend') || {}).error === 'no_such_request' && st2.requests.size === 0)
+      ok('(e2) decline: a request their block hides from the panel is no_such_request, as one that is gone, and the row is still cleared');
     else fail('(e2) decline while blocked: ' + JSON.stringify(last(wa2, 'friend')) + ' rows ' + JSON.stringify([...st2.requests]));
     // The other direction into the same wall: a fresh request, rather than one
     // that predates the block.
@@ -2703,11 +2706,25 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
   // them, the block deletes that request and B's panel is pushed without it.
   // While no hand act did the same, a request vanishing from B's panel could
   // only mean a block. Withdraw is that hand act, so (v) compares what B
-  // receives from each. The op reads the caller's own outgoing requests and
-  // nothing else: it is not gated on blocks, and nothing about the other
-  // player is read, so a withdraw aimed at someone who blocked the caller
-  // answers and costs what a genuine miss does (iv).
+  // receives from each. The op reads the caller's own requests and blocks
+  // and nothing else, side by side: it is not gated on blocks, and nothing
+  // about the other player is read, so a withdraw aimed at someone who
+  // blocked the caller answers and costs what a genuine miss does (iv).
   const WD_WRITES = new Set(['addFriendship', 'removeFriendship', 'addRequest', 'deleteRequest', 'addBlock', 'removeBlock']);
+  // WHAT AN ANSWER COSTS, measured as (db4) measures it: per read, how many
+  // reads had come back before it was asked. Two reads side by side are
+  // [0, 0]; a read that waited for the other is [0, 1]. Installed after a
+  // world is set up, so only the op under test is counted.
+  const WD_READS = ['requestsOf', 'blockIdsOf'];
+  const tripsOf = (st) => {
+    const trips = [];
+    let back = 0;
+    for (const m of WD_READS) {
+      const real = st[m];
+      st[m] = async function (...a) { trips.push(back); try { return await real.apply(st, a); } finally { back++; } };
+    }
+    return trips;
+  };
   {
     // (i) THE ROW GOES, AND BOTH PANELS ARE TOLD. The caller is answered ok
     // with its id echoed, then every device of the caller and the other
@@ -2736,10 +2753,11 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     else fail('(wd) withdraw pushes: ' + JSON.stringify({ a: fa, a2: fa2, b: fb }));
   }
   {
-    // (ii) EVERY MISS IS no_such_request. It costs the caller's one read and
-    // no write, and pushes nobody: an id nobody holds, B's own request to A
-    // (not A's to withdraw), someone else's request, a request A already
-    // withdrew, A's own id, and ids that are not ids at all.
+    // (ii) EVERY MISS IS no_such_request. It costs the caller's two reads
+    // (none for an id that is not one) and no write, and pushes nobody: an
+    // id nobody holds, B's own request to A (not A's to withdraw), someone
+    // else's request, a request A already withdrew, A's own id, and ids that
+    // are not ids at all.
     const st = memStore(ROWS);
     await st.addRequest(B, A);
     await st.addRequest(C, D);
@@ -2753,6 +2771,7 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     const bad = [];
     const MISSES = [['unknown', uid(99)], ['their request to me', B], ['someone else\'s', D], ['already withdrawn', E], ['self', A],
       ['not a uuid', 'not-a-uuid'], ['empty', ''], ['absent', undefined], ['a number', 42], ['an object', { id: E }]];
+    const MALFORMED = new Set(['not a uuid', 'empty', 'absent', 'a number', 'an object']);
     for (const [what, to] of MISSES) {
       for (const w of [wa, wb, wd, we]) w.rx.length = 0;
       st.calls.length = 0;
@@ -2760,10 +2779,11 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
       if (to !== undefined) frame.to = to;
       await S.handle(wa, frame);
       const got = { a: wa.rx, others: wb.rx.length + wd.rx.length + we.rx.length, calls: st.calls.slice(), rows: JSON.stringify([...st.requests]) };
-      if (!(same(got.a, [{ type: 'friend', op: 'withdraw', error: 'no_such_request', id: 'q' }]) && !got.others && same(got.calls, ['requestsOf']) && got.rows === keep))
+      const reads = MALFORMED.has(what) ? [] : ['requestsOf', 'blockIdsOf'];
+      if (!(same(got.a, [{ type: 'friend', op: 'withdraw', error: 'no_such_request', id: 'q' }]) && !got.others && same(got.calls, reads) && got.rows === keep))
         bad.push({ what, ...got });
     }
-    if (!bad.length) ok(`(wd) withdraw: all ${MISSES.length} misses (unknown, their request, someone else's, already withdrawn, self, malformed) answer no_such_request for one read, write nothing and push nobody`);
+    if (!bad.length) ok(`(wd) withdraw: all ${MISSES.length} misses (unknown, their request, someone else's, already withdrawn, self, malformed) answer no_such_request for the caller's requests and blocks (no read for a malformed id), write nothing and push nobody`);
     else fail('(wd) withdraw misses: ' + JSON.stringify(bad));
   }
   {
@@ -2790,12 +2810,14 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
   {
     // (iv) B BLOCKED A, AND A WITHDRAWS. B's block took A's request with it,
     // so the answer is a genuine miss, byte for byte and read for read: the
-    // caller's own requests, nothing about B, and nothing pushed to B. And a
-    // request that OUTLIVED B's block (a half-failed teardown) is withdrawn
-    // exactly as it would be with no block at all, up to the answer: the op
-    // reads nothing that could tell the two apart. `upto` is the store calls
-    // made before the answer went out.
-    const world = async (block, row) => {
+    // caller's own requests and blocks, side by side, nothing about B, and
+    // nothing pushed to B. A request that OUTLIVED B's block (a half-failed
+    // teardown) is hidden from A's panel by that block (e3), so it is
+    // answered the same way at the same cost, and only then deleted, with
+    // nobody pushed: before this, it answered ok, which a request that is
+    // gone never does. `upto` is the store calls made before the answer went
+    // out; `trips` is (iv)'s round-trip measure of the two reads.
+    const world = async (block, row, boom = null) => {
       const st = memStore(ROWS);
       const upto = [];
       const S = createSocial({ store: st, terms: [], now: () => CLOCK,
@@ -2807,19 +2829,36 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
       if (block === 'row') await st.addBlock(B, A);
       await sleep(60);
       wa.rx.length = 0; wb.rx.length = 0; st.calls.length = 0;
+      const trips = tripsOf(st);
+      if (boom) st.boom.add(boom);
       await S.handle(wa, { type: 'friend', op: 'withdraw', to: B, id: 'q' });
-      return { a: JSON.stringify(wa.rx), b: wb.rx.length, upto: upto[0], all: st.calls.slice(), rows: [...st.requests] };
+      await sleep(60);
+      return { a: JSON.stringify(wa.rx), b: wb.rx.length, upto: upto[0], all: st.calls.slice(), trips, rows: [...st.requests] };
     };
+    const gone = JSON.stringify([{ type: 'friend', op: 'withdraw', error: 'no_such_request', id: 'q' }]);
     const blocked = await world('op', false), miss = await world(null, false);
-    if (blocked.a === JSON.stringify([{ type: 'friend', op: 'withdraw', error: 'no_such_request', id: 'q' }]) && blocked.a === miss.a
-        && same(blocked.all, ['requestsOf']) && same(miss.all, ['requestsOf']) && !blocked.b && !miss.b && !blocked.rows.length)
-      ok('(wd) withdraw: after B blocked A, A\'s withdraw is byte for byte a genuine miss, one read of A\'s own requests and nothing about B, and B is sent nothing');
+    if (blocked.a === gone && blocked.a === miss.a && same(blocked.all, WD_READS) && same(miss.all, WD_READS)
+        && same(blocked.trips, [0, 0]) && same(miss.trips, [0, 0]) && !blocked.b && !miss.b && !blocked.rows.length)
+      ok('(wd) withdraw: after B blocked A, A\'s withdraw is byte for byte a genuine miss, A\'s own requests and blocks read in one round trip and nothing about B, and B is sent nothing');
     else fail('(wd) withdraw after being blocked: ' + JSON.stringify({ blocked, miss }));
-    const outlived = await world('row', true), plain = await world(null, true);
-    if (outlived.a === plain.a && same(outlived.upto, ['requestsOf', 'deleteRequest']) && same(plain.upto, outlived.upto)
-        && outlived.b === plain.b && !outlived.rows.length && !plain.rows.length && JSON.parse(outlived.a)[0].ok === true)
-      ok('(wd) withdraw: a request that outlived B\'s block is withdrawn as it would be with no block — the same answer, the same reads before it');
-    else fail('(wd) withdraw of a request that outlived the block: ' + JSON.stringify({ outlived, plain }));
+    const outlived = await world('row', true);
+    if (outlived.a === miss.a && same(outlived.upto, miss.upto) && same(outlived.trips, miss.trips)
+        && same(outlived.all, [...WD_READS, 'deleteRequest']) && !outlived.rows.length && !outlived.b)
+      ok('(wd) withdraw: a request that outlived B\'s block, hidden from A\'s panel, is answered byte for byte as a genuine miss at the same reads and round trip, then deleted quietly: A hears nothing more and B is sent nothing');
+    else fail('(wd) withdraw of a request that outlived the block: ' + JSON.stringify({ outlived, miss }));
+    // The first two trips are the op's own reads; the snapshots pushed after
+    // the answer read again, and are not the answer's cost.
+    const plain = await world(null, true);
+    if (JSON.parse(plain.a)[0].ok === true && same(plain.upto, [...WD_READS, 'deleteRequest']) && same(plain.trips.slice(0, 2), outlived.trips) && !plain.rows.length)
+      ok('(wd) withdraw: a request the panel shows costs the same two reads in the same round trip as a hidden one, then is withdrawn ok');
+    else fail('(wd) withdraw of a shown request: ' + JSON.stringify({ plain, outlived }));
+    // The cleanup comes after the answer, so a cleanup that fails must not
+    // add a second frame: an `unavailable` after no_such_request is a tell
+    // a genuine miss never gives.
+    const failed = await world('row', true, 'deleteRequest');
+    if (failed.a === miss.a && same(failed.rows, [A + '>' + B]) && !failed.b)
+      ok('(wd) withdraw: a hidden row whose cleanup fails still gets the one answer and nothing after it, and the row stays hidden for the sweep');
+    else fail('(wd) withdraw, failed cleanup: ' + JSON.stringify(failed));
   }
   {
     // (v) THE TWIN (D-BLOCK-5 J). A's request to B is the only row between
@@ -2856,6 +2895,77 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     if (blk.b === wd.b && !blk.c && !wd.c)
       ok('(wd) the twin: B receives, on both devices, exactly the same frames from A\'s withdraw as from A\'s block (D-BLOCK-5 J)');
     else fail('(wd) twin: ' + JSON.stringify({ block: blk.b, withdraw: wd.b, c: [blk.c, wd.c] }));
+  }
+
+  // ---- (dc) decline answers from the panel too ------------------------------
+  // B's request to A is the row. In the outlived worlds it survived a block
+  // that should have deleted it (A's own, B's, or both), so A's panel hides
+  // it (e3). Before this, A's decline answered it ok, where a request that
+  // is gone answers no_such_request: an answer that told A about B's block
+  // (D-BLOCK-4). Now it is answered byte for byte as a request that is gone,
+  // at the same reads in the same round trip before the answer, and only
+  // then deleted, with nobody pushed. A request the panel shows is still
+  // declined for the same reads, and both panels are told (e).
+  {
+    const world = async (blocks, row, boom = null) => {
+      const st = memStore(ROWS);
+      const upto = [];
+      const S = createSocial({ store: st, terms: [], now: () => CLOCK,
+        send: (ws, f) => { if (f.type === 'friend' && f.op === 'decline') upto.push(st.calls.slice()); ws.rx.push(f); } });
+      const wa = mkws(A), wb = mkws(B);
+      S.onAuth(wa); S.onAuth(wb);
+      if (row) await st.addRequest(B, A);
+      for (const [x, y] of blocks) await st.addBlock(x, y);
+      await sleep(60);
+      wa.rx.length = 0; wb.rx.length = 0; st.calls.length = 0;
+      const trips = tripsOf(st);
+      if (boom) st.boom.add(boom);
+      await S.handle(wa, { type: 'friend', op: 'decline', from: B, id: 'q' });
+      await sleep(60);
+      return { a: JSON.stringify(wa.rx), b: wb.rx.length, upto: upto[0], all: st.calls.slice(), trips, rows: [...st.requests] };
+    };
+    const gone = JSON.stringify([{ type: 'friend', op: 'decline', error: 'no_such_request', id: 'q' }]);
+    const miss = await world([], false);
+    if (miss.a === gone && same(miss.all, WD_READS) && same(miss.trips, [0, 0]) && !miss.b)
+      ok('(dc) decline: a request that is gone is no_such_request for the caller\'s requests and blocks, read in one round trip');
+    else fail('(dc) decline miss: ' + JSON.stringify(miss));
+    const bad = [];
+    for (const [who, blocks] of [['A blocked B', [[A, B]]], ['B blocked A', [[B, A]]], ['both ways', [[A, B], [B, A]]]]) {
+      const w = await world(blocks, true);
+      if (!(w.a === miss.a && same(w.upto, miss.upto) && same(w.trips, miss.trips)
+          && same(w.all, [...WD_READS, 'deleteRequest']) && !w.rows.length && !w.b))
+        bad.push({ who, ...w });
+    }
+    if (!bad.length)
+      ok('(dc) decline: a request that outlived a block (mine, theirs or both), hidden from the panel, is answered byte for byte as one that is gone, at the same reads and round trip, then deleted quietly: nothing more to A and nothing to B');
+    else fail('(dc) decline of a hidden request: ' + JSON.stringify({ bad, miss }));
+    // The first two trips are the op's own, as in (wd) (iv).
+    const shown = await world([], true);
+    const sa = JSON.parse(shown.a);
+    if (sa[0] && sa[0].ok === true && same(shown.upto, [...WD_READS, 'deleteRequest']) && same(shown.trips.slice(0, 2), miss.trips) && !shown.rows.length
+        && sa.filter((f) => f.type === 'friends').length === 1 && shown.b === 1)
+      ok('(dc) decline: a request the panel shows is still cleared ok, for the same two reads in the same round trip, and both panels are pushed');
+    else fail('(dc) decline of a shown request: ' + JSON.stringify(shown));
+    const failed = await world([[B, A]], true, 'deleteRequest');
+    if (failed.a === miss.a && same(failed.rows, [B + '>' + A]) && !failed.b)
+      ok('(dc) decline: a hidden row whose cleanup fails still gets the one answer and nothing after it, and the row stays hidden for the sweep');
+    else fail('(dc) decline, failed cleanup: ' + JSON.stringify(failed));
+    // An id that is not one is in no list, so it is answered before the
+    // store, as withdraw's are (wd) (ii).
+    const st = memStore(ROWS);
+    await st.addRequest(B, A);
+    const S = mkSocial(st);
+    const wa = mkws(A); S.onAuth(wa);
+    const junk = [];
+    for (const from of ['not-a-uuid', '', undefined, 42, { id: B }]) {
+      wa.rx.length = 0; st.calls.length = 0;
+      const frame = { type: 'friend', op: 'decline', id: 'q' };
+      if (from !== undefined) frame.from = from;
+      await S.handle(wa, frame);
+      if (!(JSON.stringify(wa.rx) === gone && !st.calls.length && st.requests.size === 1)) junk.push({ from, a: wa.rx, calls: st.calls.slice() });
+    }
+    if (!junk.length) ok('(dc) decline: an id that is not one is no_such_request with no store call at all');
+    else fail('(dc) decline, malformed ids: ' + JSON.stringify(junk));
   }
 }
 

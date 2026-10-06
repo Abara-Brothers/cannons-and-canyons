@@ -1294,9 +1294,21 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   await sleep(60);
   wo = await outRows();
   fv = await scr();
-  if (wo.cancels === 0 && wo.rows === null && wo.note === null && !fv.cards.includes('Echo Five') && fv.cards.includes('Dune Four') && (await errCols()).length === 0)
-    ok(`${V}: friends — the row and its count line leave on the panel push, the incoming request stays, and nothing is said`);
-  else fail(`${V}: outgoing row after the push ${JSON.stringify({ wo, cards: fv.cards })}`);
+  // NOTHING IS SAID means neither place a word could go: no column error and
+  // no toast. arm() emptied the toast ledger before the tap.
+  const saidToasts = await toasts();
+  if (wo.cancels === 0 && wo.rows === null && wo.note === null && !fv.cards.includes('Echo Five') && fv.cards.includes('Dune Four') && (await errCols()).length === 0
+      && saidToasts.length === 0)
+    ok(`${V}: friends — the row and its count line leave on the panel push, the incoming request stays, and nothing is said: no column error and no toast`);
+  else fail(`${V}: outgoing row after the push ${JSON.stringify({ wo, cards: fv.cards, toasts: saidToasts })}`);
+  // A REQUEST TO A PLAYER WITH NO NAME. callsign null is what the server
+  // sends for a name it cannot prove (FSNAP.noname), and Cancel's label then
+  // names no one rather than reading "Cancel request to null".
+  await arm(`{friends:[],requests:{in:[],out:[{id:'${ECHO}',callsign:null}]},blocked:[],friendCode:'ABC234',callsign:'Anvil Six'}`);
+  wo = await outRows();
+  if (wo.rows && wo.rows.length === 1 && wo.rows[0].fr === 'wd:' + ECHO && wo.rows[0].label === 'Cancel request to this player')
+    ok(`${V}: friends — Cancel on a request to a player with no name reads "Cancel request to this player"`);
+  else fail(`${V}: nameless outgoing row ${JSON.stringify(wo)}`);
   for (const [code, words] of [['no_such_request', 'That request is already gone.'], ['unavailable', 'Friends are not available right now. Try again later.']]) {
     await arm(FSNAP.reqs);
     await click(`#bay [data-fr="wd:${ECHO}"]`);

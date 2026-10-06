@@ -1469,6 +1469,7 @@ function connect() {
   S.ws = ws;
   ws.onopen = () => {
     S.connected = true; $('connErr').classList.add('hidden');
+    wsOpened = true;
     // Clear any "cannot reach the server" line from a tap made while down —
     // otherwise it outlives the problem it described (ISSUE-017).
     const he = $('homeError');
@@ -1496,7 +1497,9 @@ function connect() {
     // still leaves a socket a guest may legitimately join a squad down (D5).
     // ON THIS SOCKET ONLY: a hello that settles after its socket has been
     // replaced leaves the link parked for the new socket's own hello.
-    const flush = () => flushSquadJoin(ws);
+    // A NOTIFICATION TAP that landed before this boot's first socket opened
+    // waits here too (pendingPushTap), and goes after the link, the newer claim.
+    const flush = () => { flushSquadJoin(ws); flushPushTap(ws); };
     sendHello(ws).then(socialBoot, socialBoot).then(flush, flush);
   };
   ws.onclose = () => {
@@ -2428,6 +2431,31 @@ function joinSquadByCode(code) {
 }
 function flushSquadJoin(ws) { if (pendingSquadJoin && ws === S.ws) joinSquadByCode(pendingSquadJoin); }
 
+// A NOTIFICATION TAP THAT HAS TO WAIT: the url of the newest one, '' for none.
+// One slot, because two taps waiting are one too many to act on: the newest is
+// where the player last asked to go. Two things make a tap wait, and neither
+// may lose it:
+//   * A HELD SEAT'S RESUME IS IN FLIGHT (onPushTap below). If the seat is
+//     restored it wins, and 'restore' empties the slot. If it is REFUSED (the
+//     seat is gone), 'resumeError' replays the tap once the record is
+//     cleared: nothing is left for it to lose to, and dropping it there
+//     lost the tap in silence.
+//   * THIS BOOT'S SOCKET HAS NOT OPENED YET. intent() parks a room join in
+//     pendingIntent as well, but it says so on the way: a 'Reconnecting'
+//     toast over the intro and 'Cannot reach the server' in #homeError, on a
+//     launch that was never connected and is not reconnecting. So the tap
+//     waits for the socket's own hello hook, where flushSquadJoin runs, and
+//     a launch tap is quiet. A tap later in the session, on a socket that
+//     has dropped, still goes to intent() and is told about it.
+// A REPLAY GOES BACK THROUGH onPushTap, so it is arbitrated against the state
+// it lands in, exactly as a fresh tap would be: a resume still unanswered at
+// the hello hook parks it again, for 'resumeError' to replay.
+let pendingPushTap = '';
+// Whether a real socket has opened on this boot. Only connect()'s onopen sets it.
+let wsOpened = false;
+function replayPushTap() { const u = pendingPushTap; pendingPushTap = ''; if (u) onPushTap(u); }
+function flushPushTap(ws) { if (pendingPushTap && ws === S.ws) replayPushTap(); }
+
 // The body of the native notification tap, named so a suite can drive the real
 // thing; listenForPushTaps is the one line that hands it the url.
 //
@@ -2445,15 +2473,21 @@ function flushSquadJoin(ws) { if (pendingSquadJoin && ws === S.ws) joinSquadByCo
 //     the record lives until that resume is answered: 'restore' makes
 //     S.playing true, 'resumeError' clears it. A join for another room sent
 //     behind that resume would cost the player the held seat, and a squad join
-//     would land on top of the match it restores. The tap is DROPPED, not
-//     queued, for the reason boot gives; and when the held seat IS the tap's
-//     room (an async duel's turn nudge), the resume takes the player there.
+//     would land on top of the match it restores. So the tap WAITS in
+//     pendingPushTap: a restore drops it (the seat wins, as in boot), a
+//     refusal replays it. Unlike boot's loser, it has no address bar to come
+//     back from. When the held seat IS the tap's room (an async duel's turn
+//     nudge), the resume takes the player there;
+//   * before this boot's first socket opens, it waits for that socket's hello
+//     hook, quietly (pendingPushTap says why).
 function onPushTap(url) {
   const link = deepLink(url);
   if (!link) return;
+  pendingPushTap = '';                           // the newest tap wins: one parked before it is spent
   if (link.code === S.code) return;              // already where the tap points
   if (S.playing) { showToast('Finish this match first'); return; }
-  if (!S.code && loadResume()) return;           // a held seat's resume is in flight, and it wins
+  if (!S.code && loadResume()) { pendingPushTap = url; return; }   // a held seat's resume is in flight, and it wins if it lands
+  if (!wsOpened) { pendingPushTap = url; connect(); return; }       // a launch tap waits for the first socket's hello
   if (link.kind === 'room') {
     $('codeInput').value = link.code;
     intent({ type: 'join', code: link.code, name: myName(), skin: mySkin() });
@@ -2713,6 +2747,9 @@ function handle(m) {
     case 'restore':
       applySnapshot(m); saveResume(m.code, m.token);
       showToast('Reconnected — battle on!');
+      // The held seat won: a notification tap that waited on its resume is
+      // dropped, as boot drops a link that loses to a held seat.
+      pendingPushTap = '';
       break;
     // The server is going down for a deploy or restart. It arrives just before
     // the socket closes; onclose already schedules a reconnect, so all this
@@ -2730,6 +2767,10 @@ function handle(m) {
       if (S.playing) {
         showToast('That battle has ended.');
         setTimeout(() => location.reload(), 1600);
+      } else {
+        // The seat a notification tap waited on is gone, so the tap goes now,
+        // once, with the record already cleared (pendingPushTap).
+        replayPushTap();
       }
       break;
     case 'oppConn': {

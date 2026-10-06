@@ -444,7 +444,9 @@ await send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
       if (gate && !(window.__ccIntro && window.__ccIntro.state === 'running') && n++ < 300) { setTimeout(go, 10); return; }
       if (ev === 'pushNotificationActionPerformed') {
         let resume = null; try { resume = !!localStorage.getItem('cc_resume'); } catch {}
-        window.__taps.push({ intro: window.__ccIntro ? window.__ccIntro.state : null, resume });
+        // connected: whether this boot's socket was open when the tap landed.
+        const connected = typeof S === 'object' && S ? !!S.connected : null;
+        window.__taps.push({ intro: window.__ccIntro ? window.__ccIntro.state : null, resume, connected });
       }
       cbs.forEach((cb) => cb(data));
     };
@@ -478,6 +480,49 @@ await send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
   if (intro) { gate = true; window.__ccNoIntro = false; try { sessionStorage.removeItem('cc_intro'); } catch {} }
   if (tap) notify('pushNotificationActionPerformed', JSON.parse(tap));
 })();` });
+// HOLDING THE SERVER'S ANSWER, AND HEARING WHAT THE PAGE SAYS. Two more
+// recorders for part D, installed the same way and over the same socket.
+//   * A case that plants a JSON list of frame types in sessionStorage
+//     ('cc_test_hold') has every frame of those types that the server sends
+//     HELD, on arrival, until window.__release() hands them to the page's own
+//     handler. So a tap can be landed in the window between onopen sending a
+//     resume and the server's answer, which on a local server is a few
+//     milliseconds wide. The page sets ws.onmessage as it always does; the
+//     setter is an own property of the socket, and the one message listener
+//     calls whatever handler is set when the frame is delivered.
+//   * window.__said records every toast the page shows and every text
+//     written to #homeError, from document start, so a case can prove the
+//     page SAID nothing: both are gone again a moment later (a toast after
+//     1.9 s, #homeError when onopen clears it), so the end state cannot.
+await send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
+  let types = null;
+  try { types = JSON.parse(sessionStorage.getItem('cc_test_hold') || 'null'); sessionStorage.removeItem('cc_test_hold'); } catch {}
+  window.__held = Array.isArray(types) ? [] : null;
+  window.__release = () => { const q = window.__held || []; window.__held = null; q.forEach((go) => go()); return q.length; };
+  const Prev = window.WebSocket;
+  const Hold = function (url, proto) {
+    const s = new Prev(url, proto);
+    let fn = null;
+    Object.defineProperty(s, 'onmessage', { configurable: true, get: () => fn, set: (f) => { fn = f; } });
+    s.addEventListener('message', (e) => {
+      let t = null; try { t = JSON.parse(e.data).type; } catch {}
+      if (window.__held && types.includes(t)) { window.__held.push(() => { if (fn) fn.call(s, e); }); return; }
+      if (fn) fn.call(s, e);
+    });
+    return s;
+  };
+  Hold.prototype = Prev.prototype;
+  Hold.OPEN = Prev.OPEN; Hold.CONNECTING = Prev.CONNECTING; Hold.CLOSING = Prev.CLOSING; Hold.CLOSED = Prev.CLOSED;
+  window.WebSocket = Hold;
+  window.__said = { toasts: [], homeError: [] };
+  new MutationObserver((recs) => {
+    for (const r of recs) {
+      for (const n of r.addedNodes) if (n.nodeType === 1 && n.classList.contains('toast-item')) window.__said.toasts.push(n.textContent);
+      const el = r.target.nodeType === 1 ? r.target : r.target.parentNode;
+      if (el && el.id === 'homeError' && el.textContent) window.__said.homeError.push(el.textContent);
+    }
+  }).observe(document, { childList: true, subtree: true, characterData: true });
+})();` });
 native = true;
 
 // The tap that will launch the NEXT page: planted on this one, read and fired
@@ -486,6 +531,13 @@ const plant = (url, intro = false) => ev(`(() => {
   sessionStorage.setItem('cc_test_tap', ${JSON.stringify(JSON.stringify({ actionId: 'tap', notification: { data: { url } } }))});
   ${intro ? "sessionStorage.setItem('cc_test_intro', '1');" : ''}
   return true; })()`);
+// The answers of these types that the NEXT page receives are held until
+// release() (the second recorder above).
+const holdNext = (types) => ev(`(() => { sessionStorage.setItem('cc_test_hold', ${JSON.stringify(JSON.stringify(types))}); return true; })()`);
+const release = () => ev('window.__release()');
+const said = () => ev('JSON.parse(JSON.stringify(window.__said))');
+// A tap on the LIVE page, delivered by the bridge as a real one is.
+const fire = (url) => ev(`(() => { window.__cap.fire('pushNotificationActionPerformed', ${JSON.stringify({ actionId: 'tap', notification: { data: { url } } })}); return true; })()`);
 const capCalls = () => ev('JSON.stringify(window.__cap.calls)').then(JSON.parse);
 const taps = () => ev('JSON.stringify(window.__taps)').then(JSON.parse);
 const sentSquadJoins = () => ev('JSON.stringify(window.__sent)').then(JSON.parse).then((f) => f.filter((m) => m.type === 'squad' && m.op === 'join'));
@@ -527,11 +579,18 @@ const introEnded = async () => {
   await plant(`/?room=${host.code}`);
   await nav('');
   const seated = await seatedIn(host.code);
-  const f = await tx(), r = roomJoins(f), s = squadJoins(f), t = await taps(), calls = await capCalls();
+  const f = await tx(), r = roomJoins(f), s = squadJoins(f), t = await taps(), calls = await capCalls(), heard = await said();
   host.close();
   if (t.length === 1 && r.length === 1 && r[0].code === host.code && !s.length && seated) {
     ok('D1: a launch tap on /?room=CODE, with Nudges never pressed, is delivered once at boot and sends one join, and the player takes the seat');
   } else fail(`D1: launch tap on a waiting room — taps ${JSON.stringify(t)}, room ${JSON.stringify(r)}, squad ${JSON.stringify(s)}, seated ${seated}`);
+  // A LAUNCH TAP IS QUIET. It landed before this boot's socket opened, and
+  // through intent() that said 'Reconnecting' over the intro and wrote
+  // 'Cannot reach the server' to #homeError, on a launch that was never
+  // connected. It waits for the socket's hello instead, and says neither.
+  if (t.length === 1 && t[0].connected === false && !heard.toasts.some((x) => /Reconnecting|No connection/.test(x)) && !heard.homeError.length) {
+    ok('D1: and it is quiet: it landed before the socket opened, and the page showed no Reconnecting toast and wrote nothing to #homeError');
+  } else fail(`D1: launch tap before the socket opened was not quiet — taps ${JSON.stringify(t)}, said ${JSON.stringify(heard)}`);
   if (JSON.stringify(calls) === BOOT_ONLY) ok('D2: boot added one tap listener and asked for nothing else: no permission prompt, no register()');
   else fail(`D2: boot's calls on the plugin were ${JSON.stringify(calls)}, expected ${BOOT_ONLY}`);
 }
@@ -559,17 +618,92 @@ const introEnded = async () => {
   } else fail(`D4: open-but-unintroduced socket — sent early ${JSON.stringify(early)}, parked=${JSON.stringify(parked)}, then ${JSON.stringify(m)}`);
 }
 for (const url of ['/?room=ABCD', '/?squad=ABCD']) {
-  // A HELD SEAT BEATS THE TAP, as it beats both links in boot (B1, B2). The
-  // planted record names no room on this server, so the resume is refused --
-  // and the tap stays dropped all the same, exactly as a boot link does.
-  await seed(true);
-  await plant(url);
+  for (const when of ['connecting', 'open']) {
+    // A HELD SEAT BEATS THE TAP, as it beats both links in boot (B1, B2), but
+    // a tap has no address bar to come back from, so it WAITS for the
+    // resume's answer instead of being dropped. The planted record names no
+    // room on this server, so the resume is refused (resumeError) and the
+    // tap then goes, once, after the resume. The answer is HELD so the wait
+    // can be seen. D5 lands the tap while the socket is still CONNECTING;
+    // D9 lands it after onopen has sent the resume and before the server
+    // has answered it.
+    const D = when === 'connecting' ? 'D5' : 'D9';
+    await seed(true);
+    await holdNext(['resumeError']);
+    if (when === 'connecting') await plant(url);
+    await nav('');
+    if (when === 'open') {
+      for (let i = 0; i < 30 && !(await tx()).some((m) => m.type === 'resume'); i++) await sleep(100);
+      await fire(url);
+      await sleep(400);
+    }
+    const t = await taps(), early = await tx(), parked = await ev('pendingPushTap'), held = await ev('window.__held ? window.__held.length : -1');
+    const n = await release();
+    await sleep(700);
+    const f = await tx(), after = await ev('pendingPushTap'), rec = await ev(`localStorage.getItem('cc_resume')`);
+    const joins = url.includes('room') ? roomJoins : squadJoins;
+    const resumes = f.filter((m) => m.type === 'resume' && m.code === 'WXYZ');
+    const at = (m) => f.indexOf(m);
+    const j = joins(f);
+    const waited = t.length === 1 && t[0].resume === true && t[0].connected === (when === 'open')
+      && !joins(early).length && parked === url && held === 1 && n === 1;
+    if (waited) ok(`${D}: a tap on ${url} landing ${when === 'open' ? 'after the resume went and before its answer' : 'while the socket is still connecting'}, with a held seat, sends nothing and waits`);
+    else fail(`${D}: held seat + tap on ${url} (${when}) — taps ${JSON.stringify(t)}, early ${JSON.stringify(joins(early))}, parked ${JSON.stringify(parked)}, held ${held}, released ${n}`);
+    if (resumes.length === 1 && j.length === 1 && j[0].code === 'ABCD' && at(j[0]) > at(resumes[0]) && after === '' && rec === null) {
+      ok(`${D}: the resume is refused, so the record is cleared and the tap on ${url} goes once, after the resume`);
+    } else fail(`${D}: after the refusal (${when}) — resumes ${JSON.stringify(resumes)}, joins ${JSON.stringify(j)}, parked ${JSON.stringify(after)}, record ${rec}`);
+  }
+}
+{
+  // A HELD SEAT THAT IS RESTORED WINS: the waiting tap is dropped, as boot
+  // drops a link that loses to a held seat. A real seat this time: the page
+  // takes one in a host's duel, then the app is launched again by a tap on
+  // a squad, with the restore held until the tap has landed and waited.
+  const host = await hostRoom();
+  await seed(false);
+  await plant(`/?room=${host.code}`);
   await nav('');
-  const f = await tx(), t = await taps();
-  const resumes = f.filter((m) => m.type === 'resume' && m.code === 'WXYZ');
-  if (t.length === 1 && t[0].resume === true && !roomJoins(f).length && !squadJoins(f).length && resumes.length === 1) {
-    ok(`D5: a launch tap on ${url} that lands while a held seat's resume is in flight sends no join; the resume goes, once`);
-  } else fail(`D5: held seat + tap on ${url} — taps ${JSON.stringify(t)}, frames ${JSON.stringify(f.filter((m) => m.type === 'join' || m.type === 'squad' || m.type === 'resume'))}`);
+  const seated = await seatedIn(host.code);
+  await holdNext(['restore']);
+  await plant('/?squad=ABCD');
+  await nav('');
+  const t = await taps(), parked = await ev('pendingPushTap'), held = await ev('window.__held ? window.__held.length : -1');
+  await release();
+  const back = await seatedIn(host.code);
+  await sleep(700);
+  const f = await tx(), after = await ev('pendingPushTap');
+  host.close();
+  const resumes = f.filter((m) => m.type === 'resume' && m.code === host.code);
+  if (seated && t.length === 1 && t[0].resume === true && parked === '/?squad=ABCD' && held === 1 && back
+      && resumes.length === 1 && !squadJoins(f).length && !roomJoins(f).length && after === '') {
+    ok('D10: a tap that waited on a held seat is dropped when the seat is restored: the player is back in the match and no join is sent');
+  } else fail(`D10: restored seat + tap — seated ${seated}, taps ${JSON.stringify(t)}, parked ${JSON.stringify(parked)}, held ${held}, back ${back}, resumes ${JSON.stringify(resumes)}, joins ${JSON.stringify(f.filter((m) => m.type === 'join' || m.type === 'squad'))}, parked after ${JSON.stringify(after)}`);
+}
+{
+  // ONE SLOT, AND THE NEWEST TAP WINS. Two taps wait on a held seat's resume:
+  // once it is refused, only the second goes. And a tap that is acted on at
+  // once spends one still waiting, so a later flush cannot drag the player
+  // to the older one; driven, as D4 is, by putting a tap in the slot and
+  // calling the hello hook's flush after a tap that goes straight out.
+  await seed(true);
+  await holdNext(['resumeError']);
+  await nav('');
+  for (let i = 0; i < 30 && !(await tx()).some((m) => m.type === 'resume'); i++) await sleep(100);
+  await fire('/?room=ABCD');
+  await sleep(200);
+  await fire('/?squad=ABCD');
+  await sleep(300);
+  const parked = await ev('pendingPushTap');
+  await release();
+  await sleep(700);
+  const f = await tx();
+  await ev(`(() => { window.__tx = []; pendingPushTap = '/?squad=ABCD'; onPushTap('/?room=ABCD'); flushPushTap(S.ws); return true; })()`);
+  await sleep(500);
+  const g = await tx(), after = await ev('pendingPushTap');
+  if (parked === '/?squad=ABCD' && !roomJoins(f).length && squadJoins(f).length === 1
+      && roomJoins(g).length === 1 && !squadJoins(g).length && after === '') {
+    ok('D11: one slot, the newest tap wins: of two taps waiting on a refused resume only the second goes, and a tap acted on at once spends the one still waiting');
+  } else fail(`D11: newest tap — parked ${JSON.stringify(parked)}, after the refusal ${JSON.stringify(f.filter((m) => m.type === 'join' || m.type === 'squad'))}, after a direct tap and a flush ${JSON.stringify(g.filter((m) => m.type === 'join' || m.type === 'squad'))}, slot ${JSON.stringify(after)}`);
 }
 {
   await seed(false);

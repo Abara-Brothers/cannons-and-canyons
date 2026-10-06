@@ -2658,13 +2658,56 @@ export function createSocial({
     await pushBoth(ws.userId, from);
   }
 
+  // ANSWERED FROM THE ROWS THE CALLER'S PANEL SHOWS, NOT FROM THE TABLE.
+  // Decline and withdraw each act on one request row of the caller's, and
+  // friendsSnapshot hides any request across a block either way. A block's
+  // teardown deletes that row as it writes the block; when the delete threw,
+  // the row OUTLIVES the block in the table while the panel already went on
+  // without it. Answered from the raw rows, the op said ok about a request
+  // the caller cannot see, where a request that is gone says
+  // no_such_request, and that difference told the caller about a block
+  // (D-BLOCK-4). So the row counts only if the panel would show it, by
+  // friendsSnapshot's own block filter.
+  //
+  // THE BLOCK READ GOES OUT BESIDE THE REQUEST READ for every well-formed
+  // id, never after a hit: a visible row, a hidden row and no row at all
+  // then cost the same two reads in one round trip (D-BLOCK-5 I). Both are
+  // the caller's own rows. A malformed id is in no list, so it is answered
+  // before the store, for friendRequest's reason.
+  //
+  // A HIDDEN ROW IS ANSWERED no_such_request AND THEN DELETED, quietly: the
+  // block meant to delete it, so the cleanup finishes that teardown and
+  // changes no panel, which is why nobody is pushed. It goes AFTER the
+  // answer, because a request that is really gone is answered without a
+  // write, and an answer that waited for one would be the same tell by its
+  // timing. A failed cleanup is swallowed: the answer is already out, the
+  // row stays hidden, and the store's 30-day sweep collects it.
+  //
+  // `side` is the caller's side of the row: 'incoming' (other > caller) or
+  // 'outgoing' (caller > other). Answers 'shown', 'hidden' or null.
+  async function requestRow(me, other, side) {
+    const [reqs, blocks] = await Promise.all([store.requestsOf(me), store.blockIdsOf(me)]);
+    if (!reqs[side].includes(other)) return null;
+    return blocks.blocked.includes(other) || blocks.blockedBy.includes(other) ? 'hidden' : 'shown';
+  }
+  async function dropHiddenRequest(from, to) {
+    try { await store.deleteRequest(from, to); } catch { /* the sweep collects it */ }
+  }
+
   // Not gated on blocks, deliberately: declining only DELETES a row, and a
-  // player who blocks someone must still be able to clear the request they left
-  // behind rather than look at it for thirty days.
+  // player must be able to clear any request their panel shows rather than
+  // look at it for thirty days. One their panel hides is the block's to
+  // clear, and goes the hidden way above.
   async function friendDecline(ws, msg) {
     const from = wireId(msg.from);
-    const reqs = await store.requestsOf(ws.userId);
-    if (!from || !reqs.incoming.includes(from)) return friendReply(ws, msg, 'decline', { error: 'no_such_request' });
+    const none = () => friendReply(ws, msg, 'decline', { error: 'no_such_request' });
+    if (!isUuid(from)) return none();
+    const row = await requestRow(ws.userId, from, 'incoming');
+    if (row !== 'shown') {
+      none();
+      if (row === 'hidden') await dropHiddenRequest(from, ws.userId);
+      return;
+    }
     await store.deleteRequest(from, ws.userId);
     friendReply(ws, msg, 'decline', { ok: true });
     await pushBoth(ws.userId, from);
@@ -2678,17 +2721,24 @@ export function createSocial({
   // the same order the block does (the caller's, then theirs), so B receives
   // the same snapshot whichever of the two A did.
   //
-  // Read from the caller's OWN outgoing requests and nothing else, and not
-  // gated on blocks, for decline's reason: it only deletes a row of the
-  // caller's. Nothing about the other player is read before the answer, so a
-  // withdraw aimed at someone who blocked the caller (whose block took the
-  // request with it) answers what a request that never existed answers, at
-  // the same cost. A malformed `to` is in no list, so it is answered the same
-  // way too.
+  // Read from the caller's OWN rows and nothing else (requestRow above), and
+  // not gated on blocks, for decline's reason: it only deletes a row of the
+  // caller's. The same two reads go out whatever they hold, so a withdraw
+  // aimed at someone who blocked the caller answers what a request that
+  // never existed answers, at the same cost, whether the block took the
+  // request with it or the request outlived the block, hidden from the
+  // panel. A malformed `to` is in no list, so it is answered the same way
+  // too, before the store.
   async function friendWithdraw(ws, msg) {
     const to = wireId(msg.to);
-    const reqs = await store.requestsOf(ws.userId);
-    if (!to || !reqs.outgoing.includes(to)) return friendReply(ws, msg, 'withdraw', { error: 'no_such_request' });
+    const none = () => friendReply(ws, msg, 'withdraw', { error: 'no_such_request' });
+    if (!isUuid(to)) return none();
+    const row = await requestRow(ws.userId, to, 'outgoing');
+    if (row !== 'shown') {
+      none();
+      if (row === 'hidden') await dropHiddenRequest(ws.userId, to);
+      return;
+    }
     await store.deleteRequest(ws.userId, to);
     friendReply(ws, msg, 'withdraw', { ok: true });
     await pushBoth(ws.userId, to);
