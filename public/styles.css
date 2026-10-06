@@ -1991,196 +1991,204 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
      color:#7f8fb5;margin-top:calc(4 * var(--u));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
   /* ------------------------------------------------------- the Squad box -- */
-  /* The left home panel. It has no .ph -- the tab bar is its header (see
-     bay.js). The panel is a flex column with overflow:hidden so nothing can
-     escape its 192u box: test/layout.mjs reads #bay's own scrollWidth and
-     scrollHeight, and a pane that grew the frame would move the baseline on all
-     fourteen viewports for a reason nobody intended. The pane under the tab bar
-     scrolls; test/squad_ui.mjs pins that the code field is never below its fold. */
+  /* The left home panel (bay.js sqPanel): a header that never scrolls --
+     "Squad 2/4" and Manage -- and the list under it (.sqb), which does. The
+     panel is a flex column with overflow:hidden so nothing can escape its
+     192u box: test/layout.mjs reads #bay's own scrollWidth and scrollHeight,
+     and a list that grew the frame would move the baseline on all fourteen
+     viewports for a reason nobody intended.
+     LEGIBLE ON A PHONE (owner, 2026-10-06: "all text easily legible"). In the
+     box and in the Manage squad window every name is at least 15u and every
+     other word at least 13u -- 9.3 px at the smallest phone, 667x375 -- in
+     Rajdhani, the bay's text face: the mono labels these rows used (7.5-10u)
+     were under 6 px there. */
   #bay .sqx{display:flex;flex-direction:column;overflow:hidden}
-  #bay .sqt{display:flex;flex:none;height:calc(22 * var(--u));border-bottom:1px solid rgba(140,168,214,.24)}
-  #bay .sqtb{flex:1;position:relative;display:flex;align-items:center;justify-content:center;gap:calc(5 * var(--u));
-     font-family:Rajdhani,system-ui,sans-serif;font-weight:600;font-size:calc(11 * var(--u));letter-spacing:.06em;
-     text-transform:uppercase;color:#8d9cc0;transition:.15s}
-  /* THE TAB IS EASIER TO HIT THAN IT LOOKS (review T8-R1-17). The bar keeps
-     the mockup's 22u, which is only 12-16 CSS px on a phone in landscape, and
-     each tab reaches 6u further DOWN, over the strip .sqb keeps above the
-     panes. That strip never scrolls -- the pane that scrolls starts below it --
-     so no content ever passes under the wider target, and a tap on content is
-     the content's (review T8-R1-15). Down only: the tab bar is the panel's top
-     edge and the panel clips its overflow. */
-  #bay .sqtb::after{content:'';position:absolute;left:0;right:0;top:0;bottom:calc(-6 * var(--u))}
-  #bay .sqtb:hover{color:#eef3ff}
-  #bay .sqtb.on{color:#ffb46b;box-shadow:inset 0 calc(-2 * var(--u)) 0 #ffb46b}
-  #bay .sqc{display:inline-flex;align-items:center;gap:calc(3 * var(--u));font-family:"JetBrains Mono",monospace;
-     font-size:calc(8.5 * var(--u));font-weight:700;letter-spacing:.06em;color:#7f8fb5;
-     background:rgba(10,14,23,.7);border-radius:calc(99 * var(--u));padding:1px calc(5 * var(--u))}
-  #bay .sqc.lit{color:#3ce88f}
-  #bay .sqc svg{width:calc(8 * var(--u));height:calc(8 * var(--u));fill:currentColor;stroke:currentColor}
-  /* The waiting-request lamp, drawn with a border-radius rather than typed: the
-     obvious character is in the Geometric Shapes block, which
-     test/house-rules.mjs rejects whole. Same reason IC.dot exists. */
-  #bay .sqd{position:absolute;top:calc(2 * var(--u));right:calc(4 * var(--u));width:calc(5 * var(--u));
-     height:calc(5 * var(--u));border-radius:50%;background:#ffb46b}
-  /* The 6u above the panes was each pane's own top padding, which scrolled
-     away under the tabs' wider target. As .sqb's padding it stays put, and at
-     rest every line sits exactly where it did. */
-  #bay .sqb{flex:1;min-height:0;display:flex;padding-top:calc(6 * var(--u))}
-  #bay .sqp{flex:1;min-width:0;min-height:0;overflow-y:auto}
-  #bay .sqn{font-family:Rajdhani,system-ui,sans-serif;font-size:calc(10 * var(--u));line-height:1.25;
+  #bay .sqhd{flex:none;display:flex;align-items:center;gap:calc(6 * var(--u));height:calc(30 * var(--u));
+     padding-bottom:calc(4 * var(--u));border-bottom:1px solid rgba(140,168,214,.24)}
+  #bay .sqhn,#bay .sqhc{font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:calc(17 * var(--u));line-height:1;
+     letter-spacing:.06em;text-transform:uppercase;color:#eef3ff}
+  #bay .sqhc{color:#54c8ff}
+  /* Words for a screen reader only: "2 of 4" beside the visible "2/4". Clipped
+     to nothing by clip-path, not squeezed into a 1px overflow box: a box that
+     overflows is what test/account_ui.mjs reads as clipped text. It sits on
+     the count itself, well inside the panel, and takes no taps. */
+  #bay .sqhc{position:relative}
+  #bay .sqvh{position:absolute;left:0;top:0;clip-path:inset(50%);white-space:nowrap;pointer-events:none}
+  /* MANAGE IS EASIER TO HIT THAN IT LOOKS. The header is 30u, and the button a
+     26u-tall .sbtn in it, already wider than tall; a transparent layer
+     reaches 8u above it, into the panel's own padding, and 4u below, over the
+     header's own padding and never over the list, whose content scrolls up
+     under the header's foot. Not sideways: a layer past the button's edge is
+     overflow that test/account_ui.mjs reads as clipped text. The layer is
+     placed from inside the button's 1px border, so above and below it adds
+     the 1px back. The target is 38u tall -- 27 px on a 667x375 phone -- and
+     covers nothing else that takes a tap. */
+  /* Two classes deep: #bay .sbtn is later in this file at one class. */
+  #bay .sqhd .sqmg{position:relative;height:calc(26 * var(--u));padding:0 calc(11 * var(--u));font-size:calc(13 * var(--u))}
+  #bay .sqhd .sqmg::before{content:'';position:absolute;inset:calc(-8 * var(--u) - 1px) 0 calc(-4 * var(--u) - 1px)}
+  /* The friend-request lamp (D10's, moved here from the Friends tab), drawn
+     with a border-radius rather than typed: the obvious character is in the
+     Geometric Shapes block, which test/house-rules.mjs rejects whole. */
+  #bay .sqd{position:absolute;top:calc(-3 * var(--u));right:calc(-3 * var(--u));width:calc(8 * var(--u));
+     height:calc(8 * var(--u));border-radius:50%;background:#ffb46b}
+  #bay .sqb{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding-top:calc(2 * var(--u))}
+  /* MORE ROWS BELOW (fix wave B1). The list scrolls, and a fade at the foot of
+     what is visible says so. It is sticky, and it is the list's last node, so
+     once the list is scrolled to its end it sits in its own strip under the
+     last row and covers no row; nothing is pinned over the list. It takes no
+     taps. */
+  #bay .sqfade{position:sticky;bottom:0;display:block;height:calc(10 * var(--u));pointer-events:none;
+     background:linear-gradient(rgba(10,14,23,0),rgba(10,14,23,.92))}
+
+  /* ------------------------------------------- the Manage squad window -- */
+  /* Three columns in the chrome body (bay.js SCREENS.squad), each a panel
+     that scrolls on its own, so the page never grows past the 430u frame
+     however many members, friends or requests there are. */
+  #bay .sqwc,#bay .sqwp{overflow-y:auto;overflow-x:hidden;border-radius:calc(7 * var(--u));padding:calc(4 * var(--u)) calc(10 * var(--u)) calc(10 * var(--u));
+     border:1px solid rgba(140,168,214,.2);background:linear-gradient(180deg,rgba(27,36,54,.82),rgba(10,14,23,.9));
+     backdrop-filter:blur(calc(9 * var(--u)))}
+  /* The squad column's sticky footer sits on the column's own bottom edge:
+     with the panel's bottom padding under it, the rows scrolling past showed
+     through that strip, beneath Ready and Leave. */
+  #bay .sqwp.sqwq{padding-bottom:0}
+  #bay .sqwq .sqft{padding-bottom:calc(8 * var(--u))}
+  #bay .sqwc .frow .ghost{flex:1;justify-content:center}
+  /* Two classes deep: #bay .frcode is later in this file at one class. */
+  #bay .frcode.sqcd{font-size:calc(34 * var(--u));margin-top:calc(4 * var(--u))}
+
+  /* ------------------------------------------- the box and the window -- */
+  #bay .sqn{font-family:Rajdhani,system-ui,sans-serif;font-size:calc(13 * var(--u));line-height:1.25;
      font-weight:500;color:#9dadd0;margin-top:calc(6 * var(--u))}
-  #bay .sqe{min-height:calc(12 * var(--u));margin-top:calc(5 * var(--u));font-size:calc(10 * var(--u));
+  #bay .sqe{min-height:calc(16 * var(--u));margin-top:calc(5 * var(--u));font-size:calc(13 * var(--u));
      line-height:1.25;font-weight:500;color:#ff8b8b}
-  #bay .sqor{font-family:"JetBrains Mono",monospace;font-size:calc(8.5 * var(--u));letter-spacing:.16em;
-     color:#5d6c92;text-align:center;margin-top:calc(8 * var(--u))}
+  #bay .sqh{margin-top:calc(9 * var(--u));font-family:Rajdhani,system-ui,sans-serif;font-size:calc(13 * var(--u));font-weight:700;
+     letter-spacing:.1em;line-height:1.2;text-transform:uppercase;color:#8d9cc0}
   #bay .sqcr{display:flex;align-items:center;gap:calc(6 * var(--u));margin-top:calc(7 * var(--u))}
-  #bay .sqin{flex:1;min-width:0;height:calc(32 * var(--u));border-radius:calc(5 * var(--u));
+  #bay .sqin{flex:1;min-width:0;height:calc(34 * var(--u));border-radius:calc(5 * var(--u));
      border:1px solid rgba(255,180,107,.5);background:rgba(10,14,23,.8);color:#ffb46b;text-align:center;
      font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:calc(19 * var(--u));
      letter-spacing:.24em;text-transform:uppercase;outline:none}
   #bay .sqin:focus{border-color:#ffb46b;box-shadow:0 0 0 calc(2 * var(--u)) rgba(255,180,107,.25)}
   #bay .sqin[disabled]{opacity:.45;border-color:rgba(140,168,214,.3);color:#7f8fb5}
+  #bay .sqcr .sbtn{height:calc(34 * var(--u));font-size:calc(14 * var(--u))}
   #bay .sqf{display:flex;margin-top:calc(8 * var(--u))}
   #bay .sqf .sbtn,#bay .sqf .go,#bay .sqf .ghost{flex:1;justify-content:center}
-  #bay .sqg{height:calc(32 * var(--u));font-size:calc(12.5 * var(--u))}
+  #bay .sqf .sqg{height:calc(32 * var(--u));font-size:calc(14 * var(--u))}
 
-  /* --------------------------------------------- the Squad box: a squad -- */
-  /* Task 9's classes, none of them Task 8's (.sqb .sqn .sqc .sqf are taken).
-     A row keeps every fixed part flex:none and lets only the name shrink, so
-     no row is ever wider than the box however long the callsign. */
+  /* ------------------------------------------------- a squad's rows -- */
+  /* A row keeps every fixed part flex:none and lets only the name shrink, so
+     no row is ever wider than its list however long the callsign. */
   /* TWO LINES (D-UI-5). The name has the first line (.sqm1) to itself; the
      status words (.sqms) and the controls share the second (.sqm2), so no
-     status word or button takes width from a name. The row is 48u: 2u above
-     the name's line, that line (13.2u to 14u), clear ground (8.25u or more on
-     every row with a control), the 18u controls and 6u below them -- so a
-     control's target (8u round its square, below) reaches up to the foot of
-     the name's line and no further, and 2u past the row's foot, as it did on
-     the one-line row. */
-  #bay .sqm{display:flex;flex-direction:column;height:calc(48 * var(--u));
+     status word or button takes width from a name. The row is 54u: 2u above
+     the name's line, that line (16.5u), clear ground, the 22u controls and 6u
+     below them -- so a control's target (6u round its square, below) reaches
+     up to 1.5u short of the foot of the name's line, and down to the row's
+     own foot. */
+  #bay .sqm{display:flex;flex-direction:column;height:calc(54 * var(--u));
      padding:calc(2 * var(--u) - 1px) calc(8 * var(--u)) calc(6 * var(--u) - 1px) calc(6 * var(--u));
      border-radius:calc(4 * var(--u));border:1px solid rgba(140,168,214,.22);background:rgba(16,21,31,.6);margin-top:calc(6 * var(--u))}
   #bay .sqm1{flex:none;display:flex;align-items:center;gap:calc(5 * var(--u));min-width:0}
-  #bay .sqm2{flex:none;display:flex;align-items:center;gap:calc(5 * var(--u));height:calc(18 * var(--u));margin-top:auto}
+  #bay .sqm2{flex:none;display:flex;align-items:center;gap:calc(5 * var(--u));height:calc(22 * var(--u));margin-top:auto}
   /* The status words start under the name (the lamp's 11u and the 5u gap), and
      the group takes the line's free width, which puts the controls at its
-     right end: the widest words a row carries, Leader and Reconnecting beside
-     a member menu, end more than 8u short of the 16u that menu's target
-     reaches left (below). A row with no status words (a request, a friend to
-     invite) keeps the group empty, and it only pushes the controls right. */
-  #bay .sqms{flex:1;min-width:0;display:flex;align-items:center;gap:calc(5 * var(--u));padding-left:calc(16 * var(--u))}
+     right end. A row with no status words (a request, a friend to invite)
+     keeps the group empty, and it only pushes the controls right. */
+  #bay .sqms{flex:1;min-width:0;display:flex;align-items:center;gap:calc(7 * var(--u));padding-left:calc(16 * var(--u))}
   #bay .sqm .pdot{width:calc(11 * var(--u));height:calc(11 * var(--u))}
-  #bay .sqmn{flex:1;min-width:0;display:flex;align-items:baseline;gap:calc(3 * var(--u))}
+  #bay .sqmn{flex:1;min-width:0;display:flex;align-items:baseline;gap:calc(4 * var(--u))}
   #bay .sqmt{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:Rajdhani,system-ui,sans-serif;
-     font-weight:600;font-size:calc(12.5 * var(--u));line-height:1.1;color:#e6ecfb}
-  #bay .sqmy{flex:none;font-family:Rajdhani,system-ui,sans-serif;font-weight:500;font-size:calc(10.5 * var(--u));color:#7f8fb5}
-  /* The status words -- Leader, Not ready, Reconnecting, In your squad -- are
-     8u (review T9-R1-10): at 6.5u they were under 5 px on a 667x375 phone, and
-     the name beside them is the part that gives way. */
-  #bay .sql{flex:none;font-family:"JetBrains Mono",monospace;font-size:calc(8 * var(--u));font-weight:700;letter-spacing:.08em;
-     text-transform:uppercase;color:#ffb46b}
-  #bay .sqr{flex:none;display:inline-flex;align-items:center;font-family:"JetBrains Mono",monospace;font-size:calc(8 * var(--u));
-     font-weight:500;letter-spacing:.03em;text-transform:uppercase;color:#7f8fb5}
-  #bay .sqr.on svg{width:calc(12 * var(--u));height:calc(12 * var(--u));fill:#3ce88f;display:block}
+     font-weight:600;font-size:calc(15 * var(--u));line-height:1.1;color:#e6ecfb}
+  #bay .sqmy{flex:none;font-family:Rajdhani,system-ui,sans-serif;font-weight:500;font-size:calc(13 * var(--u));color:#7f8fb5}
+  /* The status words -- Leader, Ready, Not ready, Reconnecting, In your squad
+     -- are 13u (owner, 2026-10-06; review T9-R1-10 raised them from 6.5u). */
+  #bay .sql,#bay .sqr,#bay .sqy{flex:none;display:inline-flex;align-items:center;gap:calc(3 * var(--u));
+     font-family:Rajdhani,system-ui,sans-serif;font-size:calc(13 * var(--u));font-weight:600;letter-spacing:.02em;line-height:1.1}
+  #bay .sql{font-weight:700;color:#ffb46b}
+  #bay .sqr{color:#9dadd0}
+  #bay .sqr.on,#bay .sqy{color:#3ce88f}
+  #bay .sqr.on svg,#bay .sqy svg{width:calc(14 * var(--u));height:calc(14 * var(--u));fill:currentColor;flex:none;display:block}
   #bay .sqr.dr{color:#ffb46b}
-  #bay .sqm .pmb,#bay .sqic{width:calc(18 * var(--u));height:calc(18 * var(--u));border-radius:calc(3 * var(--u))}
+  #bay .sqm .pmb,#bay .sqic{width:calc(22 * var(--u));height:calc(22 * var(--u));border-radius:calc(3 * var(--u))}
   /* EACH SMALL CONTROL TAKES A TAP ACROSS 34u (review T9-R1-11): 24.3 CSS px on
-     a 667x375 phone, where the 18u square it draws is 13 px. The square it
-     draws is unchanged; a transparent layer reaching 8u past its edge all
+     a 667x375 phone, where the 22u square it draws is 15.7 px. The square it
+     draws is what shows; a transparent layer reaching 6u past its edge all
      round is the target. (Remove and Decline carry a 1px border and the layer
      is placed from inside it, so theirs adds the 1px back; the menu has none:
      #bay button sets border:0.) The controls stand on the row's second line,
-     6u above its foot, and rows stand 6u apart, so a target reaches 2u past
-     its row and stands clear of the next one -- clear, not merely touching:
-     Chrome's hit test was measured reaching about a pixel past a layer's
-     edge. Upward it reaches over the clear ground under the name to the foot
-     of the name's line box, below its letters: the lowest descender stops
-     more than 1.2u above that foot (D-UI-5). The row's 8u right padding
-     keeps the last control's layer inside the row.
-     A MEMBER ROW'S MENU reaches LEFT only, 16u, over the empty end of the
-     status line, never over a status word (D-UI-5): the leader's Remove then
-     stands 10u beside it, the two targets 2u clear of each other.
+     6u above its foot, and rows stand 6u apart, so a target reaches the foot
+     of its row and stands clear of the next one. Upward it reaches over the
+     clear ground under the name, stopping short of the name's line.
+     A MEMBER ROW'S MENU reaches LEFT 12u and not right, over the empty end of
+     the status line, never over a status word (D-UI-5): the leader's Remove
+     then stands 8u beside it, the two targets 2u clear of each other.
      DECLINE HAS THE LARGER GAP rather than a question (the Friends screen's
-     own Decline is one tap, and the box's sends the same frame): it stands 16u
-     from Accept and 24u from the menu, so between its target and each
+     own Decline is one tap, and this one sends the same frame): it stands 14u
+     from Accept and 20u from the menu, so between its target and each
      neighbour's there is 8u of ground that takes no tap at all. */
   #bay .sqm .pmb,#bay .sqic{position:relative}
-  #bay .sqm .pmb::before,#bay .sqic::before{content:'';position:absolute;inset:calc(-8 * var(--u))}
-  #bay .sqic::before{inset:calc(-8 * var(--u) - 1px)}
-  #bay .sqml .sqm .pmb::before{inset:calc(-8 * var(--u)) 0 calc(-8 * var(--u)) calc(-16 * var(--u))}
-  #bay .sqml .sqm .pmb + .sqic{margin-left:calc(5 * var(--u))}
-  #bay .sqm .sbtn + .sqic{margin-left:calc(11 * var(--u))}
-  #bay .sqm .sqic + .pmb{margin-left:calc(19 * var(--u))}
-  #bay .sqm .sbtn + .pmb{margin-left:calc(3 * var(--u))}
-  #bay .sqm .pmb svg{width:calc(11 * var(--u));height:calc(11 * var(--u))}
+  #bay .sqm .pmb::before,#bay .sqic::before{content:'';position:absolute;inset:calc(-6 * var(--u))}
+  #bay .sqic::before{inset:calc(-6 * var(--u) - 1px)}
+  #bay .sqml .sqm .pmb::before{inset:calc(-6 * var(--u)) 0 calc(-6 * var(--u)) calc(-12 * var(--u))}
+  #bay .sqml .sqm .pmb + .sqic{margin-left:calc(3 * var(--u))}
+  #bay .sqm .sbtn + .sqic{margin-left:calc(9 * var(--u))}
+  #bay .sqm .sqic + .pmb{margin-left:calc(15 * var(--u))}
+  #bay .sqm .sbtn + .pmb{margin-left:calc(2 * var(--u))}
+  #bay .sqm .pmb svg{width:calc(13 * var(--u));height:calc(13 * var(--u))}
   #bay .sqic{flex:none;display:grid;place-items:center;border:1px solid rgba(140,168,214,.26);color:#8798bd;transition:.15s}
-  #bay .sqic svg{width:calc(9 * var(--u));height:calc(9 * var(--u));display:block}
+  #bay .sqic svg{width:calc(11 * var(--u));height:calc(11 * var(--u));display:block}
   #bay .sqic:hover{border-color:#ff8b8b;color:#ff8b8b;background:rgba(255,107,107,.12)}
   #bay .sqic[disabled]{opacity:.4;cursor:default}
   #bay .sqic[disabled]:hover{border-color:rgba(140,168,214,.26);color:#8798bd;background:none}
-  #bay .sqadd{display:flex;align-items:center;gap:calc(6 * var(--u));height:calc(26 * var(--u));padding:0 calc(6 * var(--u));
-     border-radius:calc(4 * var(--u));border:1px dashed rgba(140,168,214,.42);margin-top:calc(4 * var(--u))}
-  #bay .sqai{flex:1;min-width:0;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-     font-family:Rajdhani,system-ui,sans-serif;font-weight:600;font-size:calc(11.5 * var(--u));letter-spacing:.02em;
-     color:#c0cce8;transition:.15s}
-  #bay .sqai:hover{color:#54c8ff}
-  #bay .sqcl{flex:none;display:inline-flex;align-items:center;gap:calc(4 * var(--u));font-family:"JetBrains Mono",monospace;
-     font-size:calc(8 * var(--u));font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#ffb46b;transition:.15s}
-  #bay .sqcl svg{width:calc(10 * var(--u));height:calc(10 * var(--u));flex:none}
-  #bay .sqcl:hover{color:#ffd0a2}
-  #bay .sqs{margin-top:calc(6 * var(--u));font-family:"JetBrains Mono",monospace;font-size:calc(7.5 * var(--u));font-weight:700;
-     letter-spacing:.06em;line-height:1.5;text-transform:uppercase;color:#5d6c92}
+  /* Two classes deep: #bay .sbtn is later in this file at one class. */
+  #bay .sqm .sbtn,#bay .sqfc .sbtn{flex:none;height:calc(22 * var(--u));padding:0 calc(8 * var(--u));font-size:calc(13 * var(--u));letter-spacing:.06em}
+  /* THE SEATS LINE (D12): wraps between modes, never inside one. */
+  #bay .sqs{margin-top:calc(8 * var(--u));font-family:Rajdhani,system-ui,sans-serif;font-size:calc(13 * var(--u));font-weight:600;
+     letter-spacing:.03em;line-height:1.35;color:#6f7fa6}
   #bay .sqs span{white-space:nowrap}
   #bay .sqs span.on{color:#54c8ff}
   #bay .sqs i{font-style:normal}
-  #bay .sqnote{margin-top:calc(6 * var(--u));font-family:Rajdhani,system-ui,sans-serif;font-size:calc(10 * var(--u));
+  #bay .sqnote{margin-top:calc(7 * var(--u));font-family:Rajdhani,system-ui,sans-serif;font-size:calc(13 * var(--u));
      line-height:1.3;font-weight:500;color:#9dadd0}
-  #bay .sqae{margin-top:calc(5 * var(--u));font-size:calc(10 * var(--u));line-height:1.25;font-weight:500;color:#ff8b8b}
-  /* THE FOOTER STAYS IN VIEW. The pane scrolls, and a full squad, an invite
-     and the code field are more than its 145u; Start and Ready are pinned to
-     its visible bottom rather than scrolled out of reach. The background hides
-     the rows passing under it, and it is OPAQUE: under this panel's backdrop
-     blur a .97 alpha still let the Seats line read through it. */
-  #bay .sqft{position:sticky;bottom:0;z-index:1;margin-top:calc(6 * var(--u));padding:calc(5 * var(--u)) 0 calc(1 * var(--u));
+  #bay .sqae{margin-top:calc(5 * var(--u));font-size:calc(13 * var(--u));line-height:1.25;font-weight:500;color:#ff8b8b}
+  /* THE FOOTER STAYS IN VIEW. The window's squad column scrolls, and a full
+     squad, an invite and the seats line are more than its height; Ready and
+     Leave are pinned to its visible bottom rather than scrolled out of reach.
+     The background hides the rows passing under it, and it is OPAQUE: under
+     the column's backdrop blur a .97 alpha still let the Seats line read
+     through it. At the end of the list the footer stands in its own place
+     under the last row, so no row is left hidden under it. */
+  #bay .sqft{position:sticky;bottom:0;z-index:1;margin-top:calc(8 * var(--u));padding:calc(6 * var(--u)) 0 calc(1 * var(--u));
      border-top:1px solid rgba(140,168,214,.2);background:#0d121c}
-  /* MORE ROWS BELOW (fix wave B1). On a short phone the pinned footer leaves
-     room for a row and a half of a squad of four, and the rest scroll: a fade
-     over the rows just above the footer says so. It is no wider than the gap
-     the footer keeps above itself at rest, so at the end of the list it covers
-     no row, and it takes no taps. */
-  #bay .sqft::before{content:"";position:absolute;left:0;right:0;top:calc(-6 * var(--u));height:calc(6 * var(--u));
+  /* MORE ROWS BELOW (fix wave B1): a fade over the rows just above the footer
+     says so. It is no wider than the gap the footer keeps above itself at
+     rest, so at the end of the list it covers no row, and it takes no taps. */
+  #bay .sqft::before{content:"";position:absolute;left:0;right:0;top:calc(-8 * var(--u));height:calc(8 * var(--u));
      background:linear-gradient(rgba(13,18,28,0),#0d121c);pointer-events:none}
-  #bay .sqfl{font-family:"JetBrains Mono",monospace;font-size:calc(8 * var(--u));font-weight:700;letter-spacing:.1em;
-     line-height:1.3;text-transform:uppercase;color:#9dadd0}
-  #bay .sqfl.sqq{font-family:Rajdhani,system-ui,sans-serif;font-size:calc(11 * var(--u));font-weight:600;letter-spacing:.02em;
-     text-transform:none;color:#e6ecfb}
-  #bay .sqfb{display:flex;gap:calc(6 * var(--u));margin-top:calc(4 * var(--u))}
-  #bay .sqfb .go,#bay .sqfb .ghost{flex:1;justify-content:center;height:calc(26 * var(--u));padding:0 calc(8 * var(--u));
-     font-size:calc(12 * var(--u));gap:calc(5 * var(--u));box-shadow:none}
-  #bay .sqfb .go svg,#bay .sqfb .ghost svg{width:calc(11 * var(--u));height:calc(11 * var(--u))}
+  #bay .sqfl{font-family:Rajdhani,system-ui,sans-serif;font-size:calc(13 * var(--u));font-weight:700;letter-spacing:.06em;
+     line-height:1.25;text-transform:uppercase;color:#9dadd0}
+  #bay .sqfl.sqq{font-size:calc(15 * var(--u));font-weight:600;letter-spacing:.02em;text-transform:none;color:#e6ecfb}
+  #bay .sqfb{display:flex;gap:calc(8 * var(--u));margin-top:calc(5 * var(--u))}
+  #bay .sqfb .go,#bay .sqfb .ghost{flex:1;justify-content:center;height:calc(34 * var(--u));padding:0 calc(10 * var(--u));
+     font-size:calc(15 * var(--u));gap:calc(6 * var(--u));box-shadow:none}
+  #bay .sqfb .go svg,#bay .sqfb .ghost svg{width:calc(13 * var(--u));height:calc(13 * var(--u))}
   #bay .sqfb .go.cy.on{background:rgba(84,200,255,.16);color:#8adaff;border:1px solid #54c8ff}
   #bay .sqfb .go.cy.on svg{fill:#54c8ff}
   #bay .sqfb .go.cy[disabled]{background:#1f2740;color:#616e94;border:0}
   #bay .sqfb .go.cy[disabled] svg{fill:#616e94}
   #bay .sqfb .ghost[disabled]{opacity:.45;cursor:default}
   #bay .sqfb .ghost[disabled]:hover{border-color:rgba(140,168,214,.34);color:#c0cce8;background:none}
-  /* The invite this player just received: a highlighted row above the pane. */
-  #bay .sqi{margin-top:calc(2 * var(--u));padding:calc(6 * var(--u));border-radius:calc(4 * var(--u));
+  /* The invite this player just received: a highlighted row at the top of the
+     list, in the box and in the window. */
+  #bay .sqi{margin-top:calc(4 * var(--u));padding:calc(7 * var(--u));border-radius:calc(4 * var(--u));
      border:1px solid rgba(84,200,255,.5);background:rgba(84,200,255,.12)}
-  #bay .sqit{font-family:Rajdhani,system-ui,sans-serif;font-weight:600;font-size:calc(11 * var(--u));line-height:1.25;
+  #bay .sqit{font-family:Rajdhani,system-ui,sans-serif;font-weight:600;font-size:calc(14 * var(--u));line-height:1.25;
      color:#e6ecfb;overflow-wrap:anywhere}
-  #bay .sqib{display:flex;gap:calc(6 * var(--u));margin-top:calc(5 * var(--u))}
-  #bay .sqib .sbtn{flex:1;height:calc(22 * var(--u));padding:0 calc(8 * var(--u));font-size:calc(10.5 * var(--u))}
+  #bay .sqib{display:flex;gap:calc(6 * var(--u));margin-top:calc(6 * var(--u))}
+  #bay .sqib .sbtn{flex:1;height:calc(28 * var(--u));padding:0 calc(8 * var(--u));font-size:calc(13 * var(--u))}
   #bay .sqib .sbtn.on{border-color:#54c8ff;color:#fff;background:rgba(84,200,255,.18)}
-  /* The Friends tab's rows reuse the member row (.sqm); the rest is theirs. */
-  #bay .sqh{margin-top:calc(9 * var(--u));font-family:"JetBrains Mono",monospace;font-size:calc(7.5 * var(--u));font-weight:700;
-     letter-spacing:.14em;text-transform:uppercase;color:#7f8fb5}
-  #bay .sqfr .sqmt{font-size:calc(12 * var(--u))}
-  /* Two classes deep: #bay .sbtn is later in this file at one class. */
-  #bay .sqm .sbtn,#bay .sqfc .sbtn{flex:none;height:calc(18 * var(--u));padding:0 calc(7 * var(--u));font-size:calc(9.5 * var(--u));letter-spacing:.06em}
-  #bay .sqy{flex:none;display:inline-flex;align-items:center;gap:calc(3 * var(--u));font-family:"JetBrains Mono",monospace;
-     font-size:calc(8 * var(--u));font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#3ce88f}
-  #bay .sqy svg{width:calc(11 * var(--u));height:calc(11 * var(--u));fill:currentColor;flex:none}
-  #bay .sqnt{margin-top:calc(4 * var(--u));font-size:calc(10 * var(--u));line-height:1.25;font-weight:500;color:#9dadd0}
+  /* The friend rows reuse the member row (.sqm); the rest is theirs. */
+  #bay .sqnt{margin-top:calc(4 * var(--u));font-size:calc(13 * var(--u));line-height:1.25;font-weight:500;color:#9dadd0}
   #bay .sqfc{display:flex;align-items:center;gap:calc(6 * var(--u));margin-top:calc(6 * var(--u));font-family:Rajdhani,system-ui,sans-serif;
      font-weight:700;font-size:calc(15 * var(--u));letter-spacing:.1em;color:#ffb46b}
   #bay .sqfc span{flex:1;min-width:0}

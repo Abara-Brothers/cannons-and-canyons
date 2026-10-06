@@ -56,6 +56,12 @@ process.on('exit', cleanup);
 for (const [sig, n] of [['SIGINT', 2], ['SIGTERM', 15], ['SIGHUP', 1]]) process.on(sig, () => { cleanup(); process.exit(128 + n); });
 const watchdog =setTimeout(() => { console.error(`FAIL squad_ui overran ${RUN_MS} ms -- a CDP peer stopped answering`); process.exit(1); }, RUN_MS);
 
+// ONE BLOCK AT A TIME, ON REQUEST: SQUAD_UI_ONLY=t9,u4 runs only those blocks
+// (t8 task 8, t9 task 9, t11 task 11, w the fix waves, u3, u4). Each block
+// loads its own page and shares no state with the others, so a mutation run
+// can take the one block that pins the line it changed. Unset, everything runs.
+const ONLY = (process.env.SQUAD_UI_ONLY || '').split(',').map((x) => x.trim()).filter(Boolean);
+const want = (k) => !ONLY.length || ONLY.includes(k);
 const appPort = await freePort();
 srv = spawn(process.execPath, ['server.js'], { cwd: ROOT, env: { ...process.env, PORT: String(appPort) }, stdio: 'ignore' });
 for (let i = 0; i < 80; i++) { try { await get(`http://127.0.0.1:${appPort}/health`); break; } catch {} await sleep(150); }
@@ -136,37 +142,72 @@ const setWho = (who, hidden = false) => ev(`(() => {
 // ONE READER FOR THE WHOLE BOX, so no check can quietly measure something
 // else. Geometry is normalised by the STAGE's own width, never by the box's,
 // or a box of the wrong size would measure as the right one.
+// CHANGED BY U4 (owner, 2026-10-06: the box shows the squad and the friends
+// online, behind a "Squad 2/4" header and Manage). The tabs went, and with
+// them the panes this read: `text` is the squad part of the box's list (the
+// invite row, the squad's state and lines), `ftext` the friends part, and
+// `count` the header's "2/4" -- the Squad tab's pill, which read "2 / 4".
+// The code field moved into the Manage squad window, which win() reads.
 const box = () => ev(`(() => {
   Bay.show('home');
   const p = document.querySelector('#bay .pnl.sqx');
   if (!p) return null;
   const stg = document.querySelector('#bay .stage').getBoundingClientRect();
   const u = stg.width / 932, r = p.getBoundingClientRect();
-  const panes = [...p.querySelectorAll('.sqp')];
-  const live = panes.find((x) => !x.classList.contains('hidden')) || null;
-  const i = p.querySelector('#sqCode');
-  const e = live && live.querySelector('.sqe');
+  const vis = (e) => !!e && !e.closest('.hidden') && e.getClientRects().length > 0;
+  const list = p.querySelector('.sqb'), fr = list && list.querySelector(':scope > .sqbf');
+  const own = list ? [...list.children].filter((c) => c !== fr && !c.classList.contains('sqfade')) : [];
+  const e = own.find((c) => c.classList.contains('sqe') && !c.classList.contains('hidden'));
+  const cnt = p.querySelector('.sqhc'), mg = p.querySelector('.sqmg');
   return {
     geom: [Math.round((r.x - stg.x) / u), Math.round((r.y - stg.y) / u), Math.round(r.width / u), Math.round(r.height / u)],
     shape: [...p.children].map((c) => c.tagName + '.' + c.className),
-    panes: panes.length, live: panes.indexOf(live),
-    tabs: [...p.querySelectorAll('.sqtb')].map((t) => ({
-      name: t.querySelector('.sqtn').textContent, on: t.classList.contains('on'), kids: t.children.length,
-      pill: t.querySelector('.sqc').classList.contains('hidden') ? null : t.querySelector('.sqc').textContent.trim(),
-      dot: !t.querySelector('.sqd').classList.contains('hidden'),
-    })),
-    text: live ? live.innerText.replace(/\\s+/g, ' ').trim() : '',
-    err: e && !e.classList.contains('hidden') ? e.textContent : '',
-    field: i ? { on: !i.disabled, val: i.value } : null,
-    btns: live ? [...live.querySelectorAll('button')].map((b) => ({ t: b.textContent.trim(), sq: b.getAttribute('data-sq'), go: b.getAttribute('data-go'), old: b.getAttribute('data-old'), dis: b.disabled })) : [],
-    fold: i && live ? i.getBoundingClientRect().bottom <= live.getBoundingClientRect().bottom + 0.5 : null,
+    count: cnt && !cnt.classList.contains('hidden') ? cnt.firstElementChild.textContent : null,
+    manage: mg ? { t: mg.firstChild.textContent, dis: mg.disabled, go: mg.getAttribute('data-go'), label: mg.getAttribute('aria-label'),
+      dot: !mg.querySelector('.sqd').classList.contains('hidden') } : null,
+    text: own.map((c) => c.innerText || '').join(' ').replace(/\\s+/g, ' ').trim(),
+    ftext: fr ? fr.innerText.replace(/\\s+/g, ' ').trim() : '',
+    err: e ? e.textContent : '',
+    btns: list ? [...list.querySelectorAll('button')].filter(vis).map((b) => ({ t: b.textContent.trim(), sq: b.getAttribute('data-sq'), go: b.getAttribute('data-go'), old: b.getAttribute('data-old'), dis: b.disabled })) : [],
+    field: p.querySelector('input') ? true : null,
     over: [p.scrollWidth > p.clientWidth, p.scrollHeight > p.clientHeight],
+    bayOver: (() => { const b = document.getElementById('bay'); return [b.scrollWidth > b.clientWidth, b.scrollHeight > b.clientHeight]; })(),
+  };
+})()`);
+// THE MANAGE SQUAD WINDOW (U4), the same way: its three columns -- the code
+// column (`ctext`, the one code field, its error line `cerr`), the squad
+// column (`text`, the re-ask's refusal `err`) and the friends column
+// (`ftext`) -- its chrome, and every button it draws. The field is read where
+// it is: `fold` is whether it sits inside its column's visible box.
+const win = () => ev(`(() => {
+  Bay.show('squad');
+  const c = document.getElementById('sqWin-code'), q = document.getElementById('sqWin-squad'), f = document.getElementById('sqWin-friends');
+  if (!c || !q || !f) return null;
+  const vis = (e) => !!e && !e.closest('.hidden') && e.getClientRects().length > 0;
+  const i = document.getElementById('sqCode');
+  const ce = c.querySelector('.sqcr + .sqe'), qe = [...q.children].find((x) => x.classList.contains('sqe'));
+  const t = (x) => x.innerText.replace(/\\s+/g, ' ').trim();
+  const ir = i && i.getBoundingClientRect(), cr = c.getBoundingClientRect();
+  return {
+    title: (document.querySelector('#bay .phead .pt') || {}).textContent || null,
+    sub: (document.querySelector('#bay .phead .ps') || {}).textContent || null,
+    back: !!document.querySelector('#bay .phead [data-back]'),
+    text: t(q), ctext: t(c), ftext: t(f),
+    err: qe && vis(qe) ? qe.textContent : '',
+    cerr: ce && vis(ce) ? ce.textContent : '',
+    field: i ? { on: !i.disabled, val: i.value } : null,
+    fields: document.querySelectorAll('#sqCode').length,
+    fieldIn: !!(i && c.contains(i)),
+    codeAt: [...c.children].findIndex((x) => x === i || (x.querySelector && x.querySelector('#sqCode'))),
+    fold: i ? ir.top >= cr.top - 0.5 && ir.bottom <= cr.bottom + 0.5 : null,
+    code: (c.querySelector('.sqcd') || { textContent: '' }).textContent,
+    btns: [...document.querySelectorAll('#bay .pbody button')].filter(vis).map((b) => ({ t: b.textContent.trim(), sq: b.getAttribute('data-sq'), go: b.getAttribute('data-go'), old: b.getAttribute('data-old'), dis: b.disabled })),
     bayOver: (() => { const b = document.getElementById('bay'); return [b.scrollWidth > b.clientWidth, b.scrollHeight > b.clientHeight]; })(),
   };
 })()`);
 const click = (sel) => ev(`(() => { const b = document.querySelector(${JSON.stringify(sel)}); if (!b) return false; b.click(); return true; })()`);
 
-try {
+if (want('t8')) try {
   for (const [w, h] of [[932, 430], [667, 375]]) {
     const V = `${w}x${h}`;
     await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: w < 900 });
@@ -200,138 +241,119 @@ try {
     // ---- 1. THE SLOT. The box takes over Recent sorties' geometry exactly, and
     //      it is the FIRST .pnl on home -- which is what moves test/layout.mjs's
     //      baseline (R7), so it is asserted here rather than left to that diff.
+    //      CHANGED BY U4: its two children are the header and the list, where
+    //      they were the tab bar and the panes.
     const b1 = await box();
-    if (b1 && JSON.stringify(b1.geom) === '[18,174,196,192]'
+    if (b1 && JSON.stringify(b1.geom) === '[18,174,196,192]' && JSON.stringify(b1.shape) === '["DIV.sqhd","DIV.sqb"]'
         && JSON.stringify(b1.bayOver) === '[false,false]' && JSON.stringify(b1.over) === '[false,false]'
         && (await ev(`document.querySelector('#bay .pnl').classList.contains('sqx')`)))
-      ok(`${V}: the Squad box holds the left slot at 18,174 196x192u and nothing overflows`);
-    else fail(`${V}: slot ${JSON.stringify(b1 && { geom: b1.geom, over: b1.over, bayOver: b1.bayOver })}`);
+      ok(`${V}: the Squad box holds the left slot at 18,174 196x192u, a header and a list, and nothing overflows`);
+    else fail(`${V}: slot ${JSON.stringify(b1 && { geom: b1.geom, shape: b1.shape, over: b1.over, bayOver: b1.bayOver })}`);
 
-    // ---- 2. THE BAY'S FIRST TAB BAR. Clicked through the REAL delegated
-    //      listener, never by calling sqAct(): a data-* attribute that is not in
-    //      the one closest() list produces a completely dead button with no
-    //      error, and a check that calls the handler directly cannot see that.
-    //      Driven as a GUEST, whose pane carries the code field before any
-    //      answer; a signed-in pane says "Not loaded yet." until it is answered.
+    // ---- 2. MANAGE OPENS THE WINDOW (U4; owner, 2026-10-06: "replace Invite
+    //      friends with a button that opens a window to manage the squad").
+    //      REPLACES the tab bar's checks (tab switch, tab/panel wiring, the
+    //      tab's 22u bar and wider target, the field kept across a tab switch):
+    //      the tabs are gone. Clicked through the REAL delegated listener,
+    //      never by calling the handler: a data-* attribute that is not in the
+    //      one closest() list produces a completely dead button with no error.
+    //      The window is a bay screen with the standard chrome -- the title, a
+    //      Back that comes home -- and its code field keeps what the player
+    //      typed across an in-place repaint. Driven as a GUEST, whose window
+    //      offers the field before any answer.
     await setWho('guest');
-    await ev(`(() => { const i = document.getElementById('sqCode'); if (i) i.value = 'WXYZ'; return true; })()`);
-    const before = await box();
-    await click('#bay [data-sq="tab:friends"]');
-    const after = await box();
-    if (after && after.tabs[1] && after.tabs[1].on && !after.tabs[0].on && after.live === 1)
-      ok(`${V}: tapping Friends switches the tab through the delegated listener`);
-    else fail(`${V}: tab tap did nothing -- is data-sq in bay.js's closest() list? ${JSON.stringify(after && after.tabs)}`);
-    // morphChildren is positional: the panel's own children, and each tab's,
-    // must be identical across a switch or nodes are reused across identities.
-    if (before && after && JSON.stringify(before.shape) === JSON.stringify(after.shape)
-        && before.panes === 2 && after.panes === 2
-        && JSON.stringify(before.tabs.map((t) => t.kids)) === JSON.stringify(after.tabs.map((t) => t.kids)))
-      ok(`${V}: the box keeps the same node shape across a tab switch`);
-    else fail(`${V}: node shape moved ${JSON.stringify(before && [before.shape, before.panes])} -> ${JSON.stringify(after && [after.shape, after.panes])}`);
-    // THE TABS NAME THEIR PANELS (review T8-R1-17): each tab controls a
-    // role=tabpanel that is labelled by it, so a screen reader hears which
-    // panel a tab opens.
-    const wired = await ev(`[...document.querySelectorAll('#bay .sqtb')].map((t) => {
-      const p = document.getElementById(t.getAttribute('aria-controls') || '');
-      return !!(t.id && p && p.classList.contains('sqp') && p.getAttribute('role') === 'tabpanel' && p.getAttribute('aria-labelledby') === t.id);
-    })`);
-    if (JSON.stringify(wired) === '[true,true]') ok(`${V}: each tab controls a role=tabpanel pane that is labelled by it`);
-    else fail(`${V}: tab/panel wiring ${JSON.stringify(wired)}`);
-    // A TAB IS EASIER TO HIT THAN IT LOOKS (review T8-R1-17): the bar stays
-    // 22u, but a tap 5u below it -- over the pane's own top padding, where no
-    // control sits -- still lands on the tab above.
-    const hit = await ev(`(() => {
-      const u = document.querySelector('#bay .stage').getBoundingClientRect().width / 932;
-      const bar = document.querySelector('#bay .sqt'), t = document.querySelector('#bay .sqtb[data-sq="tab:squad"]');
-      if (!bar || !t) return null;
-      const r = t.getBoundingClientRect(), el = document.elementFromPoint(r.x + r.width / 2, r.bottom + 5 * u);
-      const tab = el && el.closest('.sqtb');
-      return { bar: Math.round(bar.getBoundingClientRect().height / u), at: tab ? tab.getAttribute('data-sq') : (el && el.className) || null };
-    })()`);
-    if (hit && hit.bar === 22 && hit.at === 'tab:squad') ok(`${V}: the tab bar stays 22u, and a tap just below a tab still lands on it`);
-    else fail(`${V}: tab hit area ${JSON.stringify(hit)}`);
-    // And the code field is an INPUT, which morphNode never touches.
+    await click('#bay .sqx [data-go="squad"]'); await sleep(60);
+    const w2 = await ev(`(() => ({ scr: document.getElementById('bay').dataset.scr, title: (document.querySelector('#bay .phead .pt') || {}).textContent,
+      back: !!document.querySelector('#bay .phead [data-back]'), cols: ['sqWin-code', 'sqWin-squad', 'sqWin-friends'].map((x) => !!document.getElementById(x)) }))()`);
+    await ev(`(() => { const i = document.getElementById('sqCode'); if (i) i.value = 'WXYZ'; document.dispatchEvent(new Event('cc:social')); return true; })()`);
+    await sleep(60);
     const kept = await ev(`(() => { const i = document.getElementById('sqCode'); return i ? i.value : null; })()`);
-    if (kept === 'WXYZ') ok(`${V}: a tab switch repaints in place and keeps what the player typed`);
-    else fail(`${V}: the code field lost its value across a tab switch (${JSON.stringify(kept)})`);
-    await click('#bay [data-sq="tab:squad"]');
-    await ev(`(() => { const i = document.getElementById('sqCode'); if (i) i.value = ''; return true; })()`);
+    await click('#bay .phead [data-back]'); await sleep(60);
+    const w2back = await ev(`document.getElementById('bay').dataset.scr`);
+    if (w2 && w2.scr === 'squad' && w2.title === 'Your squad' && w2.back && w2.cols.every(Boolean) && w2back === 'home')
+      ok(`${V}: Manage opens "Your squad" through the delegated listener, with the chrome's Back, and Back comes home`);
+    else fail(`${V}: Manage ${JSON.stringify({ w2, back: w2back })}`);
+    if (kept === 'WXYZ') ok(`${V}: the window repaints in place and keeps what the player typed in the code field`);
+    else fail(`${V}: the code field lost its value across a repaint (${JSON.stringify(kept)})`);
+    // MANAGE IS EASIER TO HIT THAN IT LOOKS, and its target stays off the list:
+    // a tap 3u below it, over the header's own padding, lands on it; with the
+    // list scrolled, a tap 1u into the list is the list's.
     await setWho('in');
+    await ev(`(() => { for (let k = 0; k < 2; k++) handle({ type: 'squad', op: 'invited', code: 'RM4P', from: { callsign: 'Steel Mule' }, size: 2, max: 4 }); return true; })()`);
+    const mhit = await ev(`(() => {
+      Bay.show('home');
+      const u = document.querySelector('#bay .stage').getBoundingClientRect().width / 932;
+      const m = document.querySelector('#bay .sqmg'), l = document.querySelector('#bay .sqb');
+      if (!m || !l) return null;
+      const r = m.getBoundingClientRect(), below = document.elementFromPoint(r.x + r.width / 2, r.bottom + 3 * u);
+      l.scrollTop = l.scrollHeight;
+      const lr = l.getBoundingClientRect(), into = document.elementFromPoint(r.x + r.width / 2, lr.top + 1 * u);
+      const scrolled = l.scrollTop > 0; l.scrollTop = 0;
+      return { below: !!(below && below.closest('.sqmg')), into: !!(into && l.contains(into)), scrolled, h: +((r.height + 12 * u) / u).toFixed(1) };
+    })()`);
+    await ev(`(window.CC_SQUAD_INVITE = null, document.dispatchEvent(new Event('cc:social')), true)`);
+    if (mhit && mhit.below && mhit.into && mhit.scrolled)
+      ok(`${V}: a tap just below Manage still lands on it, and its target never covers the scrolled list`);
+    else fail(`${V}: Manage target ${JSON.stringify(mhit)}`);
 
-    // ---- 3. GUEST (D11). The lead sentence, then the code field, then "or",
-    //      then Sign in, then what signing in is for. The order is the decision:
-    //      a guest is told they can play NOW, before they are sold an account.
-    const G1 = 'You can play right now. Got a code from a friend? Enter it and you are in, as a guest.';
+    // ---- 3. GUEST (D11). What a guest can do NOW, then the door to an account.
+    //      CHANGED BY U4 (owner: a guest's box is "Squad 0/4" + Manage + a line
+    //      that friends need an account + Sign in): the box no longer carries
+    //      the code field -- the window does -- so the box's lead sentence
+    //      sends the guest to Manage, and the window's says what it always
+    //      said beside the field.
+    const G1 = 'You can play right now. Got a squad code from a friend? Tap Manage to join, as a guest.';
+    const G1W = 'You can play right now. Got a squad code from a friend? Enter it and you are in, as a guest.';
     const G2 = 'Sign in to add friends and keep your progress across devices. Your guest progress on this device comes with you when you do.';
     for (const who of ['guest', 'out']) {
       await setWho(who);
       const g = await box();
-      // innerText is what a player sees, so the two buttons read in capitals:
-      // .sbtn and .ghost both set text-transform:uppercase.
-      const gWant = G1 + ' ENTER \u2014 or \u2014 SIGN IN ' + G2;
-      if (g && g.text === gWant) ok(`${V}: ${who} -- D11's copy, in D11's order`);
-      else fail(`${V}: ${who} copy ${JSON.stringify(g && g.text)}`);
-      if (g && g.field && g.field.on && g.btns.some((b) => b.old === 'accountBtn' && !b.dis) && g.btns.some((b) => b.sq === 'code' && !b.dis))
-        ok(`${V}: ${who} -- the code field works and Sign in taps the account button`);
-      else fail(`${V}: ${who} controls ${JSON.stringify(g && { field: g.field, btns: g.btns })}`);
-      // THE FIELD IS ABOVE THE FOLD. The pane scrolls (the closing sentence runs
-      // past it) and that is fine, but a code field a guest has to find by
-      // scrolling is the one thing D11 asks for first.
-      if (g && g.fold === true && JSON.stringify(g.bayOver) === '[false,false]')
-        ok(`${V}: ${who} -- the code field is inside the visible pane and #bay never scrolls`);
-      else fail(`${V}: ${who} fold ${JSON.stringify(g && { fold: g.fold, bayOver: g.bayOver })}`);
+      // innerText is what a player sees, so the heading and the button read in
+      // capitals: .sqh, .sbtn and .ghost set text-transform:uppercase.
+      if (g && g.count === '0/4' && g.manage && !g.manage.dis && g.manage.go === 'squad' && g.text === G1
+          && g.ftext === 'FRIENDS Sign in to add friends. SIGN IN' && g.btns.some((b) => b.old === 'accountBtn' && !b.dis) && g.field === null)
+        ok(`${V}: ${who} -- the box reads Squad 0/4 with Manage, says what a guest can do, and that friends need an account, with Sign in`);
+      else fail(`${V}: ${who} box ${JSON.stringify(g && { count: g.count, manage: g.manage, text: g.text, ftext: g.ftext, btns: g.btns, field: g.field })}`);
+      const gw = await win();
+      if (gw && gw.text === G1W && gw.ftext === G2 + ' SIGN IN' && gw.field && gw.field.on && gw.fieldIn && gw.ctext.endsWith('A squad you join shows its code here.')
+          && gw.btns.some((b) => b.old === 'accountBtn' && !b.dis) && gw.btns.some((b) => b.sq === 'code' && !b.dis && b.t === 'Join'))
+        ok(`${V}: ${who} -- the window offers the code field and Join, D11's sentence beside it, and Sign in with what it is for`);
+      else fail(`${V}: ${who} window ${JSON.stringify(gw && { text: gw.text, ftext: gw.ftext, field: gw.field, btns: gw.btns })}`);
+      // THE FIELD IS ABOVE THE FOLD: it is the one thing D11 asks for first.
+      if (gw && gw.fold === true && gw.codeAt === 1 && JSON.stringify(gw.bayOver) === '[false,false]')
+        ok(`${V}: ${who} -- the code field is the code column's second node, inside the visible column, and #bay never scrolls`);
+      else fail(`${V}: ${who} fold ${JSON.stringify(gw && { fold: gw.fold, at: gw.codeAt, bayOver: gw.bayOver })}`);
     }
     // NO ACCOUNT BUTTON, NO SIGN-IN OFFER. accountChip() already drops the chip
     // when #accountBtn is hidden ("no session and no way to start one"); the box
-    // must not offer a door that is not there.
+    // and the window must not offer a door that is not there.
     await setWho('guest', true);
-    const gh = await box();
-    if (gh && !gh.btns.some((b) => b.old === 'accountBtn') && gh.text.startsWith(G1) && !/sign in/i.test(gh.text))
-      ok(`${V}: guest -- no Sign in offered while #accountBtn is hidden`);
-    else fail(`${V}: hidden-account guest ${JSON.stringify(gh && gh.text)}`);
-    // THE TABS' WIDER TARGET NEVER COVERS THE PANE'S CONTENT (review T8-R1-15).
-    // The guest pane scrolls, and scrolled, its content passes under the top of
-    // the pane: a tap there must reach what is drawn there, never the tab above.
-    await setWho('guest');
-    const cover = await ev(`(() => {
-      const u = document.querySelector('#bay .stage').getBoundingClientRect().width / 932;
-      const p = document.getElementById('sqPane-squad'); if (!p) return null;
-      p.scrollTop = p.scrollHeight;
-      const r = p.getBoundingClientRect(), hits = [];
-      for (const k of [0.5, 1, 2, 3, 4]) {
-        const el = document.elementFromPoint(r.x + r.width / 2, r.top + k * u);
-        hits.push(el && el.closest('.sqtb') ? 'tab' : el && p.contains(el) ? 'pane' : (el && el.className) || null);
-      }
-      const scrolled = p.scrollTop > 0; p.scrollTop = 0;
-      return { scrolled, hits };
-    })()`);
-    if (cover && cover.scrolled && cover.hits.every((h) => h === 'pane'))
-      ok(`${V}: scrolled, the top of the pane is the pane's -- the tabs' wider target does not cover it`);
-    else fail(`${V}: the tab target covers the scrolled pane ${JSON.stringify(cover)}`);
+    const gh = await box(), ghw = await win();
+    if (gh && !gh.btns.some((b) => b.old === 'accountBtn') && gh.text === G1 && gh.ftext === 'FRIENDS Friends need an account.' && !/sign in/i.test(gh.ftext)
+        && ghw && !ghw.btns.some((b) => b.old === 'accountBtn') && ghw.ftext === 'Friends need an account.')
+      ok(`${V}: guest -- no Sign in offered while #accountBtn is hidden: friends need an account, said plainly`);
+    else fail(`${V}: hidden-account guest ${JSON.stringify({ box: gh && [gh.text, gh.ftext], win: ghw && ghw.ftext })}`);
     await setWho('in');
 
-    // ---- 4. OFFLINE (design 5.1 state 6). Every control in this box needs the
+    // ---- 4. OFFLINE (design 5.1 state 6). Every squad control needs the
     //      socket -- the code field asks the server which KIND of code it is,
     //      Invite needs the friend graph, and signing in needs the network too.
     //      So the refusal is said once, at the top, for every kind of account:
     //      a guest offered a dead field and a dead Sign in button is the exact
-    //      lie this box exists to avoid.
+    //      lie this box exists to avoid. CHANGED BY U4: the field is the
+    //      window's, so the window is read for it; the box keeps Manage, which
+    //      is a way to a screen, not a squad action.
     for (const who of ['in', 'guest', 'out']) {
       await setWho(who); await up(false);
-      const o = await box();
-      if (o && o.text.startsWith('Needs a connection.') && o.field && o.field.on === false
-          && o.btns.length > 0 && o.btns.every((b) => b.dis))
-        ok(`${V}: offline (${who}) -- "Needs a connection", the field and every control dead`);
-      else fail(`${V}: offline (${who}) ${JSON.stringify(o && { text: o.text, field: o.field, btns: o.btns })}`);
+      const o = await box(), ow = await win();
+      await ev(`(Bay.show('home'), true)`);
+      if (o && o.text.startsWith('Needs a connection.') && o.btns.length === 0 && o.manage && !o.manage.dis
+          && ow && ow.text.startsWith('Needs a connection.') && ow.ftext.startsWith('Needs a connection.')
+          && ow.field && ow.field.on === false && ow.btns.length > 0 && ow.btns.every((b) => b.dis))
+        ok(`${V}: offline (${who}) -- "Needs a connection" in the box and the window, the field and every window control dead`);
+      else fail(`${V}: offline (${who}) ${JSON.stringify({ box: o && { text: o.text, btns: o.btns, manage: o.manage }, win: ow && { text: ow.text, ftext: ow.ftext, field: ow.field, btns: ow.btns } })}`);
       await up(true);
     }
-    // The Friends tab says the same thing, first, for the same reason.
-    await up(false); await click('#bay [data-sq="tab:friends"]');
-    const of = await box();
-    if (of && of.text.startsWith('Needs a connection.') && of.btns.every((b) => b.dis))
-      ok(`${V}: offline -- the Friends tab says "Needs a connection" too`);
-    else fail(`${V}: offline friends ${JSON.stringify(of && { text: of.text, btns: of.btns })}`);
-    await up(true); await click('#bay [data-sq="tab:squad"]');
     await setWho('in');
 
     // ---- 5. THE THIRD STATE. This is the assertion the whole task turns on:
@@ -346,16 +368,16 @@ try {
     //      tapped. It says Loading, because the box is; the hello asks by itself.
     const w0 = await box(), q0 = await squads();
     if (w0 && w0.text.startsWith('Not loaded yet.') && !w0.text.includes(NOSQ) && q0.length === 0
-        && w0.btns.some((b) => b.sq === 'retry' && b.dis && b.t === 'Loading') && w0.tabs[0].pill === null)
+        && w0.btns.some((b) => b.sq === 'retry' && b.dis && b.t === 'Loading') && w0.count === null)
       ok(`${V}: before any answer the box says "Not loaded yet.", holds Retry (Loading) until the hello, and asks nothing before it`);
-    else fail(`${V}: third state ${JSON.stringify(w0 && { text: w0.text, btns: w0.btns, pill: w0.tabs[0].pill, sent: q0 })}`);
+    else fail(`${V}: third state ${JSON.stringify(w0 && { text: w0.text, btns: w0.btns, count: w0.count, sent: q0 })}`);
     // THE CODE FIELD DOES NOT WAIT FOR THE SQUAD ANSWER (review T8-R1-2). The
     // code frame is answered from memory, before any sign-in and with the
-    // social layer off, and after Task 11 this is the one field a room code
-    // goes in.
-    if (w0 && w0.field && w0.field.on && w0.btns.some((b) => b.sq === 'code' && !b.dis) && w0.fold === true)
-      ok(`${V}: the unanswered box still offers a live code field, above the fold`);
-    else fail(`${V}: unanswered code field ${JSON.stringify(w0 && { field: w0.field, btns: w0.btns, fold: w0.fold })}`);
+    // social layer off. CHANGED BY U4: the field is the window's.
+    const w0w = await win(); await ev(`(Bay.show('home'), true)`);
+    if (w0w && w0w.field && w0w.field.on && w0w.btns.some((b) => b.sq === 'code' && !b.dis) && w0w.fold === true && w0w.text.startsWith('Not loaded yet.'))
+      ok(`${V}: the unanswered window still offers a live code field, above the fold`);
+    else fail(`${V}: unanswered code field ${JSON.stringify(w0w && { field: w0w.field, btns: w0w.btns, fold: w0w.fold, text: w0w.text })}`);
     // The introduction: the real sendHello, which finds no session to send
     // here and marks the socket anyway. The ask follows it, once.
     const ask = async (stored) => {
@@ -368,18 +390,18 @@ try {
     const f0 = await ask('');
     const w1 = await box();
     if (f0.length === 1 && f0[0].op === 'resume' && !('code' in f0[0]) && typeof f0[0].id === 'number'
-        && w1 && w1.text.startsWith('Not loaded yet.') && w1.btns.some((b) => b.sq === 'retry' && b.dis) && w1.tabs[0].pill === null)
+        && w1 && w1.text.startsWith('Not loaded yet.') && w1.btns.some((b) => b.sq === 'retry' && b.dis) && w1.count === null)
       ok(`${V}: once introduced the box sends one bare {type:'squad',op:'resume'} and waits, still not claiming anything`);
-    else fail(`${V}: bare resume frame ${JSON.stringify(f0)} box ${JSON.stringify(w1 && { text: w1.text, btns: w1.btns, pill: w1.tabs[0].pill })}`);
+    else fail(`${V}: bare resume frame ${JSON.stringify(f0)} box ${JSON.stringify(w1 && { text: w1.text, btns: w1.btns, count: w1.count })}`);
 
     // ---- 6. THE TWO ANSWERS TO `gone`. The mock answers the SAME frame the
     //      same way whatever this device remembered, so the suite cannot be
     //      green both with and without the bug.
     await reply({ op: 'gone' });
     const n = await box();
-    if (n && n.text.startsWith(NOSQ) && !n.text.includes('ended') && n.tabs[0].pill === '0 / 4')
-      ok(`${V}: gone with nothing remembered is "No squad yet", and the pill is 0 / 4 (D10)`);
-    else fail(`${V}: no-squad ${JSON.stringify(n && { text: n.text, pill: n.tabs[0].pill })}`);
+    if (n && n.text.startsWith(NOSQ) && !n.text.includes('ended') && n.count === '0/4')
+      ok(`${V}: gone with nothing remembered is "No squad yet", and the box reads Squad 0/4 (D10)`);
+    else fail(`${V}: no-squad ${JSON.stringify(n && { text: n.text, count: n.count })}`);
     // A CODE THIS TAB NEVER HELD IS NOT ITS TO PRESENT (D-UI-2; review
     // T8-R1-1). Storage is shared by every tab on the device, so the code in it
     // may be one ANOTHER tab joined, and a resume that names it takes the
@@ -430,15 +452,19 @@ try {
     const x = await box();
     if (x && x.text.startsWith('Not loaded yet.') && !x.text.includes(NOSQ)
         && x.err === 'Squads are not available right now. Try again later.'
-        && x.btns.some((b) => b.sq === 'retry' && !b.dis) && x.tabs[0].pill === null)
-      ok(`${V}: a refused resume says so, keeps the pill empty, and offers a live Retry`);
-    else fail(`${V}: refusal ${JSON.stringify(x && { text: x.text, err: x.err, pill: x.tabs[0].pill, btns: x.btns })}`);
-    // A REFUSED RESUME KEEPS THE CODE FIELD (review T8-R1-2): while squads are
-    // refused -- every linked player on the live build -- a room code must
-    // still join from the box, as it did in any outage before this project.
-    if (x && x.field && x.field.on && x.btns.some((b) => b.sq === 'code' && !b.dis) && x.fold === true)
-      ok(`${V}: a refused resume still offers a live code field, above the fold`);
-    else fail(`${V}: refused code field ${JSON.stringify(x && { field: x.field, btns: x.btns, fold: x.fold })}`);
+        && x.btns.some((b) => b.sq === 'retry' && !b.dis) && x.count === null)
+      ok(`${V}: a refused resume says so, leaves the count out, and offers a live Retry`);
+    else fail(`${V}: refusal ${JSON.stringify(x && { text: x.text, err: x.err, count: x.count, btns: x.btns })}`);
+    // A REFUSED RESUME KEEPS THE CODE FIELD (review T8-R1-2): the code frame is
+    // answered from memory while squads are refused. CHANGED BY U4: in the
+    // window, which says the refusal too, with its own Retry. What the player
+    // types there must outlive the answer that Retry brings back, so the rest
+    // of this check is driven from the window.
+    const xw = await win();
+    if (xw && xw.field && xw.field.on && xw.btns.some((b) => b.sq === 'code' && !b.dis) && xw.fold === true
+        && xw.err === 'Squads are not available right now. Try again later.' && xw.btns.some((b) => b.sq === 'retry' && !b.dis))
+      ok(`${V}: a refused resume still offers a live code field in the window, above the fold, under the refusal and its Retry`);
+    else fail(`${V}: refused code field ${JSON.stringify(xw && { field: xw.field, btns: xw.btns, fold: xw.fold, err: xw.err })}`);
     // A refusal is Retry's to clear: a repaint does not re-ask a server saying no.
     await clearTx();
     await ev(`(() => { document.dispatchEvent(new Event('cc:social')); return true; })()`);
@@ -450,10 +476,10 @@ try {
     await click('#bay [data-sq="retry"]');
     await sleep(60);
     const again = await squads();
-    // WHILE RETRY'S QUESTION IS OUT THE BOX KNOWS NOTHING (review T8-R1-6):
+    // WHILE RETRY'S QUESTION IS OUT THE WINDOW KNOWS NOTHING (review T8-R1-6):
     // Retry drops the old answer along with the refusal, so the wait reads
     // "Not loaded yet." and never "No squad yet".
-    const inflight = await box();
+    const inflight = await win();
     if (still.length === 0 && again.length === 1 && again[0].op === 'resume') ok(`${V}: Retry clears the refusal and asks again; a repaint does not`);
     else fail(`${V}: Retry sent ${JSON.stringify(again)} (a repaint sent ${still.length})`);
     if (inflight && inflight.text.startsWith('Not loaded yet.') && !inflight.text.includes(NOSQ))
@@ -461,12 +487,12 @@ try {
     else fail(`${V}: Retry in flight ${JSON.stringify(inflight && inflight.text)}`);
     await reply({ op: 'gone' });
     // THE ANSWER REPAINTS IN PLACE: the code field sits at the same place in
-    // the pane before and after it, so morphChildren keeps the node and the
+    // its column before and after it, so morphChildren keeps the node and the
     // player's typing (morphNode never touches an INPUT's value).
     const kept7 = await ev(`(() => { const i = document.getElementById('sqCode'); return i ? i.value : null; })()`);
-    if (kept7 === 'MNPQ') ok(`${V}: the answer to Retry repaints the box and keeps what was typed in the code field`);
+    if (kept7 === 'MNPQ') ok(`${V}: the answer to Retry repaints the window and keeps what was typed in the code field`);
     else fail(`${V}: the answer dropped the typed code (${JSON.stringify(kept7)})`);
-    await ev(`(() => { const i = document.getElementById('sqCode'); if (i) i.value = ''; return true; })()`);
+    await ev(`(() => { const i = document.getElementById('sqCode'); if (i) i.value = ''; Bay.show('home'); return true; })()`);
 
     // ---- 7b. EVERY REFUSAL OF A RESUME SAYS ITS OWN DECIDED SENTENCE (review
     //       T8-R1-12), and AN OP THIS BUILD DOES NOT KNOW IS NOT AN EMPTY SQUAD
@@ -486,9 +512,9 @@ try {
       await ask(''); await reply(ans7);
       const y = await box();
       if (y && y.text.startsWith('Not loaded yet.') && !y.text.includes(NOSQ) && y.err === line
-          && y.btns.some((b) => b.sq === 'retry' && !b.dis) && y.tabs[0].pill === null)
-        ok(`${V}: a resume answered ${JSON.stringify(ans7)} says "${line}", keeps the pill empty and offers Retry`);
-      else fail(`${V}: resume answered ${JSON.stringify(ans7)} ${JSON.stringify(y && { text: y.text, err: y.err, pill: y.tabs[0].pill, btns: y.btns })}`);
+          && y.btns.some((b) => b.sq === 'retry' && !b.dis) && y.count === null)
+        ok(`${V}: a resume answered ${JSON.stringify(ans7)} says "${line}", leaves the count out and offers Retry`);
+      else fail(`${V}: resume answered ${JSON.stringify(ans7)} ${JSON.stringify(y && { text: y.text, err: y.err, count: y.count, btns: y.btns })}`);
     }
 
     // ---- 8. A SQUAD THIS CLIENT HAS BEEN TOLD ABOUT must never read "No squad
@@ -500,12 +526,15 @@ try {
     const stored = () => ev(`(() => { try { return localStorage.getItem('cc_squad'); } catch { return 'ERR'; } })()`);
     const slot = () => ev('window.CC_SQUAD && { code: window.CC_SQUAD.code, n: window.CC_SQUAD.members.length }');
     await ask(''); await reply(SNAP);
-    const s = await box();
+    const s = await box(), sw = await win();
+    await ev(`(Bay.show('home'), true)`);
+    // CHANGED BY U4: the box shows the members, not the code; the code is the
+    // window's, under "Your squad code".
     if (s && !s.text.includes(NOSQ) && !s.text.includes('ended') && !s.text.includes('Not loaded yet')
-        && s.text.includes('BKPQ') && s.tabs[0].pill === '2 / 4' && (await stored()) === 'BKPQ'
+        && s.text.includes('Dusty Crag') && s.count === '2/4' && sw && sw.code === 'BKPQ' && (await stored()) === 'BKPQ'
         && JSON.stringify(await slot()) === '{"code":"BKPQ","n":2}')
-      ok(`${V}: a snapshot renders as a squad, pills 2 / 4, lands in window.CC_SQUAD and is remembered`);
-    else fail(`${V}: snapshot ${JSON.stringify(s && { text: s.text, pill: s.tabs[0].pill })} held=${JSON.stringify(await stored())} slot=${JSON.stringify(await slot())}`);
+      ok(`${V}: a snapshot renders as a squad -- Squad 2/4 and its members in the box, its code in the window -- lands in window.CC_SQUAD and is remembered`);
+    else fail(`${V}: snapshot ${JSON.stringify(s && { text: s.text, count: s.count, code: sw && sw.code })} held=${JSON.stringify(await stored())} slot=${JSON.stringify(await slot())}`);
 
     // ---- 9. PUSHES (plan X7). The server sends the roster with NO request id
     //      when somebody else acts, and app.js's socialReply used to drop every
@@ -515,9 +544,9 @@ try {
     const THIRD = M({ id: '00000000-0000-4000-8000-0000000000cc', callsign: 'Steel Mule' });
     await push({ ...SNAP, members: [...SNAP.members, THIRD] });
     const p1 = await box();
-    if (p1 && p1.tabs[0].pill === '3 / 4' && p1.text.includes('Steel Mule') && JSON.stringify(await slot()) === '{"code":"BKPQ","n":3}')
-      ok(`${V}: an id-less roster push reaches the slot and repaints the box (3 / 4)`);
-    else fail(`${V}: roster push ${JSON.stringify(p1 && { text: p1.text, pill: p1.tabs[0].pill })} slot=${JSON.stringify(await slot())}`);
+    if (p1 && p1.count === '3/4' && p1.text.includes('Steel Mule') && JSON.stringify(await slot()) === '{"code":"BKPQ","n":3}')
+      ok(`${V}: an id-less roster push reaches the slot and repaints the box (3/4)`);
+    else fail(`${V}: roster push ${JSON.stringify(p1 && { text: p1.text, count: p1.count })} slot=${JSON.stringify(await slot())}`);
     // NOT OURS: `you` -1 (a join answered after its player was kicked) and a
     // roster whose own row names another account are never written.
     await push({ ...SNAP, code: 'ZZZZ', you: -1 });
@@ -531,10 +560,10 @@ try {
     await clearTx();
     await ev(`(document.dispatchEvent(new CustomEvent('cc:account')), true)`); await sleep(60);
     const same = await box();
-    if (JSON.stringify(await slot()) === '{"code":"BKPQ","n":3}' && same && same.text.includes('BKPQ') && same.tabs[0].pill === '3 / 4'
+    if (JSON.stringify(await slot()) === '{"code":"BKPQ","n":3}' && same && same.text.includes('Steel Mule') && same.count === '3/4'
         && (await squads()).length === 0)
       ok(`${V}: cc:account for the account already signed in keeps the squad and asks nothing`);
-    else fail(`${V}: same-account cc:account ${JSON.stringify(same && { text: same.text, pill: same.tabs[0].pill })} slot=${JSON.stringify(await slot())} sent=${JSON.stringify(await squads())}`);
+    else fail(`${V}: same-account cc:account ${JSON.stringify(same && { text: same.text, count: same.count })} slot=${JSON.stringify(await slot())} sent=${JSON.stringify(await squads())}`);
 
     // ---- 10. A RECONNECT, through the REAL ws.onopen. A member whose socket
     //      blips is dropped and removed a minute later unless the new socket
@@ -570,7 +599,7 @@ try {
     else fail(`${V}: reconnect sent ${JSON.stringify(early.map((f) => f.type))} then ${JSON.stringify(seq.map((f) => f.type + (f.op ? ':' + f.op : '') + (f.code ? ':' + f.code : '')))}`);
     // The squad stays on screen while the new socket asks: known outlives it.
     const kb = await box();
-    if (kb && kb.text.includes('BKPQ')) ok(`${V}: the box keeps the squad on screen while a reconnect asks again`);
+    if (kb && kb.text.includes('Dusty Crag') && kb.count === '2/4') ok(`${V}: the box keeps the squad on screen while a reconnect asks again`);
     else fail(`${V}: reconnect blanked the box ${JSON.stringify(kb && kb.text)}`);
     await reply(SNAP); await settleFriends();
     // A RECONNECT'S RESUME REFUSED. The row the blip dropped comes back only
@@ -584,18 +613,23 @@ try {
     const kq = await squads();
     await reply(SNAP);
     const kk = await box();
-    if (kr && kr.text.includes('BKPQ') && kr.err === 'Squads are not available right now. Try again later.'
-        && kr.btns.some((b) => b.sq === 'retry' && !b.dis) && kr.tabs[0].pill === '2 / 4'
+    if (kr && kr.text.includes('Dusty Crag') && kr.err === 'Squads are not available right now. Try again later.'
+        && kr.btns.some((b) => b.sq === 'retry' && !b.dis) && kr.count === '2/4'
         && kq.length === 1 && kq[0].op === 'resume' && kq[0].code === 'BKPQ'
-        && kk && kk.text.includes('BKPQ') && kk.err === '' && !kk.btns.some((b) => b.sq === 'retry'))
+        && kk && kk.text.includes('Dusty Crag') && kk.err === '' && !kk.btns.some((b) => b.sq === 'retry'))
       ok(`${V}: a refused reconnect resume is said under the squad, and its Retry asks again by code`);
-    else fail(`${V}: refused reconnect ${JSON.stringify({ kr: kr && { text: kr.text, err: kr.err, btns: kr.btns, pill: kr.tabs[0].pill }, kq, kk: kk && { text: kk.text, err: kk.err, btns: kk.btns } })}`);
+    else fail(`${V}: refused reconnect ${JSON.stringify({ kr: kr && { text: kr.text, err: kr.err, btns: kr.btns, count: kr.count }, kq, kk: kk && { text: kk.text, err: kk.err, btns: kk.btns } })}`);
     // THE CODE FIELD STAYS UNDER A SQUAD WHOSE RE-ASK WAS REFUSED (D-UI-2;
-    // review T8-R1-5): #sqCode is the one code field (X8), and a room code
-    // needs no squad.
-    if (kr && kr.field && kr.field.on && kr.btns.some((b) => b.sq === 'code' && !b.dis) && kr.fold === true)
-      ok(`${V}: a squad whose re-ask was refused still offers a live code field, above the fold`);
-    else fail(`${V}: refused re-ask under a squad: code field ${JSON.stringify(kr && { field: kr.field, btns: kr.btns, fold: kr.fold })}`);
+    // review T8-R1-5): #sqCode is the one code field (X8). CHANGED BY U4: the
+    // window's, read after the same refusal.
+    await reconnect(); await token();
+    await reply({ error: 'unavailable' }); await settleFriends();
+    const krw = await win();
+    await clearTx(); await click('#bay [data-sq="retry"]'); await sleep(60);
+    await reply(SNAP); await ev(`(Bay.show('home'), true)`);
+    if (krw && krw.field && krw.field.on && krw.btns.some((b) => b.sq === 'code' && !b.dis) && krw.fold === true && krw.text.includes('BKPQ'))
+      ok(`${V}: a squad whose re-ask was refused still offers a live code field in the window, above the fold`);
+    else fail(`${V}: refused re-ask under a squad: code field ${JSON.stringify(krw && { field: krw.field, btns: krw.btns, fold: krw.fold, text: krw.text })}`);
 
     // ---- 10b. A LATE HELLO FROM A REPLACED SOCKET (review T8-R1-9). The token
     //       read is async, so the old socket's sendHello can finish after the
@@ -676,7 +710,7 @@ try {
     const nq = await squads();
     await reply(SNAP);
     const ns = await box();
-    if (nb && nb.text.startsWith(NOSQ) && nq.length === 1 && nq[0].op === 'resume' && !('code' in nq[0]) && ns && ns.text.includes('BKPQ'))
+    if (nb && nb.text.startsWith(NOSQ) && nq.length === 1 && nq[0].op === 'resume' && !('code' in nq[0]) && ns && ns.text.includes('Dusty Crag') && ns.count === '2/4')
       ok(`${V}: \`gone\` to a tab that held nothing is "No squad yet", and its next return asks once more`);
     else fail(`${V}: held-nothing return ${JSON.stringify({ nb: nb && nb.text, nq, ns: ns && ns.text })}`);
 
@@ -684,16 +718,16 @@ try {
     //       membership ends sends them a frame (D-BLOCK), and the box says what
     //       it says -- never why. A block that removes a player sends EXACTLY
     //       the kick frame, so it reads exactly as a kick.
-    // The fourth column: Invite friends is offered under the line. Not under
-    // `elsewhere`, whose squad may still be the account's on the other tab or
-    // device: every squad control belongs to the socket on the row (D-UI-1,
-    // review T8-R1-9). The code field is offered under every line.
+    // CHANGED BY U4: the fourth column was whether Invite friends was offered
+    // under the line; that button went with the tabs, and the friends online
+    // carry their own Invite, live or dead by sqCanInvite (E8 pins it). The
+    // code field is in the window under every line, read once below.
     const ENDS = [
-      [{ op: 'ended', reason: 'kicked' }, 'You were removed from the squad.', null, true, '0 / 4'],
-      [{ op: 'ended', reason: 'left' }, 'You left the squad.', null, true, '0 / 4'],
-      [{ op: 'left', ok: true, id: 987654 }, 'You left the squad.', null, true, '0 / 4'],
-      [{ op: 'ended', reason: 'no_leader' }, 'Your squad has ended. Squad up again.', null, true, '0 / 4'],
-      [{ op: 'ended', reason: 'constructor' }, 'Your squad has ended. Squad up again.', null, true, '0 / 4'],
+      [{ op: 'ended', reason: 'kicked' }, 'You were removed from the squad.', null, true, '0/4'],
+      [{ op: 'ended', reason: 'left' }, 'You left the squad.', null, true, '0/4'],
+      [{ op: 'left', ok: true, id: 987654 }, 'You left the squad.', null, true, '0/4'],
+      [{ op: 'ended', reason: 'no_leader' }, 'Your squad has ended. Squad up again.', null, true, '0/4'],
+      [{ op: 'ended', reason: 'constructor' }, 'Your squad has ended. Squad up again.', null, true, '0/4'],
       // Another tab or device of this account took the row, or left, created
       // or joined from there (server/social.js endedElsewhere). A second tab on
       // THIS device is the common case, so the line names both (review
@@ -705,17 +739,23 @@ try {
     // window.CC_SQUAD_END is a CLOSED vocabulary: a reason this build does not
     // know is 'ended', never the server's own word.
     const endWord = { kicked: 'kicked', left: 'left', no_leader: 'no_leader', constructor: 'ended', elsewhere: 'elsewhere' };
-    for (const [frame, line, keep, invite, pill] of ENDS) {
+    for (const [frame, line, keep, , count] of ENDS) {
       await push(SNAP);
       await push(frame);
       const e = await box();
       const word = await ev('window.CC_SQUAD_END');
-      if (e && e.text.startsWith(line) && e.field && e.field.on && e.btns.some((b) => b.sq === 'tab:friends') === invite
-          && (await slot()) === null && (await stored()) === keep && e.tabs[0].pill === pill
+      if (e && e.text.startsWith(line)
+          && (await slot()) === null && (await stored()) === keep && e.count === count
           && word === (frame.op === 'left' ? 'left' : endWord[frame.reason]))
         ok(`${V}: ${frame.op}${frame.reason ? ':' + frame.reason : ''} -- "${line}", the slot is empty and the code is ${keep ? 'kept' : 'forgotten'}`);
-      else fail(`${V}: ${JSON.stringify(frame)} ${JSON.stringify(e && { text: e.text, field: e.field, btns: e.btns, pill: e.tabs[0].pill })} slot=${JSON.stringify(await slot())} held=${JSON.stringify(await stored())} end=${JSON.stringify(word)}`);
+      else fail(`${V}: ${JSON.stringify(frame)} ${JSON.stringify(e && { text: e.text, btns: e.btns, count: e.count })} slot=${JSON.stringify(await slot())} held=${JSON.stringify(await stored())} end=${JSON.stringify(word)}`);
     }
+    // The window under the last line, `elsewhere`: the same line, and the code
+    // field live (it was offered under every line in the box).
+    const eW = await win(); await ev(`(Bay.show('home'), true)`);
+    if (eW && eW.text.startsWith('Your squad was changed in another tab or on another device.') && eW.field && eW.field.on && eW.sub === 'Open on another tab or device')
+      ok(`${V}: under "elsewhere" the window says the same line and still offers the code field`);
+    else fail(`${V}: window under elsewhere ${JSON.stringify(eW && { text: eW.text, field: eW.field, sub: eW.sub })}`);
     // ELSEWHERE IS NOT FINAL FOR THIS TAB: coming back to it asks once more --
     // WITHOUT the code, so a glance at a background tab never pulls the squad
     // off the device in use (the server moves the row to a bare resume only
@@ -735,7 +775,7 @@ try {
     const settled = await squads();
     if (back.length === 1 && back[0].op === 'resume' && !('code' in back[0]) && quietBack.length === 0
         && viaRetry.length === 1 && viaRetry[0].op === 'resume' && !('code' in viaRetry[0])
-        && b2 && b2.text.includes('BKPQ') && settled.length === 0)
+        && b2 && b2.text.includes('Dusty Crag') && b2.count === '1/4' && settled.length === 0)
       ok(`${V}: after "elsewhere" a return asks once, bare; a refusal waits for Retry; what it is told is shown, then nothing more is asked`);
     else fail(`${V}: return after elsewhere sent ${JSON.stringify(back)}, after a refusal ${JSON.stringify(quietBack)}, Retry ${JSON.stringify(viaRetry)}, box ${JSON.stringify(b2 && b2.text)} then ${JSON.stringify(settled)}`);
     // A KICK IS FINAL: a return to the tab asks nothing.
@@ -775,28 +815,37 @@ try {
     //      is and then does the one thing that matches. Each branch is driven
     //      separately: a mock that answered all three the same way would be
     //      green with and without the bug.
-    const SQ_NONE = 'No squad or game with that code.';
-    const typeCode = (v) => ev(`(() => { const i = document.getElementById('sqCode'); if (!i) return false; i.value = ${JSON.stringify(v)}; return true; })()`);
+    //      CHANGED BY U4 (owner, 2026-10-06: the field moves into the Manage
+    //      squad window, and joins squads only -- game codes are retired): the
+    //      field is driven in the window, where its error line is `cerr`; a
+    //      room's code is said to be a game's and joins nothing (it went down
+    //      #codeInput/#joinBtn); and an unknown code is "No squad with that
+    //      code." (it was "No squad or game with that code.").
+    const SQ_NONE = 'No squad with that code.';
+    const SQ_GAME = 'That is a game code. Only squad codes join here.';
+    const typeCode = (v) => ev(`(() => { if (document.getElementById('bay').dataset.scr !== 'squad') Bay.show('squad'); const i = document.getElementById('sqCode'); if (!i) return false; i.value = ${JSON.stringify(v)}; return true; })()`);
     const codeReply = async (patch) => { const r = await ev(`(() => {
       const q = window.__tx.filter((f) => f.type === 'code'); const i = q.length ? q[q.length - 1].id : null;
       handle(Object.assign({ type: 'code', id: i }, ${JSON.stringify(patch)})); return i; })()`); await sleep(120); return r; };
     const enterCode = async (v) => { await typeCode(v); await clearTx(); await click('#bay [data-sq="code"]'); await sleep(40); };
     // (a) too short -- refused on this side, no frame at all
     await enterCode('AB');
-    const short = await box();
-    if ((await tx()).length === 0 && short && short.err === 'Enter the 4-letter code.')
+    const short = await win();
+    if ((await tx()).length === 0 && short && short.cerr === 'Enter the 4-letter code.')
       ok(`${V}: a short code is refused here and never reaches the socket`);
-    else fail(`${V}: short code ${JSON.stringify({ tx: await tx(), err: short && short.err })}`);
-    // (b) a ROOM code goes down the join path that already exists
-    await ev(`(() => { window.__joined = null; const b = $('joinBtn'); window.__joinFn = b.onclick; b.onclick = () => { window.__joined = $('codeInput').value; }; return true; })()`);
+    else fail(`${V}: short code ${JSON.stringify({ tx: await tx(), err: short && short.cerr })}`);
+    // (b) A GAME'S CODE JOINS NOTHING (U4): it is asked about, upper-cased, and
+    //     said to be a game's; #codeInput/#joinBtn are never touched.
+    await ev(`(() => { window.__joined = null; const b = $('joinBtn'); window.__joinFn = b.onclick; b.onclick = () => { window.__joined = $('codeInput').value || 'pressed'; }; return true; })()`);
     await enterCode('mnpq');
     const asked = (await tx()).filter((f) => f.type === 'code');
     await codeReply({ kind: 'room' });
-    const joined = await ev('window.__joined');
+    const joined = await ev('window.__joined'), gw14 = await win();
     await ev(`($('joinBtn').onclick = window.__joinFn, true)`);
-    if (asked.length === 1 && asked[0].code === 'MNPQ' && joined === 'MNPQ')
-      ok(`${V}: a room code is upper-cased, asked about, then joined through #codeInput/#joinBtn`);
-    else fail(`${V}: room branch asked=${JSON.stringify(asked)} joined=${JSON.stringify(joined)}`);
+    if (asked.length === 1 && asked[0].code === 'MNPQ' && joined === null && gw14 && gw14.cerr === SQ_GAME
+        && !(await tx()).some((f) => f.type === 'join' || (f.type === 'squad' && f.op === 'join')))
+      ok(`${V}: a game's code is upper-cased and asked about, then said to be a game's -- nothing joins`);
+    else fail(`${V}: game code asked=${JSON.stringify(asked)} joined=${JSON.stringify(joined)} said=${JSON.stringify(gw14 && gw14.cerr)}`);
     // (c) a SQUAD code sends squad op:'join' with this player's CURRENT callsign
     //     and paint (task 4: a seat's name is whatever the join frame carried).
     const who = await ev('({ name: myName(), skin: mySkin() })');
@@ -807,14 +856,14 @@ try {
       return j;
     };
     const j = await joinWith({ op: 'join', error: 'no_such_squad' });
-    const jn = await box();
+    const jn = await win();
     if (j.length === 1 && j[0].code === 'BKPQ' && j[0].name === who.name && j[0].skin === who.skin)
       ok(`${V}: a squad code sends squad op:'join' with this player's callsign and paint`);
     else fail(`${V}: squad branch ${JSON.stringify(j)} want ${JSON.stringify(who)}`);
     // D-BLOCK-2 A: a refused join reads EXACTLY as an unknown code does, so a
     // join a block refuses shows the ordinary view.
-    if (jn && jn.err === SQ_NONE) ok(`${V}: a join refused no_such_squad says what an unknown code says`);
-    else fail(`${V}: join no_such_squad ${JSON.stringify(jn && jn.err)}`);
+    if (jn && jn.cerr === SQ_NONE) ok(`${V}: a join refused no_such_squad says what an unknown code says`);
+    else fail(`${V}: join no_such_squad ${JSON.stringify(jn && jn.cerr)}`);
     // EVERY DECIDED JOIN REFUSAL, one row each (review T8-R1-12): a key edited
     // or deleted in SOC_ERR reads the generic fallback, and only a row per key
     // can see that. The last row is a code this build does not know.
@@ -823,20 +872,20 @@ try {
       ['unavailable', 'That squad could not be joined right now. Try again later.'],
       ['not_a_code_this_build_knows', 'That squad could not be joined right now. Try again later.']]) {
       await joinWith({ op: 'join', error: code });
-      const jx = await box();
-      if (jx && jx.err === line) ok(`${V}: a join refused ${code} says "${line}"`);
-      else fail(`${V}: join ${code} ${JSON.stringify(jx && jx.err)}`);
+      const jx = await win();
+      if (jx && jx.cerr === line) ok(`${V}: a join refused ${code} says "${line}"`);
+      else fail(`${V}: join ${code} ${JSON.stringify(jx && jx.cerr)}`);
     }
     // And a join that lands: the roster is the answer, the box shows it, and
     // this tab's next reconnect takes its row back WITH the code again.
     await joinWith(SNAP);
-    const jok = await box();
+    const jok = await win(), jokb = await box();
     await reconnect(); await token();
     const coded = await squads();
     await reply(SNAP); await settleFriends();
-    if (jok && jok.text.includes('BKPQ') && !jok.err && (await stored()) === 'BKPQ' && coded.length === 1 && coded[0].code === 'BKPQ')
+    if (jok && jok.text.includes('Dusty Crag') && !jok.cerr && jokb && jokb.count === '2/4' && (await stored()) === 'BKPQ' && coded.length === 1 && coded[0].code === 'BKPQ')
       ok(`${V}: a join that lands shows the squad, and a reconnect resumes it by code`);
-    else fail(`${V}: join landed ${JSON.stringify(jok && { text: jok.text, err: jok.err })} reconnect=${JSON.stringify(coded)}`);
+    else fail(`${V}: join landed ${JSON.stringify(jok && { text: jok.text, err: jok.cerr, count: jokb && jokb.count })} reconnect=${JSON.stringify(coded)}`);
     // A SQUAD ON SCREEN IS A SQUAD THIS TAB HAD (review T8-R1-13). After a
     // `gone` the tab's next return owes one more question, BARE; the player may
     // join a squad by code meanwhile. If that squad has ended by the time the
@@ -861,23 +910,23 @@ try {
     // (d) NONE
     await push({ op: 'ended', reason: 'left' });
     await enterCode('ZZZZ'); await codeReply({ kind: 'none' });
-    const none = await box();
-    if (none && none.err === SQ_NONE) ok(`${V}: an unknown code is told the truth (5.3)`);
-    else fail(`${V}: none branch ${JSON.stringify(none && none.err)}`);
-    await up(false); const noneOff = await box(); await up(true);
-    if (noneOff && noneOff.err === '' && noneOff.field && !noneOff.field.on) ok(`${V}: offline, the field's last answer is not left under a dead field`);
-    else fail(`${V}: offline code error ${JSON.stringify(noneOff && { err: noneOff.err, field: noneOff.field })}`);
+    const none = await win();
+    if (none && none.cerr === SQ_NONE) ok(`${V}: an unknown code is told the truth (5.3)`);
+    else fail(`${V}: none branch ${JSON.stringify(none && none.cerr)}`);
+    await up(false); const noneOff = await win(); await up(true);
+    if (noneOff && noneOff.cerr === '' && noneOff.field && !noneOff.field.on) ok(`${V}: offline, the field's last answer is not left under a dead field`);
+    else fail(`${V}: offline code error ${JSON.stringify(noneOff && { err: noneOff.cerr, field: noneOff.field })}`);
     // A REFUSED CODE FRAME IS NOT AN UNKNOWN CODE (review T8-R1-11): a timeout
     // on a live socket answers 'unavailable', and telling that player a valid
     // code does not exist is the lie. Each refusal says its own decided
     // sentence (review T8-R1-12).
-    await box();                                                // repaint: the socket coming back is not one by itself here
+    await win();                                                // repaint: the socket coming back is not one by itself here
     for (const [cerr, line] of [['unavailable', 'That code could not be checked right now. Try again later.'],
       ['offline', 'Not connected. Try again in a moment.']]) {
       await enterCode('MNPQ'); await codeReply({ error: cerr });
-      const cx = await box();
-      if (cx && cx.err === line) ok(`${V}: a code frame refused ${cerr} says "${line}", not that the code does not exist`);
-      else fail(`${V}: code frame refused ${cerr} ${JSON.stringify(cx && cx.err)}`);
+      const cx = await win();
+      if (cx && cx.cerr === line) ok(`${V}: a code frame refused ${cerr} says "${line}", not that the code does not exist`);
+      else fail(`${V}: code frame refused ${cerr} ${JSON.stringify(cx && cx.cerr)}`);
     }
     // (e) ENTER. The join panel never had one despite a comment saying it did;
     //     a 4-letter code on a phone keyboard ends with the Go key.
@@ -898,6 +947,7 @@ try {
     const rep = (await tx()).filter((f) => f.type === 'code');
     if (rep.length === 0) ok(`${V}: an autorepeated Enter sends nothing`);
     else { fail(`${V}: an autorepeated Enter sent ${JSON.stringify(rep)}`); await codeReply({ kind: 'none' }); }
+    await ev(`(() => { const i = document.getElementById('sqCode'); if (i) { i.value = ''; i.blur(); } return true; })()`);
     // (f) A PLAYER WITH NO ACCOUNT WHO ENTERS A SQUAD CODE IS IN IT (D11), and
     //     sees it. With no squad in hand such a player asks nothing: their
     //     squad is keyed to the socket they joined on.
@@ -908,7 +958,7 @@ try {
     const gj = (await squads()).filter((f) => f.op === 'join');
     await reply(GSNAP);
     const gin = await box();
-    if (outAsk.length === 0 && gj.length === 1 && gin && gin.text.includes('BKPQ') && !gin.text.includes('You can play right now'))
+    if (outAsk.length === 0 && gj.length === 1 && gin && gin.text.includes('Steel Mule') && gin.count === '2/4' && !gin.text.includes('You can play right now'))
       ok(`${V}: a player with no account asks nothing, enters a squad code, and sees the squad they are in`);
     else fail(`${V}: no-account join asked=${JSON.stringify(outAsk)} join=${JSON.stringify(gj)} ${JSON.stringify(gin && gin.text)}`);
     // A FIRST SAVE MINTS AN ANONYMOUS ACCOUNT, maybe mid-squad. Nobody is being
@@ -919,13 +969,13 @@ try {
     const minted = await slot();
     await reply(GSNAP);
     const gmint = await box();
-    if (JSON.stringify(minted) === '{"code":"BKPQ","n":2}' && gmint && gmint.text.includes('BKPQ'))
+    if (JSON.stringify(minted) === '{"code":"BKPQ","n":2}' && gmint && gmint.text.includes('Steel Mule') && gmint.count === '2/4')
       ok(`${V}: an anonymous account minted mid-squad keeps the squad`);
     else fail(`${V}: minted account dropped the squad ${JSON.stringify(gmint && gmint.text)} slot=${JSON.stringify(minted)}`);
     // And a guest who is kicked is told so, above everything a guest can do.
     await push({ op: 'ended', reason: 'kicked' });
     const gk = await box();
-    if (gk && gk.text.startsWith('You were removed from the squad. ' + G1)) ok(`${V}: a kicked guest is told, and offered the code field again`);
+    if (gk && gk.text.startsWith('You were removed from the squad. ' + G1)) ok(`${V}: a kicked guest is told, and offered the way to a squad code again`);
     else fail(`${V}: kicked guest ${JSON.stringify(gk && gk.text)}`);
     await setWho('in');
     await ask(''); await reply(SNAP);
@@ -935,18 +985,21 @@ try {
     //      that belonged to somebody else must be dropped.
     const FRIENDS = `{ friends: [{ id: 'a', callsign: 'Dusty Crag', online: true }, { id: 'b', callsign: null, online: false }],
       requests: { in: [{ id: 'c', callsign: 'Steel Mule' }], out: [] }, blocked: [], friendCode: 'AB12CD', callsign: null }`;
-    await ev(`(window.CC_SOCIAL = ${FRIENDS}, document.dispatchEvent(new Event('cc:social')), true)`);
+    await ev(`(Bay.show('home'), window.CC_SOCIAL = ${FRIENDS}, document.dispatchEvent(new Event('cc:social')), true)`);
     await sleep(60);
-    const fr1 = await ev(`(() => { const t = document.querySelectorAll('#bay .sqtb')[1]; if (!t) return null; const c = t.querySelector('.sqc');
-      return { pill: c.classList.contains('hidden') ? null : c.textContent.trim(), dot: !t.querySelector('.sqd').classList.contains('hidden') }; })()`);
-    if (fr1 && fr1.pill === '1' && fr1.dot === true)
-      ok(`${V}: cc:social repaints home -- Friends reads 1 online with the waiting-request lamp`);
-    else fail(`${V}: friends tab ${JSON.stringify(fr1)}`);
+    // CHANGED BY U4: the Friends tab, its count pill and its request lamp went
+    // with the tabs. The box's friends part reads "Friends online · 1", and the
+    // lamp is on Manage, which is where a request is answered now.
+    const fr1 = await ev(`(() => { const f = document.querySelector('#bay .sqx .sqbf'), m = document.querySelector('#bay .sqmg');
+      return f && m ? { head: (f.querySelector('.sqh') || {}).textContent, dot: !m.querySelector('.sqd').classList.contains('hidden') } : null; })()`);
+    if (fr1 && fr1.head === 'Friends online \u00b7 1' && fr1.dot === true)
+      ok(`${V}: cc:social repaints home -- "Friends online · 1", and Manage carries the waiting-request lamp`);
+    else fail(`${V}: friends online ${JSON.stringify(fr1)}`);
     // THE LAMP IS NOT THE ONLY WAY TO KNOW (review T8-R1-17): it is aria-hidden,
-    // so the tab's name says the waiting request in words.
-    const frName = await ev(`(() => { const t = document.querySelectorAll('#bay .sqtb')[1]; return t ? t.getAttribute('aria-label') : null; })()`);
-    if (frName === 'Friends, 1 online, 1 request waiting') ok(`${V}: the Friends tab's name says 1 online and 1 request waiting`);
-    else fail(`${V}: Friends tab name ${JSON.stringify(frName)}`);
+    // so Manage's name says the waiting request in words.
+    const frName = await ev(`(() => { const t = document.querySelector('#bay .sqmg'); return t ? t.getAttribute('aria-label') : null; })()`);
+    if (frName === 'Manage squad, 1 friend request waiting') ok(`${V}: Manage's name says 1 friend request waiting`);
+    else fail(`${V}: Manage name ${JSON.stringify(frName)}`);
     // A DIFFERENT ACCOUNT IS NOT YOUR SQUAD -- AND IT IS NOT ASKED ABOUT UNTIL
     // ITS OWN HELLO (review T8-R1-2). An in-page sign-in fires cc:account from
     // cloudBoot BEFORE app.js sends the new identity's hello, and the server
@@ -965,7 +1018,7 @@ try {
     const flipAsk = await squads();
     await hello();
     const helloAsk = await squads();
-    if (flip && flip.text.startsWith('Not loaded yet.') && !flip.text.includes('BKPQ') && (await stored()) === null && (await slot()) === null
+    if (flip && flip.text.startsWith('Not loaded yet.') && !flip.text.includes('Dusty Crag') && flip.count === null && (await stored()) === null && (await slot()) === null
         && flipAsk.length === 0 && bare1(helloAsk))
       ok(`${V}: a different account drops the squad, the code and the answer, asks nothing on the switch, and asks bare after its hello`);
     else fail(`${V}: account flip ${JSON.stringify(flip && flip.text)} held=${JSON.stringify(await stored())} slot=${JSON.stringify(await slot())} on the switch=${JSON.stringify(flipAsk)} after the hello=${JSON.stringify(helloAsk)}`);
@@ -986,18 +1039,20 @@ try {
     else fail(`${V}: an end outlived its account: before=${JSON.stringify(endWas)} next account=${JSON.stringify(endB)} ${JSON.stringify(eb && eb.text)} guest=${JSON.stringify(endG)} ${JSON.stringify(eg && eg.text)}`);
     await setWho('in'); await hello(); await reply({ op: 'gone' }); await settleFriends();
 
-    // ---- 16. THE FRIENDS TAB, v1 (design 5.1): the counts D13 asks for and the
+    // ---- 16. THE FRIENDS, v1 (design 5.1): the counts D13 asks for and the
     //      door to the full screen. Task 9 adds the rows and Invite under them.
-    //      The pill must be ABSENT, not zero, while CC_SOCIAL is null.
+    //      A count must be ABSENT, not zero, while CC_SOCIAL is null.
+    //      CHANGED BY U4: the Friends tab became the box's "Friends online"
+    //      part (its unknown, refused and Retry states) and the window's
+    //      friends column (the counts and the door to the Friends screen).
     await ev(`(window.CC_SOCIAL = null, window.CC_SOCIAL_ERR = '', window.CC_SOCIAL_ASKING = false, document.dispatchEvent(new Event('cc:social')), true)`);
-    await click('#bay [data-sq="tab:friends"]');
     const fu = await box();
-    if (fu && fu.tabs[1].pill === null && fu.text.startsWith('Not loaded yet.') && !fu.text.includes('No friends'))
-      ok(`${V}: Friends with no snapshot says "Not loaded yet.", and the pill is absent rather than 0`);
-    else fail(`${V}: friends unknown ${JSON.stringify(fu && { pill: fu.tabs[1].pill, text: fu.text })}`);
+    if (fu && fu.ftext.startsWith('FRIENDS ONLINE Not loaded yet.') && !/\d/.test(fu.ftext) && !fu.ftext.includes('No friends'))
+      ok(`${V}: the box's friends with no snapshot say "Not loaded yet.", and the count is absent rather than 0`);
+    else fail(`${V}: friends unknown ${JSON.stringify(fu && fu.ftext)}`);
     // A REFUSED FRIENDS READ HAS A RETRY (review T8-R1-7). Nothing re-asks it by
     // itself -- it is eight round trips on the server, asked once per
-    // connection and per sign-in -- so the tab offers the tap, and says Loading
+    // connection and per sign-in -- so the box offers the tap, and says Loading
     // while that question is out.
     await ev(`(window.CC_SOCIAL_ERR = 'unavailable', document.dispatchEvent(new Event('cc:social')), true)`);
     const fe = await box();
@@ -1006,22 +1061,22 @@ try {
     const fl = await box();
     await ev(`(() => { for (const f of window.__tx.filter((x) => x.type === 'friends')) handle({ type: 'friends', error: 'unavailable', id: f.id }); window.CC_SOCIAL_ERR = ''; document.dispatchEvent(new Event('cc:social')); return true; })()`);
     await sleep(60);
-    if (fe && fe.err === 'Friends are not available right now. Try again later.' && fe.btns.some((b) => b.sq === 'fretry' && !b.dis && b.t === 'Retry')
+    if (fe && fe.ftext.includes('Friends are not available right now. Try again later.') && fe.btns.some((b) => b.sq === 'fretry' && !b.dis && b.t === 'Retry')
         && fq.length === 1 && fl && fl.btns.some((b) => b.sq === 'fretry' && b.dis && b.t === 'Loading'))
       ok(`${V}: a refused friends read offers Retry, which asks once and says Loading while it waits`);
-    else fail(`${V}: friends retry ${JSON.stringify({ fe: fe && { err: fe.err, btns: fe.btns }, fq, fl: fl && fl.btns })}`);
+    else fail(`${V}: friends retry ${JSON.stringify({ fe: fe && { ftext: fe.ftext, btns: fe.btns }, fq, fl: fl && fl.btns })}`);
     await ev(`(window.CC_SOCIAL = ${FRIENDS}, document.dispatchEvent(new Event('cc:social')), true)`);
     await sleep(60);
-    const fk = await box();
+    const fk = await win(), fkb = await box();
     // CHANGED BY TASK 9, which adds the Request and Friends rows under these
-    // count lines (C11): the three lines are still the tab's opening words,
+    // count lines (C11): the three lines are still the column's opening words,
     // exactly, and + Add friend is still its last; what now sits between them
     // is task 9's own check's to read.
-    if (fk && fk.text.startsWith('Your friends \u00b7 2 1 online now. 1 request waiting for an answer. ') && fk.text.endsWith(' + ADD FRIEND')
-        && fk.btns.some((b) => b.go === 'friends' && !b.dis))
-      ok(`${V}: Friends reads 2 friends, 1 online, 1 request, and offers the door to the screen`);
-    else fail(`${V}: friends known ${JSON.stringify(fk && { text: fk.text, btns: fk.btns })}`);
-    await click('#bay [data-sq="tab:squad"]');
+    if (fk && fk.ftext.startsWith('Your friends · 2 1 online now. 1 request waiting for an answer. ') && fk.ftext.endsWith(' + ADD FRIEND')
+        && fk.btns.some((b) => b.go === 'friends' && !b.dis)
+        && fkb && fkb.ftext.startsWith('FRIENDS ONLINE · 1 ') && fkb.ftext.includes('Dusty Crag'))
+      ok(`${V}: the window reads 2 friends, 1 online, 1 request, and offers the door to the screen; the box lists the one online`);
+    else fail(`${V}: friends known ${JSON.stringify({ win: fk && { text: fk.ftext, btns: fk.btns }, box: fkb && fkb.ftext })}`);
 
     // ---- 17. AN ANSWER SETTLES THE ACCOUNT THAT ASKED (review T8-R1-13). An
     //       account switch replaces the box's state; the answer to the old
@@ -1042,12 +1097,12 @@ try {
     const cq = (await tx()).filter((f) => f.type === 'code');
     await clearTx(); await setWho('in'); await hello();          // back to the first account; its hello asks
     await answer(cq[0] && cq[0].id, { type: 'code', kind: 'none' });
-    const iso2 = await box();
+    const iso2 = await win();
     await reply({ op: 'gone' });
-    if (cq.length === 1 && iso2 && iso2.text.startsWith('Not loaded yet.') && !iso2.text.includes(SQ_NONE))
+    if (cq.length === 1 && iso2 && iso2.text.startsWith('Not loaded yet.') && iso2.cerr === '')
       ok(`${V}: the old account's code answer does not land on the new account's field`);
-    else fail(`${V}: code answer crossed accounts ${JSON.stringify({ cq, iso2: iso2 && iso2.text })}`);
-    await typeCode('');
+    else fail(`${V}: code answer crossed accounts ${JSON.stringify({ cq, iso2: iso2 && [iso2.text, iso2.cerr] })}`);
+    await typeCode(''); await ev(`(Bay.show('home'), true)`);
 
     // ---- 18. BACK TO THE TAB, one event at a time (review T8-R1-14). A phone
     //       fires visibilitychange on the way OUT, while the page is hidden: an
@@ -1090,6 +1145,22 @@ try {
     if (unheard.length === 0 && onEntry.length === 1 && onEntry[0].op === 'resume')
       ok(`${V}: entering home asks about an introduction no event announced`);
     else fail(`${V}: entry hook: before ${JSON.stringify(unheard)}, on entry ${JSON.stringify(onEntry)}`);
+    // AND SO DOES ENTERING THE MANAGE SQUAD WINDOW (U4), which draws the same
+    // state: a player who goes straight there must not sit on "Not loaded yet."
+    // A repaint of it asks nothing.
+    await ev(`(Bay.go('career'), true)`);
+    await clearTx();
+    await ev(`(helloWs = S.ws, helloN++, true)`);
+    await sleep(60);
+    const unheardW = await squads();
+    await ev(`(Bay.go('squad'), true)`); await sleep(60);
+    const onEntryW = await squads();
+    await clearTx(); await ev(`(document.dispatchEvent(new Event('cc:social')), true)`); await sleep(60);
+    const repaintW = await squads();
+    await answer(onEntryW[0] && onEntryW[0].id, { type: 'squad', ...SNAP }); await ev(`(Bay.show('home'), true)`);
+    if (unheardW.length === 0 && onEntryW.length === 1 && onEntryW[0].op === 'resume' && repaintW.length === 0)
+      ok(`${V}: entering the Manage squad window asks about an introduction no event announced, and a repaint of it does not`);
+    else fail(`${V}: window entry hook: before ${JSON.stringify(unheardW)}, on entry ${JSON.stringify(onEntryW)}, on a repaint ${JSON.stringify(repaintW)}`);
 
     // ---- 20. A ROSTER THIS SOCKET WAS ONLY SHOWN (D-UI-1; review T8-R1-1). A
     //       bare resume from a second tab or device, while a live socket
@@ -1108,16 +1179,19 @@ try {
     await ask(''); await reply({ op: 'gone' });
     const lk = await ask('');
     await reply(LOOK);
-    const lb = await box();
+    const lb = await box(), lw = await win();
+    await ev(`(Bay.show('home'), true)`);
     const lookEnd = await ev('window.CC_SQUAD_END');
-    // AND THE SQUAD PILL IS EMPTY (review T8-R1-6): the account has a squad,
-    // on another socket, so "0 / 4" would be false and a count this tab has
-    // not been told is not a count.
-    if (lk.length === 1 && !('code' in lk[0]) && lb && lb.text.startsWith(OPEN) && !lb.text.includes('BKPQ') && !lb.text.includes('Dusty Crag') && lb.tabs[0].pill === null
+    // AND THE SQUAD COUNT IS LEFT OUT (review T8-R1-6): the account has a
+    // squad, on another socket, so "0/4" would be false and a count this tab
+    // has not been told is not a count. CHANGED BY U4: the code field is the
+    // window's, and no squad control there either -- Copy, Ready, Leave.
+    if (lk.length === 1 && !('code' in lk[0]) && lb && lb.text.startsWith(OPEN) && !lb.text.includes('BKPQ') && !lb.text.includes('Dusty Crag') && lb.count === null
         && (await slot()) === null && lookEnd === 'open' && (await stored()) === null
-        && !lb.btns.some((b) => b.sq === 'tab:friends') && lb.field && lb.field.on && lb.btns.some((b) => b.sq === 'code' && !b.dis))
+        && lw && lw.text.startsWith(OPEN) && lw.field && lw.field.on && lw.btns.some((b) => b.sq === 'code' && !b.dis)
+        && !lw.btns.some((b) => ['ready', 'leave'].includes(b.sq) || (b.sq === 'link' && !b.dis)))
       ok(`${V}: a held:false roster reads "${OPEN}", with no squad control and the code field, and is neither in the slot nor stored`);
-    else fail(`${V}: look-only answer ${JSON.stringify(lb && { text: lb.text, btns: lb.btns, field: lb.field, pill: lb.tabs[0].pill })} slot=${JSON.stringify(await slot())} end=${JSON.stringify(lookEnd)} held=${JSON.stringify(await stored())} asked=${JSON.stringify(lk)}`);
+    else fail(`${V}: look-only answer ${JSON.stringify({ box: lb && { text: lb.text, btns: lb.btns, count: lb.count }, win: lw && { text: lw.text, btns: lw.btns, field: lw.field } })} slot=${JSON.stringify(await slot())} end=${JSON.stringify(lookEnd)} held=${JSON.stringify(await stored())} asked=${JSON.stringify(lk)}`);
     // A RETURN ASKS AGAIN, BARE -- even with a code another tab has stored
     // meanwhile, which would pull the row off the socket in use -- and each
     // return asks once, whatever the answer was.
@@ -1146,7 +1220,7 @@ try {
     await reconnect(); await token();
     const lcoded = (await tx()).filter((f) => f.type === 'squad');
     await reply(HELD); await settleFriends();
-    if (lh && lh.text.includes('BKPQ') && !lh.text.includes(OPEN) && JSON.stringify(await slot()) === '{"code":"BKPQ","n":2}'
+    if (lh && lh.text.includes('Dusty Crag') && lh.count === '2/4' && !lh.text.includes(OPEN) && JSON.stringify(await slot()) === '{"code":"BKPQ","n":2}'
         && lcoded.length === 1 && lcoded[0].op === 'resume' && lcoded[0].code === 'BKPQ')
       ok(`${V}: a held:true answer makes the squad this tab's again, and its next reconnect resumes by code`);
     else fail(`${V}: held again ${JSON.stringify(lh && lh.text)} slot=${JSON.stringify(await slot())} reconnect=${JSON.stringify(lcoded)}`);
@@ -1155,9 +1229,9 @@ try {
     await push(LOOK);
     const lp = await box();
     if ((await slot()) === null && (await ev('window.CC_SQUAD_END')) === 'open' && (await stored()) === 'BKPQ' && lp && lp.text.startsWith(OPEN)
-        && lp.tabs[0].pill === null)
-      ok(`${V}: a held:false push empties the slot, says the squad is open elsewhere, empties the pill, and keeps the code`);
-    else fail(`${V}: held:false push ${JSON.stringify(lp && { text: lp.text, pill: lp.tabs[0].pill })} slot=${JSON.stringify(await slot())} held=${JSON.stringify(await stored())}`);
+        && lp.count === null)
+      ok(`${V}: a held:false push empties the slot, says the squad is open elsewhere, leaves the count out, and keeps the code`);
+    else fail(`${V}: held:false push ${JSON.stringify(lp && { text: lp.text, count: lp.count })} slot=${JSON.stringify(await slot())} held=${JSON.stringify(await stored())}`);
     // THE SQUAD ENDED ON THE OTHER DEVICE: this tab showed it, so the answer to
     // the next return is the neutral "has ended" line, and the code the bare
     // question did not present is not spent.
@@ -1207,10 +1281,11 @@ try {
     // C3: the line is CAUSE-NEUTRAL. A kick, the drop window, a block and a
     // restart all answer the same `gone`, and naming one of them would tell a
     // player removed by a block what happened to them.
-    if (s21 && s21.text.startsWith('Your squad has ended. Squad up again.')
-        && s21.btns.some((b) => b.sq === 'tab:friends' && /invite friends/i.test(b.t)) && spent21 === null)
+    // CHANGED BY U4: Invite friends was offered under the line; that button
+    // went with the tabs (the friends online carry their own Invite).
+    if (s21 && s21.text.startsWith('Your squad has ended. Squad up again.') && s21.count === '0/4' && spent21 === null)
       ok(`${V}: gone with a remembered code is the neutral "has ended" line, and the code is spent`);
-    else fail(`${V}: squad-gone ${JSON.stringify(s21 && { text: s21.text, btns: s21.btns })} held=${JSON.stringify(spent21)}`);
+    else fail(`${V}: squad-gone ${JSON.stringify(s21 && { text: s21.text, count: s21.count })} held=${JSON.stringify(spent21)}`);
     // AND IT IS SPENT. The next introduction has nothing to remember and says so.
     if (s21b && s21b.text.startsWith(NOSQ)) ok(`${V}: the "has ended" line is not repeated on the next answer`);
     else fail(`${V}: ended line stuck ${JSON.stringify(s21b && s21b.text)}`);
@@ -1256,7 +1331,7 @@ try {
 // through the real delegated listener (click()), never by calling sqAct().
 // A roster in these checks carries `held: true`, as every roster this server
 // puts in the slot does (D-UI-1): the box gates every squad control on it.
-try {
+if (want('t9')) try {
   const T9_MULE = '00000000-0000-4000-8000-0000000000cc';
   const T9_PIKE = '00000000-0000-4000-8000-0000000000dd';
   // D-UI-3 (task 9's fix pass): EVERY ROW CARRIES `rid`, the server's handle
@@ -1284,13 +1359,19 @@ try {
       mode: 'duel', tees: null, max: null, you: 0, held: true, members: [], fits: ${JSON.stringify(t9fits(n))} }, ${JSON.stringify(patch)})), true)`);
     await sleep(80);
   };
-  // ONE READER FOR THE SQUAD PANE AND ONE FOR THE FRIENDS PANE. Visible means
-  // rendered: a node carrying .hidden is in the tree for morphChildren's sake
-  // and says nothing.
+  // ONE READER FOR THE SQUAD COLUMN AND ONE FOR THE FRIENDS COLUMN. Visible
+  // means rendered: a node carrying .hidden is in the tree for
+  // morphChildren's sake and says nothing.
+  // CHANGED BY U4: the squad and its controls moved from the box's Squad pane
+  // into the Manage squad window's middle column (#sqWin-squad), and the
+  // friend rows into its right-hand column (#sqWin-friends); the code field
+  // into its left-hand column (#sqWin-code). The dashed "+ Invite a friend"
+  // row went (the friends are in the next column) and the Squad tab's dot and
+  // label with the tabs. The rest reads as it did.
   const t9box = () => ev(`(() => {
-    Bay.show('home');
-    const pane = document.getElementById('sqPane-squad'), pnl = document.querySelector('#bay .pnl.sqx');
-    if (!pane || !pnl) return null;
+    Bay.show('squad');
+    const pane = document.getElementById('sqWin-squad'), pnl = pane, cc = document.getElementById('sqWin-code');
+    if (!pane || !cc) return null;
     const vis = (e) => !!e && !e.closest('.hidden') && e.getClientRects().length > 0;
     const q = (s, r) => (r || pane).querySelector(s);
     const btn = (s, r) => { const e = q(s, r); return vis(e) ? { t: e.textContent.trim(), dis: e.disabled, pressed: e.getAttribute('aria-pressed'), cy: e.classList.contains('cy') } : null; };
@@ -1307,8 +1388,9 @@ try {
         kick: (() => { const k = r.querySelector('[data-sq^="kick:"]'); return vis(k) ? { v: k.dataset.sq, dis: k.disabled, label: k.getAttribute('aria-label') } : null; })(),
         over: r.scrollWidth > r.clientWidth + 1, imgs: r.querySelectorAll('img').length,
       })),
+      head: txt(':scope > .sqh'),
       summary: txt('.sqml .sqn'),
-      add: vis(q('.sqadd')), invite: btn('.sqadd [data-sq="tab:friends"]'), link: btn('[data-sq="link"]'),
+      add: vis(q('.sqadd')), link: btn('[data-sq="link"]', cc),
       seats: vis(q('.sqs')) ? [...pane.querySelectorAll('.sqs span')].map((s) => s.textContent + (s.classList.contains('on') ? '*' : '')) : [],
       note: txt('.sqnote'), line: txt('.sqft .sqfl'), foot: vis(q('.sqft')),
       start: btn('[data-sq="start"]'), ready: btn('[data-sq="ready"]'), leave: btn('[data-sq="leave"]'), rack: btn('[data-sq="rack"]'),
@@ -1319,22 +1401,39 @@ try {
       inv: vis(i) ? { t: (i.querySelector('.sqit') || { textContent: '' }).textContent, join: btn('[data-sq^="join:"]', i), ign: btn('[data-sq^="ignore:"]', i),
         err: (() => { const e = i.querySelector('.sqae'); return vis(e) ? e.textContent : ''; })() } : null,
       codes: document.querySelectorAll('#sqCode').length,
-      codeInPane: !!pane.querySelector('#sqCode'),
-      // THE SQUAD TAB (D-UI-4): its dot, its accessible name, and the invite
-      // row's live region.
-      tabDot: (() => { const t = document.getElementById('sqTab-squad'); return !!t && !t.querySelector('.sqd').classList.contains('hidden'); })(),
-      tabLabel: (() => { const t = document.getElementById('sqTab-squad'); return t ? t.getAttribute('aria-label') : null; })(),
+      codeInPane: !!pane.querySelector('#sqCode'), codeInCol: !!cc.querySelector('#sqCode'),
       invRole: (() => { const w = pane.querySelector('.sqiw'); return w ? w.getAttribute('role') : null; })(),
       invLive: !!(i && i.closest('[role="status"]')),
-      // Where the one code field sits among the pane's own children: the typed
-      // value survives a repaint only while this index does (morphChildren).
-      codeAt: [...pane.children].findIndex((c) => c.querySelector && c.querySelector('#sqCode')),
-      codeAfterRoster: (() => { const l = q('.sqml'), c = q('#sqCode'); return !!(l && c && (l.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING)); })(),
+      // Where the one code field sits among its column's own children: the
+      // typed value survives a repaint only while this index does.
+      codeAt: [...cc.children].findIndex((c) => c.id === 'sqCode' || (c.querySelector && c.querySelector('#sqCode'))),
       footIn: (() => { const f = q('.sqft'); if (!vis(f)) return null; const r = f.getBoundingClientRect(); return r.top >= pr.top - 0.5 && r.bottom <= pr.bottom + 0.5; })(),
-      inside: pnl.getBoundingClientRect().bottom >= pr.bottom - 0.5,
-      ownLaunch: !!pnl.querySelector('.launch, [data-launch]'),
-      probeInBar: (() => { const lp = document.querySelector('#bay .launch, #bay [data-launch]'); return !!(lp && lp.closest('.lbar')); })(),
+      // How far above the column's inner bottom edge the pinned footer sits,
+      // in px: rows scrolling past would show through any strip below it.
+      footGap: (() => { const f = q('.sqft'); if (!vis(f)) return null; return +(pr.bottom - parseFloat(getComputedStyle(pane).borderBottomWidth) - f.getBoundingClientRect().bottom).toFixed(2); })(),
+      // The column ends inside the page body: it scrolls, it never spills.
+      inside: (() => { const b = document.querySelector('#bay .pbody'); return !!b && pr.bottom <= b.getBoundingClientRect().bottom + 0.5; })(),
+      ownLaunch: !!pane.querySelector('.launch, [data-launch], [data-rdy]'),
       bayOver: (() => { const b = document.getElementById('bay'); return b.scrollWidth > b.clientWidth || b.scrollHeight > b.clientHeight; })(),
+    };
+  })()`);
+  // THE HOME BOX, for the checks that read what U4 left there: its member
+  // rows (name and status), the action line under them, and the invite row.
+  const t9home = () => ev(`(() => {
+    Bay.show('home');
+    const p = document.querySelector('#bay .sqx'); if (!p) return null;
+    const vis = (e) => !!e && !e.closest('.hidden') && e.getClientRects().length > 0;
+    const i = p.querySelector('.sqi');
+    const ae = p.querySelector('.sqml ~ .sqae');
+    return {
+      rows: [...p.querySelectorAll('.sqml .sqm')].filter(vis).map((r) => ({ name: r.querySelector('.sqmt').textContent, state: (r.querySelector('.sqr') || { textContent: '' }).textContent,
+        tick: vis(r.querySelector('.sqr.on svg')), lead: vis(r.querySelector('.sql')), kick: !!r.querySelector('[data-sq^="kick:"]'), menu: vis(r.querySelector('.pmb')) })),
+      aerr: vis(ae) ? ae.textContent : '',
+      inv: vis(i) ? { t: (i.querySelector('.sqit') || { textContent: '' }).textContent, join: !!i.querySelector('[data-sq^="join:"]'), ign: !!i.querySelector('[data-sq^="ignore:"]') } : null,
+      invRole: (() => { const w = p.querySelector('.sqb > .sqiw'); return w ? w.getAttribute('role') : null; })(),
+      say: (document.querySelector('#bay .lbar .rdy .rdys') || {}).textContent || null,
+      text: p.querySelector('.sqb').innerText.replace(/\\s+/g, ' ').trim(),
+      ctl: [...p.querySelectorAll('[data-sq]')].map((b) => b.getAttribute('data-sq')),
     };
   })()`);
   const t9click = (sel) => ev(`(() => { const b = document.querySelector(${JSON.stringify(sel)}); if (!b) return false; b.click(); return true; })()`);
@@ -1345,7 +1444,7 @@ try {
   // A BUTTON THE RENDER DID NOT DRAW, pressed through the real listener, in
   // either pane: the way to prove a handler refuses what a stale or forged DOM
   // asks of it.
-  const t9press = (v, paneId = 'sqPane-squad') => ev(`(() => { const f = document.getElementById(${JSON.stringify(paneId)}); const b = document.createElement('button');
+  const t9press = (v, paneId = 'sqWin-squad') => ev(`(() => { const f = document.getElementById(${JSON.stringify(paneId)}); const b = document.createElement('button');
     b.dataset.sq = ${JSON.stringify(v)}; f.appendChild(b); b.click(); b.remove(); return true; })()`);
   // setTimeout, recorded while `fn` runs, so a check can see a timer a handler
   // set and fire it by hand rather than wait it out.
@@ -1393,18 +1492,24 @@ try {
     //      too, and nobody starts): the leader's row carries its own tick, as
     //      every row does (it said only Leader since fix wave E9), and the
     //      leader's footer has Ready where Start was. Start is gone.
+    //      CHANGED BY U4: read in the Manage squad window. The dashed invite
+    //      row is gone -- the friends column stands beside the squad -- and its
+    //      code link is the code column's Copy, under the code itself; the
+    //      one code field is in the code column, not under the roster; the
+    //      column has a "Members 2/4" heading; Ready reads as a word as well
+    //      as a tick (row state "Ready").
     await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
     const a1 = await t9box();
-    if (a1 && a1.rows.length === 2
-        && a1.rows[0].name === 'Dusty Crag' && a1.rows[0].you && a1.rows[0].lead && a1.rows[0].tick && a1.rows[0].dot && a1.rows[0].lit
+    if (a1 && a1.rows.length === 2 && a1.head === 'Members \u00b7 2/4'
+        && a1.rows[0].name === 'Dusty Crag' && a1.rows[0].you && a1.rows[0].lead && a1.rows[0].tick && a1.rows[0].state === 'Ready' && a1.rows[0].dot && a1.rows[0].lit
         && a1.rows[1].name === 'Steel Mule' && !a1.rows[1].you && !a1.rows[1].lead && a1.rows[1].tick
-        && a1.add && a1.invite && !a1.invite.dis && a1.link && a1.link.t === 'Code QK7T' && !a1.link.dis
+        && !a1.add && a1.link && a1.link.t === 'Copy' && !a1.link.dis
         && JSON.stringify(a1.seats) === JSON.stringify(['Duel 2*', 'FFA 2–4*', 'Boss 1–2*', 'Aliens 1–2*', 'Golf 1–4*'])
         && a1.line === 'Duel · 2' && !a1.start && a1.ready && !a1.ready.dis && a1.ready.t === 'Ready' && a1.ready.pressed === 'true'
         && a1.leave && !a1.leave.dis && a1.leave.t === 'Leave'
-        && a1.codes === 1 && a1.codeInPane && a1.codeAfterRoster
-        && !a1.ownLaunch && a1.probeInBar && a1.inside && !a1.bayOver && !a1.rows.some((r) => r.over))
-      ok(`${V}: leader forming -- rows with a drawn lamp, (you), Leader and a tick on every ready row, the dashed invite row with the code link, the Seats line lit by fits, Ready (no Start) and Leave live, and the one code field below the roster`);
+        && a1.codes === 1 && !a1.codeInPane && a1.codeInCol && a1.codeAt === 1
+        && !a1.ownLaunch && a1.inside && !a1.bayOver && !a1.rows.some((r) => r.over))
+      ok(`${V}: leader forming -- rows with a drawn lamp, (you), Leader and a tick on every ready row, the Seats line lit by fits, Ready (no Start) and Leave live, Copy beside the code, and the one code field in the code column`);
     else fail(`${V}: leader forming ${JSON.stringify(a1)}`);
     // The leader's Remove and the player menu are on the OTHER row only.
     if (a1 && a1.rows.length === 2 && !a1.rows[0].menu && !a1.rows[0].kick && a1.rows[1].menu && a1.rows[1].kick && !a1.rows[1].kick.dis && a1.rows[1].kick.v === 'kick:' + RID_MULE)
@@ -1589,10 +1694,11 @@ try {
       ok(`${V}: a roster that does not say held:true shows its rows with every squad control dead`);
     else fail(`${V}: held gate ${JSON.stringify(a9 && { ready: a9.ready, kick: a9.rows[1] && a9.rows[1].kick })}`);
 
-    // ---- A10. THE ONE CODE FIELD UNDER A SQUAD (D-UI-2). It is the pane's
-    //       seventh child in every squad state -- with a refused re-ask and
-    //       without -- so what the player typed survives a roster push, the
-    //       refusal and its Retry (morphChildren is positional).
+    // ---- A10. THE ONE CODE FIELD UNDER A SQUAD (D-UI-2). It is the code
+    //       column's second child in every squad state -- with a refused re-ask
+    //       and without -- so what the player typed survives a roster push, the
+    //       refusal and its Retry (morphChildren is positional). CHANGED BY U4:
+    //       it was the Squad pane's seventh child, under the roster.
     await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
     await ev(`(document.getElementById('sqCode').value = 'RM4P', true)`);
     await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: false })] });
@@ -1608,11 +1714,11 @@ try {
     const a10b = await t9box();
     const kept3 = await ev(`document.getElementById('sqCode').value`);
     await ev(`(document.getElementById('sqCode').value = '', true)`);
-    if (a10 && a10.codeAt === 6 && kept1 === 'RM4P'
-        && a10r && a10r.codeAt === 6 && kept2 === 'RM4P' && a10r.rerr === 'Squads are not available right now. Try again later.'
+    if (a10 && a10.codeAt === 1 && kept1 === 'RM4P'
+        && a10r && a10r.codeAt === 1 && kept2 === 'RM4P' && a10r.rerr === 'Squads are not available right now. Try again later.'
         && a10r.retry && !a10r.retry.dis && !a10r.foot && !a10r.add && a10r.rows.length === 0
         && a10r.summary.includes('QK7T') && a10r.codes === 1
-        && a10b && a10b.codeAt === 6 && kept3 === 'RM4P' && a10b.rerr === '' && !a10b.retry && a10b.foot && a10b.rows.length === 2)
+        && a10b && a10b.codeAt === 1 && kept3 === 'RM4P' && a10b.rerr === '' && !a10b.retry && a10b.foot && a10b.rows.length === 2)
       ok(`${V}: the code field keeps what was typed across a roster push, a refused re-ask and its Retry; under the refusal the squad is shown read-only, with no controls`);
     else fail(`${V}: code field under a squad ${JSON.stringify({ a10: a10 && a10.codeAt, kept1, a10r: a10r && { at: a10r.codeAt, rerr: a10r.rerr, retry: a10r.retry, foot: a10r.foot, add: a10r.add, rows: a10r.rows.length, summary: a10r.summary }, kept2, a10b: a10b && { at: a10b.codeAt, rerr: a10b.rerr, retry: a10b.retry, foot: a10b.foot }, kept3 })}`);
 
@@ -1621,9 +1727,11 @@ try {
     //       bottom rather than scrolled out of reach.
     await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true }), T9PIKE({ ready: true }), T9M({ guest: true, ready: true })] });
     const a11 = await t9box();
-    if (a11 && a11.rows.length === 4 && !a11.add && a11.footIn === true && a11.ready && a11.inside && !a11.rows.some((r) => r.over))
-      ok(`${V}: a full squad drops the invite row, and the footer holding Ready stays inside the visible pane`);
-    else fail(`${V}: full squad ${JSON.stringify(a11 && { rows: a11.rows.length, add: a11.add, footIn: a11.footIn, ready: a11.ready })}`);
+    // U4: and the footer sits on the column's own bottom edge, with no strip
+    // under it for the rows scrolling past to show through.
+    if (a11 && a11.rows.length === 4 && !a11.add && a11.footIn === true && Math.abs(a11.footGap) < 1.5 && a11.ready && a11.inside && !a11.rows.some((r) => r.over))
+      ok(`${V}: a full squad keeps the footer holding Ready inside the visible column, on its bottom edge`);
+    else fail(`${V}: full squad ${JSON.stringify(a11 && { rows: a11.rows.length, add: a11.add, footIn: a11.footIn, footGap: a11.footGap, ready: a11.ready })}`);
     // ---- B1. READY SENDS ONE CORRELATED FRAME, WITH THE RACK, AND SAYS SO
     //      WHILE IT IS OUT. Standing down carries no rack: only standing up
     //      needs one (design 4.3). The server answers `ready` with its own op.
@@ -1661,7 +1769,7 @@ try {
     await clearTx(); await t9click('#bay [data-sq="leave"]'); await sleep(60);
     const b2f = await squads(), b2 = await t9box();
     await reply({ op: 'left', ok: true });
-    const b2t = await ev(`(Bay.show('home'), document.getElementById('sqPane-squad').innerText)`);
+    const b2t = await ev(`(() => { Bay.show('home'); const t = document.querySelector('#bay .sqx .sqb').innerText; Bay.show('squad'); return t; })()`);   // U4: the box's list
     if (b2f.length === 1 && b2f[0].op === 'leave' && typeof b2f[0].id === 'number' && b2 && b2.leave && b2.leave.t === 'Leaving' && b2.leave.dis
         && b2t.includes('You left the squad.') && (await ev('window.CC_SQUAD')) === null)
       ok(`${V}: Leave sends one frame, reads Leaving while it is out, and the answer leaves the player out of the squad`);
@@ -1677,7 +1785,7 @@ try {
     await clearTx(); await t9click('#bay [data-sq="leave"]'); await sleep(60);
     const b2lf = await squads(), b2l = await t9box();
     await reply({ op: 'left', ok: true });
-    const b2lt = await ev(`(Bay.show('home'), document.getElementById('sqPane-squad').innerText)`);
+    const b2lt = await ev(`(() => { Bay.show('home'); const t = document.querySelector('#bay .sqx .sqb').innerText; Bay.show('squad'); return t; })()`);
     const b2lslot = await ev('window.CC_SQUAD');
     await t9state({ leader: T9_MULE, members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
     const b2h0 = await t9box();
@@ -1747,11 +1855,14 @@ try {
       await clearTx();
       await ev(`(handle(${JSON.stringify(at === undefined ? { type: 'squad', op: 'start', error: code } : { type: 'squad', op: 'start', error: code, at })}), true)`);
       await sleep(60);
-      const bx = await t9box(), sent = (await tx()).length;
-      const say = await ev(`(document.querySelector('#bay .lbar .launch .rdys') || {}).textContent || null`);
-      if (!(sent === 0 && bx && bx.aerr === line && say === line && bx.ready && !bx.ready.dis)) b4bad.push({ code, at, sent, aerr: bx && bx.aerr, say, ready: bx && bx.ready });
+      // CHANGED BY U4: the window is read for the action line and Ready, and
+      // home for the box's own action line and the ribbon's.
+      const bx = await t9box(), sent = (await tx()).length, hb = await t9home();
+      const say = hb && hb.say;
+      if (!(sent === 0 && bx && bx.aerr === line && hb.aerr === line && say === line && bx.ready && !bx.ready.dis)) b4bad.push({ code, at, sent, aerr: bx && bx.aerr, home: hb && hb.aerr, say, ready: bx && bx.ready });
     }
-    if (!b4bad.length) ok(`${V}: all ${says.length} start refusals pushed to the squad say their own sentence on the box and on the ready control, and send nothing`);
+    await t9box();                                // back to the window, where the checks below press
+    if (!b4bad.length) ok(`${V}: all ${says.length} start refusals pushed to the squad say their own sentence in the window, in the box and on the ready control, and send nothing`);
     else fail(`${V}: start refusals ${JSON.stringify(b4bad)}`);
 
     // ---- B5. THE LATCH. socialTx answers SYNCHRONOUSLY when the socket is down,
@@ -1803,7 +1914,7 @@ try {
     const pressed = async (name, setup, v) => {
       await setup(); await clearTx();
       await ev(`(() => { const b = document.createElement('button'); b.setAttribute('data-sq', ${JSON.stringify(v)});
-        document.getElementById('sqPane-squad').appendChild(b); b.click(); b.remove(); return true; })()`);
+        document.getElementById('sqWin-squad').appendChild(b); b.click(); b.remove(); return true; })()`);
       await sleep(50); b6[name] = (await squads()).length;
     };
     await pressed('leaderStart', () => t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] }), 'start');
@@ -1826,6 +1937,22 @@ try {
     if (clip === `http://127.0.0.1:${appPort}/?squad=QK7T` && b7f.length === 0)
       ok(`${V}: the code link copies /?squad=QK7T and sends nothing`);
     else fail(`${V}: code link copied ${JSON.stringify(clip)}, sent ${JSON.stringify(b7f)}`);
+    // ---- B7b. SHARE (U4; owner, 2026-10-06: the squad code with Copy and
+    //       Share). Offered only where the device has a share sheet, as the
+    //       Friends screen's is, and it shares the same link, with the code in
+    //       words. A squad with no code to share offers it dead. Nothing is sent.
+    await ev(`(window.__shareHad = Object.getOwnPropertyDescriptor(navigator, 'share'), Object.defineProperty(navigator, 'share', { value: undefined, configurable: true }), true)`);
+    const b7none = await ev(`(Bay.show('squad'), document.dispatchEvent(new Event('cc:social')), !!document.querySelector('#bay [data-sq="share"]'))`);
+    await ev(`(window.__shared = null, Object.defineProperty(navigator, 'share', { value: (o) => { window.__shared = o; return Promise.resolve(); }, configurable: true }), document.dispatchEvent(new Event('cc:social')), true)`);
+    await sleep(40);
+    const b7live = await ev(`(() => { const b = document.querySelector('#bay [data-sq="share"]'); return b ? !b.disabled : null; })()`);
+    await clearTx(); await t9click('#bay [data-sq="share"]'); await sleep(60);
+    const shared = await ev('window.__shared'), b7sf = await squads();
+    await ev(`(() => { const d = window.__shareHad; if (d) Object.defineProperty(navigator, 'share', d); else delete navigator.share; document.dispatchEvent(new Event('cc:social')); return true; })()`);
+    if (b7none === false && b7live === true && shared && shared.url === `http://127.0.0.1:${appPort}/?squad=QK7T`
+        && shared.text === 'Join my squad in Cannons and Canyons. Squad code QK7T.' && b7sf.length === 0)
+      ok(`${V}: Share is offered only with a share sheet, and shares /?squad=QK7T with the code in words, sending nothing`);
+    else fail(`${V}: share ${JSON.stringify({ none: b7none, live: b7live, shared, sent: b7f })}`);
     // ---- C0. A CLEAN START FOR THE INVITE CHECKS (review T9-R1-9): a frame an
     //      earlier check left unanswered would keep the box busy, and every Join
     //      below would be dead for a reason that has nothing to do with invites.
@@ -1837,17 +1964,17 @@ try {
     //      left to fall through, the only invite a CONNECTED player ever got
     //      would be the push notification 4.4 declines to send them.
     const invite = (o) => ev(`(handle(Object.assign({ type: 'squad', op: 'invited', code: 'RM4P', from: { callsign: 'Steel Mule' }, size: 2, max: 4 }, ${JSON.stringify(o || {})})), true)`).then(() => sleep(80));
-    // Out of the squad (a push the server sends a leaver's other tabs): the box
-    // is in a no-squad state, with the code field.
-    await ev(`(handle({ type: 'squad', op: 'ended', reason: 'left' }), true)`); await sleep(60);
+    // Out of the squad (a push the server sends a leaver's other tabs): the
+    // window is in a no-squad state, with the code field.
+    await ev(`(handle({ type: 'squad', op: 'ended', reason: 'left' }), Bay.show('squad'), true)`); await sleep(60);
     await ev(`(document.getElementById('sqCode').value = 'ZX9K', true)`);
-    const c1at = await ev(`[...document.getElementById('sqPane-squad').children].findIndex((c) => c.querySelector && c.querySelector('#sqCode'))`);
+    const c1at = await ev(`[...document.getElementById('sqWin-code').children].findIndex((c) => c.id === 'sqCode' || (c.querySelector && c.querySelector('#sqCode')))`);
     const c1t = await ev('Date.now()');
     await invite();
     const c1 = await t9box();
     const c1slot = await ev('JSON.stringify(window.CC_SQUAD_INVITE)');
     const c1kept = await ev(`document.getElementById('sqCode').value`);
-    const c1at2 = await ev(`[...document.getElementById('sqPane-squad').children].findIndex((c) => c.querySelector && c.querySelector('#sqCode'))`);
+    const c1at2 = await ev(`[...document.getElementById('sqWin-code').children].findIndex((c) => c.id === 'sqCode' || (c.querySelector && c.querySelector('#sqCode')))`);
     await ev(`(document.getElementById('sqCode').value = '', true)`);
     if (c1 && c1.inv && c1.inv.t === 'Steel Mule invites you to their squad · 2 / 4' && c1.inv.join && !c1.inv.join.dis && c1.inv.join.t === 'Join'
         && c1.inv.ign && !c1.inv.ign.dis
@@ -1903,53 +2030,62 @@ try {
     //      set and fired by hand; the clock is moved, never waited on.
     await t9timers(() => invite({ code: 'RM7P', from: { callsign: 'Ridge Pike' } }));
     const c3timer = await ev(`window.__t9timers.filter((t) => t.ms >= 600000 && t.ms <= 601000).length`);
-    const c3new = await t9box();
+    const c3new = await t9box(), c3newH = await t9home();
     await ev(`(window.CC_SQUAD_INVITE.at = Date.now() - 599000, document.dispatchEvent(new Event('cc:social')), true)`); await sleep(60);
     const c3old = await t9box();
     await ev(`(window.CC_SQUAD_INVITE.at = Date.now() + 60000, document.dispatchEvent(new Event('cc:social')), true)`); await sleep(60);
     const c3ahead = await t9box();                // the clock set back since: an age that cannot be told is not offered
     await ev(`(window.CC_SQUAD_INVITE.at = Date.now() - 600001, document.dispatchEvent(new Event('cc:social')), true)`); await sleep(60);
-    const c3gone = await t9box();
-    await clearTx(); await t9press('join:RM7P'); await sleep(50);
+    const c3gone = await t9box(), c3goneH = await t9home();
+    await clearTx(); await t9press('join:RM7P', 'sqBox'); await sleep(50);
     const c3sent = await squads();
     if (c3sent.length) await reply({ op: 'join', error: 'full' });
     await ev(`(window.CC_SQUAD_INVITE.at = Date.now(), document.dispatchEvent(new Event('cc:social')), true)`); await sleep(60);
     const c3back = await t9box();
     await ev(`(() => { const t = window.__t9timers.find((x) => x.ms >= 600000 && x.ms <= 601000); if (t) t.f(); return true; })()`); await sleep(60);
-    const c3slot = await ev('window.CC_SQUAD_INVITE'), c3fired = await t9box();
+    const c3slot = await ev('window.CC_SQUAD_INVITE'), c3fired = await t9box(), c3firedH = await t9home();
     // A timer takes ITS OWN invite and nothing newer: a second invite has
     // arrived by the time the first one's ten minutes are up.
     await t9timers(() => invite({ code: 'RM7Q', from: { callsign: 'Ridge Pike' } }));
     await invite({ code: 'RM7R', from: { callsign: 'Steel Mule' } });
     await ev(`(() => { const t = window.__t9timers.find((x) => x.ms >= 600000 && x.ms <= 601000); if (t) t.f(); return true; })()`); await sleep(60);
     const c3kept = await ev('window.CC_SQUAD_INVITE && window.CC_SQUAD_INVITE.code'), c3keptRow = await t9box();
-    if (c3timer === 1 && c3new && c3new.inv && c3new.tabDot && c3old && c3old.inv && c3ahead && !c3ahead.inv && c3gone && !c3gone.inv && !c3gone.tabDot && c3sent.length === 0
-        && c3back && c3back.inv && c3slot === null && c3fired && !c3fired.inv && !c3fired.tabDot
+    // CHANGED BY U4: "lights nothing" was the Squad tab's dot; the tabs are
+    // gone, and the invite is shown on home itself -- the box's row -- which
+    // is read beside the window's.
+    if (c3timer === 1 && c3new && c3new.inv && c3newH && c3newH.inv && c3old && c3old.inv && c3ahead && !c3ahead.inv && c3gone && !c3gone.inv && c3goneH && !c3goneH.inv && c3sent.length === 0
+        && c3back && c3back.inv && c3slot === null && c3fired && !c3fired.inv && c3firedH && !c3firedH.inv
         && c3kept === 'RM7R' && c3keptRow && c3keptRow.inv && c3keptRow.inv.t.indexOf('Steel Mule') === 0)
-      ok(`${V}: an invite older than ten minutes is not shown, lights nothing and joins nothing, and the timer set on arrival empties the slot of that invite and no newer one`);
-    else fail(`${V}: invite lifetime ${JSON.stringify({ timer: c3timer, fresh: c3new && [!!c3new.inv, c3new.tabDot], old: c3old && !!c3old.inv, ahead: c3ahead && !!c3ahead.inv, gone: c3gone && [!!c3gone.inv, c3gone.tabDot], sent: c3sent, back: c3back && !!c3back.inv, slot: c3slot, fired: c3fired && [!!c3fired.inv, c3fired.tabDot], kept: c3kept })}`);
+      ok(`${V}: an invite older than ten minutes is not shown, on home or in the window, and joins nothing, and the timer set on arrival empties the slot of that invite and no newer one`);
+    else fail(`${V}: invite lifetime ${JSON.stringify({ timer: c3timer, fresh: c3new && [!!c3new.inv, !!(c3newH && c3newH.inv)], old: c3old && !!c3old.inv, ahead: c3ahead && !!c3ahead.inv, gone: c3gone && [!!c3gone.inv, !!(c3goneH && c3goneH.inv)], sent: c3sent, back: c3back && !!c3back.inv, slot: c3slot, fired: c3fired && [!!c3fired.inv, !!(c3firedH && c3firedH.inv)], kept: c3kept })}`);
 
-    // ---- C3c. A PENDING INVITE LIGHTS THE SQUAD TAB'S DOT (D-UI-4; review
-    //      T9-R1-6) -- seen from the Friends tab too, which is where a player
-    //      building a squad is looking -- and the tab's name says it in words,
-    //      because the dot is aria-hidden. The row is a status region, so a
-    //      screen reader hears it arrive. Ignore puts the dot out.
+    // ---- C3c. A PENDING INVITE STAYS ON HOME (U4; D-UI-4, review T9-R1-6). An
+    //      invite lasts ten minutes, so its row is not only behind Manage: the
+    //      box draws it at the top of its list, in a status region a screen
+    //      reader hears it arrive in, with Join and Ignore. Join pressed ON
+    //      HOME sends the window's join frame, word for word; Ignore pressed on
+    //      home hides it and sends nothing. No connection draws no row.
+    //      REPLACES the Squad tab's dot and label: the tabs are gone, and the
+    //      row itself is on home.
     await invite({ code: 'RM8Q', from: { callsign: 'Steel Mule' }, size: 2 });
-    await t9click('#bay [data-sq="tab:friends"]'); await sleep(40);
-    const c3d = await t9box();
-    await t9click('#bay [data-sq="tab:squad"]'); await sleep(40);
+    const c3h = await t9home();
+    await clearTx(); await t9click('#bay .sqx [data-sq^="join:"]'); await sleep(40);
+    const c3hj = await squads(), c3hName = await ev('myName()'), c3hSkin = await ev('mySkin()');
+    await reply({ op: 'join', error: 'full' });
     const c3e = await t9box();
     await up(false);
-    const c3off = await t9box();                  // no connection: the pane draws no row, so the tab points at none
+    const c3off = await t9home();                 // no connection: the box draws no row
     await up(true);
-    await t9box();                                // repainted with the connection back
-    await t9click('#bay [data-sq^="ignore:"]'); await sleep(40);
-    const c3i = await t9box();
-    if (c3d && c3d.tabDot && c3d.tabLabel === 'Squad, 0 of 4, invite waiting' && c3e && c3e.inv && c3e.invRole === 'status' && c3e.invLive
-        && c3off && !c3off.inv && !c3off.tabDot && c3off.tabLabel === null
-        && c3i && !c3i.inv && !c3i.tabDot && c3i.tabLabel === null && c3i.invRole === 'status')
-      ok(`${V}: a pending invite lights the Squad tab's dot, from the Friends tab too, names it in the tab's label, sits in a status region, and Ignore puts it out`);
-    else fail(`${V}: invite dot ${JSON.stringify({ fromFriends: c3d && [c3d.tabDot, c3d.tabLabel], row: c3e && [!!c3e.inv, c3e.invRole, c3e.invLive], offline: c3off && [!!c3off.inv, c3off.tabDot], ignored: c3i && [!!c3i.inv, c3i.tabDot, c3i.tabLabel] })}`);
+    await t9home();                               // repainted with the connection back
+    await clearTx(); await t9click('#bay .sqx [data-sq^="ignore:"]'); await sleep(40);
+    const c3i = await t9home(), c3is = await squads(), c3iw = await t9box();
+    if (c3h && c3h.inv && c3h.inv.t === 'Steel Mule invites you to their squad \u00b7 2 / 4' && c3h.inv.join && c3h.inv.ign && c3h.invRole === 'status'
+        && c3hj.length === 1 && c3hj[0].op === 'join' && c3hj[0].code === 'RM8Q' && c3hj[0].name === c3hName && c3hj[0].skin === c3hSkin
+        && c3e && c3e.inv && c3e.inv.err === 'That squad is full.' && c3e.invRole === 'status' && c3e.invLive
+        && c3off && !c3off.inv && c3off.invRole === 'status'
+        && c3i && !c3i.inv && c3i.invRole === 'status' && c3is.length === 0 && c3iw && !c3iw.inv)
+      ok(`${V}: a pending invite sits on home in a status region with Join and Ignore; Join there sends the join frame, Ignore there hides it and sends nothing`);
+    else fail(`${V}: invite on home ${JSON.stringify({ home: c3h, join: c3hj, win: c3e && [c3e.inv, c3e.invRole, c3e.invLive], offline: c3off && c3off.inv, ignored: c3i && c3i.inv, sent: c3is })}`);
 
     // ---- C4. JOIN SENDS ONE CORRELATED JOIN FRAME -- the code, this device's
     //      current name and paint -- and the row says so while it is out.
@@ -1968,7 +2104,7 @@ try {
     else fail(`${V}: join frame ${JSON.stringify({ c4f, myName, mySkin, inv: c4 && c4.inv, ignored: c4i && c4i.inv })}`);
     // ---- C5. A REFUSED JOIN FREES THE ROW AND SAYS WHY INSIDE IT, in task 8's
     //      words for a join (the D-BLOCK line for no_such_squad).
-    const joinSays = [['no_such_squad', 'No squad or game with that code.'], ['full', 'That squad is full.'],
+    const joinSays = [['no_such_squad', 'No squad with that code.'], ['full', 'That squad is full.'],   // U4: squad codes only
       ['already_in', 'You are already in that squad on another device.'], ['unavailable', 'That squad could not be joined right now. Try again later.']];
     const c5bad = [];
     for (const [code, line] of joinSays) {
@@ -2043,7 +2179,7 @@ try {
     await invite({ code: 'RM2P' });
     const c8os = await ev('window.CC_SQUAD_INVITE');
     await setWho('in');
-    if (c8g && c8g.rows.length === 2 && !c8g.inv && !c8g.tabDot && c8gs === null && c8os === null)
+    if (c8g && c8g.rows.length === 2 && !c8g.inv && c8gs === null && c8os === null)
       ok(`${V}: an invite that lands on a page with no linked account -- a guest in a squad, or signed out -- is dropped`);
     else fail(`${V}: invite after a sign-out ${JSON.stringify({ guest: c8g && { rows: c8g.rows.length, inv: c8g.inv }, guestSlot: c8gs, outSlot: c8os })}`);
     // (C8 signed the account out and back in: introduce it and answer, so the
@@ -2052,7 +2188,7 @@ try {
     await reply({ op: 'gone' });
     // A button the render did not draw, pressed through the real listener: the
     // way to prove a handler refuses what a stale or forged DOM asks of it.
-    const t9inject = (sq9) => ev(`(() => { const f = document.getElementById('sqPane-squad'); const b = document.createElement('button');
+    const t9inject = (sq9) => ev(`(() => { const f = document.getElementById('sqWin-squad'); const b = document.createElement('button');
       b.dataset.sq = ${JSON.stringify(sq9)}; f.appendChild(b); b.click(); b.remove(); return true; })()`);
 
     // ---- D1. THE LEADER'S REMOVE ASKS FIRST (C11): "Remove <name> from the
@@ -2213,13 +2349,17 @@ try {
     //      first. The owner wants the inviter told whether the invite went out
     //      (D-BLOCK-2 E, revised): one line under that friend's row, and the
     //      button reads Invited until the next roster or thirty seconds.
+    //      CHANGED BY U4: the rows are the Manage squad window's friends column
+    //      (#sqWin-friends), and every friend is listed ONLINE FIRST (owner,
+    //      2026-10-06), the server's order kept within each half -- so a row is
+    //      found by its name below, never by the server's position.
     const T9_NIA = '00000000-0000-4000-8000-000000000011', T9_GHOST = '00000000-0000-4000-8000-000000000012';
     const FR9 = { friends: [{ id: T9_MULE, callsign: 'Steel Mule', online: true }, { id: T9_PIKE, callsign: 'Ridge Pike', online: false },
       { id: T9_GHOST, callsign: null, online: true }], requests: { in: [{ id: T9_NIA, callsign: 'Nia Vale' }], out: [] },
       blocked: [], friendCode: 'AB12CD', callsign: null };
     const t9fr = () => ev(`(() => {
-      Bay.show('home');
-      const p = document.getElementById('sqPane-friends'); if (!p) return null;
+      Bay.show('squad');
+      const p = document.getElementById('sqWin-friends'); if (!p) return null;
       const vis = (e) => !!e && !e.closest('.hidden') && e.getClientRects().length > 0;
       const btn = (e) => (vis(e) ? { t: e.textContent.trim(), dis: e.disabled, title: e.getAttribute('title'), label: e.getAttribute('aria-label') } : null);
       const rows = (k) => [...p.querySelectorAll('.sqfr[data-row^="' + k + ':"]')].map((r) => ({
@@ -2242,24 +2382,32 @@ try {
     await t9settle();
     // Leave any squad: a push the server sends a leaver's other tabs.
     await ev(`(handle({ type: 'squad', op: 'ended', reason: 'left' }), true)`); await sleep(60);
+    // DUEL ARMED, the board a new squad starts on, so an Invite's create sends
+    // no mode before its invite (E2). Since U4 these checks read the window,
+    // which never re-arms the boards, so a leader's one follow after a resume
+    // (sqFollow) waits for the first home render -- B4's, on a free-for-all.
+    await ev(`(ccMode = 'duel', true)`);
     await friendsIn(FR9);
-    await t9click('#bay [data-sq="tab:friends"]'); await sleep(60);
 
     // ---- E1. THE ROWS. Task 8's count lines stay above them; every name is
     //      esc()'d; a nameless friend keeps a row with the placeholder mark; the
-    //      Decline is drawn; nothing overflows the box.
+    //      Decline is drawn; nothing overflows the column. CHANGED BY U4: the
+    //      two online friends come first (Steel Mule, then the nameless one),
+    //      and Ridge Pike, offline, last -- with Invite all the same: an
+    //      offline friend's invite goes by push.
     const e1 = await t9fr();
     const R = (list, i) => (list && list[i]) || {};
+    const PIKE = (f) => R(f && f.fr, (f && f.fr ? f.fr.findIndex((r) => r.name === 'Ridge Pike') : -1));
     if (e1 && e1.text.startsWith('Your friends · 3 2 online now. 1 request waiting for an answer.') && e1.add
         && JSON.stringify(e1.heads) === JSON.stringify(['Requests · 1', 'Friends · 3'])
         && e1.req.length === 1 && R(e1.req, 0).name === 'Nia Vale' && R(e1.req, 0).acc && !R(e1.req, 0).acc.dis
         && R(e1.req, 0).dec && !R(e1.req, 0).dec.dis && R(e1.req, 0).dec.label === 'Decline Nia Vale' && R(e1.req, 0).decSvg && R(e1.req, 0).menu
         && e1.fr.length === 3
         && R(e1.fr, 0).name === 'Steel Mule' && R(e1.fr, 0).lit && R(e1.fr, 0).inv && R(e1.fr, 0).inv.t === 'Invite' && !R(e1.fr, 0).inv.dis && R(e1.fr, 0).menu
-        && R(e1.fr, 1).name === 'Ridge Pike' && !R(e1.fr, 1).lit && R(e1.fr, 1).dot && R(e1.fr, 1).inv && !R(e1.fr, 1).inv.dis
-        && R(e1.fr, 2).name === 'No callsign' && R(e1.fr, 2).anon && R(e1.fr, 2).inv
+        && R(e1.fr, 1).name === 'No callsign' && R(e1.fr, 1).lit && R(e1.fr, 1).anon && R(e1.fr, 1).inv
+        && R(e1.fr, 2).name === 'Ridge Pike' && !R(e1.fr, 2).lit && R(e1.fr, 2).dot && R(e1.fr, 2).inv && !R(e1.fr, 2).inv.dis
         && !e1.req.concat(e1.fr).some((r) => r.over) && e1.why === '' && !e1.fr.some((r) => r.desc))
-      ok(`${V}: the Friends tab lists the request with Accept and a drawn Decline, and each friend with a lamp, Invite and the menu, under the counts`);
+      ok(`${V}: the window lists the request with Accept and a drawn Decline, and each friend, online first, with a lamp, Invite and the menu, under the counts`);
     else fail(`${V}: friends rows ${JSON.stringify(e1)}`);
     // E1b. A REQUEST WITH NO NAME: Decline says "this player" to a screen reader,
     //      never "No callsign" (review T9-R1-12).
@@ -2299,7 +2447,7 @@ try {
     const e3timer = await ev(`window.__t9timers.filter((t) => t.ms > 30000 && t.ms < 31000).length`);
     await ev(`(() => { const t = window.__t9timers.find((x) => x.ms > 30000 && x.ms < 31000); const n0 = Date.now; Date.now = () => n0() + 31000;
       try { if (t) t.f(); } finally { Date.now = n0; } return true; })()`);
-    const e3raw = await ev(`(() => { const b = document.querySelector('#sqPane-friends [data-sq="invite:${T9_MULE}"]'); return b ? { t: b.textContent.trim(), dis: b.disabled } : null; })()`);
+    const e3raw = await ev(`(() => { const b = document.querySelector('#sqWin-friends [data-sq="invite:${T9_MULE}"]'); return b ? { t: b.textContent.trim(), dis: b.disabled } : null; })()`);
     if (e3timer === 1 && e3raw && e3raw.t === 'Invite' && !e3raw.dis)
       ok(`${V}: the timer set with Invited repaints the row back to Invite by itself`);
     else fail(`${V}: invited timer ${JSON.stringify({ timers: e3timer, row: e3raw })}`);
@@ -2355,7 +2503,7 @@ try {
       await t9state({ members: [T9YOU({ ready: true })] });
       await clearTx(); await t9click(`#bay [data-sq="invite:${T9_PIKE}"]`); await sleep(40);
       await reply(code === 'sign_in' ? { type: 'social', error: 'sign_in' } : { op: 'invite', error: code });
-      const f = await t9fr(), row = R(f && f.fr, 1);
+      const f = await t9fr(), row = PIKE(f);
       if (!(row.line && row.line.t === line && row.line.bad === bad && row.inv && row.inv.t === 'Invite' && !row.inv.dis)) e6bad.push({ code, line: row.line, inv: row.inv });
     }
     if (!e6bad.length) ok(`${V}: all ${invSays.length} refusals of an invite say their sentence under the row, and 'already' is a plain note`);
@@ -2379,8 +2527,8 @@ try {
       await setup();
       const f = await t9fr();
       await clearTx(); await t9force(`#bay [data-sq="invite:${T9_PIKE}"]`); await sleep(40);
-      e8[name] = { dis: !!(R(f && f.fr, 1).inv && R(f.fr, 1).inv.dis), title: R(f && f.fr, 1).inv && R(f.fr, 1).inv.title, sent: (await squads()).length,
-        why: f && f.why, desc: R(f && f.fr, 1).desc };
+      e8[name] = { dis: !!(PIKE(f).inv && PIKE(f).inv.dis), title: PIKE(f).inv && PIKE(f).inv.title, sent: (await squads()).length,
+        why: f && f.why, desc: PIKE(f).desc };
     };
     await deadInvite('full', () => t9state({ members: [T9YOU(), T9MULE(), T9M({ guest: true }), T9M({ guest: true })] }));
     await deadInvite('notHeld', async () => {
@@ -2408,13 +2556,13 @@ try {
     // touch screen -- and each dead Invite points at that line.
     const E8WHY = { full: 'Your squad is full.', notHeld: 'Your squad is open on another device.',
       open: 'Your squad was changed in another tab or on another device.', unknown: 'Your squad has not loaded yet.',
-      looked: 'Your squad is open on another device.', refused: 'Your squad could not be checked. Retry on the Squad tab.' };
+      looked: 'Your squad is open on another device.', refused: 'Your squad could not be checked. Tap Retry to check again.' };   // U4: there is no Squad tab
     if (Object.values(e8).every((x) => x.dis && x.sent === 0) && e8.full.title === 'Your squad is full.'
         && Object.keys(E8WHY).every((k) => e8[k] && e8[k].why === E8WHY[k] && e8[k].desc === 'sqInvWhy'))
       ok(`${V}: Invite is dead, handler and all, for a full squad, an unheld roster, a squad changed or open elsewhere, a refused re-ask and an unanswered box, and a line above the rows says why`);
     else fail(`${V}: invite gates ${JSON.stringify(e8)}`);
 
-    // ---- E9. ACCEPT AND DECLINE, from the box. Each sends its friend frame; a
+    // ---- E9. ACCEPT AND DECLINE, from the window. Each sends its friend frame; a
     //      refusal is said under the request it answers.
     await t9state({ members: [T9YOU({ ready: true })] });
     // E9a. While another action is out (an Invite), Accept and Decline wait
@@ -2431,7 +2579,7 @@ try {
     await clearTx();
     // (Steel Mule, not Ridge Pike: E9a has just marked Ridge Pike Invited, and
     // that mark alone would refuse the press.)
-    await t9press(`accept:${T9_NIA}`, 'sqPane-friends'); await t9press(`decline:${T9_NIA}`, 'sqPane-friends'); await t9press(`invite:${T9_MULE}`, 'sqPane-friends');
+    await t9press(`accept:${T9_NIA}`, 'sqWin-friends'); await t9press(`decline:${T9_NIA}`, 'sqWin-friends'); await t9press(`invite:${T9_MULE}`, 'sqWin-friends');
     await sleep(60);
     const e9g = (await tx()).filter((f) => f.type === 'friend' || f.type === 'squad');
     await ev(`($('accountBtn').dataset.state = 'in', true)`);
@@ -2455,7 +2603,7 @@ try {
     //       with Copy, so there is somewhere to start.
     await friendsIn({ friends: [], requests: { in: [], out: [] }, blocked: [], friendCode: 'AB12CD', callsign: null });
     const e10 = await t9fr();
-    const e10copy = await ev(`(() => { const b = document.querySelector('#sqPane-friends [data-fr="copy"]'); return b ? !b.disabled : null; })()`);
+    const e10copy = await ev(`(() => { const b = document.querySelector('#sqWin-friends [data-fr="copy"]'); return b ? !b.disabled : null; })()`);
     if (e10 && e10.text.includes('No friends yet. Share your friend code, or add a friend by theirs or by callsign.') && e10.text.includes('FR-AB12CD')
         && e10copy === true && JSON.stringify(e10.heads) === JSON.stringify(['Friends · 0']))
       ok(`${V}: no friends yet says so, and shows the player's friend code with Copy`);
@@ -2481,7 +2629,6 @@ try {
     await ev(`(handle({ type: 'squad', op: 'ended', reason: 'left' }), true)`); await sleep(60);
     await clearTx(); await ev('sendHello(S.ws).then(() => true)'); await sleep(60);
     await reply({ op: 'gone' });
-    await t9click('#bay [data-sq="tab:squad"]'); await sleep(40);
     // ---- F. A START REFUSED AFTER THE ENGINE HAD SHOWN A LOBBY (task 4's
     //      client obligation). The seating builds the room seat by seat and,
     //      failing part-way, tears it down QUIETLY: the leader and every member
@@ -2569,7 +2716,8 @@ try {
     const probe = f4q.find((f) => f.type === 'code');
     await answer(probe && probe.id, { type: 'code', kind: 'none' });
     const f4e = await scr(), f4 = await t9box();
-    const f4say = await ev(`(document.querySelector('#bay .lbar .launch .rdys') || {}).textContent || null`);
+    const f4say = (await t9home() || {}).say || null;   // U4: the window has no ribbon; home's is read
+    await t9box();
     if (probe && probe.code === 'RM6Q' && f4e === 'home' && f4 && f4.aerr === 'That match could not be started. Try again.'
         && f4say === 'That match could not be started. Try again.' && f4.ready && !f4.ready.dis)
       ok(`${V}: a countdown refused after the room was built leaves the dead lobby too, and the box and the ready control say why`);
@@ -2595,7 +2743,9 @@ try {
     //      the inviter is told. The text must read back exactly, and no element
     //      may appear.
     const EVIL = '<img src=x onerror=1>';
-    const imgs = () => ev(`document.querySelectorAll('#sqPane-squad img, #sqPane-friends img').length`);
+    // CHANGED BY U4: the window's two columns, and the home box, which draws
+    // the members' names too.
+    const imgs = () => ev(`document.querySelectorAll('#sqWin-squad img, #sqWin-friends img, #bay .sqx img').length`);
     const g = {};
     await t9state({ members: [T9YOU({ ready: true }), T9PIKE({ callsign: EVIL, ready: true })] });
     await ev(`(handle({ type: 'squad', op: 'start', error: 'member_offline', at: 1 }), true)`); await sleep(60);   // a push since U3
@@ -2605,23 +2755,24 @@ try {
     await t9click('#bay [data-sq="kcancel"]'); await sleep(40);
     await t9state({ leader: T9_PIKE, members: [T9YOU({ ready: true }), T9PIKE({ callsign: EVIL, ready: true })] });
     g.lead = [(await t9box()).note === EVIL + ' picks the mode. The match starts when everyone is ready.', await imgs()];
+    g.home = [((await t9home()) || { rows: [] }).rows.some((r) => r.name === EVIL), await imgs()];
     await friendsIn({ friends: [{ id: T9_MULE, callsign: EVIL, online: false }], requests: { in: [{ id: T9_NIA, callsign: EVIL }], out: [] },
       blocked: [], friendCode: 'AB12CD', callsign: null });
-    await t9click('#bay [data-sq="tab:friends"]'); await sleep(40);
+    await t9fr();
     await clearTx(); await t9click(`#bay [data-sq="invite:${T9_MULE}"]`); await sleep(40);
     await reply({ op: 'invite', ok: true, delivered: 'online' });
     const gf = await t9fr();
     g.rows = [R(gf && gf.fr, 0).name === EVIL && R(gf && gf.req, 0).name === EVIL, await imgs()];
     g.note = [!!(R(gf && gf.fr, 0).line && R(gf.fr, 0).line.t === 'Invite sent to ' + EVIL + '.'), await imgs()];
     await friendsIn(FR9);
-    await t9click('#bay [data-sq="tab:squad"]'); await sleep(40);
     if (Object.values(g).every(([same, n]) => same === true && n === 0))
-      ok(`${V}: a name carrying markup reads back as text in a start refusal, the Remove question, the leader sentence, the friend and request rows and the invite note`);
+      ok(`${V}: a name carrying markup reads back as text in a start refusal, the Remove question, the leader sentence, the home box, the friend and request rows and the invite note`);
     else fail(`${V}: names reaching markup ${JSON.stringify(g)}`);
 
     // ---- H. READABLE WORDS AND TAPPABLE CONTROLS (review T9-R1-10 and 11).
-    //      Leader, Not ready, Reconnecting and In your squad are at least 7.5u
-    //      (the brief's size; they were 6.5u, under 5 px on a 667x375 phone).
+    //      Leader, Not ready, Reconnecting and In your squad are at least 13u
+    //      (CHANGED BY U4, owner 2026-10-06: "all text easily legible"; the
+    //      floor was 7.5u, the brief's size, and they were 6.5u before that).
     //      Remove, Decline and the member menu each take a tap anywhere in a
     //      square at least 24 CSS px across -- 34u, which is 24.3 px on a
     //      667x375 phone: the target's size is read back from the layout, and
@@ -2664,22 +2815,20 @@ try {
         .map((e) => +(parseFloat(getComputedStyle(e).fontSize) / u).toFixed(2)); })()`);
     await t9state({ mode: 'ffa', members: [T9YOU({ ready: true }), T9MULE({ ready: false }), T9PIKE({ ready: true, dropped: true })] });
     await t9box();
-    const hSq = { hits: await t9hit('.sqm .pmb, .sqm .sqic', 'sqPane-squad'), sql: await t9font('#sqPane-squad .sql'), sqr: await t9font('#sqPane-squad .sqr:not(.on)') };
+    const hSq = { hits: await t9hit('.sqm .pmb, .sqm .sqic', 'sqWin-squad'), sql: await t9font('#sqWin-squad .sql'), sqr: await t9font('#sqWin-squad .sqr:not(.on)') };
     await friendsIn({ ...FR9, friends: [{ id: T9_MULE, callsign: 'Steel Mule', online: true }, { id: T9_PIKE, callsign: 'Ridge Pike', online: false }] });
     await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
-    await t9click('#bay [data-sq="tab:friends"]'); await sleep(60);
     await t9fr();
-    const hFr = { hits: await t9hit('.sqm .pmb, .sqm .sqic', 'sqPane-friends'), sqy: await t9font('#sqPane-friends .sqy') };
+    const hFr = { hits: await t9hit('.sqm .pmb, .sqm .sqic', 'sqWin-friends'), sqy: await t9font('#sqWin-friends .sqy') };
     const hRows = await t9fr();
-    await t9click('#bay [data-sq="tab:squad"]'); await sleep(40);
     await friendsIn(FR9);
     const fontsOk = [...hSq.sql, ...hSq.sqr, ...hFr.sqy];
-    if (hSq.sql.length === 1 && hSq.sqr.length === 2 && hFr.sqy.length === 1 && fontsOk.every((f) => f >= 7.5)
+    if (hSq.sql.length === 1 && hSq.sqr.length === 2 && hFr.sqy.length === 1 && fontsOk.every((f) => f >= 13)
         && hSq.hits.length === 4 && hFr.hits.length === 4 && hSq.hits.concat(hFr.hits).every((x) => x.w >= 24 && x.h >= 24 && x.miss === 0 && x.prevKept !== false)
         && hFr.hits.filter((x) => x.v.startsWith('decline:')).length === 1 && hFr.hits.find((x) => x.v.startsWith('decline:')).prevKept === true
         && hFr.hits.find((x) => x.v.startsWith('decline:')).dead === true
         && hRows && !hRows.req.concat(hRows.fr).some((r) => r.over))
-      ok(`${V}: the squad's status words are at least 7.5u, and Remove, Decline and every member menu take a tap across about 24 px without overlapping each other or Accept`);
+      ok(`${V}: the squad's status words are at least 13u, and Remove, Decline and every member menu take a tap across about 24 px without overlapping each other or Accept`);
     else fail(`${V}: words and targets ${JSON.stringify({ squad: hSq, friends: hFr, over: hRows && hRows.req.concat(hRows.fr).map((r) => r.over) })}`);
 
     // ---- I. TWO-LINE ROWS (D-UI-5). A busy row carried its status words or its
@@ -2768,19 +2917,18 @@ try {
     const iN = {}, iW = {};
     await t9state({ mode: 'ffa', members: [T9YOU({ ready: true }), T9MULE({ ready: false }), T9PIKE({ ready: true, dropped: true })] });
     await t9box();
-    iN.lead = await t9names('sqPane-squad'); iW.lead = await t9words('sqPane-squad');
+    iN.lead = await t9names('sqWin-squad'); iW.lead = await t9words('sqWin-squad');
     await t9state({ leader: T9_PIKE, mode: 'ffa', members: [T9YOU({ ready: false }), T9PIKE({ ready: true, dropped: true }), T9MULE({ ready: false })] });
     await t9box();
-    iN.member = await t9names('sqPane-squad'); iW.member = await t9words('sqPane-squad');
-    const iMenuSq = await t9menuTap('sqPane-squad');
+    iN.member = await t9names('sqWin-squad'); iW.member = await t9words('sqWin-squad');
+    const iMenuSq = await t9menuTap('sqWin-squad');
     await friendsIn({ ...FR9, friends: [{ id: T9_MULE, callsign: 'Steel Mule', online: true }, { id: T9_PIKE, callsign: 'Ridge Pike', online: false }] });
     await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
-    await t9click('#bay [data-sq="tab:friends"]'); await sleep(60);
-    iN.friends = await t9names('sqPane-friends'); iW.friends = await t9words('sqPane-friends');
-    const iMenuFr = await t9menuTap('sqPane-friends');
+    await t9fr();
+    iN.friends = await t9names('sqWin-friends'); iW.friends = await t9words('sqWin-friends');
+    const iMenuFr = await t9menuTap('sqWin-friends');
     const iShut = await ev(`(() => { const m = document.getElementById('pmenu'); return !(m && !m.hidden); })()`);
     await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1 });
-    await t9click('#bay [data-sq="tab:squad"]'); await sleep(40);
     await friendsIn(FR9);
     const iNamed = (rows, names, words) => Array.isArray(rows) && JSON.stringify(rows.map((r) => r.name)) === JSON.stringify(names)
       && JSON.stringify(rows.map((r) => r.words)) === JSON.stringify(words) && rows.every((r) => !r.cut && r.under && r.foot);
@@ -2812,7 +2960,7 @@ try {
 // the slot carries it (D-UI-1). Every control is pressed through the real
 // delegated listener. Frames are filtered by TYPE, never counted whole: a
 // sign-in also starts a friends read that lands in the same recorder.
-try {
+if (want('t11')) try {
   const T11_MULE = '00000000-0000-4000-8000-0000000000cc';
   const T11_PIKE = '00000000-0000-4000-8000-0000000000dd';
   const T11R = (tag) => (tag + '0'.repeat(32)).slice(0, 32);
@@ -3028,7 +3176,8 @@ try {
     //      string (the server refuses '4' as bad_max): M1b.
     const t11board = (...idx) => ev(`(() => { const b = () => [...document.querySelectorAll('#bay .board')]; for (const i of ${JSON.stringify(idx)}) b()[i].click(); return true; })()`);
     const t11modes = async () => (await squads()).filter((f) => f.op === 'mode');
-    const t11aerr = () => ev(`(() => { Bay.show('home'); const e = document.querySelector('#sqPane-squad .sqml ~ .sqae'); return e && !e.classList.contains('hidden') ? e.textContent : ''; })()`);
+    // The box's action line (U4: the box's list, under its member rows).
+    const t11aerr = () => ev(`(() => { Bay.show('home'); const e = document.querySelector('#bay .sqx .sqml ~ .sqae'); return e && !e.classList.contains('hidden') ? e.textContent : ''; })()`);
     const MODE_WAIT = MODE_WAIT0;
     await t11state({ members: [T11YOU(), T11MULE()] });
     await clearTx();
@@ -3135,7 +3284,9 @@ try {
       await reply({ op: 'mode', error: code });
       m8[code] = await t11aerr();
     }
-    const m8foot = await ev(`(document.querySelector('#sqPane-squad .sqft .sqfl') || {}).textContent`);
+    // The footer is the Manage squad window's (U4).
+    const m8foot = await ev(`(Bay.show('squad'), (document.querySelector('#sqWin-squad .sqft .sqfl') || {}).textContent)`);
+    await ev(`(Bay.show('home'), true)`);
     await clearTx(); await t11board(4); await sleep(MODE_WAIT);
     const first = (await t11modes())[0];
     await clearTx(); await t11board(1); await sleep(MODE_WAIT);
@@ -3290,24 +3441,27 @@ try {
     await ev(`(Bay.show('home'), true)`);
     // ---- C1. THE ONE CODE FIELD IS TASK 8's (#sqCode, X8); what it still owed
     //      is here. ONE CODE AT A TIME (review T8-R1-10): two presses before the
-    //      server has answered are one code frame, the Enter button is held
+    //      server has answered are one code frame, the Join button is held
     //      while it is out, and every way it can settle frees it again.
-    await ev(`(handle({ type: 'squad', op: 'ended', reason: 'left' }), Bay.show('home'), true)`); await sleep(80);
-    const SQ_NONE11 = 'No squad or game with that code.';
-    const t11code = (v) => ev(`(() => { const i = document.getElementById('sqCode'); if (!i) return false; i.value = ${JSON.stringify(v)}; return true; })()`);
+    //      CHANGED BY U4: the field is the Manage squad window's (its button
+    //      reads Join), and an unknown code is "No squad with that code."
+    await ev(`(handle({ type: 'squad', op: 'ended', reason: 'left' }), Bay.show('squad'), true)`); await sleep(80);
+    const SQ_NONE11 = 'No squad with that code.';
+    const SQ_GAME11 = 'That is a game code. Only squad codes join here.';
+    const t11code = (v) => ev(`(() => { if (document.getElementById('bay').dataset.scr !== 'squad') Bay.show('squad'); const i = document.getElementById('sqCode'); if (!i) return false; i.value = ${JSON.stringify(v)}; return true; })()`);
     // Pressed through the real listener, twice, and with Enter on the field --
     // a disabled button swallows a click, so the second press is also made on
     // a button the render never drew, to prove the guard is in the handler.
-    const t11press = () => ev(`(() => { const p = document.getElementById('sqPane-squad'); const b = document.createElement('button');
+    const t11press = () => ev(`(() => { const p = document.getElementById('sqWin-code'); const b = document.createElement('button');
       b.setAttribute('data-sq', 'code'); p.appendChild(b); b.click(); b.remove(); return true; })()`);
     const t11codes = async () => (await tx()).filter((f) => f.type === 'code');
     const t11joins = async () => (await squads()).filter((f) => f.op === 'join');
-    const t11enter = () => ev(`(() => { Bay.show('home'); const b = document.querySelector('#sqPane-squad [data-sq="code"]'); return b ? b.disabled : null; })()`);
-    const t11cerr = () => ev(`(() => { Bay.show('home'); const r = document.querySelector('#sqPane-squad .sqcr'); const e = r && r.nextElementSibling; return e && e.classList.contains('sqe') && !e.classList.contains('hidden') ? e.textContent : ''; })()`);
+    const t11enter = () => ev(`(() => { Bay.show('squad'); const b = document.querySelector('#sqWin-code [data-sq="code"]'); return b ? b.disabled : null; })()`);
+    const t11cerr = () => ev(`(() => { Bay.show('squad'); const r = document.querySelector('#sqWin-code .sqcr'); const e = r && r.nextElementSibling; return e && e.classList.contains('sqe') && !e.classList.contains('hidden') ? e.textContent : ''; })()`);
     const t11codeAnswer = async (patch) => { await ev(`(() => { const q = window.__tx.filter((f) => f.type === 'code'); handle(Object.assign({ type: 'code', id: q.length ? q[q.length - 1].id : null }, ${JSON.stringify(patch)})); return true; })()`); await sleep(100); };
     const c1 = {};
     await t11code('MNPQ'); await clearTx();
-    await click('#sqPane-squad [data-sq="code"]'); c1.held = await t11enter();
+    await click('#sqWin-code [data-sq="code"]'); c1.held = await t11enter();
     await t11press();
     await ev(`(() => { const i = document.getElementById('sqCode'); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return true; })()`);
     await sleep(60);
@@ -3318,7 +3472,7 @@ try {
     c1.again = (await t11codes()).length;
     await t11codeAnswer({ kind: 'none' });
     if (c1.held === true && c1.out === 1 && c1.freed === false && c1.err === SQ_NONE11 && c1.again === 1)
-      ok(`${V}: three presses while a code is out send one code frame, Enter is held until the answer, and the answer frees it`);
+      ok(`${V}: three presses while a code is out send one code frame, Join is held until the answer, and the answer frees it`);
     else fail(`${V}: code busy guard ${JSON.stringify(c1)}`);
     // ---- C2. THE GUARD SPANS THE SQUAD JOIN: a press between the code's answer
     //      and the join's sends neither another code nor another join, and the
@@ -3337,8 +3491,10 @@ try {
     if (c2j === 1 && c2.joins === 1 && c2.codes === 1 && c2.held === true && c2.err === 'That squad is full.' && c2.freed === false && c2.again === 1)
       ok(`${V}: a press while the squad join is out sends nothing, and the join's refusal frees the field`);
     else fail(`${V}: busy through the join ${JSON.stringify({ c2j, c2 })}`);
-    // ---- C3. A REFUSED CODE FRAME AND THE ROOM BRANCH FREE IT TOO, and a dead
+    // ---- C3. A REFUSED CODE FRAME AND A GAME'S CODE FREE IT TOO, and a dead
     //      socket -- answered synchronously by socialTx -- never latches it.
+    //      CHANGED BY U4: the room branch is a game's code, said and joined
+    //      nowhere.
     const c3 = {};
     await t11code('MNPQ'); await clearTx(); await t11press(); await sleep(60);
     await t11codeAnswer({ error: 'unavailable' });
@@ -3346,86 +3502,52 @@ try {
     await t11codeAnswer({ kind: 'room' });
     await clearTx(); await t11press(); await sleep(60); c3.afterRoom = (await t11codes()).length;
     await t11codeAnswer({ kind: 'none' });
-    // The press with the socket down repaints the box into its offline state,
-    // which replaces the field (a different child index), so the code is typed
-    // again before the next press.
     await up(false); await t11press(); await sleep(60); await up(true);
     await t11code('MNPQ'); await clearTx(); await t11press(); await sleep(60); c3.afterDead = (await t11codes()).length;
     await t11codeAnswer({ kind: 'none' });
     if (c3.afterErr === 1 && c3.afterRoom === 1 && c3.afterDead === 1)
-      ok(`${V}: a refused code frame, the room branch and a dead socket each leave the field free for the next code`);
+      ok(`${V}: a refused code frame, a game's code and a dead socket each leave the field free for the next code`);
     else fail(`${V}: busy release ${JSON.stringify(c3)}`);
-    // ---- C4. A ROOM'S REFUSAL IS SAID IN THE FIELD (review T8-R1-16). The room
-    //      join is app.js's own, and its refusal lands in #homeError, inside the
-    //      hidden legacy rack where nobody can see it. It is read back -- and
-    //      WATCHED, not timed: this one arrives 700 ms later, past the join
-    //      panel's old 350 ms guess. Escaped, like every server sentence.
+    // ---- C4. GAME CODES ARE RETIRED (U4; owner, 2026-10-06: the field joins
+    //      squads only). REPLACES task 11's room-refusal checks (C4, the room
+    //      join through the legacy rack with its refusal read back from
+    //      #homeError, and C5, that read-back's bounds): a game's code is said
+    //      to be one, in the field, and NOTHING joins -- no join frame, the
+    //      legacy #codeInput untouched, #joinBtn never pressed -- and nothing a
+    //      later flow writes into #homeError is said in the field.
+    await ev(`(() => { $('codeInput').value = ''; $('homeError').textContent = ''; window.__j11 = 0; const b = $('joinBtn'); window.__j11fn = b.onclick; b.onclick = () => { window.__j11++; }; return true; })()`);
     await t11code('zz9q'); await clearTx(); await t11press(); await sleep(60);
+    const c4asked = await t11codes();
     await t11codeAnswer({ kind: 'room' });
-    const c4join = (await tx()).filter((f) => f.type === 'join');
-    await sleep(700);
-    await ev(`(handle({ type: 'joinError', reason: 'That room is full <b id="x11">now</b>.' }), true)`); await sleep(80);
-    const c4 = { err: await t11cerr(), inject: await ev(`!!document.getElementById('x11')`) };
-    // ITS FIRST SENTENCE ONLY: whatever is written there next -- another
-    // flow's line -- is not this join's.
-    await ev(`($('homeError').textContent = 'Something else entirely', true)`); await sleep(80);
-    c4.next = await t11cerr();
-    await ev(`($('homeError').textContent = '', true)`);
-    if (c4join.length === 1 && c4join[0].code === 'ZZ9Q' && c4.err === 'That room is full <b id="x11">now</b>.' && !c4.inject
-        && c4.next === c4.err)
-      ok(`${V}: a room code joins through the legacy rack, and a refusal that arrives 700 ms later is said in the field, as text, and nothing after it`);
-    else fail(`${V}: room refusal ${JSON.stringify({ c4join, c4 })}`);
-    // ---- C5. THE WATCH IS THIS JOIN'S AND NOTHING ELSE'S. A sentence written
-    //      once the lobby is up (the join landed), after another code has been
-    //      entered, or after the watch's window, is not this join's to say.
-    const c5 = {};
-    await ev(`$('homeError').textContent = ''`);
-    await t11code('ZZ9Q'); await clearTx(); await t11press(); await sleep(60);
-    await t11codeAnswer({ kind: 'room' });
-    // Two evaluations, not one: the watch hears a write once the script that
-    // made it has finished, and by then the lobby must still be up.
-    await ev(`(Bay.show('lobby'), $('homeError').textContent = 'Not this join', true)`); await sleep(80);
-    await ev(`(Bay.show('home'), true)`);
-    c5.lobby = await t11cerr();
-    await ev(`$('homeError').textContent = ''`);
-    await t11code('ZZ9Q'); await clearTx(); await t11press(); await sleep(60);
-    await t11codeAnswer({ kind: 'room' });
-    await t11code('QQQQ'); await clearTx(); await t11press(); await sleep(60);
-    await t11codeAnswer({ kind: 'none' });
-    await ev(`(handle({ type: 'joinError', reason: 'The old room' }), true)`); await sleep(80);
-    c5.superseded = await t11cerr();
-    await ev(`$('homeError').textContent = ''`);
-    await ev(`(window.__t11timers = [], window.__st11 = window.setTimeout, window.setTimeout = (f, ms, ...a) => { window.__t11timers.push({ f, ms }); return window.__st11(f, ms, ...a); }, true)`);
-    try {
-      await t11code('ZZ9Q'); await clearTx(); await t11press(); await sleep(60);
-      await t11codeAnswer({ kind: 'room' });
-    } finally { await ev(`(window.setTimeout = window.__st11, true)`); }
-    // The watch's own timer is the one set for SQ_ROOM_MS (15 s); the code
-    // frame's twelve-second waiter is app.js's and is left alone.
-    c5.window = await ev(`(() => { const t = window.__t11timers.filter((x) => x.ms === 15000); t.forEach((x) => x.f()); return t.map((x) => x.ms); })()`);
-    await ev(`(handle({ type: 'joinError', reason: 'Too late' }), true)`); await sleep(80);
-    c5.late = await t11cerr();
-    await ev(`$('homeError').textContent = ''`);
-    if (c5.lobby === '' && c5.superseded === SQ_NONE11 && c5.window.length === 1 && c5.late === '')
-      ok(`${V}: the room watch says nothing written once the lobby is up, after another code, or after its window`);
-    else fail(`${V}: room watch bounds ${JSON.stringify(c5)}`);
+    await sleep(100);
+    await ev(`(handle({ type: 'joinError', reason: 'That room is full.' }), $('homeError').textContent = 'Something else entirely', true)`); await sleep(80);
+    const c4 = { err: await t11cerr(), joins: (await tx()).filter((f) => f.type === 'join' || (f.type === 'squad' && f.op === 'join')).length,
+      field: await ev(`$('codeInput').value`), pressed: await ev('window.__j11'), freed: await t11enter() };
+    await ev(`(() => { $('joinBtn').onclick = window.__j11fn; $('homeError').textContent = ''; return true; })()`);
+    if (c4asked.length === 1 && c4asked[0].code === 'ZZ9Q' && c4.err === SQ_GAME11 && c4.joins === 0 && c4.field === '' && c4.pressed === 0 && c4.freed === false)
+      ok(`${V}: a game's code is said to be one, in the field, and joins nothing -- no frame, no legacy join, no read-back of #homeError`);
+    else fail(`${V}: game code ${JSON.stringify({ c4asked, c4 })}`);
     // ---- J1. THE JOIN SCREEN IS GONE (design 5.3, R10). render() falls back to
     //      home for an unknown name, so the stamp alone would pass either way:
     //      what proves the removal is that no overlay is built, the launch bar
     //      has lost its button (and kept Launch), and the page holds ONE code
-    //      field -- the Squad box's -- where the overlay used to add a second.
+    //      field where the overlay used to add a second. CHANGED BY U4: that
+    //      field is the Manage squad window's, so home holds none.
     const gone = await ev(`(() => {
       Bay.show('join');
       const out = { scr: $('bay').dataset.scr, overlay: !!document.querySelector('#bay .jn'),
         bar: [...document.querySelectorAll('#bay .lbar button')].map((b) => b.textContent.trim()),
         fields: document.querySelectorAll('#bay input[maxlength="4"]').length, sqCode: document.querySelectorAll('#sqCode').length,
         old: !!document.getElementById('bayCode') };
+      Bay.show('squad');
+      out.winFields = document.querySelectorAll('#bay input[maxlength="4"]').length;
+      out.winCode = document.querySelectorAll('#sqWin-code #sqCode').length;
       Bay.show('home');
       return out;
     })()`);
     if (gone.scr === 'home' && !gone.overlay && !gone.bar.some((t) => /join/i.test(t)) && gone.bar.some((t) => /Launch/.test(t))
-        && gone.fields === 1 && gone.sqCode === 1 && !gone.old)
-      ok(`${V}: no join screen, no Join code button beside Launch, and one code field on the page`);
+        && gone.fields === 0 && gone.sqCode === 0 && gone.winFields === 1 && gone.winCode === 1 && !gone.old)
+      ok(`${V}: no join screen, no Join code button beside Launch, no code field on home, and one in the Manage squad window`);
     else fail(`${V}: join leftovers ${JSON.stringify(gone)}`);
   }
 } catch (e) {
@@ -3438,7 +3560,7 @@ try {
 // shows, stores and sends -- bay.js keeps its internals private -- and was
 // shown RED with the matching part of the fix reverted. One viewport: these are
 // behaviours, not layout.
-try {
+if (want('w')) try {
   const W2_MULE = '00000000-0000-4000-8000-0000000000cc';
   const W2R = (tag) => (tag + '0'.repeat(32)).slice(0, 32);
   const W2GK = 'ab'.repeat(16);
@@ -3465,7 +3587,8 @@ try {
   };
   const w2hello = async () => { await clearTx(); await ev('sendHello(S.ws).then(() => true)'); await sleep(80); };
   const w2hide = () => ev(`(window.dispatchEvent(new Event('pagehide')), true)`);
-  const w2pane = () => ev(`(() => { Bay.show('home'); const p = document.getElementById('sqPane-squad'); return p ? p.textContent.replace(/\\s+/g, ' ') : ''; })()`);
+  // The home box's list (U4: what the Squad pane said, the box says).
+  const w2pane = () => ev(`(() => { Bay.show('home'); const p = document.querySelector('#bay .sqx .sqb'); return p ? p.textContent.replace(/\\s+/g, ' ') : ''; })()`);
   const V = '667x375';
   await send('Emulation.setDeviceMetricsOverride', { width: 667, height: 375, deviceScaleFactor: 2, mobile: true });
   if (!(await w2load())) throw new Error('page never became ready for the fix-wave checks');
@@ -3543,7 +3666,7 @@ try {
 
   // ---- W4. A READY REFUSED 'dropped' SAYS SO (E9), and names no block.
   await clearTx();
-  await ev(`(() => { const b = document.querySelector('#sqPane-squad [data-sq="ready"]'); if (b) { b.removeAttribute('disabled'); b.click(); } return !!b; })()`); await sleep(60);
+  await ev(`(() => { Bay.show('squad'); const b = document.querySelector('#sqWin-squad [data-sq="ready"]'); if (b) { b.removeAttribute('disabled'); b.click(); } return !!b; })()`); await sleep(60);
   const w4sent = (await squads()).filter((f) => f.op === 'ready').length;
   if (w4sent) await reply({ op: 'ready', error: 'dropped' });
   const w4 = await w2pane();
@@ -3561,20 +3684,25 @@ try {
     ok(`${V}: "You left the squad." shows, and is gone five seconds later`);
   else fail(`${V}: left line ${JSON.stringify({ w5a: w5a.slice(0, 120), w5b: w5b.slice(0, 120) })}`);
 
-  // ---- W6. A GUEST'S TABS SHOW COUNTS (E9, spec D10): "0 / 4" and "0".
+  // ---- W6. A GUEST'S COUNT IS KNOWN (E9, spec D10): "Squad 0/4". CHANGED BY
+  //      U4: the tabs read "0 / 4" and "0"; the box's header reads "Squad
+  //      0/4" (owner, 2026-10-06), and a guest's friends part says friends
+  //      need an account, with no count to give.
   await stubSocket(); await setWho('guest'); await w2hello();
-  const w6 = await ev(`(() => { Bay.show('home'); return [...document.querySelectorAll('#bay [data-sq^="tab:"]')].map((t) => t.textContent.replace(/\\s+/g, ' ').trim()); })()`);
-  if (w6.length === 2 && /0\s*\/\s*4/.test(w6[0]) && /Friends\s*0$/.test(w6[1]))
-    ok(`${V}: a guest with no squad sees "0 / 4" on Squad and "0" on Friends`);
-  else fail(`${V}: guest tab counts ${JSON.stringify(w6)}`);
+  const w6 = await ev(`(() => { Bay.show('home'); const h = document.querySelector('#bay .sqx .sqhd'); const c = h && h.querySelector('.sqhc');
+    return h ? { head: h.querySelector('.sqhn').textContent, count: c && !c.classList.contains('hidden') ? c.firstElementChild.textContent : null,
+      friends: (document.querySelector('#bay .sqx .sqbf') || {}).textContent || '' } : null; })()`);
+  if (w6 && w6.head === 'Squad' && w6.count === '0/4' && w6.friends.includes('Sign in to add friends.'))
+    ok(`${V}: a guest with no squad sees "Squad 0/4", and that friends need an account`);
+  else fail(`${V}: guest counts ${JSON.stringify(w6)}`);
 
   // ---- W7. INVITE THAT CREATES THE SQUAD SENDS THE LIT BOARD FIRST (B3).
   await stubSocket(); await setWho('in'); await w2hello(); await reply({ op: 'gone' });
   await ev(`(ccMode = 'boss', true)`);
   await ev(`(window.CC_SOCIAL = ${JSON.stringify({ friends: [{ id: W2_MULE, callsign: 'Steel Mule', online: true }], requests: { in: [], out: [] }, blocked: [], friendCode: 'AB12CD', callsign: null })}, document.dispatchEvent(new Event('cc:social')), true)`); await sleep(60);
-  await ev(`(() => { const b = document.querySelector('#bay [data-sq="tab:friends"]'); if (b) b.click(); return true; })()`); await sleep(60);
+  // U4: the friend online, and its Invite, are in the home box itself.
   await clearTx();
-  await ev(`(() => { const b = document.querySelector('#bay [data-sq="invite:${W2_MULE}"]'); if (b) b.click(); return !!b; })()`); await sleep(60);
+  await ev(`(() => { Bay.show('home'); const b = document.querySelector('#bay .sqx [data-sq="invite:${W2_MULE}"]'); if (b) b.click(); return !!b; })()`); await sleep(60);
   await reply({ op: 'state', code: 'QK7T', leader: ME, mode: 'duel', tees: null, max: null, you: 0, held: true, members: [w2m(ME, 'Dusty Crag', 'a1')], fits: w2fits(1) });
   await sleep(400);
   const w7 = (await squads()).map((f) => f.op + (f.mode ? ':' + f.mode : ''));
@@ -3595,7 +3723,7 @@ try {
 // Launch; a member's boards and tee set are the leader's to change. Every
 // roster goes in through the real handle(), every tap through the real
 // delegated listener.
-try {
+if (want('u3')) try {
   const U3_MULE = '00000000-0000-4000-8000-0000000000cc';
   const U3_PIKE = '00000000-0000-4000-8000-0000000000dd';
   const U3_NAMELESS = '00000000-0000-4000-8000-0000000000ee';
@@ -3632,6 +3760,9 @@ try {
       tU: t ? +(parseFloat(getComputedStyle(t).fontSize) / u).toFixed(2) : null, yU: y ? +(parseFloat(getComputedStyle(y).fontSize) / u).toFixed(2) : null };
   })()`);
   const u3home = () => ev(`(Bay.show('home'), true)`);
+  // The squad footer's line, which moved from the box into the Manage squad
+  // window (U4): read there, then home again, where u3launch reads.
+  const u3winLine = () => ev(`(() => { Bay.show('squad'); const t = (document.querySelector('#sqWin-squad .sqft .sqfl') || {}).textContent; Bay.show('home'); return t; })()`);
   const u3tap = async (sel = '#bay .lbar .launch') => { await clearTx(); await click(sel); await sleep(50); return (await squads()).filter((f) => f.op === 'ready'); };
   const u3force = async (sel = '#bay .lbar .launch') => {
     await clearTx();
@@ -3707,7 +3838,7 @@ try {
     await u3state({ startsIn: 2500, members: [U3YOU({ ready: true }), U3MULE({ ready: true })] });
     const u3a = await u3launch();
     await ev(`(Date.now = window.__u3now, true)`);
-    const u3line = await ev(`(document.querySelector('#sqPane-squad .sqft .sqfl') || {}).textContent`);
+    const u3line = await u3winLine();
     await sleep(900);
     const u3b = await u3launch();
     await sleep(1000);
@@ -3715,14 +3846,14 @@ try {
     const u3cancel = await u3tap();
     await reply({ op: 'ready', ok: true });
     await u3state({ members: [U3YOU(), U3MULE({ ready: true })] });
-    const u3d = await u3launch(), u3dline = await ev(`(document.querySelector('#sqPane-squad .sqft .sqfl') || {}).textContent`);
+    const u3d = await u3launch(), u3dline = await u3winLine();
     await sleep(1200);
     const u3e = await u3launch();
     if (u3a && u3a.label === 'Starting in 3' && u3a.say === 'Everyone is ready' && / cd\b/.test(u3a.cls) && !u3a.dis && u3a.bg === 'gradient' && u3line === 'Starting in 3'
         && u3b && u3b.label === 'Starting in 2' && u3c && u3c.label === 'Starting in 1'
         && u3cancel.length === 1 && u3cancel[0].ready === false
         && u3d && u3d.label === 'Ready up 1/2' && u3dline === 'Duel · 2' && u3e && u3e.label === 'Ready up 1/2')
-      ok(`${V}: everyone ready, Launch counts Starting in 3, 2, 1 from the roster's arrival whatever the device clock says, the box's line with it; a tap stands down and the next roster takes the countdown away`);
+      ok(`${V}: everyone ready, Launch counts Starting in 3, 2, 1 from the roster's arrival whatever the device clock says, the window's squad line with it; a tap stands down and the next roster takes the countdown away`);
     else fail(`${V}: countdown ${JSON.stringify({ u3a, u3line, u3b: u3b && u3b.label, u3c: u3c && u3c.label, u3cancel, u3d, u3dline, u3e: u3e && u3e.label })}`);
 
     // ---- U4. GREY, WITH THE REASON, WHILE THE SQUAD COULD NOT START. Three on
@@ -3827,6 +3958,314 @@ try {
   }
 } catch (e) {
   fail('squad_ui U3 stopped: ' + (e && e.message));
+}
+// ============================================================================
+// U4: THE SQUAD BOX AND THE MANAGE SQUAD WINDOW (owner, 2026-10-06). "Replace
+// Invite friends with a button that opens a window to manage the squad; the
+// main-menu squad box shows only the squad (how many in the party / how many
+// it can hold) and the friends online; all text easily legible." The box is
+// "Squad N/4" and Manage, each member's name and ready status, the invite just
+// received, and the friends online, each with Invite; the window is the code
+// with Copy and Share, the code field, the squad with Ready, Leave and the
+// leader's Remove, and every friend. The phone sizes the owner reads on:
+// 874x402 (iPhone landscape) and 667x375 (the smallest). Every roster goes in
+// through the real handle(), every tap through the real delegated listener.
+if (want('u4')) try {
+  const U4_MULE = '00000000-0000-4000-8000-0000000000cc';
+  const U4_PIKE = '00000000-0000-4000-8000-0000000000dd';
+  const U4_NIA = '00000000-0000-4000-8000-000000000011';
+  const U4_KIT = '00000000-0000-4000-8000-000000000013';
+  const U4R = (tag) => (tag + '0'.repeat(32)).slice(0, 32);
+  const u4m = (id, callsign, rid, o) => Object.assign({ id, rid: U4R(rid), callsign, guest: false, online: true, ready: false, dropped: false }, o);
+  const U4YOU = (o) => u4m(ME, 'Dusty Crag', 'a1', o);
+  const U4MULE = (o) => u4m(U4_MULE, 'Steel Mule', 'c1', o);
+  const U4PIKE = (o) => u4m(U4_PIKE, 'Ridge Pike', 'd1', o);
+  const U4GUEST = (o) => u4m(null, null, 'e1', Object.assign({ guest: true }, o));
+  const u4fits = (n) => ({ duel: n === 2, ffa: n >= 2 && n <= 4, boss: n >= 1 && n <= 2, aliens: n >= 1 && n <= 2, golf: n >= 1 && n <= 4 });
+  const u4state = async (patch) => {
+    const n = (patch.members || []).length;
+    await ev(`(handle(Object.assign({ type: 'squad', op: 'state', code: 'QK7T', leader: ${JSON.stringify(ME)},
+      mode: 'ffa', tees: null, max: null, you: 0, held: true, members: [], fits: ${JSON.stringify(u4fits(n))} }, ${JSON.stringify(patch)})), true)`);
+    await sleep(80);
+  };
+  // Two friends online and one not, and a request waiting.
+  const U4FR = { friends: [{ id: U4_MULE, callsign: 'Steel Mule', online: true }, { id: U4_PIKE, callsign: 'Ridge Pike', online: false },
+    { id: U4_NIA, callsign: 'Nia Vale', online: true }], requests: { in: [{ id: U4_KIT, callsign: 'Kit Harrow' }], out: [] },
+    blocked: [], friendCode: 'AB12CD', callsign: null };
+  const u4friends = async (f) => { await ev(`(window.CC_SOCIAL = ${JSON.stringify(f)}, document.dispatchEvent(new Event('cc:social')), true)`); await sleep(60); };
+  // The home box, row by row, and the controls it carries.
+  const u4box = () => ev(`(() => {
+    Bay.show('home');
+    const p = document.querySelector('#bay .sqx'); if (!p) return null;
+    const vis = (e) => !!e && !e.closest('.hidden') && e.getClientRects().length > 0;
+    const c = p.querySelector('.sqhc'), m = p.querySelector('.sqmg'), fr = p.querySelector('.sqbf');
+    const row = (r) => ({ name: r.querySelector('.sqmt').textContent, you: vis(r.querySelector('.sqmy')), lead: vis(r.querySelector('.sql')),
+      state: (r.querySelector('.sqr') || { textContent: '' }).textContent, tick: vis(r.querySelector('.sqr.on svg')), menu: vis(r.querySelector('.pmb')),
+      inv: (() => { const b = r.querySelector('[data-sq^="invite:"]'); return vis(b) ? { t: b.textContent.trim(), dis: b.disabled, v: b.getAttribute('data-sq') } : null; })() });
+    return {
+      head: p.querySelector('.sqhn').textContent, count: c && !c.classList.contains('hidden') ? c.firstElementChild.textContent : null,
+      manage: m ? { t: m.firstChild.textContent, go: m.getAttribute('data-go'), dis: m.disabled } : null,
+      members: [...p.querySelectorAll('.sqml .sqm')].filter(vis).map(row),
+      friends: fr ? [...fr.querySelectorAll('.sqm')].filter(vis).map(row) : [],
+      fhead: fr && fr.querySelector('.sqh') ? fr.querySelector('.sqh').textContent : null,
+      text: p.querySelector('.sqb').innerText.replace(/\\s+/g, ' ').trim(),
+      ops: [...p.querySelectorAll('[data-sq]')].filter(vis).map((b) => b.getAttribute('data-sq').split(':')[0]),
+      tabs: p.querySelectorAll('[role="tab"], [role="tablist"], [role="tabpanel"]').length,
+      field: !!p.querySelector('input'), foot: !!p.querySelector('.sqft'),
+      vh: (p.querySelector('.sqhc .sqvh') || {}).textContent || null,
+    };
+  })()`);
+  // EVERY WORD ON SCREEN in a container, by computed font-size in design
+  // units: each visible text node is read off its own element. `names` are the
+  // player names (.sqmt), which have their own floor.
+  const u4type = (sel) => ev(`(() => {
+    const u = document.querySelector('#bay .stage').getBoundingClientRect().width / 932;
+    const root = document.querySelector(${JSON.stringify(sel)}); if (!root) return null;
+    const out = [], w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let n = w.nextNode(); n; n = w.nextNode()) {
+      const e = n.parentElement;
+      if (!n.data.trim() || !e || e.closest('.hidden') || !e.getClientRects().length || e.closest('.sqvh')) continue;
+      out.push({ t: n.data.trim().slice(0, 24), u: +(parseFloat(getComputedStyle(e).fontSize) / u).toFixed(2), name: !!e.closest('.sqmt') });
+    }
+    // The code field's own type (its value is not a text node).
+    const i = root.querySelector('input');
+    if (i && i.getClientRects().length) out.push({ t: 'input', u: +(parseFloat(getComputedStyle(i).fontSize) / u).toFixed(2), name: false });
+    return out;
+  })()`);
+  const u4small = (list) => (list || []).filter((x) => x.u < (x.name ? 15 : 13));
+
+  for (const [w, h] of [[874, 402], [667, 375]]) {
+    const V = `${w}x${h}`;
+    await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: w < 900 });
+    await send('Page.navigate', { url: `http://127.0.0.1:${appPort}/` });
+    let u4up = false;
+    for (let i = 0; i < 80; i++) {
+      if (await ev('!!window.Bay && typeof handle === "function" && !!document.querySelector("#bay .sqx")').catch(() => false)) { u4up = true; break; }
+      await sleep(200);
+    }
+    if (!u4up) { fail(`${V}: page never became ready for the U4 checks`); continue; }
+    for (let k = 0; k < 40 && (await ev(`document.getElementById('bay').classList.contains('enter')`)); k++) await sleep(100);
+    await ev(`(localStorage.removeItem('cc_squad'), localStorage.setItem('cc_loadout', ${JSON.stringify(JSON.stringify(['mortar', 'cluster', 'napalm', 'airstrike', 'volley']))}), ccMode = 'ffa', true)`);
+    await stubSocket(); await setWho('in');
+    await clearTx(); await ev('sendHello(S.ws).then(() => true)'); await sleep(60);
+    await reply({ op: 'gone' });
+    await clearTx();
+
+    // ---- N0. AN ACCOUNT CHANGE ALONE REPAINTS THE OPEN WINDOW. With no friends
+    //      snapshot, no refusal and no squad standing, a sign-out changes
+    //      nothing app.js would announce (no cc:social, no cc:squad): only the
+    //      bay's own cc:account listener can turn the window's friends column
+    //      into the sign-in offer. Read straight off the DOM.
+    await ev(`(Bay.show('squad'), true)`);
+    const n0a = await ev(`document.getElementById('sqWin-friends').innerText.replace(/\\s+/g, ' ').trim()`);
+    await ev(`(() => { const b = $('accountBtn'); b.dataset.state = 'guest'; window.CC_ACCOUNT = ${GUEST}; document.dispatchEvent(new CustomEvent('cc:account')); return true; })()`);
+    await sleep(60);
+    const n0b = await ev(`({ scr: document.getElementById('bay').dataset.scr, f: document.getElementById('sqWin-friends').innerText.replace(/\\s+/g, ' ').trim() })`);
+    await setWho('in');
+    await clearTx(); await ev('sendHello(S.ws).then(() => true)'); await sleep(60);
+    await reply({ op: 'gone' });
+    await clearTx(); await ev(`(Bay.show('home'), true)`);
+    if (n0a.startsWith('Not loaded yet.') && n0b.scr === 'squad' && n0b.f.startsWith('Sign in to add friends and keep your progress'))
+      ok(`${V}: a sign-out while the window is open repaints it in place, though nothing else announced it`);
+    else fail(`${V}: account change on the window ${JSON.stringify({ n0a, n0b })}`);
+    await u4friends(U4FR);
+
+    // ---- N1. NO SQUAD: "Squad 0/4" and Manage, "No squad yet.", and the
+    //      friends who are online -- only them -- each with a live Invite. No
+    //      tabs, no code field, no footer: the box shows the squad and the
+    //      friends online and nothing else.
+    const n1 = await u4box();
+    // And the window's code column, with no squad: no code yet, and what gives
+    // one -- an Invite creates the squad.
+    const n1code = await ev(`(() => { Bay.show('squad'); const c = document.getElementById('sqWin-code'); const t = { code: c.querySelector('.sqcd').textContent,
+      link: c.querySelector('[data-sq="link"]').disabled, note: c.lastElementChild.textContent }; Bay.show('home'); return t; })()`);
+    if (n1code.code === '\u2014' && n1code.link === true && n1code.note === 'Your squad gets its code when you invite a friend.'
+        && n1 && n1.head === 'Squad' && n1.count === '0/4' && n1.manage && n1.manage.t === 'Manage' && n1.manage.go === 'squad' && !n1.manage.dis
+        && n1.text.startsWith('No squad yet.') && n1.members.length === 0
+        && n1.fhead === 'Friends online · 2' && JSON.stringify(n1.friends.map((f) => f.name)) === '["Steel Mule","Nia Vale"]'
+        && n1.friends.every((f) => f.inv && f.inv.t === 'Invite' && !f.inv.dis && f.menu) && !n1.text.includes('Ridge Pike') && !n1.text.includes('Kit Harrow')
+        && n1.tabs === 0 && !n1.field && !n1.foot && n1.vh === ', 0 of 4')
+      ok(`${V}: no squad -- the box reads Squad 0/4 with Manage (", 0 of 4" in words for a screen reader), "No squad yet.", and the two friends online with Invite; nobody offline, no request, no tabs, no field, no footer`);
+    else fail(`${V}: no-squad box ${JSON.stringify({ n1, n1code })}`);
+
+    // ---- N2. A SQUAD OF ONE TO FOUR: the count and every member's name with
+    //      their ready status -- Ready (a drawn tick and the word), Not ready,
+    //      Reconnecting -- the leader marked, and NO squad control in the box:
+    //      no Ready, Leave, Remove, Copy or code. Each member but you carries
+    //      the player menu (design 5.5).
+    const N2 = [
+      [U4YOU({ ready: true })],
+      [U4YOU({ ready: true }), U4MULE()],
+      [U4YOU(), U4MULE({ ready: true }), U4PIKE({ ready: true, dropped: true })],
+      [U4YOU({ ready: true }), U4MULE(), U4PIKE({ ready: true }), U4GUEST({ ready: true })],
+    ];
+    const n2bad = [];
+    for (const members of N2) {
+      await u4state({ members });
+      const b = await u4box(), n = members.length;
+      const want = members.map((m) => (m.dropped ? 'Reconnecting' : m.ready ? 'Ready' : 'Not ready'));
+      const good = b && b.count === n + '/4' && b.members.length === n
+        && JSON.stringify(b.members.map((r) => r.name)) === JSON.stringify(members.map((m) => m.callsign || 'No callsign'))
+        && JSON.stringify(b.members.map((r) => r.state)) === JSON.stringify(want)
+        && b.members.every((r, i) => r.tick === (want[i] === 'Ready')) && b.members[0].you && b.members[0].lead && !b.members.slice(1).some((r) => r.lead)
+        && !b.members[0].menu && b.members.slice(1).every((r, i) => r.menu === !!members[i + 1].id)
+        && !b.ops.some((o) => ['ready', 'leave', 'kick', 'kok', 'link', 'share', 'code', 'start'].includes(o)) && !b.field && !b.foot;
+      if (!good) n2bad.push({ n, b });
+    }
+    if (!n2bad.length) ok(`${V}: a squad of 1, 2, 3 and 4 reads Squad N/4 with each member's name and Ready, Not ready or Reconnecting, the leader marked, and no squad control in the box`);
+    else fail(`${V}: squad box ${JSON.stringify(n2bad)}`);
+
+    // ---- N3. THE BOX'S INVITE IS THE WINDOW'S INVITE: the same one frame,
+    //      `{type:'squad', op:'invite', to}`, the owner's note under that row
+    //      in the box, and Invited until the next roster.
+    await u4state({ members: [U4YOU({ ready: true }), U4MULE()] });
+    await clearTx(); await click(`#bay .sqx [data-sq="invite:${U4_NIA}"]`); await sleep(50);
+    const n3f = await squads();
+    await reply({ op: 'invite', ok: true, delivered: 'push' });
+    const n3 = await ev(`(() => { const r = document.querySelector('#bay .sqx [data-row="f:${U4_NIA}"]'); const n = r && r.nextElementSibling;
+      const b = r && r.querySelector('[data-sq^="invite:"]'); return { line: n && n.classList.contains('sqnt') ? n.textContent : null, btn: b ? [b.textContent.trim(), b.disabled] : null }; })()`);
+    if (n3f.length === 1 && JSON.stringify(Object.keys(n3f[0]).sort()) === '["id","op","to","type"]' && n3f[0].op === 'invite' && n3f[0].to === U4_NIA
+        && n3.line === "Invite sent to Nia Vale. They'll get a notification." && JSON.stringify(n3.btn) === '["Invited",true]')
+      ok(`${V}: Invite in the box sends the one invite frame, says the owner's note under the row and marks the friend Invited`);
+    else fail(`${V}: box invite ${JSON.stringify({ n3f, n3 })}`);
+
+    // ---- N4. THE BOX SCROLLS, WITH THE FADE, AND NO ROW IS HIDDEN UNDER A
+    //      FOOTER (fix wave B1, U4). Four members and two friends online are
+    //      more than 150u: the list scrolls under a header that stays put, the
+    //      fade sits at the foot of what is visible, over the rows passing
+    //      under it, and at the end of the list it stands in its own strip
+    //      below the last row, covering none. It takes no taps.
+    await u4state({ members: [U4YOU({ ready: true }), U4MULE(), U4PIKE({ ready: true }), U4GUEST({ ready: true })] });
+    const n4 = await ev(`(() => {
+      Bay.show('home');
+      const l = document.querySelector('#bay .sqx .sqb'), f = l && l.querySelector(':scope > .sqfade'), hd = document.querySelector('#bay .sqx .sqhd');
+      if (!l || !f) return null;
+      const lr = l.getBoundingClientRect(), h0 = hd.getBoundingClientRect().top;
+      const rows = () => [...l.querySelectorAll('.sqm')].map((r) => r.getBoundingClientRect());
+      const atRest = f.getBoundingClientRect(), covers = rows().some((r) => r.bottom > atRest.top + 0.5 && r.top < atRest.bottom - 0.5);
+      l.scrollTop = l.scrollHeight;
+      const end = f.getBoundingClientRect(), last = rows().pop();
+      const clear = !rows().some((r) => r.bottom > end.top + 0.5 && r.top < end.bottom - 0.5) && last.bottom <= end.top + 0.5;
+      const kept = Math.abs(hd.getBoundingClientRect().top - h0) < 0.5, scrolled = l.scrollTop > 0;
+      l.scrollTop = 0;
+      return { over: l.scrollHeight > l.clientHeight, foot: Math.abs(atRest.bottom - lr.bottom) < 1.5, covers, clear, kept, scrolled,
+        sticky: getComputedStyle(f).position, taps: getComputedStyle(f).pointerEvents, last: l.lastElementChild === f, footer: !!l.querySelector('.sqft') };
+    })()`);
+    if (n4 && n4.over && n4.scrolled && n4.foot && n4.covers && n4.clear && n4.kept && n4.sticky === 'sticky' && n4.taps === 'none' && n4.last && !n4.footer)
+      ok(`${V}: a full squad and the friends online scroll under a fixed header, the fade marks more below and, at the end, covers no row; no footer`);
+    else fail(`${V}: box scroll ${JSON.stringify(n4)}`);
+
+    // ---- N5. LEGIBLE ON A PHONE (owner, 2026-10-06: "all text easily
+    //      legible"). Every word in the box and in the window is measured by
+    //      its computed font-size: names at least 15u, everything else at
+    //      least 13u. The busiest states: the box with a full squad, an
+    //      invite just received, a refused action and the friends online; the
+    //      window as the leader, with requests, every friend and the Remove
+    //      question open; a guest's box and window.
+    await ev(`(handle({ type: 'squad', op: 'invited', code: 'RM4P', from: { callsign: 'Ridge Pike' }, size: 2, max: 4 }), true)`); await sleep(60);
+    await ev(`(handle({ type: 'squad', op: 'start', error: 'member_busy', at: 1 }), true)`); await sleep(60);
+    const n5 = {};
+    n5.box = await ev(`(Bay.show('home'), true)`).then(() => u4type('#bay .sqx'));
+    await ev(`(Bay.show('squad'), true)`);
+    n5.win = await u4type('#bay .pbody');
+    await click(`#bay [data-sq="kick:${U4R('c1')}"]`); await sleep(40);
+    n5.ask = await u4type('#sqWin-squad .sqft');
+    await click('#bay [data-sq="kcancel"]'); await sleep(40);
+    await setWho('guest');
+    n5.guestWin = await u4type('#bay .pbody');
+    n5.guestBox = await ev(`(Bay.show('home'), true)`).then(() => u4type('#bay .sqx'));
+    await setWho('in');
+    const n5names = (n5.box || []).filter((x) => x.name).length, n5small = Object.fromEntries(Object.entries(n5).map(([k, v]) => [k, v ? u4small(v) : null]));
+    if (Object.values(n5).every((v) => Array.isArray(v) && v.length > 0) && Object.values(n5small).every((v) => v && v.length === 0) && n5names >= 4
+        && (n5.ask || []).some((x) => x.t.startsWith('Remove Steel Mule')))
+      ok(`${V}: every word in the box and the window is at least 13u and every name at least 15u -- the full box, the leader's window, the Remove question, and a guest's`);
+    else fail(`${V}: type below the floor ${JSON.stringify(n5small)} (names in the box: ${n5names})`);
+
+    // ---- N6. A JOIN BY LINK LANDS WHERE THE SQUAD IS SHOWN (U4): a ?squad=
+    //      link, or the notification tap an invite sends, joins and takes the
+    //      bay home, where the box draws the squad and the ribbon is its Ready.
+    //      Not from the Manage squad window, which draws it already, and not
+    //      on a refusal, which is said in a toast where the player is.
+    await ev(`(handle({ type: 'squad', op: 'ended', reason: 'left' }), true)`); await sleep(60);
+    // The page's own socket opened at boot, which is what lets a tap go at
+    // once (app.js wsOpened); set here as well, so the check never depends on
+    // how fast that socket opened before the stub replaced it.
+    await ev(`(wsOpened = true, window.__u4toast = [], window.__u4st = window.showToast, window.showToast = (t) => { window.__u4toast.push(t); }, true)`);
+    const land = async (from, answer) => {
+      await ev(`(Bay.go(${JSON.stringify(from)}), true)`); await sleep(40);
+      await clearTx(); await ev(`(onPushTap('/?squad=QK7T'), true)`); await sleep(60);
+      const j = (await squads()).filter((f) => f.op === 'join');
+      await reply(answer);
+      return { sent: j.length, code: j[0] && j[0].code, scr: await ev(`document.getElementById('bay').dataset.scr`) };
+    };
+    const ROSTER = { op: 'state', code: 'QK7T', leader: U4_MULE, mode: 'ffa', tees: null, max: null, you: 1, held: true,
+      members: [U4MULE({ ready: true }), U4YOU()], fits: u4fits(2) };
+    const n6 = {};
+    n6.career = await land('career', ROSTER);
+    n6.box = await u4box();
+    await ev(`(handle({ type: 'squad', op: 'ended', reason: 'left' }), true)`); await sleep(60);
+    n6.armoury = await land('armoury', ROSTER);
+    await ev(`(handle({ type: 'squad', op: 'ended', reason: 'left' }), true)`); await sleep(60);
+    n6.window = await land('squad', ROSTER);
+    await ev(`(handle({ type: 'squad', op: 'ended', reason: 'left' }), true)`); await sleep(60);
+    n6.refused = await land('career', { op: 'join', error: 'no_such_squad' });
+    n6.said = await ev('window.__u4toast.slice()');
+    await ev(`(window.showToast = window.__u4st, Bay.show('home'), true)`);
+    if (n6.career.sent === 1 && n6.career.code === 'QK7T' && n6.career.scr === 'home'
+        && n6.box && n6.box.count === '2/4' && n6.box.members.length === 2
+        && n6.armoury.sent === 1 && n6.armoury.scr === 'home' && n6.window.sent === 1 && n6.window.scr === 'squad'
+        && n6.refused.sent === 1 && n6.refused.scr === 'career' && n6.said.includes('No squad with that code.'))
+      ok(`${V}: a squad link's join lands home, where the box shows the squad -- from the record or the Armoury; the window keeps its place, and a refusal stays put and says why`);
+    else fail(`${V}: link landing ${JSON.stringify(n6)}`);
+
+    // ---- N7. THE WINDOW FOLLOWS WHAT THE BOX FOLLOWS, IN PLACE: its title
+    //      line says the squad and its mode; an account change repaints it
+    //      while it is open (cc:account), as a friends snapshot does
+    //      (cc:social); the field is named for a screen reader as a squad
+    //      code. A line about an action on a friend who is offline belongs
+    //      under that friend's row in the window, and is not left at the foot
+    //      of the box, which does not list them.
+    await u4friends(U4FR);                          // N5's account changes dropped the snapshot
+    await u4state({ members: [U4YOU({ ready: true }), U4MULE()] });
+    await ev(`(Bay.show('squad'), true)`);
+    const n7a = await ev(`({ sub: document.querySelector('#bay .phead .ps').textContent, label: document.getElementById('sqCode').getAttribute('aria-label') })`);
+    // A roster pushed while the window is open repaints it IN PLACE: read
+    // straight off the DOM, with no render of the test's own.
+    await u4state({ members: [U4YOU({ ready: true }), U4MULE(), U4PIKE()] });
+    const n7push = await ev(`({ scr: document.getElementById('bay').dataset.scr, rows: [...document.querySelectorAll('#sqWin-squad .sqml .sqmt')].map((e) => e.textContent),
+      sub: document.querySelector('#bay .phead .ps').textContent })`);
+    await u4state({ members: [U4YOU({ ready: true }), U4MULE()] });
+    await clearTx(); await click(`#sqWin-friends [data-sq="invite:${U4_PIKE}"]`); await sleep(40);
+    await reply({ op: 'invite', ok: true, delivered: 'none' });
+    const n7line = await ev(`(() => { const r = document.querySelector('#sqWin-friends [data-row="f:${U4_PIKE}"]'), n = r && r.nextElementSibling; return n ? n.textContent : null; })()`);
+    const n7box = await u4box();
+    await ev(`(Bay.show('squad'), true)`);
+    await setWho('guest');
+    const n7guest = await ev(`document.getElementById('sqWin-friends').innerText.replace(/\\s+/g, ' ').trim()`);
+    await setWho('in'); await u4friends(U4FR);
+    if (n7a.sub === 'Squad 2/4 \u00b7 Free-for-all' && n7a.label === 'Squad code'
+        && n7push.scr === 'squad' && JSON.stringify(n7push.rows) === '["Dusty Crag","Steel Mule","Ridge Pike"]' && n7push.sub === 'Squad 3/4 \u00b7 Free-for-all'
+        && n7line === "Ridge Pike is offline and can't be notified. Share your squad code instead."
+        && n7box && !n7box.text.includes('Ridge Pike') && !n7box.text.includes('offline and can')
+        && n7guest.startsWith('Sign in to add friends'))
+      ok(`${V}: the window's title line names the squad and its mode, the field is a squad code, a roster push and an account change repaint the open window, and a line about an offline friend stays in the window`);
+    else fail(`${V}: window follows ${JSON.stringify({ n7a, n7push, n7line, box: n7box && n7box.text, n7guest })}`);
+
+    // ---- N8. A START REFUSED WHILE THE WINDOW IS OPEN is said on its action
+    //      line and on the ready control, and is no toast: the window is
+    //      where the squad is shown, as home is (U3's cc:squadrefused).
+    await u4state({ members: [U4YOU({ ready: true }), U4MULE({ ready: true })] });
+    await ev(`(Bay.show('squad'), window.__u4toast = [], window.__u4st = window.showToast, window.showToast = (t) => { window.__u4toast.push(t); }, true)`);
+    await ev(`(handle({ type: 'squad', op: 'start', error: 'capacity' }), true)`); await sleep(60);
+    const n8 = await ev(`(() => { const e = document.querySelector('#sqWin-squad .sqml ~ .sqae'); return { line: e && !e.classList.contains('hidden') ? e.textContent : '', toasts: window.__u4toast.slice() }; })()`);
+    await ev(`(window.showToast = window.__u4st, true)`);
+    if (n8.line === 'The server is at capacity. Try again shortly.' && n8.toasts.length === 0)
+      ok(`${V}: a start refused while the window is open is said on its action line, not in a toast`);
+    else fail(`${V}: refusal in the window ${JSON.stringify(n8)}`);
+    await ev(`(handle({ type: 'squad', op: 'ended', reason: 'left' }), Bay.show('home'), true)`); await sleep(60);
+  }
+} catch (e) {
+  fail('squad_ui U4 stopped: ' + (e && e.message));
 }
 clearTimeout(watchdog);
 cleanup();

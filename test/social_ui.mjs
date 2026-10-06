@@ -1984,6 +1984,58 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
     ok(`${V}: entry point — Bay controls carries a Friends row that counts the friends and opens the screen`);
   else fail(`${V}: entry point ${JSON.stringify(entry)}`);
 
+  // ---- 42b. THE SQUAD'S FRIENDS (U4; owner, 2026-10-06). The home Squad box
+  //      lists the friends who are online, and only them, each with Invite;
+  //      the Manage squad window behind its Manage lists EVERY friend, online
+  //      first (an offline friend's invite goes by push), and the requests
+  //      waiting, with Accept and a drawn Decline. Its "+ Add friend" opens
+  //      this screen, and this screen's Back goes back to the window. The
+  //      window's Accept and Decline send exactly the frames this screen's
+  //      Accept and Ignore send.
+  const MIXED = `{friends:[{id:'22222222-2222-4222-8222-222222222222',callsign:'Crater Two',online:false},{id:'11111111-1111-4111-8111-111111111111',callsign:'Bunker Nine',online:true},{id:'66666666-6666-4666-8666-666666666666',callsign:'Fjord Six',online:true}],requests:{in:[{id:'33333333-3333-4333-8333-333333333333',callsign:'Dune Four'}],out:[]},blocked:[],friendCode:'ABC234',callsign:'Anvil Six'}`;
+  await arm(MIXED);
+  const sqf = await ev(`(() => {
+    Bay.show('home');
+    const rows = (sel) => [...document.querySelectorAll(sel)].map((r) => ({ name: r.querySelector('.sqmt').textContent, lit: !!r.querySelector('.pdot.on'),
+      inv: !!r.querySelector('[data-sq^="invite:"]'), acc: !!r.querySelector('[data-sq^="accept:"]'), dec: !!r.querySelector('[data-sq^="decline:"] svg') }));
+    const out = { box: rows('#bay .sqx .sqbf .sqfr'), head: (document.querySelector('#bay .sqx .sqbf .sqh') || {}).textContent };
+    document.querySelector('#bay .sqx [data-go="squad"]').click();
+    out.scr1 = $('bay').dataset.scr;
+    out.win = rows('#sqWin-friends .sqfr[data-row^="f:"]');
+    out.req = rows('#sqWin-friends .sqfr[data-row^="r:"]');
+    document.querySelector('#sqWin-friends [data-go="friends"]').click();
+    out.scr2 = $('bay').dataset.scr;
+    document.querySelector('#bay .phead [data-back]').click();
+    out.scr3 = $('bay').dataset.scr;
+    return out;
+  })()`);
+  const SQ_WIN = [['Bunker Nine', true], ['Fjord Six', true], ['Crater Two', false]];
+  if (sqf && JSON.stringify(sqf.box.map((r) => [r.name, r.inv])) === '[["Bunker Nine",true],["Fjord Six",true]]' && sqf.head === 'Friends online · 2'
+      && sqf.scr1 === 'squad' && JSON.stringify(sqf.win.map((r) => [r.name, r.lit])) === JSON.stringify(SQ_WIN) && sqf.win.every((r) => r.inv)
+      && sqf.req.length === 1 && sqf.req[0].name === 'Dune Four' && sqf.req[0].acc && sqf.req[0].dec
+      && sqf.scr2 === 'friends' && sqf.scr3 === 'squad')
+    ok(`${V}: the box lists the friends online with Invite; the window lists every friend online first, with Invite, and the request; Add friend opens Friends, whose Back returns`);
+  else fail(`${V}: squad friends ${JSON.stringify(sqf)}`);
+  // The same frames as this screen's own Accept and Ignore.
+  const DUNE = '33333333-3333-4333-8333-333333333333';
+  await ev(`(window.__tx.length = 0, true)`);
+  await click(`#sqWin-friends [data-sq="decline:${DUNE}"]`); await sleep(40);
+  const winDec = await calls('friend');
+  await answer((f) => f.type === 'friend', { type: 'friend', op: 'decline', ok: true }); await sleep(40);
+  await click(`#sqWin-friends [data-sq="accept:${DUNE}"]`); await sleep(40);
+  const winAcc = (await calls('friend')).slice(1);
+  await answer((f) => f.type === 'friend', { type: 'friend', op: 'accept', ok: true }); await sleep(40);
+  await arm(MIXED);
+  await ev(`(window.__tx.length = 0, true)`);
+  await click(`#bay [data-fr="dec:${DUNE}"]`); await sleep(40);
+  await click(`#bay [data-fr="acc:${DUNE}"]`); await sleep(40);
+  const scrFr = await calls('friend');
+  const bare = (f) => JSON.stringify({ type: f.type, op: f.op, from: f.from, keys: Object.keys(f).filter((k) => k !== 'id').sort() });
+  if (winDec.length === 1 && winAcc.length === 1 && scrFr.length === 2
+      && bare(winDec[0]) === bare(scrFr[0]) && bare(winAcc[0]) === bare(scrFr[1]) && winDec[0].from === DUNE && winDec[0].op === 'decline' && winAcc[0].op === 'accept')
+    ok(`${V}: the window's Decline and Accept send this screen's own decline and accept frames`);
+  else fail(`${V}: window request frames ${JSON.stringify({ winDec, winAcc, scrFr })}`);
+
   // ---- 43. layout: the three columns end inside the page body and nothing
   //      clips, at both shipped phone shapes, with a long name and twenty blocks
   await ev(`(() => {

@@ -2427,9 +2427,11 @@ function deepLink(u) {
 // it.
 //
 // The one code a player will enter through a link at a time, '' for none. The
-// Squad box is not told the answer: app.js's socialReply puts the roster a join
-// is answered with into window.CC_SQUAD before this callback runs (plan X7), and
-// bay.js's cc:squad listener records the code and a guest row's secret from it.
+// Squad box is not handed the answer: app.js's socialReply puts the roster a
+// join is answered with into window.CC_SQUAD before this callback runs (plan
+// X7), and bay.js's cc:squad listener records the code and a guest row's
+// secret from it. The callback only tells the bay that a join landed, so the
+// player is shown the squad they joined (Bay.landSquad).
 let pendingSquadJoin = '';
 // The box's own words for the same refusals (bay.js SOC_ERR, 'squad.join.*'),
 // so a join by link and a join by the code field read alike, with one sentence
@@ -2438,7 +2440,7 @@ let pendingSquadJoin = '';
 // NEVER names a block: the server refuses a join a block forbids as
 // `no_such_squad`, and that reads exactly as an unknown code does (D-BLOCK-2 A).
 const SQUAD_LINK_ERR = {
-  no_such_squad: 'No squad or game with that code.',
+  no_such_squad: 'No squad with that code.',
   full: 'That squad is full.',
   already_in: 'You are already in that squad on another device.',
   slow_down: 'Too many tries. Wait a moment.',
@@ -2452,6 +2454,10 @@ function joinSquadByCode(code) {
   pendingSquadJoin = '';
   socialSend({ type: 'squad', op: 'join', code: c, name: myName(), skin: mySkin() }, (r) => {
     if (r && r.error) showToast(SQUAD_LINK_ERR[r.error] || 'That squad could not be joined right now. Try again later.');
+    // A JOIN THAT LANDED IS SHOWN (U4): the bay goes home, where the box draws
+    // the squad and the ribbon is its Ready. bay.js decides whether to move
+    // (Bay.landSquad): not from the window or a lobby, and never over a match.
+    else if (r && r.op === 'state' && window.Bay && typeof window.Bay.landSquad === 'function') window.Bay.landSquad();
   });
 }
 function flushSquadJoin(ws) { if (pendingSquadJoin && ws === S.ws) joinSquadByCode(pendingSquadJoin); }
