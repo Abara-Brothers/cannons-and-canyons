@@ -20,19 +20,19 @@
 // drops the old cache outright and a returning
 // player never runs the previous app.js under the new index.html (ISSUE-038).
 // House rule 7c fails the suite if this number and the stamp ever disagree.
-const VERSION = 'cc-v13';
+const VERSION = 'cc-v14';
 const SHELL = [
   './',
   'index.html',
-  'app.js?v=13',
-  'cloud.js?v=13',
-  'config.js?v=13',
-  'errors.js?v=13',
+  'app.js?v=14',
+  'cloud.js?v=14',
+  'config.js?v=14',
+  'errors.js?v=14',
   'game-core.js',        // the authoritative simulation — offline play needs it
   'room-engine.js',      // rooms/turns/bots — the other half of an offline match
-  'styles.css?v=13',
-  'bay.js?v=13',          // the Launch Bay front end
-  'intro.js?v=13',        // the cold-start intro: an offline launch plays it too
+  'styles.css?v=14',
+  'bay.js?v=14',          // the Launch Bay front end
+  'intro.js?v=14',        // the cold-start intro: an offline launch plays it too
   'fonts/barlow-500.woff2',
   'fonts/barlow-600.woff2',
   'fonts/barlow-700.woff2',
