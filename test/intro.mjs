@@ -115,7 +115,7 @@ const send = (method, params = {}, sessionId) => new Promise((resolve, reject) =
 //   Seam: computed style of every #bay element in the first frame at
 //       tp >= 5960, to compare with the same elements after the intro.
 const INSTR = `(() => {
-  const S = window.__t = { stageSeen: false, coverAtStage: null, a1Checks: 0, a1Fails: [], a3Frames: 0, a3Max: 0, seam: null, geo: null, errors: 0, clicks: 0, revealOpacity: null };
+  const S = window.__t = { stageSeen: false, coverAtStage: null, a1Checks: 0, a1Fails: [], a3Frames: 0, a3Max: 0, seam: null, geo: null, errors: 0, clicks: 0, revealOpacity: null, start: null, drive: null, rest: null };
   addEventListener('error', () => { S.errors++; });
   addEventListener('unhandledrejection', () => { S.errors++; });
   document.addEventListener('click', () => { S.clicks++; });
@@ -148,6 +148,42 @@ const INSTR = `(() => {
       tankw: all('> .tankw').map(L), plat: all('> .plat').map(L),
     };
   };
+  // The intro's own tank: its two layers in the wrapper it appends to .tankw,
+  // beside the menu's own image. Mid-drive, the point the hull pitches about
+  // (the second translate in its transform) and the pivot the barrel layer
+  // turns about (the fourth, after the hull's three), with the frame they are
+  // measured on; at rest, where the wrapper and the image stand, the layers'
+  // transforms and their clips.
+  function introTank() {
+    const tw = document.querySelector('#bay .stage .tankw'), wrap = tw && tw.querySelector('[data-intro]');
+    const imgs = tw ? Array.from(tw.querySelectorAll(':scope > img')) : [];
+    return wrap && imgs.length ? { wrap, img: imgs[imgs.length - 1], cvs: Array.from(wrap.querySelectorAll('canvas')) } : null;
+  }
+  window.__driveGeo = function () {
+    const t = introTank(); if (!t || t.cvs.length !== 2) return null;
+    const tf = t.cvs[1].style.transform, m = tf.match(/translate\\(([-0-9.]+)px, ?([-0-9.]+)px\\)/g) || [];
+    const xy = (k) => (m[k] ? m[k].match(/[-0-9.]+/g).map(Number) : null), ic = getComputedStyle(t.img);
+    return { pivot: xy(3), hull: xy(1), w: parseFloat(getComputedStyle(t.wrap).width), h: parseFloat(getComputedStyle(t.wrap).height), tf,
+      frameW: parseFloat(getComputedStyle(t.img.parentElement).width), pad: -parseFloat(ic.marginTop) || 0, imgH: parseFloat(ic.height) };
+  };
+  // The drive's first frames (still cruising): how far left the hull is, the
+  // tp it was drawn at, and, as laid out in the stage (computed styles, so
+  // the rotation shim reads the same), the tank's frame (.tankw) and the
+  // backdrop's left edge (.ap); both stand in .stage, neither transformed.
+  window.__startGeo = function (tp) {
+    const t = introTank(); if (!t || t.cvs.length !== 2) return null;
+    const m = t.cvs[0].style.transform.match(/translate\\(([-0-9.]+)px/);
+    const tw = getComputedStyle(document.querySelector('#bay .stage > .tankw')), ap = getComputedStyle(document.querySelector('#bay .stage > .ap'));
+    const rotated = getComputedStyle(document.documentElement).getPropertyValue('--rotated').trim() === '1';
+    return { tp, dx: m ? +m[1] : null, frameL: parseFloat(tw.left), frameW: parseFloat(tw.width), apL: parseFloat(ap.left), apTf: ap.transform,
+      rotated, bob: new DOMMatrixReadOnly(tw.transform === 'none' ? undefined : tw.transform).f };
+  };
+  window.__restGeo = function () {
+    const t = introTank(); if (!t || t.cvs.length !== 2) return null;
+    const R = (e) => { const b = e.getBoundingClientRect(); return [b.left, b.top, b.width, b.height]; };
+    return { wrap: R(t.wrap), img: R(t.img), tf: t.cvs.map((c) => getComputedStyle(c).transform), clips: t.cvs.map((c) => getComputedStyle(c).clipPath),
+      sizes: t.cvs.map((c) => [c.width, c.height]), nat: [t.img.naturalWidth, t.img.naturalHeight], opacity: getComputedStyle(t.wrap).opacity };
+  };
   window.__snap = function () {
     return Array.from(document.querySelectorAll('#bay *')).map((el) => {
       const cs = getComputedStyle(el), anim = el.getAnimations ? el.getAnimations().length > 0 : false;
@@ -162,6 +198,9 @@ const INSTR = `(() => {
         const top = document.querySelector('#bay .stage .top');
         S.revealOpacity = top ? Array.from(top.children).filter((c) => { const r = c.getBoundingClientRect(); return r.width >= 1 && r.height >= 1; }).map((c) => +getComputedStyle(c).opacity) : [];
       }
+      if (I.tp >= 4250 && I.tp < 4600 && !S.start) S.start = window.__startGeo(I.tp);
+      if (I.tp >= 4900 && I.tp < 5600 && !S.drive) S.drive = window.__driveGeo();
+      if (I.tp >= 5650 && I.tp < 5800 && !S.rest) S.rest = window.__restGeo();
       if (I.tp >= 5955) { const r = alphaRange(cv); S.a3Frames++; if (r[1] > S.a3Max) S.a3Max = r[1]; }
       if (I.tp >= 5960 && !S.seam) { S.seam = window.__snap(); S.geo = window.__geo(); }
     }
@@ -237,6 +276,56 @@ const REDRAW_DIFF = `(async () => {
 })()`;
 const SUBTREE = `Array.from(document.querySelectorAll('#bay *')).map((el) => el.tagName + '|' + (typeof el.className === 'string' ? el.className : '') + '|' + (el.hasAttribute('style') ? '[' + el.getAttribute('style') + ']' : '-')).join('\\n')`;
 const TRANSITIONS = `Array.from(document.getElementById('bay').getAnimations({ subtree: true })).filter((a) => a.constructor.name === 'CSSTransition').map((a) => a.transitionProperty + '@' + (a.effect.target.className || a.effect.target.tagName))`;
+// THE INTRO'S TANK IS THE MENU'S (2026-10-06: the sprite now holds the whole
+// gun, and intro.js's measurements of it were re-taken). Run on the live menu
+// after the intro, with what the page recorded during it (__restGeo,
+// __driveGeo). The two layers' clips are tested on the menu's own sprite: a
+// pixel is in a layer when the clip, filled, covers at least half of it.
+// drawTank's own geometry gives the gun's pivot: the muzzle tip it fires from
+// (muzzleTipWorld), back along the barrel by BARREL.len + BARREL.brake, in a
+// fresh render of the same 204-wide sprite.
+const TANK_CHECK = (rest, drive) => `(async () => {
+  const rest = ${JSON.stringify(rest)}, drive = ${JSON.stringify(drive)};
+  if (!rest || !drive || !drive.pivot) return { missing: true };
+  const tw = document.querySelector('#bay .stage .tankw'), img = Array.from(tw.querySelectorAll(':scope > img')).pop();
+  await img.decode();
+  const W = img.naturalWidth, H = img.naturalHeight;
+  const layer = (clip) => {
+    const c = document.createElement('canvas'); c.width = W; c.height = H; const q = c.getContext('2d');
+    if (clip) {
+      q.beginPath();
+      clip.replace(/^polygon\\(|\\)$/g, '').split(',').forEach((pt, i) => { const [x, y] = pt.trim().split(/\\s+/).map((n) => parseFloat(n) / 100); i ? q.lineTo(x * W, y * H) : q.moveTo(x * W, y * H); });
+      q.closePath(); q.fillStyle = '#fff'; q.fill();
+    } else q.drawImage(img, 0, 0);
+    return q.getImageData(0, 0, W, H).data;
+  };
+  const px = layer(null), hull = layer(rest.clips[0]), gun = layer(rest.clips[1]);
+  const hex = (h) => [1, 3, 5].map((k) => parseInt(h.slice(k, k + 2), 16));
+  // The gun's pixels: drawn in its own steels (TANK_G), and, so that an
+  // anti-aliased edge elsewhere that happens to blend to one of them (a road
+  // wheel's rim against the track can) is not taken for it, only where the
+  // four neighbours are gun steel too.
+  const GUN = [TANK_G.barrel, TANK_G.barrelLite, TANK_G.brake, TANK_G.brakeSlot].map(hex);
+  const steel = (i) => i >= 0 && i < px.length && px[i + 3] === 255 && GUN.some((g) => g[0] === px[i] && g[1] === px[i + 1] && g[2] === px[i + 2]);
+  let solid = 0, missed = 0, gunPx = 0, gunOut = 0, gunInHull = 0;
+  for (let i = 0; i < px.length; i += 4) {
+    if (px[i + 3] < 128) continue;
+    solid++;
+    const inH = hull[i + 3] >= 128, inG = gun[i + 3] >= 128;
+    if (!inH && !inG) missed++;
+    const x = (i / 4) % W;
+    if (x > 0 && x < W - 1 && steel(i) && steel(i - 4) && steel(i + 4) && steel(i - 4 * W) && steel(i + 4 * W)) { gunPx++; if (!inG) gunOut++; if (inH) gunInHull++; }
+  }
+  const orig = window.drawTank; let g = null;
+  window.drawTank = function (i) { g = { t: tankScreen(i), m: muzzleTipWorld(i), w: view.cssW, h: view.cssH, zoom: cam.zoom, cx: cam.cx, cy: cam.cy }; return orig.apply(this, arguments); };
+  try { Bay.tankURL('intro-test-probe', 204); } finally { window.drawTank = orig; }
+  const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+  const tipX = (g.m.x - g.cx) * g.zoom + g.w / 2, tipY = (g.m.y - g.cy) * g.zoom + g.h / 2, L = g.t.r * (BARREL.len + BARREL.brake);
+  const s = drive.w / (W / dpr), padTop = H / dpr - g.h;
+  const want = [(tipX - g.m.dx * L) * s, (tipY - g.m.dy * L + padTop) * s];
+  return { solid, missed, gunPx, gunOut, gunInHull, pivot: drive.pivot, want: want.map((n) => Math.round(n * 10) / 10),
+    off: Math.hypot(drive.pivot[0] - want[0], drive.pivot[1] - want[1]) };
+})()`;
 
 async function settled(p) {
   // the intro is gone (canvas, hint, any shield) and the page has had a beat
@@ -312,6 +401,39 @@ for (const v of VIEWS) {
     (() => { const a = sub.split('\n'), b = controlSubtree[v.label].split('\n'); const i = a.findIndex((x, k) => x !== b[k]); return i < 0 ? 'length differs' : `first difference: ${a[i]}  vs  ${b[i]}`; })());
   check(`[${v.label}] no canvas, no inert left behind`, !(await p.ev("!!document.getElementById('intro') || document.getElementById('bay').inert")));
   check(`[${v.label}] A11 no console errors`, p.logs.length === 0 && T.errors === 0, p.logs.slice(0, 3).join(' | '));
+  // THE INTRO'S TANK ENDS ON THE MENU'S. At rest (tp 5650-5800, before the
+  // menu's own image has faded in over it) the wrapper stands on the menu
+  // image's box with nothing left of the drive in either layer, and the two
+  // layers hold the menu's own sprite; between them every solid pixel of it,
+  // the whole gun in the barrel layer and none of it in the hull's. Mid-drive
+  // the barrel turns about drawTank's own pivot, the mantlet's centre.
+  {
+    const R = T.rest, tk = await p.ev(TANK_CHECK(T.rest, T.drive));
+    const boxOk = R && R.wrap.every((n, i) => Math.abs(n - R.img[i]) <= 0.5);
+    check(`[${v.label}] the intro's tank comes to rest exactly on the menu's: the same box, no transform left, the menu's own sprite in both layers`,
+      !!R && boxOk && R.tf.every((t) => t === 'none') && R.sizes.every((sz) => sz[0] === R.nat[0] && sz[1] === R.nat[1]), JSON.stringify(R));
+    check(`[${v.label}] at rest the two layers are the whole tank: every solid pixel in one (${tk.solid}), all ${tk.gunPx} of the gun's in the barrel layer, none in the hull's`,
+      !tk.missing && tk.solid > 1000 && tk.missed === 0 && tk.gunPx > 200 && tk.gunOut === 0 && tk.gunInHull === 0, JSON.stringify(tk));
+    check(`[${v.label}] mid-drive the barrel turns about the gun's own pivot, the mantlet's centre (${tk.off !== undefined ? tk.off.toFixed(2) : '?'}px off)`,
+      !tk.missing && tk.off <= 1, JSON.stringify({ pivot: tk.pivot, want: tk.want }));
+    // The hull still pitches about the point it always did, (.5, .58) of the
+    // frame, now that the frame starts the pad down the image.
+    const D = T.drive, hw = D && D.hull ? [D.frameW * .5, D.pad + .58 * (D.imgH - D.pad)] : null;
+    check(`[${v.label}] mid-drive the hull pitches about (.5, .58) of the tank's frame, as it always did`,
+      !!hw && Math.abs(D.hull[0] - hw[0]) <= .6 && Math.abs(D.hull[1] - hw[1]) <= .6, JSON.stringify({ hull: D && D.hull, want: hw }));
+    // The drive measures from the tank's FRAME, not from the bigger image
+    // that holds the gun: it sets off with the frame's right edge on the
+    // backdrop's left edge and cruises (intro.js driveIn, driveDist; V0 =
+    // 2 / 1.58 of the way per drive, the drive 4250-5300 ms).
+    // (Under the rotation shim intro.js's bobOffset() takes the idle bob,
+    // which is the wrapper's own translateY, as an x offset, so there the
+    // start may also be out by that frame's bob; the frame-against-image
+    // question this asks is the pad, 30px and more.)
+    const S0 = T.start, p0 = S0 ? (S0.tp - 4250) / 1050 : 0;
+    const dxWant = S0 ? -(S0.frameL + S0.frameW - S0.apL) * (1 - (2 / 1.58) * p0) : NaN, dxTol = 1 + (S0 && S0.rotated ? Math.abs(S0.bob) : 0);
+    check(`[${v.label}] the drive sets off from the tank's frame: its right edge on the backdrop's left edge (${S0 && S0.dx !== null ? (S0.dx - dxWant).toFixed(2) : '?'}px off, within ${dxTol.toFixed(2)})`,
+      !!S0 && S0.dx !== null && S0.apTf === 'none' && p0 >= 0 && p0 < .58 && Math.abs(S0.dx - dxWant) <= dxTol, JSON.stringify({ start: S0, dxWant }));
+  }
   if (v === VIEWS[0]) {
     // A4: the same tab again (Back to menu, a refresh, the sign-in return)
     await p.go(); await sleep(800);

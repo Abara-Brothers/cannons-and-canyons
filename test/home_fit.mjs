@@ -10,7 +10,12 @@
 //   2. The top row is one smaller height, every chip a target of at least
 //      44 CSS px, and the mode boards come up into the space saved.
 //   3. The tank sits lower, on its platform inside the blue ring, and the top
-//      of its sprite -- the barrel's end -- is clear of every board.
+//      of its sprite -- the barrel's end -- is clear of every board. Since
+//      2026-10-06 ("the tank is also being cut off at the top") the sprite
+//      holds the whole gun: its muzzle stands inside the image with clear
+//      pixels round it, and every pixel the tank draws, the gun's with it, is
+//      clear of every board. The same sprite, uncut, on the Paint shop and
+//      every other screen that shows it, its frame where it always stood.
 //   4. The Bay controls line under each row is larger and easily read.
 // Headless Chrome has no safe-area insets, so the iPhone 17 is emulated the
 // way the task brief says: a stylesheet sets --sa-l/--sa-r/--sa-b, from which
@@ -137,6 +142,7 @@ const PROBE = `(() => {
     u, sa, iw: innerWidth, ih: innerHeight, scr: q('#bay').dataset.scr,
     stage: R(q('#bay .stage')), top: R(q('#bay .top')), mark: R(q('#bay .top .mark')), boards: R(q('#bay .boards')),
     lbar: R(q('#bay .lbar')), ap: R(q('#bay .ap')), plat: R(q('#bay .plat')), img: R(q('#bay .tankw img')),
+    pad: -parseFloat(getComputedStyle(q('#bay .tankw img')).marginTop) || 0,
     box: R(q('#bay .pnl.sqx')), stn: R(stn), ph: R(stn.querySelector('.ph')),
     stnPad: parseFloat(getComputedStyle(stn).paddingBottom), stnBorder: parseFloat(getComputedStyle(stn).borderBottomWidth),
     st: st.map(R),
@@ -158,6 +164,40 @@ const QUADS = `(() => {
     return { on: b.classList.contains('on'), mode: (b.getAttribute('data-set') || '').replace('mode=', ''),
       pts: [[0, 0], [w, 0], [w, h], [0, h]].map(([x, y]) => { const p = M.transformPoint(new DOMPoint(x, y)); return [p.x, p.y]; }) };
   });
+})()`;
+// THE TANK AS IT IS DRAWN, not the box of its image: the image is the frame
+// plus a transparent pad above and to the right that holds the gun (bay.js
+// tankURL), so its box is far taller than the tank in most columns. For each
+// image matched (a stage's tank, or a card's), every column of the sprite's
+// pixels that draws anything, as its CSS-px rectangle on the page (first to
+// last drawn pixel); the frame (the image less the pad its negative margins
+// hand back, or its wrapper's box on a stage) and the box the layout gives
+// it; and how many drawn pixels lie within 2px (the sprite's own CSS px) of
+// its top and right edges -- where a cut sprite ends its gun.
+const SPRITES = (sel) => `(async () => {
+  const out = [];
+  for (const img of document.querySelectorAll(${JSON.stringify(sel)})) {
+    await img.decode();
+    const W = img.naturalWidth, H = img.naturalHeight;
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const q = c.getContext('2d'); q.drawImage(img, 0, 0);
+    const d = q.getImageData(0, 0, W, H).data;
+    const b = img.getBoundingClientRect(), kx = b.width / W, ky = b.height / H, cs = getComputedStyle(img);
+    // 2px of the sprite's own (tankURL draws at the page's pixel ratio)
+    const m = Math.round(2 * Math.max(1, Math.min(3, devicePixelRatio || 1)));
+    const cols = []; let edgeT = 0, edgeR = 0, minY = H, maxX = -1;
+    for (let x = 0; x < W; x++) {
+      let t = -1, e = -1;
+      for (let y = 0; y < H; y++) if (d[(y * W + x) * 4 + 3] > 0) { if (t < 0) t = y; e = y; if (y < m) edgeT++; if (x >= W - m) edgeR++; }
+      if (t >= 0) { cols.push([b.left + x * kx, b.left + (x + 1) * kx, b.top + t * ky, b.top + (e + 1) * ky]); if (t < minY) minY = t; maxX = x; }
+    }
+    const stageImg = !!img.closest('.tankw'), wrap = img.parentElement.getBoundingClientRect();
+    const mt = -parseFloat(cs.marginTop) || 0, mr = -parseFloat(cs.marginRight) || 0;
+    const frame = stageImg ? { l: wrap.left, t: wrap.top, w: wrap.width } : { l: b.left, t: b.top + mt, w: b.width - mr };
+    out.push({ stageImg, cols, edgeT, edgeR, frame, img: { l: b.left, t: b.top, w: b.width, h: b.height, mt, mr },
+      drawn: { t: b.top + minY * ky, r: b.left + (maxX + 1) * kx } });
+  }
+  return out;
 })()`;
 // The point a tap at (x, y) reaches, as the chip it belongs to (or null).
 const HITS = (pts) => `(() => ${JSON.stringify(pts)}.map(([x, y]) => { const e = document.elementFromPoint(x, y); const c = e && e.closest('#bay .top .chip'); return c ? [...document.querySelectorAll('#bay .top .chip')].indexOf(c) : -1; }))()`;
@@ -282,30 +322,32 @@ for (const v of VIEWS) {
 
   // 4. NOTHING OVERLAPS, with every mode armed in turn (the armed board rises
   //    10.8u): no drawn chip or the brand mark over a board, no target over a
-  //    resting board, no panel over a board, and the tank's sprite -- at the
-  //    top of its 7u bob -- under every board.
+  //    resting board, no panel over a board, and no pixel the tank draws --
+  //    the whole gun, at the top of its 7u bob -- under any board.
   const bad = [];
   for (const m of MODES) {
     await ev(`(() => { ccMode = ${JSON.stringify(m)}; Bay.show('home'); return true; })()`);
     await sleep(40);
-    const q = await ev(QUADS), gg = await ev(PROBE);
+    const q = await ev(QUADS), gg = await ev(PROBE), [spr] = await ev(SPRITES('#bay .tankw img'));
     if (!q.some((b) => b.on && b.mode === m)) { bad.push(`${m}: not armed`); continue; }
-    const tank = { l: gg.img.l, r: gg.img.r, t: gg.img.t - 7 * u, b: gg.img.b };
+    const tankCols = spr.cols.map(([l, r, t, b]) => rectPts({ l, r, t: t - 7 * u, b: b - 7 * u }));
     for (const b of q) {
       gg.chips.forEach((c, i) => { if (polysOverlap(rectPts(c), b.pts)) bad.push(`${m}: chip ${i} over ${b.mode}`); });
       if (polysOverlap(rectPts(gg.mark), b.pts)) bad.push(`${m}: brand mark over ${b.mode}`);
       if (!b.on) gg.chips.map(targetOf).forEach((t, i) => { if (polysOverlap(rectPts(t), b.pts)) bad.push(`${m}: chip ${i}'s target over resting ${b.mode}`); });
       for (const [n, p] of [['Squad box', gg.box], ['Bay stations', gg.stn]]) if (polysOverlap(rectPts(p), b.pts)) bad.push(`${m}: ${n} over ${b.mode}`);
-      if (polysOverlap(rectPts(tank), b.pts)) bad.push(`${m}: tank's sprite under ${b.mode} at the top of its bob`);
+      if (tankCols.some((col) => polysOverlap(col, b.pts))) bad.push(`${m}: the tank (its gun, or any pixel of it) under ${b.mode} at the top of its bob`);
     }
   }
   check(`[${V}] nothing overlaps, every mode armed in turn: top row vs boards, boards vs the tank's barrel, boards vs panels`, bad.length === 0, bad.slice(0, 5).join('; '));
   await ev(`(() => { ccMode = 'duel'; Bay.show('home'); return true; })()`);
 
-  // 5. THE TANK ON ITS PLATFORM: drawTank's floor (80% down the sprite,
-  //    bay.js tankURL) inside the ring, between its far rim and its middle.
+  // 5. THE TANK ON ITS PLATFORM: drawTank's floor (80% down the sprite's
+  //    frame, bay.js tankURL; the image is the frame and, above it, the pad
+  //    it hands back in its negative margin) inside the ring, between its far
+  //    rim and its middle.
   //    Before, it stood on the far rim, 7u above the platform's top.
-  const floor = g.img.t + 0.8 * g.img.h, platMid = g.plat.t + g.plat.h / 2;
+  const floor = g.img.t + g.pad + 0.8 * (g.img.h - g.pad), platMid = g.plat.t + g.plat.h / 2;
   check(`[${V}] the tank stands inside the ring: its floor ${f1((floor - g.plat.t) / u)}u below the platform's far rim, above its middle`,
     floor > g.plat.t + 4 * u && floor < platMid, JSON.stringify({ floor, plat: g.plat }));
 
@@ -350,6 +392,50 @@ for (const v of VIEWS) {
   const worst = Math.min(...set.colours.map((c) => contrast(rgb(c), [0x1b, 0x24, 0x36])));
   check(`[${V}] Bay controls: every row's line is 13u, at least 7:1 against the page's brightest background stop (${f1(worst)}:1), none cut short`,
     set.scr === 'settings' && set.n >= 10 && set.sizes.every((s) => s === 13) && worst >= 7 && set.cut.length === 0, JSON.stringify(set));
+
+  // 8. THE WHOLE GUN, ON EVERY SCREEN THAT SHOWS THE TANK (owner, 2026-10-06:
+  //    "also being cut off at the top"). drawTank's gun leaves the tank's
+  //    frame through its top-right corner, 0.147 of its width to the right
+  //    and 0.128 above; cut at the frame, it ended in a square corner. Now:
+  //    a. every tank image draws nothing within 2px of its top and right
+  //       edges, and its gun reaches past the frame (at least 0.12 of the
+  //       frame's width above it and 0.14 to its right) -- the muzzle is in
+  //       the image, with clear pixels round it;
+  //    b. its frame stands where the screen puts it, at its own size: on a
+  //       stage, on the tank's wrapper (.tankw); in a card, in the box its
+  //       layout gives it, the image's margins handing back the pad;
+  //    c. on the Paint shop, the gun is clear of the header and the locker.
+  const SHOWS = [['home', 204], ['paint', 286], ['armoury', 164], ['setup', 56], ['career', 120]];
+  const uncut = [], placed = [], shop = [];
+  for (const [scr, w] of SHOWS) {
+    await ev(`(() => { Bay.show(${JSON.stringify(scr)}); return true; })()`);
+    await sleep(40);
+    const sp = await ev(SPRITES('#bay .tankw img, #bay .crew img, #bay .cmd img'));
+    if (sp.length !== 1) { uncut.push(`${scr}: ${sp.length} tank images`); continue; }
+    const s = sp[0], f = s.frame, fh = Math.round(w * 246 / 300) * u;
+    if (s.edgeT || s.edgeR) uncut.push(`${scr}: ${s.edgeT} drawn pixels on the top edge, ${s.edgeR} on the right`);
+    if (!(s.drawn.t <= f.t - 0.12 * f.w && s.drawn.r >= f.l + 1.14 * f.w)) uncut.push(`${scr}: the gun ends ${f1((f.t - s.drawn.t) / f.w * 100) / 100} of the frame above it and ${f1((s.drawn.r - f.l - f.w) / f.w * 100) / 100} to its right`);
+    // The sprite's pad as drawn: its image is the frame's height and the pad.
+    // The frame is the frame's own size; on a stage it starts on the
+    // wrapper; in a card the negative margins hand back exactly the pad.
+    const padPx = s.img.h - fh;
+    if (!(padPx > 0 && near(s.img.w - padPx, w * u, 0.6) && (s.stageImg
+      ? near(f.w, w * u, 0.5) && near(s.img.t + padPx, f.t, 0.6) && near(s.img.l, f.l, 0.5)
+      : near(s.img.mt, padPx, 0.6) && near(s.img.mr, padPx, 0.6))))
+      placed.push(`${scr}: frame ${JSON.stringify(f)}, image ${JSON.stringify(s.img)}, pad ${f1(padPx)}`);
+    if (scr === 'paint') {
+      // what is drawn above the frame: the gun, and the pennant's tip
+      const gun = s.cols.filter((c) => c[2] < f.t).map(([l, r, t, b]) => rectPts({ l, r, t, b: Math.min(b, f.t) }));
+      const boxes = await ev(`(() => { const R = (e) => { const b = e.getBoundingClientRect(); return { l: b.left, t: b.top, r: b.right, b: b.bottom }; };
+        return { head: R(document.querySelector('#bay .phead')), locker: R([...document.querySelectorAll('#bay .card')].find((c) => c.querySelector('.swg'))) }; })()`);
+      for (const [n, bx] of Object.entries(boxes)) if (gun.some((c) => polysOverlap(c, rectPts(bx)))) shop.push(`the gun under the ${n}`);
+      if (!gun.length) shop.push('no gun above the frame');
+    }
+  }
+  await ev(`(() => { Bay.show('home'); return true; })()`);
+  check(`[${V}] the whole gun is in every tank image (home, Paint shop, Armoury, Match setup, Service record): nothing drawn on its top or right edge, the muzzle past the frame`, uncut.length === 0, uncut.join('; '));
+  check(`[${V}] every tank's frame stands where its screen puts it, the size it always was`, placed.length === 0, placed.join('; '));
+  check(`[${V}] on the Paint shop the gun is clear of the header and the Paint locker`, shop.length === 0, shop.join('; '));
 }
 
 // ---- two linked accounts still fit the Account row ---------------------------

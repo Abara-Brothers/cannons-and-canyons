@@ -1960,6 +1960,20 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
      tank's own place on the platform is bay.js's stage(), its `sink`.) */
   #bay[data-scr=home] .glow,#bay[data-scr=home] .spill,#bay[data-scr=home] .plat,
   #bay[data-scr=home] .refl,#bay[data-scr=home] .tankw{margin-top:var(--ht)}
+  /* THE WHOLE GUN CLEARS THE BOARDS. The tank's sprite now carries the gun's
+     muzzle (bay.js tankURL, owner 2026-10-06: the tank "is also being cut off
+     at the top"), 26u above where the cropped sprite ended. Where home is
+     stretched it has room to spare: the boards rise by --ht and the tank
+     sinks by it. Where the frame fills the safe height (--ht 0: 812x375,
+     874x402 or 932x430 with no insets), the muzzle would run under the Alien
+     Invasion board, so there, and only there, the tank and its reflection
+     sink a further --tg into the platform: 13u, less what the stretch
+     already gave (2 --ht), plus however much lower a small screen's boards
+     start (--bt past its 56u). The 13u is the 10.8-11.3u the muzzle stood
+     under that board at the top of the bob, and about 2u clear. An iPhone
+     held sideways (--ht ~22u) gets none, and its tank stands where it did. */
+  #bay[data-scr=home]{--tg:max(0px, 13 * var(--u) - 2 * var(--ht) + var(--bt) - 56 * var(--u))}
+  #bay[data-scr=home] .refl,#bay[data-scr=home] .tankw{margin-top:calc(var(--ht) + var(--tg))}
   #bay[data-scr=home] .ap{top:calc(138 * var(--u) - var(--ht));height:calc(200 * var(--u) + 2 * var(--ht))}
   #bay[data-scr=home] .lbar{bottom:calc(4 * var(--u) - var(--ht))}
 

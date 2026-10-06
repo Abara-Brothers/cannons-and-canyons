@@ -280,12 +280,28 @@ function state() {
 // and no terrain, then copies it out. Every global drawTank reads is set and
 // restored inside this one call; the render loop cannot interleave, and the
 // next draw() re-sizes the canvas back anyway because dispW no longer matches.
+//
+// THE FRAME AND ITS MARGIN (owner, 2026-10-06: the menu's tank "is also being
+// cut off at the top"). Every screen places the tank by its FRAME: cssW wide,
+// 246/300 of that tall, the floor 80% down. drawTank's gun, at the 38 degrees
+// it is drawn at here, leaves that frame through its top-right corner -- the
+// muzzle brake ends 0.147 of cssW past the right edge and 0.128 above the top,
+// the pennant's tip 0.011 above (measured on the locked art) -- so a sprite
+// cut at the frame ended the barrel in a square corner. The canvas is
+// therefore the frame plus tankPad(cssW) on the top and the right, empty but
+// for the gun and the pennant, with at least 2px clear around the muzzle at
+// every size; inside the frame the tank is drawn by the same view and camera
+// as before. Every <img> of it gives the pad back in negative margins
+// (stage(), tankImg()), so it stands, and takes up room, exactly where the
+// frame did.
+const tankPad = (cssW) => Math.ceil(cssW * 0.15) + 2;
 const TANK_CACHE = new Map();
 function tankURL(skinId, cssW) {
   const key = skinId + '@' + cssW;
   if (TANK_CACHE.has(key)) return TANK_CACHE.get(key);
   if (!has('drawTank') || !has('canvas') || !has('S')) return '';
-  const H = Math.round(cssW * 246 / 300);
+  const H = Math.round(cssW * 246 / 300), pad = tankPad(cssW);
+  const CW = cssW + pad, CH = H + pad;            // the canvas: the frame, the pad above it and to its right
   const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
   const keep = {
     cw: canvas.width, ch: canvas.height, view: { ...view }, cam: { ...cam },
@@ -294,11 +310,15 @@ function tankURL(skinId, cssW) {
   };
   let url = '';
   try {
-    canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(H * dpr);
+    canvas.width = Math.round(CW * dpr); canvas.height = Math.round(CH * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, cssW, H);
+    ctx.clearRect(0, 0, CW, CH);
+    // The frame is drawn as it always was, by the frame's own view and
+    // camera, a whole number of device pixels down the canvas; the gun now
+    // runs on into the pad instead of off the edge.
+    ctx.translate(0, Math.round(pad * dpr) / dpr);
     view.cssW = cssW; view.cssH = H;
-    const r = cssW * 0.33;                       // tank spans ~2.7r — leaves a margin
+    const r = cssW * 0.33;                       // the hull and tracks span ~2.7r of the frame; the gun leaves it (above)
     cam.zoom = r / 240; cam.cx = 0;
     // No terrain: surfaceAt() answers a flat floor at world.h * .72, so place
     // the camera so that floor lands at 80% of the frame height.
@@ -340,16 +360,22 @@ function dust() {
 // The lit platform, the reflection, and the tank itself. o = {cx, cy, w} in design px,
 // and o.sink: how much lower the tank and its reflection stand on the platform
 // than everywhere else draws them (0 when absent).
+// Both images are the sprite at its full width, the frame plus tankPad(w),
+// so the tank is drawn at the frame's scale (max-width:none: #bay img would
+// otherwise squeeze it into the frame-wide box). The tank's is raised by the pad,
+// so its frame starts at the top of .tankw as it always did. The reflection's
+// is not: flipped about its own middle, the frame's floor is already at its
+// top, and .refl (overflow:hidden, the frame's width) cuts off the pad.
 function stage(skinId, o) {
-  const w = o.w, h = Math.round(w * 246 / 300), sink = o.sink || 0;
+  const w = o.w, h = Math.round(w * 246 / 300), sink = o.sink || 0, pad = tankPad(w);
   const pw = Math.round(w * 1.5), ph = Math.round(pw * 0.193);
   const src = tankURL(skinId, w);
-  const img = (extra) => src ? '<img src="' + src + '" alt="Your tank" style="width:' + u(w) + '"' + (extra || '') + '>' : '';
+  const img = (style, extra) => src ? '<img src="' + src + '" alt="Your tank" style="width:' + u(w + pad) + ';max-width:none' + (style || '') + '"' + (extra || '') + '>' : '';
   return '<div class="plat" style="left:' + u(o.cx - pw / 2) + ';top:' + u(o.cy - ph / 2) + ';width:' + u(pw) + ';height:' + u(ph) + '">'
     + '<span class="plate"></span><span class="platc"></span><span class="rim"></span>'
     + '<span class="ringw" style="left:0;top:' + u(Math.round((ph - pw) / 2)) + ';width:' + u(pw) + ';height:' + u(pw) + '"><span class="ring"></span></span></div>'
-    + '<div class="refl" style="left:' + u(o.cx - w / 2) + ';top:' + u(o.cy - 7 + sink) + ';width:' + u(w) + ';height:' + u(Math.round(h * 0.34)) + '">' + img(' alt=""') + '</div>'
-    + '<div class="tankw" style="left:' + u(o.cx - w / 2) + ';top:' + u(o.cy - 3 - h + sink) + ';width:' + u(w) + '">' + img() + '</div>';
+    + '<div class="refl" style="left:' + u(o.cx - w / 2) + ';top:' + u(o.cy - 7 + sink) + ';width:' + u(w) + ';height:' + u(Math.round(h * 0.34)) + '">' + img('', ' alt=""') + '</div>'
+    + '<div class="tankw" style="left:' + u(o.cx - w / 2) + ';top:' + u(o.cy - 3 - h + sink) + ';width:' + u(w) + '">' + img(';margin-top:' + u(-pad)) + '</div>';
 }
 
 /* ---- inner-page chrome: same room, different station ------------------------ */
@@ -364,8 +390,10 @@ function chrome(title, sub, meta, body, foot) {
     + (foot ? '<div class="pfoot">' + foot + '</div>' : '')
     + '</div></div>';
 }
-// A small tank image for cards and seats — the same live render, smaller.
-const tankImg = (skinId, w, alt) => { const src = tankURL(skinId, w); return src ? '<img src="' + src + '" alt="' + (alt || '') + '" style="width:' + u(w) + '">' : ''; };
+// A small tank image for cards and seats — the same live render, smaller. Its
+// negative margins hand back the sprite's pad (tankURL), so it lays out, and
+// its frame stands, exactly as the frame alone did; the gun reaches into it.
+const tankImg = (skinId, w, alt) => { const src = tankURL(skinId, w), pad = tankPad(w); return src ? '<img src="' + src + '" alt="' + (alt || '') + '" style="width:' + u(w + pad) + ';max-width:none;margin:' + u(-pad) + ' ' + u(-pad) + ' 0 0">' : ''; };
 const wicon = (id) => (G.ICONS && ICONS[id]) || (G.UI_IC && UI_IC[id]) || '';
 const cap = (t) => String(t).charAt(0).toUpperCase() + String(t).slice(1);
 // An option with a third entry is drawn DISABLED, and that entry is the one

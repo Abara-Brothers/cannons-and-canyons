@@ -637,7 +637,9 @@
   function readMenuGeometry(tw, img) {
     if (!tw || !img) return;
     const r = rectStage(img), b = bobOffset(tw);
-    slot = { x: r.x - b.x / u, y: r.y - b.y / u, w: r.w, h: r.h };
+    // The slot is the tank's frame, which the image overhangs above and to
+    // the right by the pad that holds the gun (TANK_FRAME).
+    slot = { x: r.x - b.x / u, y: r.y + r.h * TANK_FRAME.y - b.y / u, w: r.w * TANK_FRAME.w, h: r.h * TANK_FRAME.h };
     slot.cx = slot.x + slot.w / 2; slot.cy = slot.y + slot.h / 2;
     const ap = bay.querySelector('.stage .ap');
     apBox = ap ? rectStage(ap) : null;
@@ -956,9 +958,21 @@
   // reflection fade in OVER the layers (so the hull never dips), the layers
   // then fade out underneath (double-covered edges would otherwise pop), and
   // the wrapper is removed.
-  const TANK_HOLE = 'polygon(0% 0%, 99.657% 0%, 73.088% 25.359%, 65.392% 37.605%, 67.794% 41.377%, 79.412% 35.269%, 100% 15.599%, 100% 100%, 0% 100%)';
-  const TANK_BARREL = 'polygon(61.912% 32.186%, 71.275% 46.796%, 134.999% -14.012%, 125.637% -28.623%)';
-  const PIVOT_X = .64657, PIVOT_Y = .41347;   // measured on the drawTank sprite, which is locked
+  // Measured on the drawTank sprite, which is locked, as bay.js draws it for
+  // home: its 204x167 frame, and tankPad(204) = 33 more on the top and the
+  // right that hold the gun's muzzle (237x200 in all, its frame 33 down).
+  // Fractions and percentages of that image. The gun is drawn at 38 degrees
+  // from the mantlet's centre (PIVOT), its muzzle brake 0.23r either side of
+  // its line: the barrel layer is that band, 2px wider and from 1px behind
+  // the mantlet's centre on out past the image, and the hull's hole is the
+  // band 1px narrower on each side, from the centre itself, so the two
+  // layers overlap by a pixel and leave no seam. HULL is the point the hull
+  // pitches about, (.5, .58) of the frame.
+  const TANK_FRAME = { y: 33 / 200, w: 204 / 237, h: 167 / 200 };
+  const TANK_HOLE = 'polygon(0% 0%, 93.619% 0%, 52.106% 38.433%, 60.670% 51.422%, 100% 15.010%, 100% 100%, 0% 100%)';
+  const TANK_BARREL = 'polygon(51.514% 38.347%, 60.598% 52.124%, 127.429% -9.750%, 118.345% -23.527%)';
+  const PIVOT_X = .56388, PIVOT_Y = .44928;
+  const HULL_X = .43038, HULL_Y = .64930;
   let wrap = null, hullCv = null, barrelCv = null, layerSrc = '';
   function menuImg(tw) {
     const imgs = tw.querySelectorAll(':scope > img');
@@ -1049,7 +1063,7 @@
     if (!buildLayers(tw, img, extra)) return;
     if (tp >= K.settled) { hullCv.style.transform = 'none'; barrelCv.style.transform = 'none'; return; }
     const dx = tankDriveX(tp) * u, ty = (tankChatter(tp) + tankSquat(tp) + tankIdle(tp)) * u;
-    const ox = (w * .5).toFixed(1), oy = (h * .58).toFixed(1), rotd = tankPitch(tp) + tankRoll(tp);
+    const ox = (w * HULL_X).toFixed(1), oy = (h * HULL_Y).toFixed(1), rotd = tankPitch(tp) + tankRoll(tp);
     const hull = 'translate(' + dx.toFixed(2) + 'px,' + ty.toFixed(2) + 'px) translate(' + ox + 'px,' + oy + 'px) rotate('
       + rotd.toFixed(3) + 'deg) translate(-' + ox + 'px,-' + oy + 'px)';
     const px = (w * PIVOT_X).toFixed(1), py = (h * PIVOT_Y).toFixed(1);
