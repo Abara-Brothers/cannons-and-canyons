@@ -226,10 +226,18 @@ const offBadge = (id) => '<span class="bof">' + esc(OFF_TXT[offKind(id)] || OFF_
 // every player who never squads up still gets. Nor does a squad the socket
 // cannot reach: offline the boards are a player's own, as Launch is
 // (sqTwoPlus), and a pill would say "Squad too big" over a game alone.
-const noFit = (id) => { const q = sq.snap; return !!(q && wsReady() && q.fits && q.fits[id] === false); };
+// NOR A SQUAD OF ONE (owner: a squad of one behaves as no squad). Launch is
+// the ordinary Launch there and plays Duel vs the computer, so a Duel board
+// dimmed "Needs 2 players" refused a game the ribbon was offering. The boards
+// read the squad exactly when Launch does: a squad of two or more, online
+// (sqTwoPlus, the one test of both).
+const noFit = (id) => { const q = sq.snap; return !!(q && sqTwoPlus() && q.fits && q.fits[id] === false); };
 // WHICH WAY IT DOES NOT FIT, in words. `fits` checks the mode's MINIMUM as well
-// as its maximum (X6), so a squad of one fits no duel, and D12's "Squad too
-// big" would be false there. The minimum is read off the box's own seat copy
+// as its maximum (X6), so a squad under a mode's minimum does not fit it
+// either, and D12's "Squad too big" would be false there. (A squad of one,
+// the case this was written for, gets no pill at all since noFit waits for
+// two; no mode needs more than two today, so a pill now says "Squad too big".)
+// The minimum is read off the box's own seat copy
 // (SQ_SEATS: '2', '2&ndash;4', '1&ndash;2' ...), the one place this file spells
 // the seats, and it only ever picks the words: whether a board dims is `fits`
 // alone. ITS OWN CLASS, NEVER .bof: the home boards lost the offline badge on
@@ -391,9 +399,18 @@ function chrome(title, sub, meta, body, foot) {
     + '</div></div>';
 }
 // A small tank image for cards and seats — the same live render, smaller. Its
-// negative margins hand back the sprite's pad (tankURL), so it lays out, and
-// its frame stands, exactly as the frame alone did; the gun reaches into it.
-const tankImg = (skinId, w, alt) => { const src = tankURL(skinId, w), pad = tankPad(w); return src ? '<img src="' + src + '" alt="' + (alt || '') + '" style="width:' + u(w + pad) + ';max-width:none;margin:' + u(-pad) + ' ' + u(-pad) + ' 0 0">' : ''; };
+// negative margins hand back the sprite's pad (tankURL), so it lays out exactly
+// as the frame alone did; the gun reaches into the pad.
+// THE GUN STAYS INSIDE ITS CARD. Drawn whole, the gun stands 0.128 of the
+// frame's width above the frame, and a frame at the top of a card's row put
+// the muzzle over the card's top border (Match setup's crew card, a lobby
+// seat). `drop` (design px, none when absent) draws the frame that much lower
+// than the box its layout gives it -- position:relative, so the row, the card
+// and everything beside the tank stay exactly where they were -- and is sized
+// at each call to leave the muzzle a clear gap under the border while the
+// tracks stay inside the row. The Service record card has room to spare, and
+// gives its tank the room in its layout instead (SCREENS.career).
+const tankImg = (skinId, w, alt, drop) => { const src = tankURL(skinId, w), pad = tankPad(w); return src ? '<img src="' + src + '" alt="' + (alt || '') + '" style="width:' + u(w + pad) + ';max-width:none;margin:' + u(-pad) + ' ' + u(-pad) + ' 0 0' + (drop ? ';position:relative;top:' + u(drop) : '') + '">' : ''; };
 const wicon = (id) => (G.ICONS && ICONS[id]) || (G.UI_IC && UI_IC[id]) || '';
 const cap = (t) => String(t).charAt(0).toUpperCase() + String(t).slice(1);
 // An option with a third entry is drawn DISABLED, and that entry is the one
@@ -1785,8 +1802,12 @@ SCREENS.career = function () {
   // button) needs ~334u, and at 288u it overflowed its box from the day it was
   // written, the button hanging below the column into the page body. The body
   // runs to 416u here (no footer), so 340u from 68u ends at 408u with room.
+  // 19u ABOVE THE TANK, not .cmd's 12u: the whole gun stands 15.4u over the
+  // tank's frame (tankImg), and at 12u its muzzle crossed the card's top
+  // border. The card's column has over 110u to spare below, so the tank and
+  // everything under it move down 7u and the muzzle has 3u clear.
   const body = '<div class="cols" style="height:' + u(340) + '">'
-    + '<div class="card cmd" style="width:' + u(186) + '">' + tankImg(s.skinId, 120, 'Your tank') + '<span class="lbl">Rank</span><div class="rank">' + esc(rank) + '</div>'
+    + '<div class="card cmd" style="width:' + u(186) + ';padding-top:' + u(19) + '">' + tankImg(s.skinId, 120, 'Your tank') + '<span class="lbl">Rank</span><div class="rank">' + esc(rank) + '</div>'
     +   '<div class="wl"><div class="wlc"><b>' + wins + '</b><span class="lbl">Wins</span></div><div class="wlc"><b>' + played + '</b><span class="lbl">Played</span></div>'
     +   '<div class="wlc"><b style="color:#ffb46b">' + streak + '</b><span class="lbl">Streak</span></div></div></div>'
     + '<div style="width:' + u(224) + ';display:flex;flex-direction:column">' + stats + '<div style="margin-top:' + u(12) + '"><span class="lbl">Wins by mode</span>' + bars + '</div>'
@@ -2934,7 +2955,9 @@ SCREENS.lobby = function () {
     for (let i = 0; i < max; i++) {
       const p = m && m.players[i], you = m && i === m.you, host = m && i === m.host;
       const col = fn('seatColor') ? seatColor(i) : '#54c8ff';
-      if (p) out += '<div class="seat">' + (you ? tankImg(s.skinId, 44) : '') + '<span class="b-dot" style="background:' + col + (you ? '' : ';margin-left:' + u(16)) + '"></span>'
+      // 4u lower than the seat centres it (tankImg): the 48u seat's frame
+      // stands 6u under its top edge and the gun reached 5.6u over the frame.
+      if (p) out += '<div class="seat">' + (you ? tankImg(s.skinId, 44, '', 4) : '') + '<span class="b-dot" style="background:' + col + (you ? '' : ';margin-left:' + u(16)) + '"></span>'
         + '<span class="sn">' + esc(p.name) + '</span><span class="lbl" style="margin-left:auto">' + (host ? 'Host' : '') + (you ? (host ? ' &middot; you' : 'You') : '') + '</span>'
         // REPORT AND BLOCK WHERE THE NAME IS ACTUALLY READ. The seat carries an
         // opaque per-room HANDLE and never an account id (BINDING resolution
@@ -3212,7 +3235,12 @@ SCREENS.setup = function () {
     // spilling over the footer.
     + '<div style="width:' + u(430) + ';display:flex;flex-direction:column;gap:' + u(12) + (tall ? ';min-height:0;overflow-y:auto;overflow-x:hidden' : '') + '">' + withSeg + extra
     +   '<div class="card" style="flex:' + (tall ? '1 0 auto' : '1') + ';min-height:0;padding:0 ' + u(13) + ';display:flex;flex-direction:column;justify-content:space-evenly">'
-    +     '<div class="crew" style="border:0;background:none;padding:0">' + tankImg(s.skinId, 56, 'Your tank')
+    // The tank stands 6u lower than its row centres it (tankImg): Duel and
+    // Free-for-all leave the card no room to spare, so the row starts on the
+    // card's top edge, and the gun reached 7.2u over a frame 4-5u under it.
+    // The callsign's three lines make the row 54-57u tall, the frame 46u, so
+    // the tracks still end inside the row, above the rule under it.
+    +     '<div class="crew" style="border:0;background:none;padding:0">' + tankImg(s.skinId, 56, 'Your tank', 6)
     +       '<span class="ct"><span class="lbl">Rolling out as</span>'
     +       '<span style="display:block;font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:' + u(19) + ';text-transform:uppercase;letter-spacing:.03em;margin-top:' + u(4) + ';color:#eef3ff">' + esc(s.name) + '</span>'
     +       '<span style="display:block;font-family:\'JetBrains Mono\',monospace;font-size:' + u(8.5) + ';font-weight:500;letter-spacing:.12em;text-transform:uppercase;color:#ffb46b;margin-top:' + u(4) + '">' + esc(s.skin.name) + ' paint</span></span>'

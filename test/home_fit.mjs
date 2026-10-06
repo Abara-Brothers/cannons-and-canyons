@@ -199,6 +199,32 @@ const SPRITES = (sel) => `(async () => {
   }
   return out;
 })()`;
+// A CARD'S TANK AND WHAT HOLDS IT (check 8d): every column the sprite draws,
+// as SPRITES reads them; the card it stands in, by its inner edges (inside the
+// border) -- a lobby seat is its own card; the row it lays out in (its
+// parent); and every other box in that row.
+const CARD_TANK = (sel) => `(async () => {
+  const img = document.querySelector(${JSON.stringify(sel)});
+  if (!img) return null;
+  await img.decode();
+  const W = img.naturalWidth, H = img.naturalHeight;
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const q = c.getContext('2d'); q.drawImage(img, 0, 0);
+  const d = q.getImageData(0, 0, W, H).data;
+  const b = img.getBoundingClientRect(), kx = b.width / W, ky = b.height / H;
+  const cols = [];
+  for (let x = 0; x < W; x++) {
+    let t = -1, e = -1;
+    for (let y = 0; y < H; y++) if (d[(y * W + x) * 4 + 3] > 0) { if (t < 0) t = y; e = y; }
+    if (t >= 0) cols.push([b.left + x * kx, b.left + (x + 1) * kx, b.top + t * ky, b.top + (e + 1) * ky]);
+  }
+  const R = (e) => { const r = e.getBoundingClientRect(); return { l: r.left, t: r.top, r: r.right, b: r.bottom }; };
+  const card = img.closest('.seat') || img.closest('.card'), cs = getComputedStyle(card), cr = R(card);
+  const inner = { l: cr.l + parseFloat(cs.borderLeftWidth), t: cr.t + parseFloat(cs.borderTopWidth), r: cr.r - parseFloat(cs.borderRightWidth), b: cr.b - parseFloat(cs.borderBottomWidth) };
+  const row = img.parentElement;
+  const beside = [...row.children].filter((e) => e !== img && e.getClientRects().length > 0).map((e) => ({ n: e.className || e.tagName.toLowerCase(), ...R(e) }));
+  return { cols, card: card.className, inner, row: R(row), beside };
+})()`;
 // The point a tap at (x, y) reaches, as the chip it belongs to (or null).
 const HITS = (pts) => `(() => ${JSON.stringify(pts)}.map(([x, y]) => { const e = document.elementFromPoint(x, y); const c = e && e.closest('#bay .top .chip'); return c ? [...document.querySelectorAll('#bay .top .chip')].indexOf(c) : -1; }))()`;
 
@@ -403,8 +429,15 @@ for (const v of VIEWS) {
   //       the image, with clear pixels round it;
   //    b. its frame stands where the screen puts it, at its own size: on a
   //       stage, on the tank's wrapper (.tankw); in a card, in the box its
-  //       layout gives it, the image's margins handing back the pad;
-  //    c. on the Paint shop, the gun is clear of the header and the locker.
+  //       layout gives it, the image's margins handing back the pad (and
+  //       drawn tankImg's `drop` lower than that box: d);
+  //    c. on the Paint shop, the gun is clear of the header and the locker;
+  //    d. a card's tank keeps its whole gun inside its card: Match setup's
+  //       crew card (in every mode -- Duel and Free-for-all leave the card no
+  //       room above its row), the Service record card and the lobby seat.
+  //       The topmost pixel the sprite draws is at least 2u under the card's
+  //       top border, every pixel it draws is inside the card and inside its
+  //       own row, and none is over anything beside it in that row.
   const SHOWS = [['home', 204], ['paint', 286], ['armoury', 164], ['setup', 56], ['career', 120]];
   const uncut = [], placed = [], shop = [];
   for (const [scr, w] of SHOWS) {
@@ -432,10 +465,31 @@ for (const v of VIEWS) {
       if (!gun.length) shop.push('no gun above the frame');
     }
   }
-  await ev(`(() => { Bay.show('home'); return true; })()`);
+  // d. The lobby is a room's own (app.js renderLobby, the payload the bay
+  //    reads): this player in the first seat, of a duel's two and of a
+  //    free-for-all's four.
+  const CARDS = [...MODES.map((m) => ['setup', m, '#bay .crew img']), ['career', null, '#bay .cmd img'], ['lobby', 'duel', '#bay .seat img'], ['lobby', 'ffa', '#bay .seat img']];
+  const inCard = [];
+  for (const [scr, m, sel] of CARDS) {
+    const lob = { type: 'lobby', code: 'ABCD', mode: m, max: m === 'ffa' ? 4 : 2, you: 0, host: 0, players: [{ name: 'TESTPILOT', skin: 'olive' }, { name: 'Bunker Nine', skin: 'desert' }] };
+    await ev(`(() => { ${scr === 'lobby' ? `renderLobby(${JSON.stringify(lob)});` : `ccMode = ${JSON.stringify(m || 'duel')};`} Bay.show(${JSON.stringify(scr)}); return true; })()`);
+    await sleep(40);
+    const k = await ev(CARD_TANK(sel)), n = scr + (m ? ' ' + m : '');
+    if (!k || !k.cols.length) { inCard.push(`${n}: no tank drawn`); continue; }
+    const dr = { l: k.cols[0][0], r: k.cols[k.cols.length - 1][1], t: Math.min(...k.cols.map((c) => c[2])), b: Math.max(...k.cols.map((c) => c[3])) };
+    const clear = (dr.t - k.inner.t) / u, inside = (o) => dr.l >= o.l - 0.01 && dr.r <= o.r + 0.01 && dr.t >= o.t - 0.01 && dr.b <= o.b + 0.01;
+    const why = [];
+    if (!(clear >= 2)) why.push(`the gun's top is ${f1(clear)}u under the top border of its card (.${k.card}), not 2u`);
+    if (!inside(k.inner)) why.push(`drawn ${f1((dr.t - k.inner.t) / u)}..${f1((dr.b - k.inner.t) / u)}u down, it leaves its card (${f1((k.inner.b - k.inner.t) / u)}u inside)`);
+    if (!inside(k.row)) why.push(`drawn ${f1((dr.t - k.row.t) / u)}..${f1((dr.b - k.row.t) / u)}u down its row, it leaves the row (${f1((k.row.b - k.row.t) / u)}u)`);
+    for (const s of k.beside) if (k.cols.some(([l, r, t, b]) => rectsOverlap({ l, r, t, b }, s))) why.push(`it is over .${s.n} beside it`);
+    if (why.length) inCard.push(`${n}: ${why.join(', ')}`);
+  }
+  await ev(`(() => { ccMode = 'duel'; Bay.show('home'); return true; })()`);
   check(`[${V}] the whole gun is in every tank image (home, Paint shop, Armoury, Match setup, Service record): nothing drawn on its top or right edge, the muzzle past the frame`, uncut.length === 0, uncut.join('; '));
   check(`[${V}] every tank's frame stands where its screen puts it, the size it always was`, placed.length === 0, placed.join('; '));
   check(`[${V}] on the Paint shop the gun is clear of the header and the Paint locker`, shop.length === 0, shop.join('; '));
+  check(`[${V}] every card's tank keeps its whole gun inside its card, 2u under the top border, and stays in its row (Match setup in every mode, Service record, a lobby seat)`, inCard.length === 0, inCard.join('; '));
 }
 
 // ---- two linked accounts still fit the Account row ---------------------------

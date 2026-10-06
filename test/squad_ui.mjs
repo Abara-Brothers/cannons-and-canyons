@@ -3050,15 +3050,24 @@ if (want('t11')) try {
         && JSON.stringify(b2.pills) === JSON.stringify(['Squad too big', null, 'Squad too big', 'Squad too big', null]))
       ok(`${V}: a squad of three dims duel, boss and aliens with "Squad too big"; free-for-all and golf are untouched`);
     else fail(`${V}: too big ${JSON.stringify(b2)}`);
-    // B2b. TOO SMALL IS NOT TOO BIG (X6: fits checks the minimum too). A squad
-    //      of one fits no duel and no free-for-all, and "Squad too big" would
-    //      be false there: the pill names the mode's minimum instead.
+    // B2b. SQUAD 1/4 IS NO SQUAD (owner, update 8: "a squad of one behaves as
+    //      no squad"). CHANGED: since 7302835 a squad of one -- whose `fits`
+    //      says no duel and no free-for-all, X6 checking the minimum -- dimmed
+    //      Duel and Free-for-all "Needs 2 players" while the ribbon's ordinary
+    //      Launch played Duel vs the computer. Now every board is live: the
+    //      class lists exactly as with no squad (B1), no pill, no grey, the
+    //      box saying 1/4 and the ribbon the ordinary Launch.
     await t11state({ members: [T11YOU()] });
     const b2b = await t11boards('#bay .board');
-    if (JSON.stringify(b2b.nofit) === JSON.stringify([true, true, false, false, false])
-        && JSON.stringify(b2b.pills) === JSON.stringify(['Needs 2 players', 'Needs 2 players', null, null, null]))
-      ok(`${V}: a squad of one dims duel and free-for-all with "Needs 2 players", never "Squad too big"`);
-    else fail(`${V}: too small ${JSON.stringify(b2b)}`);
+    await sleep(400);                              // B2's grey has eased off (.22s), as B3 measures it
+    const b2bLook = await ev(`(() => ({ grey: [...document.querySelectorAll('#bay .board .bcard img')].map((i) => /grayscale/.test(getComputedStyle(i).filter)),
+      count: (document.querySelector('#bay .sqx .sqhc [aria-hidden]') || {}).textContent,
+      launch: (() => { const l = document.querySelector('#bay .lbar .launch'); return l ? [l.textContent.trim(), l.getAttribute('data-go'), l.classList.contains('rdy')] : null; })() }))()`);
+    if (JSON.stringify(b2b.cls) === JSON.stringify(['board on', 'board', 'board', 'board', 'board']) && b2b.pills.every((p) => p === null)
+        && b2bLook.grey.length === 5 && b2bLook.grey.every((g) => !g) && b2bLook.count === '1/4'
+        && JSON.stringify(b2bLook.launch) === JSON.stringify(['Launch', 'setup', false]))
+      ok(`${V}: Squad 1/4 is no squad -- every board live, no pill and no grey on Duel or Free-for-all, and the ribbon the ordinary Launch`);
+    else fail(`${V}: squad of one ${JSON.stringify({ b2b, b2bLook })}`);
     // B2c. THE BOARDS READ `fits`, THEY DO NOT COUNT. Two members, which the
     //      seat table says fit everything, and a frame that says duel does
     //      not: the frame wins, because it is the one truth Start reads too.
@@ -3067,6 +3076,22 @@ if (want('t11')) try {
     if (JSON.stringify(b2c.nofit) === JSON.stringify([true, false, false, false, false]) && b2c.pills[0] === 'Squad too big' && b2c.pills.slice(1).every((p) => p === null))
       ok(`${V}: the boards follow the frame's fits, not a count of the rows`);
     else fail(`${V}: fits not read ${JSON.stringify(b2c)}`);
+    // B2d. SQUAD 2/4 IN BOSS: TWO OR MORE GET THE PILLS AS BEFORE (B2b stops
+    //      only a squad of one). Steel Mule leads on Boss Fight and this page
+    //      follows. The server's own `fits` for two seats every mode, so no
+    //      board dims; and a frame whose `fits` says no to Duel and
+    //      Free-for-all dims exactly those two, "Squad too big", with Boss
+    //      Fight lit and untouched.
+    await t11state({ leader: T11_MULE, mode: 'boss', members: [T11YOU(), T11MULE()] });
+    const b2d = await t11boards('#bay .board');
+    const b2dAt = await ev(`({ armed: Bay.state().mode.id, count: (document.querySelector('#bay .sqx .sqhc [aria-hidden]') || {}).textContent })`);
+    await t11state({ leader: T11_MULE, mode: 'boss', members: [T11YOU(), T11MULE()], fits: { duel: false, ffa: false, boss: true, aliens: true, golf: true } });
+    const b2e = await t11boards('#bay .board');
+    if (b2dAt.armed === 'boss' && b2dAt.count === '2/4' && JSON.stringify(b2d.cls) === JSON.stringify(['board', 'board', 'board on', 'board', 'board']) && b2d.pills.every((p) => p === null)
+        && JSON.stringify(b2e.cls) === JSON.stringify(['board nofit', 'board nofit', 'board on', 'board', 'board'])
+        && JSON.stringify(b2e.pills) === JSON.stringify(['Squad too big', 'Squad too big', null, null, null]))
+      ok(`${V}: Squad 2/4 in Boss Fight keeps the pills as before -- none while two fit every mode, and "Squad too big" on exactly the boards the frame's fits refuses`);
+    else fail(`${V}: squad of two in Boss ${JSON.stringify({ b2dAt, b2d, b2e })}`);
 
     // ---- B3. A DIM IS A DIM, AND IT MUST NOT LIFT. .board.on raises .bcard,
     //      and a board that greys out while rising reads as a press rather
@@ -3088,8 +3113,10 @@ if (want('t11')) try {
       ok(`${V}: the armed board the squad does not fit is dimmed and does not lift, its pill is not dimmed, and a board that fits is untouched`);
     else fail(`${V}: dim look ${JSON.stringify(look)}`);
 
-    // ---- B4. THE PILL MUST NOT EAT THE TAP, CLIP ITS TEXT OR LEAVE ITS BOARD.
-    //      Both pills, the long one included, at the point a finger lands.
+    // ---- B4. THE PILL MUST NOT EAT THE TAP, CLIP ITS TEXT OR LEAVE ITS BOARD,
+    //      at the point a finger lands. CHANGED with B2b: the squad of one's
+    //      "Needs 2 players" pills are gone, so a squad of one is read for no
+    //      pill at all, and the three are put back for B5.
     const t11pillHit = () => ev(`(() => [...document.querySelectorAll('#bay .board .bnf')].map((p) => {
       const r = p.getBoundingClientRect(), bd = p.closest('.board').getBoundingClientRect();
       const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
@@ -3100,9 +3127,10 @@ if (want('t11')) try {
     const hitBig = await t11pillHit();
     await t11state({ members: [T11YOU()] });
     const hitSmall = await t11pillHit();
+    await t11state({ leader: T11_MULE, members: [T11YOU(), T11MULE(), T11PIKE()] });
     const pillOk = (a) => a.length > 0 && a.every((x) => x.set === x.own && !x.clipped && x.inside);
-    if (hitBig.length === 3 && hitSmall.length === 2 && pillOk(hitBig) && pillOk(hitSmall))
-      ok(`${V}: a tap on either pill lands on its board, and neither pill clips its text or leaves its board`);
+    if (hitBig.length === 3 && hitSmall.length === 0 && pillOk(hitBig))
+      ok(`${V}: a tap on a pill lands on its board, and no pill clips its text or leaves its board (a squad of one has none)`);
     else fail(`${V}: pill hit test ${JSON.stringify({ hitBig, hitSmall })}`);
 
     // ---- B5. THE HOME TYPE-SIZE HOLE. styles.css makes the home screen's small
@@ -3162,7 +3190,9 @@ if (want('t11')) try {
     await ev(`(Bay.show('modes'), true)`); await sleep(450);
     const mis = await t11mission();
     // AND IT FOLLOWS THE SQUAD WHILE IT IS ON SCREEN: a roster that lands while
-    // the Mission board is up repaints it, with no tap in between.
+    // the Mission board is up repaints it, with no tap in between. CHANGED with
+    // B2b: the roster is a squad of one, which takes every pill and dim off
+    // the five cards (it put "Needs 2 players" on Duel and Free-for-all).
     await t11state({ members: [T11YOU()] });
     const misLive = await t11mission();
     await ev(`(Bay.show('home'), true)`);
@@ -3171,8 +3201,8 @@ if (want('t11')) try {
         && mis.bof.every(Boolean) && mis.clear && !mis.clipped && mis.through)
       ok(`${V}: the Mission board carries the same pill, keeps every offline badge, and the two do not overlap`);
     else fail(`${V}: mission ${JSON.stringify(mis)}`);
-    if (JSON.stringify(misLive.pills) === JSON.stringify(['Needs 2 players', 'Needs 2 players', null, null, null]) && misLive.bof.every(Boolean) && misLive.clear)
-      ok(`${V}: a roster that lands while the Mission board is up repaints its pills`);
+    if (misLive.pills.length === 5 && misLive.pills.every((p) => p === null) && misLive.nofit.every((x) => !x) && misLive.bof.every(Boolean))
+      ok(`${V}: a roster that lands while the Mission board is up repaints its pills: Squad 1/4 leaves every card live`);
     else fail(`${V}: mission repaint ${JSON.stringify(misLive)}`);
 
     // ---- B8. AND WHEN THE SQUAD IS OVER, THE DIM GOES WITH IT: a board left
@@ -4461,8 +4491,23 @@ if (want('u8')) try {
       f2[key + '0'] = await u8look(sel);
       await u8state({ members: [U8YOU({ ready: true }), U8MULE()] }); await sleep(SETTLE8);
       f2[key + '1'] = await u8look(sel);
-      await u8state({ startsIn: 3000, members: [U8YOU({ ready: true }), U8MULE({ ready: true })] }); await sleep(SETTLE8);
-      f2[key + '2'] = await u8look(sel);
+      // THE PAGE'S CLOCK IS HELD FOR THE COUNTDOWN'S READ, as U3 holds it.
+      // The countdown runs on performance.now(), stamped as the roster
+      // arrives (app.js CC_SQUAD_STARTS), and "Starting in 3" lasts one
+      // second: on the real clock the 80 ms after the roster, SETTLE8's
+      // 250 ms and the CDP round trips left about 650 ms of slack, so a
+      // loaded machine read "Starting in 2". Held, the roster lands and is
+      // read at t0, however slow the machine; the colour transition SETTLE8
+      // waits out runs on the browser's own clock, which replacing the
+      // page's performance.now does not touch. Let go in a finally, before
+      // the roster that ends the countdown.
+      await ev(`(window.__f2clock = performance.now(), performance.now = () => window.__f2clock, true)`);
+      try {
+        await u8state({ startsIn: 3000, members: [U8YOU({ ready: true }), U8MULE({ ready: true })] }); await sleep(SETTLE8);
+        f2[key + '2'] = await u8look(sel);
+      } finally {
+        await ev(`(delete performance.now, true)`).catch(() => {});
+      }
       await u8state({ members: [U8YOU(), U8MULE({ online: false })] }); await sleep(SETTLE8);
       f2[key + 'X'] = await u8look(sel);
       await u8state({ members: [U8YOU(), U8MULE()] });
