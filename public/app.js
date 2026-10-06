@@ -718,23 +718,38 @@ const dockLearned = () => { try { return localStorage.getItem(DOCK_LEARNED) === 
 function applyDockLearned() { document.body.classList.toggle('dock-learned', dockLearned()); }
 applyDockLearned();
 
+// ---- Dock: up or down, the way the player last left it ----------------------
+// Per device, like the learned flag above: it is about this screen and this
+// hand, not the account. Only the CONTROLS tab writes it. A collapse the game
+// makes for itself (a resync putting back what the player had, a match start
+// applying this very choice) never does, so what is stored is always something
+// the player chose, never something the game decided for them.
+const DOCK_SHUT = 'cc_dock_shut';
+const dockShutChosen = () => { try { return localStorage.getItem(DOCK_SHUT) === '1'; } catch { return false; } };
+
 $('dockTab').onclick = () => {
   const opening = dockShutReq;                 // shut right now, so this tap opens it
   setDockCollapsed(!dockShutReq, true);
+  // Remembered BEFORE the learned bookkeeping below, which returns early on an
+  // open: both directions are the player's choice for the next match.
+  try { localStorage.setItem(DOCK_SHUT, opening ? '0' : '1'); } catch {}
   if (opening) { dockOpenedByTap = true; return; }
   if (dockOpenedByTap && !dockLearned()) {
     try { localStorage.setItem(DOCK_LEARNED, '1'); } catch {}
     applyDockLearned();
   }
 };
-// EVERY match loads in with the controls tucked away (Jordan, 8.24 — this
-// replaces 8.22's open-then-tuck-after-your-first-shot intro): the battlefield
-// gets the whole screen, the sliver keeps FIRE, the live aim readout and the
-// selected weapon, and the upward-nudging CONTROLS tab invites the rest up.
-// Same for a cold resume. The slide is measured off the OPEN dock, so wait for
-// a laid-out one before shutting it.
-function startDockCollapsed() {
-  if (!dockSlidePx()) { requestAnimationFrame(startDockCollapsed); return; }
+// EVERY new battle, new golf round and cold resume opens the controls the way
+// the player last left them with the CONTROLS tab, and UP when they never have
+// (owner, 2026-10-06 — this replaces 8.24's every-match-starts-tucked-away): a
+// new player sees the controls the moment he loads in, and a player who tucks
+// them away is not made to do it again at the start of every game. Storage that
+// cannot be read also means UP, because showing the controls is the safe way to
+// be wrong and hiding them is not. A shut start is measured off the OPEN dock,
+// so it waits for a laid-out one before shutting it.
+function startDockAsLeft() {
+  if (!dockShutChosen()) { setDockCollapsed(false, false); return; }
+  if (!dockSlidePx()) { requestAnimationFrame(startDockAsLeft); return; }
   setDockCollapsed(true, false);
 }
 // A re-measure while open keeps the slide honest after any layout change.
@@ -3369,7 +3384,12 @@ function applySnapshot(m) {
     aim: S.aim && S.aim[S.you] ? { ...S.aim[S.you] } : null,
     selected: S.selected,
     zoom: S.userZoom, panX: S.panX, panY: S.panY,
-    dockShut: $('dock').classList.contains('collapsed'),
+    // The REQUESTED dock state, not the class: 'collapsed' lands only at the
+    // end of a slide, and a restore can arrive during one. A tap on the
+    // CONTROLS tab that focuses the window is enough, because focus asks the
+    // server for a sync (resyncOnReturn), and reading the class then put the
+    // dock straight back the way it was before the player's tap.
+    dockShut: dockShutReq,
   } : null;
   S.world = m.world || S.world;
   S.lavaY = m.lavaY ?? (S.world.h - 300);
@@ -3474,7 +3494,7 @@ function applySnapshot(m) {
   if (keep) setDockCollapsed(keep.dockShut, false);   // resync: dock stays as you left it
   else if (m.type === 'hole') {
     // Next golf hole: not a new game — leave the dock as the player has it.
-  } else startDockCollapsed();   // new battle or cold resume: hidden, tab brings it up
+  } else startDockAsLeft();   // new battle, new golf round or cold resume: the player's own up or down
 }
 
 // The server hands the turn over on ITS clock — usually while this client is
@@ -4068,11 +4088,15 @@ const COACH_KEY = 'cc_coach';
 // first-timer sat on "Step 3 of 3 · You can move, too." for the whole round.
 // Golf's third lesson is the bag instead. Both sets are EXACTLY three long
 // because index.html hard-codes three dots and renderCoach lights only those.
+// The 'fire' step names FIRE and nothing else: FIRE is on screen whether the
+// controls are up or tucked away, and a first battle now opens with them UP
+// (startDockAsLeft), so 'tap the CONTROLS tab to bring the panel up' would send
+// a first-timer looking for a panel that is already there.
 const COACH_COMBAT = [
   { id: 'pull', title: 'Touch anywhere. Pull back.',
     body: 'The shell flies the opposite way — like a slingshot. Pull further for more power.' },
   { id: 'fire', title: 'Now fire.',
-    body: 'Tap the CONTROLS tab to bring the panel up, then hit FIRE. One shot each turn — no clock, take your time.' },
+    body: 'Hit FIRE. One shot each turn — no clock, take your time.' },
   { id: 'drive', title: 'You can move, too.',
     body: 'Drive left or right on your turn. It spends fuel, and the fuel bar refills every turn.' },
 ];
@@ -4085,7 +4109,7 @@ const COACH_GOLF = [
   { id: 'pull', title: 'Touch anywhere. Pull back.',
     body: 'The ball flies the opposite way — like a slingshot. Pull further for more power.' },
   { id: 'fire', title: 'Now fire.',
-    body: 'Tap the CONTROLS tab to bring the panel up, then hit FIRE. One stroke each turn — no clock, take your time.' },
+    body: 'Hit FIRE. One stroke each turn — no clock, take your time.' },
   { id: 'club', title: 'Pick your club.',
     body: 'Driver for maximum carry off the tee. Iron for a shot that bites on landing. Wedge flies high and short and stops dead. Putter never leaves the turf — it only rolls, exactly as far as you dare.' },
 ];

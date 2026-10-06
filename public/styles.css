@@ -1402,9 +1402,9 @@ body.golf .fuel { display: none; }
 #dock.collapsed { margin-bottom: calc(-1 * var(--dock-slide, 0px)); }
 /* The tab rides the dock's top edge, so it is grabbable in either state.
    OPEN it is a quiet chevron pill; COLLAPSED it grows a CONTROLS label, takes
-   the accent colour and beckons twice — the controls start hidden every match,
-   so this tab is how a new player discovers them (Jordan: 'make the toggle
-   more obvious'). */
+   the accent colour and beckons twice — a match opens the way the player last
+   left the dock (owner, 2026-10-06), and a tucked-away dock leaves this tab as
+   the only way back to the controls (Jordan: 'make the toggle more obvious'). */
 .dock-tab {
   /* 24px, not 22: this is the sole dock toggle, so WCAG 2.2 SC 2.5.8 (AA)
      applies and 22 failed it. No exception rescued it either — the Spacing

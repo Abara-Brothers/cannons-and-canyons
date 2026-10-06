@@ -314,6 +314,12 @@ else
   # SIXTH client-side suite: golf for four in the page — the Players choice
   # into the create frame, four HUD cards, a four-row scorecard. Skips without Chrome.
   run golf_four_ui node test/golf_four_ui.mjs
+  # The in-game dock remembers up or down per device (owner, 2026-10-06): the
+  # first match opens UP, only the CONTROLS tab writes the choice, and every new
+  # battle, golf round and cold resume reads it back, while a same-match resync
+  # and the next golf hole leave the dock alone. Real matches against its own
+  # server, real taps on the tab. Skips without Chrome.
+  run dock node test/dock.mjs
   # SEVENTH client-side suite: the Bay's Set callsign control — the row with Roll
   # and Set, the inline field, every error sentence, the exact frames that reach
   # the socket, what a guest is told, and the landscape keyboard lift. The socket

@@ -179,8 +179,11 @@ async function go() {
   await send('Page.navigate', { url: ORIGIN });
   await sleep(1200);
   // Drop only the resume token — wiping all of localStorage would also reset the
-  // callsign and re-arm first-run state on every mode.
-  await evalJs(`try { localStorage.removeItem('cc_resume'); } catch(e) {} 1`).catch(() => {});
+  // callsign and re-arm first-run state on every mode. The shots were framed
+  // with each match opening on the tucked-away dock, and a match now opens the
+  // way the CONTROLS tab last left it (UP on a fresh profile), so every flow is
+  // started from the tucked choice: the dock taps below are toggles.
+  await evalJs(`try { localStorage.removeItem('cc_resume'); localStorage.setItem('cc_dock_shut', '1'); } catch(e) {} 1`).catch(() => {});
   await send('Page.navigate', { url: ORIGIN });
   await sleep(3500);
   const ok = await evalJs(`!!document.querySelector('#bay .board[data-set="mode=duel"]')`).catch(() => false);
