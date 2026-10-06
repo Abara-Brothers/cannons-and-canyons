@@ -57,7 +57,7 @@ for (const [sig, n] of [['SIGINT', 2], ['SIGTERM', 15], ['SIGHUP', 1]]) process.
 const watchdog =setTimeout(() => { console.error(`FAIL squad_ui overran ${RUN_MS} ms -- a CDP peer stopped answering`); process.exit(1); }, RUN_MS);
 
 // ONE BLOCK AT A TIME, ON REQUEST: SQUAD_UI_ONLY=t9,u4 runs only those blocks
-// (t8 task 8, t9 task 9, t11 task 11, w the fix waves, u3, u4). Each block
+// (t8 task 8, t9 task 9, t11 task 11, w the fix waves, u3, u4, u8). Each block
 // loads its own page and shares no state with the others, so a mutation run
 // can take the one block that pins the line it changed. Unset, everything runs.
 const ONLY = (process.env.SQUAD_UI_ONLY || '').split(',').map((x) => x.trim()).filter(Boolean);
@@ -1532,15 +1532,18 @@ if (want('t9')) try {
     //      three on a duel. Too small: one on a free-for-all. The footer keeps
     //      the spec's "<Mode> · seats N, squad M", which is true in both
     //      directions. CHANGED BY U3: the leader's dead control was Start; it is
-    //      the leader's own Ready now, dead for standing UP (sqUpWhy).
+    //      the leader's own Ready now, dead for standing UP (sqUpWhy). CHANGED
+    //      BY THE UPDATE 8 REVIEW: the squad of one has no Ready at all (owner:
+    //      ready-up appears once a second player joins); its footer still says
+    //      why the seats refuse.
     await t9state({ members: [T9YOU(), T9MULE({ ready: true }), T9PIKE({ ready: true })] });
     const a2 = await t9box();
     await t9state({ mode: 'ffa', members: [T9YOU()] });
     const a2s = await t9box();
     if (a2 && !a2.start && a2.ready && a2.ready.dis && a2.line === 'Duel · seats 2, squad 3'
         && JSON.stringify(a2.seats) === JSON.stringify(['Duel 2', 'FFA 2–4*', 'Boss 1–2', 'Aliens 1–2', 'Golf 1–4*'])
-        && a2s && a2s.ready && a2s.ready.dis && a2s.line === 'Free-for-all · seats 2–4, squad 1')
-      ok(`${V}: a squad too big or too small for the armed mode has a dead Ready and a footer that says so`);
+        && a2s && !a2s.ready && a2s.line === 'Free-for-all · seats 2–4, squad 1')
+      ok(`${V}: a squad too big for the armed mode has a dead Ready, a squad of one none, and the footer says why the seats refuse`);
     else fail(`${V}: seats refusal ${JSON.stringify({ big: a2 && { ready: a2.ready, line: a2.line, seats: a2.seats }, small: a2s && { ready: a2s.ready, line: a2s.line } })}`);
     // A2b. THE BOX READS `fits`, IT DOES NOT COUNT. Two members, which the seat
     //      table says fit a duel, and a frame that says they do not: the frame
@@ -1792,7 +1795,8 @@ if (want('t9')) try {
     //      And the heir's box follows the roster that names them: a member told
     //      they now lead gets the leader's Seats line in place of who decides.
     //      CHANGED BY U3: the leader's footer had Start where a member's had
-    //      Ready; every footer has Ready and Leave now.
+    //      Ready; every footer has Ready and Leave now. CHANGED BY THE UPDATE 8
+    //      REVIEW: an heir left alone leads a squad of one, which has no Ready.
     await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
     await clearTx(); await t9click('#bay [data-sq="leave"]'); await sleep(60);
     const b2lf = await squads(), b2l = await t9box();
@@ -1807,8 +1811,8 @@ if (want('t9')) try {
         && b2l && b2l.leave && b2l.leave.t === 'Leaving' && b2l.leave.dis && b2l.ready && b2l.ready.dis && !b2l.start
         && b2lt.includes('You left the squad.') && b2lslot === null
         && b2h0 && !b2h0.start && b2h0.ready && b2h0.seats.length === 0 && b2h0.note !== ''
-        && b2h && !b2h.start && b2h.ready && b2h.leave && !b2h.leave.dis && b2h.seats.length === 5 && b2h.note === '')
-      ok(`${V}: the leader's Leave sends the one leave frame, holds Ready while it is out, and a member the roster names leader gets the Seats line, Ready and Leave`);
+        && b2h && !b2h.start && !b2h.ready && b2h.leave && !b2h.leave.dis && b2h.seats.length === 5 && b2h.note === '')
+      ok(`${V}: the leader's Leave sends the one leave frame, holds Ready while it is out, and a member the roster names leader of a squad of one gets the Seats line and Leave`);
     else fail(`${V}: leader leave ${JSON.stringify({ b2lf, out: b2l && { leave: b2l.leave, ready: b2l.ready }, text: b2lt, slot: b2lslot, member: b2h0 && { start: b2h0.start, ready: b2h0.ready, note: b2h0.note }, heir: b2h && { start: b2h.start, leave: b2h.leave, ready: b2h.ready, seats: b2h.seats, note: b2h.note } })}`);
 
     // ---- B3. THE LEADER READIES, AND NOTHING EVER SENDS START. CHANGED BY U3
@@ -2233,7 +2237,7 @@ if (want('t9')) try {
     const d2d = await t9box();
     if (d2f.length === 1 && d2f[0].op === 'kick' && d2f[0].rid === RID_MULE && typeof d2f[0].id === 'number' && !('i' in d2f[0])
         && d2 && d2.kok && d2.kok.t === 'Removing' && d2.kok.dis && d2.kcancel && d2.kcancel.dis && d2k && d2k.kok && d2k.kok.t === 'Removing'
-        && d2d && d2d.rows.length === 1 && !d2d.kok && d2d.ready && d2d.aerr === '')   // Ready: Start until U3
+        && d2d && d2d.rows.length === 1 && !d2d.kok && !d2d.ready && d2d.aerr === '')   // alone now: no Ready (update 8 review)
       ok(`${V}: Remove names an account row by its rid, reads Removing while out, and the roster that answers it closes the question`);
     else fail(`${V}: kick by rid ${JSON.stringify({ d2f, out: d2 && { kok: d2.kok, kcancel: d2.kcancel }, back: d2d && { rows: d2d.rows.length, kok: d2d.kok, aerr: d2d.aerr } })}`);
 
@@ -3758,8 +3762,9 @@ if (want('u3')) try {
   // (bay.js SQ_MODE_MS); a check that nothing was sent waits past it.
   const MODE_WAIT3 = 450;
   // THE RIBBON'S CONTROL as a player meets it: its two lines, its state class,
-  // whether it is live, aria-pressed, the drawn tick, its look, and the type
-  // in design units.
+  // whether it is live, aria-pressed, the drawn tick, its look (whether its
+  // face is the live orange, and its border), and the type in design units.
+  // U8's F2 reads the grey itself, stop by stop.
   const u3launch = (sel = '#bay .lbar .launch') => ev(`(() => {
     const b = document.querySelector(${JSON.stringify(sel)});
     if (!b) return null;
@@ -3769,6 +3774,7 @@ if (want('u3')) try {
       cls: b.className, dis: b.disabled, pressed: b.getAttribute('aria-pressed'), tick: !!(t && t.querySelector('svg')),
       go: b.getAttribute('data-go'), rdy: b.hasAttribute('data-rdy'),
       bg: cs.backgroundImage === 'none' ? cs.backgroundColor : 'gradient', color: cs.color,
+      orange: /rgb\\(255, 160, 85\\)/.test(cs.backgroundImage), bw: parseFloat(cs.borderTopWidth) || 0,
       tU: t ? +(parseFloat(getComputedStyle(t).fontSize) / u).toFixed(2) : null, yU: y ? +(parseFloat(getComputedStyle(y).fontSize) / u).toFixed(2) : null };
   })()`);
   const u3home = () => ev(`(Bay.show('home'), true)`);
@@ -3803,7 +3809,9 @@ if (want('u3')) try {
     // ---- U1. THE COUNT AND THE NAMES. The squad's size and how many are
     //      ready, always; who it waits for, "you" first, two names at most and
     //      then "+k"; a guest and a nameless player in words, never "No
-    //      callsign". Orange to ready up, cyan with a drawn tick once ready.
+    //      callsign". CHANGED BY THE UPDATE 8 REVIEW (owner: "greyed out with
+    //      0/2 or 1/2 players ready"): a live grey with a border to ready up,
+    //      and the same grey with a drawn tick once ready -- never orange.
     const u1 = {};
     await u3state({ members: [U3YOU(), U3MULE()] });
     u1.two0 = await u3launch();
@@ -3816,14 +3824,14 @@ if (want('u3')) try {
     await u3state({ mode: 'ffa', members: [U3YOU({ ready: true }), U3MULE({ ready: true }), U3GUEST(), U3NONAME()] });
     u1.words = await u3launch();
     const okU1 = u1.two0 && u1.two0.rdy && !u1.two0.go && u1.two0.label === 'Ready up 0/2' && u1.two0.say === 'Waiting for you, Steel Mule'
-        && / up\b/.test(u1.two0.cls) && !u1.two0.dis && u1.two0.pressed === 'false' && !u1.two0.tick && u1.two0.bg === 'gradient'
+        && / up\b/.test(u1.two0.cls) && !u1.two0.dis && u1.two0.pressed === 'false' && !u1.two0.tick && !u1.two0.orange && u1.two0.bw >= 1
       && u1.two1 && u1.two1.label === 'Ready 1/2' && u1.two1.say === 'Waiting for Steel Mule' && / on\b/.test(u1.two1.cls) && !u1.two1.dis
-        && u1.two1.pressed === 'true' && u1.two1.tick && u1.two1.bg !== 'gradient'
+        && u1.two1.pressed === 'true' && u1.two1.tick && !u1.two1.orange && u1.two1.bw >= 1
       && u1.three && u1.three.label === 'Ready 2/3' && u1.three.say === 'Waiting for Ridge Pike'
       && u1.four && u1.four.label === 'Ready up 0/4' && u1.four.say === 'Waiting for you, Steel Mule +2'
       && u1.words && u1.words.label === 'Ready 2/4' && u1.words.say === 'Waiting for a guest, a player'
       && [u1.two0, u1.two1, u1.three, u1.four, u1.words].every((x) => x.tU >= 13 && x.yU >= 13);
-    if (okU1) ok(`${V}: Launch in a squad reads Ready up 0/2, Ready 1/2, Ready 2/3, Ready up 0/4 and who it waits for -- you first, two names, then +k, a guest and a nameless player in words -- orange to ready up, cyan with a tick once ready, every line at least 13u`);
+    if (okU1) ok(`${V}: Launch in a squad reads Ready up 0/2, Ready 1/2, Ready 2/3, Ready up 0/4 and who it waits for -- you first, two names, then +k, a guest and a nameless player in words -- a bordered grey, never orange, to ready up and with a tick once ready, every line at least 13u`);
     else fail(`${V}: ready counts ${JSON.stringify(u1)}`);
 
     // ---- U2. THE TAP READIES WITH THE RACK; THE NEXT ONE STANDS DOWN. One
@@ -3861,7 +3869,7 @@ if (want('u3')) try {
     const u3d = await u3launch(), u3dline = await u3winLine();
     await sleep(1200);
     const u3e = await u3launch();
-    if (u3a && u3a.label === 'Starting in 3' && u3a.say === 'Everyone is ready' && / cd\b/.test(u3a.cls) && !u3a.dis && u3a.bg === 'gradient' && u3line === 'Starting in 3'
+    if (u3a && u3a.label === 'Starting in 3' && u3a.say === 'Everyone is ready' && / cd\b/.test(u3a.cls) && !u3a.dis && u3a.orange && u3line === 'Starting in 3'
         && u3b && u3b.label === 'Starting in 2' && u3c && u3c.label === 'Starting in 1'
         && u3cancel.length === 1 && u3cancel[0].ready === false
         && u3d && u3d.label === 'Ready up 1/2' && u3dline === 'Duel · 2' && u3e && u3e.label === 'Ready up 1/2')
@@ -4104,7 +4112,9 @@ if (want('u4')) try {
     //      their ready status -- Ready (a drawn tick and the word), Not ready,
     //      Reconnecting -- the leader marked, and NO squad control in the box:
     //      no Ready, Leave, Remove, Copy or code. Each member but you carries
-    //      the player menu (design 5.5).
+    //      the player menu (design 5.5). CHANGED BY THE UPDATE 8 REVIEW: a
+    //      squad of one has no ready status at all, even a Ready left over
+    //      (owner: ready-up appears once a second player joins).
     const N2 = [
       [U4YOU({ ready: true })],
       [U4YOU({ ready: true }), U4MULE()],
@@ -4115,7 +4125,7 @@ if (want('u4')) try {
     for (const members of N2) {
       await u4state({ members });
       const b = await u4box(), n = members.length;
-      const want = members.map((m) => (m.dropped ? 'Reconnecting' : m.ready ? 'Ready' : 'Not ready'));
+      const want = members.map((m) => (n < 2 ? '' : m.dropped ? 'Reconnecting' : m.ready ? 'Ready' : 'Not ready'));
       const good = b && b.count === n + '/4' && b.members.length === n
         && JSON.stringify(b.members.map((r) => r.name)) === JSON.stringify(members.map((m) => m.callsign || 'No callsign'))
         && JSON.stringify(b.members.map((r) => r.state)) === JSON.stringify(want)
@@ -4124,7 +4134,7 @@ if (want('u4')) try {
         && !b.ops.some((o) => ['ready', 'leave', 'kick', 'kok', 'link', 'share', 'code', 'start'].includes(o)) && !b.field && !b.foot;
       if (!good) n2bad.push({ n, b });
     }
-    if (!n2bad.length) ok(`${V}: a squad of 1, 2, 3 and 4 reads Squad N/4 with each member's name and Ready, Not ready or Reconnecting, the leader marked, and no squad control in the box`);
+    if (!n2bad.length) ok(`${V}: a squad of 1, 2, 3 and 4 reads Squad N/4 with each member's name and, from two up, Ready, Not ready or Reconnecting, the leader marked, and no squad control in the box`);
     else fail(`${V}: squad box ${JSON.stringify(n2bad)}`);
 
     // ---- N3. THE BOX'S INVITE IS THE WINDOW'S INVITE: the same one frame,
@@ -4278,6 +4288,408 @@ if (want('u4')) try {
   }
 } catch (e) {
   fail('squad_ui U4 stopped: ' + (e && e.message));
+}
+// ============================================================================
+// U8: THE UPDATE 8 REVIEW'S CLIENT FIXES (2026-10-06), each where a player
+// meets it, at the phone sizes the owner reads on (874x402, 667x375):
+//   F1  a member's Match setup and Armoury follow a leader's change of mode
+//       or tee set at once -- the push alone repaints them -- and a Ready
+//       never readies anyone for a mode their screen is not showing, member
+//       or leader;
+//   F2  "the launch button greyed out with 0/2 or 1/2 players ready" (owner):
+//       the ribbon's Launch and setup's Start Game are a live GREY while
+//       anyone is still to ready -- a button, with a border and the count --
+//       and the live ORANGE only for the countdown; a control that cannot
+//       ready is the dead grey, distinct from both. Read off computed style;
+//   F3  offline, a remembered squad is no squad: the ordinary Launch,
+//       Computer on setup, Your squad dead with "Needs a connection", the
+//       offline game one tap away, no squad pills; and the squad is back the
+//       moment the socket is, a member's offline mode with it -- through
+//       app.js's own ws.onclose and ws.onopen, on a stand-in socket;
+//   F5  a squad of one shows no ready-up state: nothing under your name but
+//       Leader, no Ready in the window; and a Ready left over from a bigger
+//       squad is stood down when the player starts a game alone;
+//   F6  the window's dead Copy and Share look dead;
+//   F7  the field manual's player counts are the modes' own (golf 1-4).
+if (want('u8')) try {
+  const U8_MULE = '00000000-0000-4000-8000-0000000000cc';
+  const U8_PIKE = '00000000-0000-4000-8000-0000000000dd';
+  const U8R = (tag) => (tag + '0'.repeat(32)).slice(0, 32);
+  const u8m = (id, callsign, rid, o) => Object.assign({ id, rid: U8R(rid), callsign, guest: false, online: true, ready: false, dropped: false }, o);
+  const U8YOU = (o) => u8m(ME, 'Dusty Crag', 'a1', o);
+  const U8MULE = (o) => u8m(U8_MULE, 'Steel Mule', 'c1', o);
+  const U8PIKE = (o) => u8m(U8_PIKE, 'Ridge Pike', 'd1', o);
+  const u8fits = (n) => ({ duel: n === 2, ffa: n >= 2 && n <= 4, boss: n >= 1 && n <= 2, aliens: n >= 1 && n <= 2, golf: n >= 1 && n <= 4 });
+  const U8BASE = (patch) => Object.assign({ type: 'squad', op: 'state', code: 'QK7T', leader: ME, mode: 'duel', tees: null, max: null, you: 0, held: true,
+    members: [], fits: u8fits((patch.members || []).length) }, patch);
+  // A roster PUSHED, as the server sends one whenever somebody else acts: no
+  // request id, straight into the real handle().
+  const u8state = async (patch) => { await ev(`(handle(${JSON.stringify(U8BASE(patch))}), true)`); await sleep(80); };
+  // Past bay.js's SQ_MODE_MS (250 ms), the wait before a leader's mode goes.
+  const MODE_WAIT8 = 450;
+  // Past Match setup's .go transition (.15s on every property): a control
+  // repainted in place is read once it has finished changing colour.
+  const SETTLE8 = 250;
+  const FIVE8 = ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'];
+  const vis8 = `((e) => !!e && !e.closest('.hidden') && e.getClientRects().length > 0)`;
+  const readyFrames = async () => (await squads()).filter((f) => f.op === 'ready');
+
+  // A READY CONTROL'S LOOK, off its computed style: every colour its face is
+  // painted with (the gradient's stops, or the flat colour), its border, its
+  // type's contrast against the face, its cursor and whether it is live.
+  //   orange  the live orange, #ffa055 at the top of the gradient
+  //   grey    every stop a grey (channels within 40 of each other), a border
+  //           of 1px or more in a light colour, type at 4.5:1 or better, a
+  //           pointer, and live: the button to tap
+  //   dead    the disabled grey #1f2740: no border, not-allowed, disabled
+  const u8look = (sel) => ev(`(() => {
+    const b = document.querySelector(${JSON.stringify(sel)}); if (!b) return null;
+    const cs = getComputedStyle(b);
+    const cols = (s) => (s.match(/rgba?\\([^)]*\\)/g) || []).map((c) => c.match(/[\\d.]+/g).map(Number));
+    const img = cs.backgroundImage, face = img !== 'none' ? cols(img) : cols(cs.backgroundColor);
+    const lin = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+    const lum = (c) => 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);
+    const fg = cols(cs.color)[0], bc = cols(cs.borderTopColor)[0], bw = parseFloat(cs.borderTopWidth) || 0;
+    const ratio = Math.min(...face.map((c) => { const a = lum(fg), z = lum(c); return (Math.max(a, z) + 0.05) / (Math.min(a, z) + 0.05); }));
+    const greyFace = face.length > 0 && face.every((c) => Math.max(c[0], c[1], c[2]) - Math.min(c[0], c[1], c[2]) <= 40);
+    const t = b.querySelector('.rdyt'), y = b.querySelector('.rdys');
+    const look = /rgb\\(255, 160, 85\\)/.test(img) ? 'orange'
+      : greyFace && b.disabled && bw === 0 && cs.cursor === 'not-allowed' && cs.backgroundColor === 'rgb(31, 39, 64)' ? 'dead'
+      : greyFace && !b.disabled && bw >= 1 && !!bc && lum(bc) >= 0.25 && ratio >= 4.5 && cs.cursor === 'pointer' ? 'grey'
+      : 'other';
+    return { look, label: t ? t.textContent : b.textContent.trim(), say: y ? y.textContent : null, tick: !!(t && t.querySelector('svg')),
+      dis: b.disabled, face: img !== 'none' ? img : cs.backgroundColor, bw, ratio: +ratio.toFixed(2), cursor: cs.cursor };
+  })()`);
+  // MATCH SETUP as a player reads it: the title, the armed mode, the brief's
+  // draft or clubs, the rack's slots, the Play with and Tee set choices, and
+  // what Start Game says. Read straight off the DOM, never rendered here.
+  const u8setup = () => ev(`(() => {
+    const q = (s) => document.querySelector(s);
+    const brow = (k) => { const r = [...document.querySelectorAll('#bay .brief .brow')].find((x) => x.querySelector('.lbl').textContent === k); return r ? r.querySelector('b').textContent : null; };
+    const opt = (k) => { const o = [...document.querySelectorAll('#bay .b-opt')].find((x) => x.querySelector('.lbl') && x.querySelector('.lbl').textContent === k);
+      return o && !o.classList.contains('hidden') ? [...o.querySelectorAll('.seg.on')].map((b) => b.dataset.set).join() : null; };
+    const why = (k) => { const o = [...document.querySelectorAll('#bay .b-opt')].find((x) => x.querySelector('.lbl') && x.querySelector('.lbl').textContent === k);
+      const b = o && o.querySelector('.seg[data-set="with=squad"]'); return b ? { dis: b.disabled, why: (b.querySelector('.b-why') || { textContent: null }).textContent } : null; };
+    const r = q('#bay .pfoot [data-launch]'), t = r && r.querySelector('.rdyt');
+    return { scr: $('bay').dataset.scr, title: (q('#bay .phead .pt') || {}).textContent, armed: Bay.state().mode.id,
+      draft: brow('Weapons to draft'), clubs: brow('Clubs in the bag'), slots: document.querySelectorAll('#bay .card .slots .slot').length,
+      with: opt('Play with'), squad: why('Play with'), tees: opt('Tee set'),
+      start: r ? { text: t ? t.textContent : r.textContent.trim(), rdy: r.classList.contains('rdy'), dis: r.disabled } : null };
+  })()`);
+  // The ARMOURY, the same way.
+  const u8arm = () => ev(`({ scr: $('bay').dataset.scr, meta: (document.querySelector('#bay .pm') || {}).textContent,
+    title: (document.querySelector('#bay .phead .pt') || {}).textContent, slots: document.querySelectorAll('#bay .card .slots .slot').length,
+    armed: Bay.state().mode.id })`);
+  // HOME's ribbon and boards, read where they stand.
+  const u8ribbon = () => ev(`(() => { const l = document.querySelector('#bay .lbar .launch');
+    return { scr: $('bay').dataset.scr, text: l ? l.textContent.trim() : null, go: l && l.getAttribute('data-go'), rdy: !!(l && l.classList.contains('rdy')), dis: !!(l && l.disabled),
+      players: (document.querySelector('#bay .lbar .ros .rv') || {}).textContent, pills: document.querySelectorAll('#bay .board .bnf').length,
+      nofit: document.querySelectorAll('#bay .board.nofit').length, armed: Bay.state().mode.id }; })()`);
+  // A squad's rows, in the box or the window: each name, Leader or not, the
+  // ready word, and everything on the row's second line.
+  const u8rows = (sel) => ev(`[...document.querySelectorAll(${JSON.stringify(sel + ' .sqml .sqm')})].filter(${vis8}).map((r) => ({
+    name: r.querySelector('.sqmt').textContent, lead: ${vis8}(r.querySelector('.sql')), state: (r.querySelector('.sqr') || { textContent: '' }).textContent,
+    line: r.querySelector('.sqm2').innerText.replace(/\\s+/g, ' ').trim() }))`);
+  // The socket goes and comes back through app.js's OWN handlers, on a
+  // stand-in socket that connect() builds: ws.onclose flips S.connected and
+  // dispatches cc:social on a real transition; ws.onopen sets it, dispatches
+  // cc:social and sends the hello, which asks the squad again. connect() is
+  // stubbed for the retry loop (stubSocket), and only __connect builds one.
+  const u8sock = (open) => ev(`(() => {
+    const Real = window.WebSocket;
+    window.WebSocket = function () { this.readyState = 0; this.send = (s) => window.__tx.push(JSON.parse(s)); this.close = () => {}; };
+    try { S.ws.readyState = 3; window.__connect(); } finally { window.WebSocket = Real; }
+    if (${open}) { S.ws.readyState = 1; S.ws.onopen(); }
+    else { S.connected = true; S.ws.readyState = 3; S.ws.onclose(); }
+    return { connected: S.connected, ready: S.ws.readyState };
+  })()`);
+
+  for (const [w, h] of [[874, 402], [667, 375]]) {
+    const V = `${w}x${h}`;
+    await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: w < 900 });
+    await send('Page.navigate', { url: `http://127.0.0.1:${appPort}/` });
+    let u8up = false;
+    for (let i = 0; i < 80; i++) {
+      if (await ev('!!window.Bay && typeof handle === "function" && !!document.querySelector("#bay .lbar")').catch(() => false)) { u8up = true; break; }
+      await sleep(200);
+    }
+    if (!u8up) { fail(`${V}: page never became ready for the U8 checks`); continue; }
+    for (let k = 0; k < 40 && (await ev(`document.getElementById('bay').classList.contains('enter')`)); k++) await sleep(100);
+    await ev(`(localStorage.removeItem('cc_squad'), localStorage.setItem('cc_loadout', ${JSON.stringify(JSON.stringify(FIVE8))}), ccMode = 'duel', ccTees = 'mens', ccMax = 4, true)`);
+    await stubSocket(); await setWho('in');
+    await clearTx(); await ev('sendHello(S.ws).then(() => true)'); await sleep(60);
+    await reply({ op: 'gone' });
+    await clearTx(); await ev(`(Bay.show('home'), true)`);
+
+    // ---- F7. THE FIELD MANUAL'S PLAYER COUNTS ARE THE MODES' OWN: each
+    //      mode card's count, en dash and "players" aside, is the bay's mode
+    //      table's -- Artillery Golf seats one to four, not "1-2 players".
+    const f7 = await ev(`(() => {
+      const cards = [...document.querySelectorAll('#helpModal .hm-card .hm-top')].map((t) => ({ name: t.querySelector('b').textContent, n: t.querySelector('i').textContent }));
+      return { cards, modes: Bay.MODES.map((m) => ({ name: m.name, players: m.players })) };
+    })()`);
+    const f7bad = f7.modes.filter((m) => { const c = f7.cards.find((x) => x.name === m.name); return !c || c.n.replace(/\u2013/g, '-').replace(/ players$/, '') !== m.players; });
+    if (f7.cards.length === 5 && f7bad.length === 0 && f7.cards.some((c) => c.name === 'Artillery Golf' && c.n === '1\u20134 players'))
+      ok(`${V}: the field manual's five mode cards give each mode's own player count -- Artillery Golf 1\u20134 players`);
+    else fail(`${V}: field manual counts ${JSON.stringify({ f7bad, cards: f7.cards })}`);
+
+    // ---- F2. GREY UNTIL EVERYONE IS READY. This player leads a squad of two
+    //      on Duel: home's ribbon at 0/2 and 1/2, the countdown, and a member
+    //      offline; then Match setup's Start Game, with Your squad, the same.
+    const f2 = {};
+    const f2read = async (sel, key) => {
+      await u8state({ members: [U8YOU(), U8MULE()] }); await sleep(SETTLE8);
+      f2[key + '0'] = await u8look(sel);
+      await u8state({ members: [U8YOU({ ready: true }), U8MULE()] }); await sleep(SETTLE8);
+      f2[key + '1'] = await u8look(sel);
+      await u8state({ startsIn: 3000, members: [U8YOU({ ready: true }), U8MULE({ ready: true })] }); await sleep(SETTLE8);
+      f2[key + '2'] = await u8look(sel);
+      await u8state({ members: [U8YOU(), U8MULE({ online: false })] }); await sleep(SETTLE8);
+      f2[key + 'X'] = await u8look(sel);
+      await u8state({ members: [U8YOU(), U8MULE()] });
+    };
+    await f2read('#bay .lbar .launch', 'home');
+    await click('#bay .lbar .ros'); await sleep(80);
+    f2.setupScr = await ev(`$('bay').dataset.scr`);
+    await f2read('#bay .pfoot [data-launch]', 'setup');
+    await ev(`(Bay.show('home'), true)`);
+    const f2ok = (k) => {
+      const a = f2[k + '0'], b = f2[k + '1'], c = f2[k + '2'], x = f2[k + 'X'];
+      return a && a.look === 'grey' && a.label === 'Ready up 0/2' && a.say === 'Waiting for you, Steel Mule' && !a.tick
+        && b && b.look === 'grey' && b.label === 'Ready 1/2' && b.say === 'Waiting for Steel Mule' && b.tick
+        && c && c.look === 'orange' && c.label === 'Starting in 3' && c.say === 'Everyone is ready'
+        && x && x.look === 'dead' && x.label === 'Ready up 0/2' && x.say === 'Steel Mule is offline'
+        && a.face !== x.face;
+    };
+    if (f2ok('home') && f2.setupScr === 'setup' && f2ok('setup'))
+      ok(`${V}: Launch and Start Game are a live grey with a border at Ready up 0/2 and Ready 1/2 (tick), type ${f2.home0.ratio}:1, orange only for Starting in 3, and the dead grey while a member is offline`);
+    else fail(`${V}: ready colours ${JSON.stringify(f2)}`);
+
+    // ---- F1. A MEMBER'S MATCH SETUP FOLLOWS THE SQUAD. Steel Mule leads on
+    //      Duel and this player opens setup through the readouts, on Your
+    //      squad. The leader picks Boss Fight: the push alone puts setup on
+    //      Boss Fight -- title, draft, seven slots -- and Ready readies with
+    //      the seven-weapon rack the screen shows. Then golf, and its tee set.
+    await u8state({ leader: U8_MULE, members: [U8YOU(), U8MULE()] });
+    await ev(`(ccMode = 'duel', Bay.show('home'), true)`);
+    await click('#bay .lbar .ros'); await sleep(80);
+    const f1a = await u8setup();
+    await u8state({ leader: U8_MULE, mode: 'boss', members: [U8YOU(), U8MULE()] });
+    const f1b = await u8setup();
+    await clearTx(); await click('#bay .pfoot [data-launch]'); await sleep(60);
+    const f1tap = await readyFrames();
+    if (f1tap.length) await reply({ op: 'ready', ok: true });
+    await u8state({ leader: U8_MULE, mode: 'golf', tees: 'champ', members: [U8YOU(), U8MULE()] });
+    const f1c = await u8setup();
+    await u8state({ leader: U8_MULE, mode: 'golf', tees: 'junior', members: [U8YOU(), U8MULE()] });
+    const f1d = await u8setup();
+    const r7 = f1tap[0] && f1tap[0].loadout;
+    if (f1a.scr === 'setup' && f1a.title === 'Duel' && f1a.armed === 'duel' && f1a.draft === '5' && f1a.slots === 5 && f1a.with === 'with=squad'
+        && f1b.scr === 'setup' && f1b.title === 'Boss Fight' && f1b.armed === 'boss' && f1b.draft === '7' && f1b.slots === 7 && f1b.with === 'with=squad'
+        && f1b.start && f1b.start.text === 'Ready up 0/2'
+        && f1tap.length === 1 && f1tap[0].ready === true && Array.isArray(r7) && r7.length === 7 && new Set(r7).size === 7
+        && f1c.title === 'Artillery Golf' && f1c.armed === 'golf' && f1c.clubs === '4' && f1c.draft === null && f1c.tees === 'tees=champ'
+        && f1d.title === 'Artillery Golf' && f1d.tees === 'tees=junior')
+      ok(`${V}: a member's open Match setup follows the leader -- Duel to Boss Fight with seven slots, then golf and each tee set -- and its Ready readies with the seven-weapon rack it shows`);
+    else fail(`${V}: member setup follows ${JSON.stringify({ f1a, f1b, f1tap, f1c, f1d })}`);
+
+    // ---- F1, THE ARMOURY reached from that setup's Edit: Duel's five slots,
+    //      Boss Fight's seven the moment the leader picks it, and golf's bag
+    //      when golf is picked; Done goes back to a setup that says golf.
+    await u8state({ leader: U8_MULE, mode: 'duel', members: [U8YOU(), U8MULE()] });
+    await ev(`(Bay.show('home'), true)`);
+    await click('#bay .lbar .ros'); await sleep(60);
+    await click('#bay .card [data-go="armoury"]'); await sleep(80);
+    const f1e = await u8arm();
+    await u8state({ leader: U8_MULE, mode: 'boss', members: [U8YOU(), U8MULE()] });
+    const f1f = await u8arm();
+    await u8state({ leader: U8_MULE, mode: 'golf', tees: 'mens', members: [U8YOU(), U8MULE()] });
+    const f1g = await u8arm();
+    await click('#bay .pfoot [data-back]'); await sleep(80);
+    const f1h = await u8setup();
+    if (f1e.scr === 'armoury' && f1e.meta === 'Your rack' && f1e.slots === 5
+        && f1f.scr === 'armoury' && f1f.meta === 'Your rack' && f1f.slots === 7 && f1f.armed === 'boss'
+        && f1g.scr === 'armoury' && f1g.title === 'Golf bag' && f1g.meta === 'No draft' && f1g.armed === 'golf'
+        && f1h.scr === 'setup' && f1h.title === 'Artillery Golf')
+      ok(`${V}: a member's open Armoury follows the leader too -- five slots, then seven, then golf's bag -- and Done goes back to a setup on golf`);
+    else fail(`${V}: member armoury follows ${JSON.stringify({ f1e, f1f, f1g, f1h })}`);
+
+    // ---- F1, THE LAST WORD. A Ready never readies for a mode the screen is
+    //      not showing. The squad's slot moves to Boss Fight with no event, so
+    //      setup still says Duel: the tap readies nobody and puts the screen
+    //      on Boss Fight, and the next tap readies with its seven. A LEADER's
+    //      tap between a board and its mode frame readies nobody either: it
+    //      puts the mode to the squad, one frame, and nothing else -- and so
+    //      does a leader's tap after the squad refused that mode, which puts
+    //      it again.
+    await u8state({ leader: U8_MULE, mode: 'duel', members: [U8YOU(), U8MULE()] });
+    await ev(`(Bay.show('home'), true)`);
+    await click('#bay .lbar .ros'); await sleep(60);
+    await ev(`(window.CC_SQUAD = Object.assign({}, window.CC_SQUAD, { mode: 'boss' }), true)`);
+    const f1i0 = await u8setup();
+    await clearTx(); await click('#bay .pfoot [data-launch]'); await sleep(60);
+    const f1i = { sent: (await readyFrames()).length, after: await u8setup() };
+    if (f1i.sent) await reply({ op: 'ready', ok: true });
+    await clearTx(); await click('#bay .pfoot [data-launch]'); await sleep(60);
+    const f1j = await readyFrames();
+    if (f1j.length) await reply({ op: 'ready', ok: true });
+    await u8state({ members: [U8YOU(), U8MULE()] });
+    await ev(`(ccMode = 'duel', Bay.show('home'), true)`);
+    await clearTx();
+    await ev(`(() => { [...document.querySelectorAll('#bay .board')].find((b) => b.getAttribute('data-set') === 'mode=boss').click();
+      document.querySelector('#bay .lbar .launch').click(); return true; })()`);
+    await sleep(MODE_WAIT8);
+    const ops8 = async () => (await squads()).map((f) => f.op + (f.op === 'mode' ? ':' + f.mode : ''));
+    const f1k = await ops8();
+    if (f1k.includes('mode:boss')) await reply({ op: 'mode', ok: true });
+    await u8state({ mode: 'boss', members: [U8YOU(), U8MULE()] });
+    await ev(`(ccMode = 'duel', true)`);
+    await u8state({ members: [U8YOU(), U8MULE()] });
+    await ev(`(Bay.show('home'), true)`);
+    await clearTx();
+    await ev(`[...document.querySelectorAll('#bay .board')].find((b) => b.getAttribute('data-set') === 'mode=boss').click()`);
+    await sleep(MODE_WAIT8);
+    const f1l0 = await ops8();
+    if (f1l0.length) await reply({ op: 'mode', error: 'slow_down' });
+    await clearTx(); await click('#bay .lbar .launch'); await sleep(MODE_WAIT8);
+    const f1l = await ops8();
+    if (f1l.includes('mode:boss')) await reply({ op: 'mode', ok: true });
+    else if (f1l.includes('ready')) await reply({ op: 'ready', ok: true });
+    await u8state({ mode: 'boss', members: [U8YOU(), U8MULE()] });
+    await ev(`(ccMode = 'duel', true)`);
+    await u8state({ members: [U8YOU(), U8MULE()] });
+    if (f1i0.title === 'Duel' && f1i.sent === 0 && f1i.after.title === 'Boss Fight' && f1i.after.armed === 'boss'
+        && f1j.length === 1 && Array.isArray(f1j[0].loadout) && f1j[0].loadout.length === 7
+        && JSON.stringify(f1k) === '["mode:boss"]' && JSON.stringify(f1l0) === '["mode:boss"]' && JSON.stringify(f1l) === '["mode:boss"]')
+      ok(`${V}: a Ready under a screen that is not on the squad's mode readies nobody and puts the screen right; a leader's Ready while their mode is on its way, or after the squad refused it, sends the mode and nothing else`);
+    else fail(`${V}: ready for the mode on screen ${JSON.stringify({ f1i0, f1i, f1j, f1k, f1l0, f1l })}`);
+
+    // ---- F5. A SQUAD OF ONE SHOWS NO READY-UP STATE: this player alone,
+    //      still ready from a squad that shrank around them. Nothing under
+    //      their name but Leader, in the box and the window, and no Ready in
+    //      the window's footer. Starting a game alone stands that Ready down
+    //      first. A second player brings every ready word back.
+    await u8state({ members: [U8YOU({ ready: true })] });
+    await ev(`(Bay.show('home'), true)`);
+    const f5 = { box: await u8rows('#bay .sqx'), boxText: await ev(`document.querySelector('#bay .sqx .sqb').innerText.replace(/\\s+/g, ' ')`) };
+    await ev(`(Bay.show('squad'), true)`);
+    f5.win = await u8rows('#sqWin-squad');
+    f5.foot = await ev(`[...document.querySelectorAll('#sqWin-squad .sqft button')].filter(${vis8}).map((b) => b.getAttribute('data-sq'))`);
+    await ev(`(Bay.show('home'), true)`);
+    await click('#bay .lbar .launch'); await sleep(60);
+    f5.setup = await u8setup();
+    await ev(`(window.__u8sent = [], window.__u8intent = intent, window.intent = (m) => { __u8sent.push(m); }, true)`);
+    await clearTx(); await click('#bay .pfoot [data-launch]'); await sleep(60);
+    f5.down = await readyFrames(); f5.ai = await ev('__u8sent.slice()');
+    if (f5.down.length) await reply({ op: 'ready', ok: true });
+    await ev(`(window.intent = window.__u8intent, Bay.show('home'), true)`);
+    await u8state({ members: [U8YOU(), U8MULE()] });
+    f5.two = await u8rows('#bay .sqx');
+    await ev(`(Bay.show('squad'), true)`);
+    f5.twoFoot = await ev(`[...document.querySelectorAll('#sqWin-squad .sqft button')].filter(${vis8}).map((b) => b.getAttribute('data-sq'))`);
+    await ev(`(Bay.show('home'), true)`);
+    const one = (r) => Array.isArray(r) && r.length === 1 && r[0].name === 'Dusty Crag' && r[0].lead && r[0].state === '' && r[0].line === 'Leader';
+    if (one(f5.box) && one(f5.win) && !/ready/i.test(f5.boxText) && JSON.stringify(f5.foot) === '["leave"]'
+        && f5.setup.with === 'with=cpu' && f5.setup.start && !f5.setup.start.rdy
+        && f5.down.length === 1 && f5.down[0].ready === false && f5.ai.length === 1 && f5.ai[0].type === 'ai'
+        && Array.isArray(f5.two) && f5.two.length === 2 && f5.two.every((r) => r.state === 'Not ready') && JSON.stringify(f5.twoFoot) === '["ready","leave"]')
+      ok(`${V}: a squad of one shows no ready-up state -- only Leader under your name, no Ready in the window -- a leftover Ready is stood down when you play alone, and a second player brings it all back`);
+    else fail(`${V}: squad of one ${JSON.stringify(f5)}`);
+
+    // ---- F6. THE WINDOW'S DEAD COPY AND SHARE LOOK DEAD. No squad, so no
+    //      code: both dimmed, as the window's other dead buttons are, and no
+    //      pointer; with a squad's code, both live. Share is drawn only where
+    //      the device has a share sheet, so this page is given one.
+    await ev(`(Object.defineProperty(navigator, 'share', { value: () => Promise.resolve(), configurable: true }), true)`);
+    await ev(`(handle({ type: 'squad', op: 'ended', reason: 'left' }), true)`); await sleep(60);
+    const f6read = () => ev(`['link', 'share'].map((k) => { const b = document.querySelector('#sqWin-code [data-sq="' + k + '"]'); if (!b) return null;
+      const cs = getComputedStyle(b); return { k, dis: b.disabled, op: +cs.opacity, cursor: cs.cursor }; })`);
+    await ev(`(Bay.show('squad'), true)`); await sleep(SETTLE8);
+    const f6dead = await f6read();
+    await u8state({ members: [U8YOU(), U8MULE()] }); await sleep(SETTLE8);
+    const f6live = await f6read();
+    await ev(`(delete navigator.share, Bay.show('home'), true)`);
+    if (f6dead.every((x) => x && x.dis && x.op <= 0.5 && x.cursor !== 'pointer') && f6live.every((x) => x && !x.dis && x.op === 1 && x.cursor === 'pointer'))
+      ok(`${V}: with no squad code the window's Copy and Share are dimmed to ${f6dead[0].op} with no pointer, and live at full strength once there is a code`);
+    else fail(`${V}: copy and share ${JSON.stringify({ f6dead, f6live })}`);
+
+    // ---- F3. OFFLINE, A REMEMBERED SQUAD IS NO SQUAD. A member of three on
+    //      a free-for-all, which Duel, Boss and Aliens do not fit, with Match
+    //      setup open on Your squad. The socket drops through app.js's own
+    //      ws.onclose, and setup -- repainted by that alone -- is Computer,
+    //      Your squad dead with "Needs a connection", and a plain Start Game
+    //      that sends the vs-Computer frame and nothing to the squad; home is
+    //      the ordinary Launch with no squad pills, and its boards are the
+    //      player's own: Boss Fight arms. Then ws.onopen with setup open on
+    //      that Boss Fight: the squad's Free-for-all, Your squad and its Ready
+    //      are back at once, before the squad has even answered. The Mission
+    //      board, open across a second drop, loses its pills and gets them
+    //      back the same way.
+    const F3 = { leader: U8_MULE, mode: 'ffa', members: [U8YOU(), U8MULE(), U8PIKE()] };
+    // What the new socket asked, settled as the server would: the hello's
+    // squad resume gets the roster, and the friends read a refusal.
+    const u8settle = async () => {
+      await sleep(250);
+      const res = (await squads()).filter((f) => f.op === 'resume');
+      if (res.length) await answer(res[res.length - 1].id, U8BASE(F3));
+      await ev(`(() => { for (const f of window.__tx.filter((x) => x.type === 'friends')) handle({ type: 'friends', error: 'unavailable', id: f.id }); window.CC_SOCIAL_ERR = ''; return true; })()`);
+      return res.length;
+    };
+    const mbPills = () => ev(`document.querySelectorAll('#bay .mb .bnf').length`);
+    await u8state(F3);
+    await ev(`(Bay.show('home'), true)`);
+    const f3on = await u8ribbon();
+    await click('#bay .lbar .ros'); await sleep(80);
+    const f3setOn = await u8setup();
+    await clearTx();
+    const f3drop = await u8sock(false);
+    const f3setup = await u8setup();
+    await ev(`(window.__u8sent = [], window.__u8intent = intent, window.intent = (m) => { __u8sent.push(m); }, true)`);
+    await click('#bay .pfoot [data-launch]'); await sleep(60);
+    const f3sent = { ai: await ev('__u8sent.slice()'), squad: (await squads()).length };
+    await ev(`(window.intent = window.__u8intent, Bay.show('home'), true)`);
+    const f3off = await u8ribbon();
+    await ev(`[...document.querySelectorAll('#bay .board')].find((b) => b.getAttribute('data-set') === 'mode=boss').click()`);
+    await sleep(60);
+    const f3armed = await ev('Bay.state().mode.id');
+    await click('#bay .lbar .launch'); await sleep(80);
+    const f3boss = await u8setup();
+    await clearTx();
+    const f3open = await u8sock(true);
+    const f3back = await u8setup();
+    const f3res = await u8settle();
+    await ev(`(Bay.show('home'), true)`);
+    const f3home = await u8ribbon();
+    await ev(`(Bay.show('modes'), true)`);
+    const f3m = { on: await mbPills() };
+    await clearTx();
+    await u8sock(false);
+    f3m.off = await mbPills();
+    await clearTx();
+    await u8sock(true);
+    f3m.back = await mbPills();
+    f3m.res = await u8settle();
+    await ev(`(Bay.show('home'), true)`);
+    if (f3on.rdy && !f3on.dis && f3on.pills === 3 && f3on.players === 'Squad of 3'
+        && f3setOn.scr === 'setup' && f3setOn.with === 'with=squad' && f3setOn.start && f3setOn.start.rdy
+        && f3drop.connected === false && f3setup.scr === 'setup' && f3setup.title === 'Free-for-all' && f3setup.with === 'with=cpu'
+        && f3setup.squad && f3setup.squad.dis && f3setup.squad.why === 'Needs a connection'
+        && f3setup.start && f3setup.start.text === 'Start Game' && !f3setup.start.rdy && !f3setup.start.dis
+        && f3sent.ai.length === 1 && f3sent.ai[0].type === 'ai' && f3sent.ai[0].mode === 'ffa' && f3sent.squad === 0
+        && f3off.scr === 'home' && f3off.text === 'Launch' && f3off.go === 'setup' && !f3off.rdy && !f3off.dis
+        && f3off.players === 'You + 3 CPU' && f3off.pills === 0 && f3off.nofit === 0
+        && f3armed === 'boss' && f3boss.title === 'Boss Fight' && f3boss.with === 'with=cpu'
+        && f3open.connected === true && f3back.scr === 'setup' && f3back.title === 'Free-for-all' && f3back.armed === 'ffa' && f3back.with === 'with=squad'
+        && f3back.start && f3back.start.rdy && !f3back.start.dis && f3back.start.text === 'Ready up 0/3'
+        && f3res === 1 && f3home.rdy && f3home.pills === 3
+        && f3m.on === 3 && f3m.off === 0 && f3m.back === 3 && f3m.res === 1)
+      ok(`${V}: offline a remembered squad is no squad -- open setup drops to Computer with Your squad dead for "Needs a connection" and Start Game the vs-Computer frame, home is the ordinary Launch with no pills -- and the socket's return puts the squad's mode, Your squad and Ready up 0/3 back at once; the Mission board's pills go and come back with it`);
+    else fail(`${V}: offline squad ${JSON.stringify({ f3on, f3setOn, f3drop, f3setup, f3sent, f3off, f3armed, f3boss, f3open, f3back, f3res, f3home, f3m })}`);
+
+    await ev(`(handle({ type: 'squad', op: 'ended', reason: 'left' }), ccMode = 'duel', Bay.show('home'), true)`); await sleep(60);
+  }
+} catch (e) {
+  fail('squad_ui U8 stopped: ' + (e && e.message));
 }
 clearTimeout(watchdog);
 cleanup();

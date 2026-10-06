@@ -223,8 +223,10 @@ const offBadge = (id) => '<span class="bof">' + esc(OFF_TXT[offKind(id)] || OFF_
 // a Start that refuses read one truth: nothing in this file decides whether a
 // squad fits a mode. The squad is the box's one read of app.js's slot (sq.snap,
 // plan X7). No squad, or a frame with no `fits`, dims nothing -- the board
-// every player who never squads up still gets.
-const noFit = (id) => { const q = sq.snap; return !!(q && q.fits && q.fits[id] === false); };
+// every player who never squads up still gets. Nor does a squad the socket
+// cannot reach: offline the boards are a player's own, as Launch is
+// (sqTwoPlus), and a pill would say "Squad too big" over a game alone.
+const noFit = (id) => { const q = sq.snap; return !!(q && wsReady() && q.fits && q.fits[id] === false); };
 // WHICH WAY IT DOES NOT FIT, in words. `fits` checks the mode's MINIMUM as well
 // as its maximum (X6), so a squad of one fits no duel, and D12's "Squad too
 // big" would be false there. The minimum is read off the box's own seat copy
@@ -877,7 +879,11 @@ function sqRow(p, i, sn, ctl) {
   // 2026-10-06). Fix wave E9 took it off when the leader had no Ready and
   // Start stood in for one; now the leader readies like everyone else, and
   // the squad starts when every row carries the tick.
-  const st = p.dropped ? '<span class="sqr dr">Reconnecting</span>'
+  // A SQUAD OF ONE SAYS NEITHER (owner: ready-up appears once a second player
+  // joins). "Leader  Not ready" under a player's own name asked for something
+  // nothing on screen lets them do, since their Launch is the ordinary one.
+  const st = (sn.members || []).length < 2 ? ''
+    : p.dropped ? '<span class="sqr dr">Reconnecting</span>'
     : p.ready ? '<span class="sqr on">' + IC.tick + 'Ready</span>'
     : '<span class="sqr">Not ready</span>';
   const kick = ctl.lead && !you && !lead && !!sqRid(p);
@@ -941,12 +947,16 @@ function sqFoot(sn, ctl, hide) {
     : waiting ? 'Waiting for ' + waiting
     : esc(m.name) + ' &middot; ' + seats;
   const ready = !!(me && me.ready && !me.dropped);
+  // NO READY IN A SQUAD OF ONE (owner: ready-up appears once a second player
+  // joins): it could never be pressed, and said nothing about why. Kept in the
+  // tree, hidden and dead, so Leave keeps its place for morphChildren.
+  const alone = ms.length < 2;
   // THE LEADER LEAVES TOO (D-UI-3). The server's leave hands the lead to the
   // earliest signed-in member (squads.js detach), or ends a squad nobody left
   // in it can lead.
   return open + '<p class="sqfl">' + line + '</p><div class="sqfb">'
-    + '<button class="go cy' + (ready ? ' on' : '') + '" data-sq="ready" aria-pressed="' + ready + '"'
-      + (!ctl.on || sq.busy || (!ready && sqUpWhy(sn)) ? ' disabled' : '') + '>'
+    + '<button class="go cy' + (ready ? ' on' : '') + (alone ? ' hidden' : '') + '" data-sq="ready" aria-pressed="' + ready + '"'
+      + (alone || !ctl.on || sq.busy || (!ready && sqUpWhy(sn)) ? ' disabled' : '') + '>'
       + (sq.busy === 'ready' ? 'Sending' : (ready ? IC.tick : '') + 'Ready') + '</button>'
     + sqLeaveBtn(ctl) + '</div></div>';
 }
@@ -1199,23 +1209,33 @@ function sqModeSend() {
 // resume -- the reload after a match -- and are otherwise the leader's own
 // taps, which a roster landing before their mode frame must not undo. A
 // member's tap on another board no longer arms it (U3; it did under E5): the
-// leader picks the mode, and the tap is explained (sqLockWhy). Only while home or the
-// Mission board is being drawn (render calls this): a player in Match setup or
-// the Armoury keeps the mode they opened it for, and meets the squad's on
-// their way back home. The tee set and the free-for-all's count are written as
-// setField writes them, but the tee set is NOT saved as this player's
-// preference: it is the squad's. A golf squad's seat count is not followed:
-// golf has none on this client any more (sqModeSend).
+// leader picks the mode, and the tap is explained (sqLockWhy). Only while a
+// screen that draws the armed mode is being drawn (render calls this): home,
+// the Mission board, MATCH SETUP AND THE ARMOURY. Setup and the Armoury once
+// kept the mode they were opened on until the player went home, and setup's
+// Ready readied the member for the squad's mode all the same: Boss Fight's
+// seven-weapon rack under a screen that still said Duel (update 8 review). So
+// a leader's change repaints them in the squad's mode at once (the cc:squad
+// listener and sqPaint), and the Armoury becomes golf's bag when golf is
+// chosen. A MEMBER'S MODE THAT IS NOT THE SQUAD'S IS FOLLOWED TOO, whatever
+// the key says: offline a member plays alone (sqTwoPlus), any mode, and the
+// squad's is theirs again the moment the socket is. Never while the socket is
+// down, which would take that offline choice away. The tee set and the
+// free-for-all's count are written as setField writes them, but the tee set
+// is NOT saved as this player's preference: it is the squad's. A golf squad's
+// seat count is not followed: golf has none on this client any more
+// (sqModeSend).
 let sqFollowKey = '', sqLeadFollow = false;
 const SQ_TEES = ['champ', 'mens', 'womens', 'junior'];
+const SQ_FOLLOW_ON = ['home', 'modes', 'setup', 'armoury'];
 function sqFollow(scr) {
   const sn = sq.snap, me = sqMe(sn);
-  if (!sqLive(sn) || !me || !MODES.some((x) => x.id === sn.mode)) return;
+  if (!wsReady() || !sqLive(sn) || !me || !MODES.some((x) => x.id === sn.mode)) return;
   const k = [sn.code, sn.mode, sn.tees, sn.max].join('|');
   const lead = sqIsLead(sn, me);
   if (lead && !sqLeadFollow) { sqFollowKey = k; return; }
-  if (!lead && k === sqFollowKey) return;
-  if (scr !== 'home' && scr !== 'modes') return;
+  if (!lead && k === sqFollowKey && state().mode.id === sn.mode) return;
+  if (!SQ_FOLLOW_ON.includes(scr)) return;
   sqLeadFollow = false; sqFollowKey = k;
   if (has('ccMode')) ccMode = sn.mode;
   if (sn.mode === 'golf' && SQ_TEES.includes(sn.tees) && has('ccTees')) { ccTees = sn.tees; if ($('teeSel')) $('teeSel').value = sn.tees; }
@@ -2953,7 +2973,9 @@ SCREENS.lobby = function () {
       ? (st === 'connecting' ? '' : '<button class="go" data-solo>' + (mode.id === 'duel' || mode.id === 'ffa' ? 'Play vs Computer' : 'Play solo') + IC.play + '</button>')
       : '<button class="go' + (canStart && !oneSeat ? '' : ' hidden') + '" ' + (filled < minSeats ? 'disabled' : 'data-old="startMatchBtn"') + '>' + startLabel + IC.play + '</button>');
   const loaded = isGolf(mode) ? GOLF_BAG.length + ' clubs in the bag' : rackPicks().slice(0, mode.draft).length + ' weapons loaded';
-  return chrome(title, esc(mode.name) + ' &middot; ' + loaded, pending ? (st === 'offline' ? 'Offline' : st === 'connecting' ? 'Waiting room' : 'Retrying') : solo ? 'Solo drop' : searching ? 'Quick match' : oneSeat ? (isGolf(mode) ? 'Solo round' : 'Solo run') : 'Friend room',
+  // The chip names the state, never a room: nothing exists yet while the
+  // server is being reached, and the waiting room is gone (owner, 2026-10-06).
+  return chrome(title, esc(mode.name) + ' &middot; ' + loaded, pending ? (st === 'offline' ? 'Offline' : st === 'connecting' ? 'Connecting' : 'Retrying') : solo ? 'Solo drop' : searching ? 'Quick match' : oneSeat ? (isGolf(mode) ? 'Solo round' : 'Solo run') : 'Friend room',
     '<div class="doors"><span class="door" style="left:0"></span><span class="door" style="right:0"></span></div>'
     + '<div class="cols" style="align-items:center;padding:0 ' + u(34) + '"><div style="width:' + u(420) + '">' + left + summary + '</div><div style="flex:1">' + right + '</div></div>', foot);
 };
@@ -2995,7 +3017,13 @@ const SETUP_TRIPS = ['armoury', 'paint', 'modes'];
 // A squad Your squad can mean: this socket holds the row (sqLive, D-UI-1) and
 // two or more are in it. A squad of one is not one (owner: setup defaults to
 // Computer, and ready-up appears once a second player joins).
-const sqTwoPlus = () => { const sn = sq.snap; return sqLive(sn) && Array.isArray(sn.members) && sn.members.length >= 2; };
+// NOR IS A SQUAD THE SOCKET CANNOT REACH. app.js keeps the last roster in the
+// slot through a drop, so this read true offline: home's Launch became a dead
+// "Needs a connection" Ready and setup opened on a dead Your squad, and an
+// offline game was two detours away. Offline, home and setup play as if there
+// were no squad -- the ordinary Launch, Computer or Solo, offline play -- and
+// the squad is back the moment the socket is (cc:social repaints both).
+const sqTwoPlus = () => { const sn = sq.snap; return wsReady() && sqLive(sn) && Array.isArray(sn.members) && sn.members.length >= 2; };
 const setupSquad = () => sqTwoPlus() && setupWith !== 'cpu';
 const SQ_WITH_WHY = 'Needs a squad of 2 or more';
 // ---- THE SQUAD'S READY CONTROL (U3; owner, 2026-10-06) --------------------
@@ -3057,11 +3085,14 @@ function sqReadyCtl() {
     dis: !wsReady() || !!sq.busy || (!mine && !!why),
   };
 }
-// THE CONTROL AS A BUTTON, for the ribbon's .launch and Match setup's .go:
-// orange while it asks this player to ready up and while the squad counts
-// down, cyan with a tick once this player is ready, and the dead grey of every
-// disabled control while it cannot ready, so the three never look alike.
-// aria-pressed says the toggle's state; the words say the rest.
+// THE CONTROL AS A BUTTON, for the ribbon's .launch and Match setup's .go.
+// GREY UNTIL EVERYONE IS READY (owner, 2026-10-06: "the launch button greyed
+// out with 0/2 or 1/2 players ready"): "Ready up 0/2" and "Ready 1/2" are a
+// live grey, with a border and the count, because they are still the button
+// to tap (`up`, and `on` with a tick once this player is ready). It turns the
+// live orange only when the squad counts down (`cd`), and a control that
+// cannot ready at all is the dead grey of every disabled control, with its
+// reason. aria-pressed says the toggle's state; the words say the rest.
 function sqReadyBtn(base, attr, c) {
   const st = c.left !== null ? 'cd' : c.mine ? 'on' : 'up';
   return '<button class="' + base + ' rdy ' + st + '" ' + attr + ' aria-pressed="' + c.mine + '"' + (c.dis ? ' disabled' : '') + '>'
@@ -3071,10 +3102,26 @@ function sqReadyBtn(base, attr, c) {
 // THE HOOK MATCH SETUP'S START GAME AND THE RIBBON CALL. -> true when the
 // squad's control took the tap (it may still send nothing, when the squad
 // cannot ready), false when there is no squad of two to ready in.
+// NEVER READY FOR A MODE THE SCREEN IS NOT SHOWING. The ribbon and Match setup
+// draw the ARMED mode, and Ready readies for the SQUAD's (sqReady): a member
+// whose setup had kept the mode it was opened on was readied with a seven-
+// weapon Boss rack under a screen that said Duel, and seated in a Boss Fight
+// they never saw chosen. sqFollow keeps the two together now; this is the
+// last word if they ever part. Standing UP while they differ sends nothing:
+// a member's screen is put on the squad's mode (render follows), and a
+// leader's mode, still on its way, is put to the squad (boardMode sends only
+// what the roster does not already say). The tap after that readies for the
+// mode on screen. Standing down is never held.
 function squadReadyToggle() {
   const c = sqReadyCtl();
   if (!c) return false;
-  if (!c.dis) sqReady();
+  if (c.dis) return true;
+  const sn = sq.snap;
+  if (!c.mine && state().mode.id !== sn.mode) {
+    if (sqIsLead(sn, sqMe(sn))) boardMode(); else render(current);
+    return true;
+  }
+  sqReady();
   return true;
 }
 // START GAME, from this one place: the squad's Ready while Your squad is the
@@ -3091,9 +3138,13 @@ function startGameBtn(withSquad) {
 // PLAYING ALONE FROM A SQUAD STANDS THIS PLAYER DOWN FIRST (U3): a Ready left
 // standing would let the squad count this player into its match while they
 // are in their own, and the seating would then be refused for all of them.
+// IN A SQUAD OF ONE TOO: a Ready left over from a squad that shrank around
+// this player is drawn nowhere (a squad of one shows no ready-up state), and
+// the server keeps it, so the first player to join and ready would count
+// them in.
 function startGame() {
   if (setupSquad()) { squadReadyToggle(); return; }
-  const me = sqTwoPlus() ? sqMe(sq.snap) : null;
+  const sn = sq.snap, me = wsReady() && sqLive(sn) ? sqMe(sn) : null;
   if (me && me.ready && !me.dropped) sqOne({ type: 'squad', op: 'ready', ready: false }, { op: 'ready', kind: 'squad.ready', busy: 'ready' });
   const m = state().mode;
   if (!isGolf(m)) fillRack(m);
@@ -3111,7 +3162,10 @@ SCREENS.setup = function () {
   // server, so the free-for-all's count is the CPU count, shown with
   // Computer only; golf has no seat count at all (alone is a round for one,
   // a squad is the whole squad), and keeps its tee set either way.
-  const withSeg = seg('Play with', 'with', [['cpu', cpuMode ? 'Computer' : 'Solo'], ['squad', 'Your squad', squadOk ? '' : SQ_WITH_WHY]], withSq ? 'squad' : 'cpu', false);
+  // Offline the reason is the connection, which is true of every player then,
+  // a squad of two included (sqTwoPlus).
+  const withWhy = squadOk ? '' : wsReady() ? SQ_WITH_WHY : 'Needs a connection';
+  const withSeg = seg('Play with', 'with', [['cpu', cpuMode ? 'Computer' : 'Solo'], ['squad', 'Your squad', withWhy]], withSq ? 'squad' : 'cpu', false);
   // A MEMBER PLAYING WITH THE SQUAD IS SHOWN THE SQUAD'S TEE SET, live, and a
   // tap on another one is explained (sqLockWhy): the leader picks it (U3).
   const sn = sq.snap, teesOn = withSq && !sqIsLead(sn, sqMe(sn)) && SQ_TEES.includes(sn.tees) ? sn.tees : s.tees;
@@ -3317,9 +3371,10 @@ const stack = [];
 function render(name) {
   const host = $('bay'); if (!host) return;
   const next = name in SCREENS ? name : 'home';
-  // Home and the Mission board draw the armed mode: for a squad's member it is
-  // the squad's (sqFollow), set before the markup is built.
-  if (next === 'home' || next === 'modes') sqFollow(next);
+  // Home, the Mission board, Match setup and the Armoury draw the armed mode:
+  // for a squad's member it is the squad's (sqFollow), set before the markup
+  // is built.
+  if (SQ_FOLLOW_ON.includes(next)) sqFollow(next);
   // Match setup opens on its default unless the player is coming back from a
   // screen it sent them to (setupWith, SETUP_TRIPS); set before the markup.
   if (next === 'setup' && current !== 'setup' && !SETUP_TRIPS.includes(current)) setupWith = null;
@@ -3524,7 +3579,11 @@ document.addEventListener('cc:social', () => {
   // socket that comes back repaints a box that greyed itself out -- the same
   // bug test/social_ui.mjs's I9 found on the Friends screen, where leaving and
   // returning was the only thing that worked.
-  if (host && host.classList.contains('active') && (current === 'home' || current === 'squad' || current === 'settings' || current === 'friends')) render(current);
+  // MATCH SETUP AND THE MISSION BOARD JOIN IT for the same push on ws.onopen
+  // and on a drop: offline they play as if there were no squad (sqTwoPlus,
+  // noFit), and the squad comes back when the socket does.
+  if (host && host.classList.contains('active') && (current === 'home' || current === 'squad' || current === 'settings' || current === 'friends'
+    || current === 'setup' || current === 'modes')) render(current);
   // The open menu reads the snapshot too — Remove friend appears on a card the
   // moment the friendship lands, and goes when it is torn down.
   pmPaint();
@@ -3570,9 +3629,11 @@ document.addEventListener('cc:squad', () => {
   sqPaint();
   // THE MISSION BOARD WEARS THE SAME PILLS (design 5.2), so a roster that lands
   // while it is up repaints it too -- in place, and only while the bay is on
-  // stage, the guard every repaint here keeps.
+  // stage, the guard every repaint here keeps. AND THE ARMOURY, which drafts
+  // for the armed mode: a leader's change of mode reaches a member there at
+  // once (sqFollow), a raid's seven slots or golf's bag.
   const host = $('bay');
-  if (host && host.classList.contains('active') && current === 'modes') render('modes');
+  if (host && host.classList.contains('active') && (current === 'modes' || current === 'armoury')) render(current);
   sqNeed();
   sqTick();
 });

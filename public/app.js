@@ -2733,6 +2733,16 @@ function intent(m) {
   if (S.connected) { sendMsg(m); return; }              // UNCHANGED, first line: a connected client never reaches the rest
   const offline = navigator.onLine === false;
   if (offline && soloByConstruction(m)) { startLocal(m); return; }
+  // A ROOM FOR ONE, WITH THE DEVICE KNOWN TO BE OFFLINE: Match setup's Start
+  // Game for Boss Fight, Alien Invasion or golf alone (soloRoom, which only
+  // createBtn's Solo create sets). Nobody is invited into it and nothing
+  // about it can be converted, so the pending lobby's question -- wait for
+  // the server, or Play solo? -- has one answer, and it reached the player as
+  // a second tap behind a screen saying OFFLINE. Played here at once, through
+  // Play solo's own door (house rule 7d). A server that merely cannot be
+  // raised still shows the pending lobby and its offer: only a device that
+  // KNOWS it is offline skips it.
+  if (offline && soloRoom && soloOfferable(m)) { pendingIntent = m; playSolo(); return; }
   pendingIntent = m;
   connect();          // don't sit out the 1.5s retry loop after a deliberate tap
   clearTimeout(localFallback); localFallback = null;

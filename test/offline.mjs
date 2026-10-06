@@ -101,7 +101,7 @@ const STATE = `({ local: S.local, playing: S.playing, mode: S.mode, n: S.n, name
   pend: (typeof pendingIntent === 'undefined' || !pendingIntent) ? null : pendingIntent.mode, lw: lobbyWait,
   text: document.getElementById('bay').textContent, wait: !!document.querySelector('#bay .seat.wait'),
   solo: !!document.querySelector('#bay [data-solo]'), soloLabel: (document.querySelector('#bay [data-solo]') || { textContent: null }).textContent, home: !!document.querySelector('#bay .lbar'), back: !!document.querySelector('#bay .bk'),
-  toasts: window.__toasts || [], waitSeen: !!window.__waitSeen })`;
+  toasts: window.__toasts || [], waitSeen: !!window.__waitSeen, meta: (document.querySelector('#bay .pm') || { textContent: null }).textContent })`;
 const state = () => ev(STATE);
 
 // A fresh page: server resumed, page loaded and connected, engine module warm,
@@ -388,8 +388,8 @@ try {
     if (s.soloLabel === LABEL[mode]) ok(`1: ${mode} offline — the offer reads '${LABEL[mode]}'`); else fail(`1: ${mode} offline — the offer reads '${s.soloLabel}'`);
     if (!s.local && !s.playing && s.pend === mode) ok(`1: ${mode} offline — nothing started, the create is queued`);
     else fail(`1: ${mode} offline — local=${s.local} playing=${s.playing} pend=${s.pend}`);
-    if (s.solo && s.text.includes(NEED[mode]) && s.text.includes('No connection') && s.lw === 'offline') ok(`1: ${mode} offline — the lobby explains and offers Play solo`);
-    else fail(`1: ${mode} offline — solo=${s.solo} lw=${s.lw} text=${s.text.slice(0, 120)}`);
+    if (s.solo && s.text.includes(NEED[mode]) && s.text.includes('No connection') && s.lw === 'offline' && s.meta === 'Offline') ok(`1: ${mode} offline — the lobby explains, wears the Offline chip and offers Play solo`);
+    else fail(`1: ${mode} offline — solo=${s.solo} lw=${s.lw} meta=${s.meta} text=${s.text.slice(0, 120)}`);
     if (!s.wait && !s.waitSeen) ok(`1: ${mode} offline — no 'Open slot' seat, nobody is being waited for`); else fail(`1: ${mode} offline — an Open slot was rendered`);
   }
 
@@ -410,10 +410,14 @@ try {
   await ev(`(ccMode = 'boss', Bay.show('home'), document.querySelector('#bay .launch').click(), document.querySelector('#bay .pfoot [data-launch]').click(), true)`);
   await sleep(1000);
   let s = await state();
-  if (s.text.includes('Reaching the server') && !s.solo && !s.local && s.lw === 'connecting') ok("3: during the grace the lobby says 'Reaching the server' with no offer yet"); else fail('3: at 1 s — ' + JSON.stringify({ solo: s.solo, lw: s.lw, local: s.local, text: s.text.slice(0, 100) }));
+  // Its chip names the state, never a room (update 8 review): the waiting
+  // room is gone, and nothing has been made yet.
+  if (s.text.includes('Reaching the server') && !s.solo && !s.local && s.lw === 'connecting' && s.meta === 'Connecting' && !/waiting room/i.test(s.text))
+    ok("3: during the grace the lobby says 'Reaching the server' under a Connecting chip, with no offer yet and no waiting room");
+  else fail('3: at 1 s — ' + JSON.stringify({ solo: s.solo, lw: s.lw, local: s.local, meta: s.meta, text: s.text.slice(0, 100) }));
   await sleep(4200);
   s = await state();
-  if (s.solo && s.text.includes('Cannot reach the server') && !s.local && !s.playing && s.lw === 'unreachable') ok('3: after 4 s it offers Play solo and has started nothing'); else fail('3: at 5 s — ' + JSON.stringify({ solo: s.solo, lw: s.lw, local: s.local, playing: s.playing, text: s.text.slice(0, 100) }));
+  if (s.solo && s.text.includes('Cannot reach the server') && !s.local && !s.playing && s.lw === 'unreachable' && s.meta === 'Retrying') ok('3: after 4 s it offers Play solo under a Retrying chip and has started nothing'); else fail('3: at 5 s — ' + JSON.stringify({ solo: s.solo, lw: s.lw, local: s.local, playing: s.playing, meta: s.meta, text: s.text.slice(0, 100) }));
   if (s.text.includes('Your solo run starts as soon as the server can be reached. We keep trying in the background.') && !s.text.includes('second commander'))
     ok('3: the offer says the Solo run waits for the server, never that it needs a second commander');
   else fail('3: solo copy — ' + s.text.slice(0, 220));
@@ -497,27 +501,56 @@ try {
   if (rooms === 1) ok('9: two taps, one room'); else fail(`9: engine rooms after a double tap: ${rooms}`);
 
   // ---- 9b. Start Game with no connection --------------------------------------
-  // Computer (Duel, Free-for-all) starts on this device at once. Solo (Boss,
-  // Aliens, golf) is a create, so it waits in the pending lobby, which says the
-  // run waits for the server -- never that it needs a second player -- counts
-  // one seat of one, and offers Play solo, which starts it here.
+  // Computer (Duel, Free-for-all) starts on this device at once. CHANGED BY
+  // THE UPDATE 8 REVIEW: so does Solo (Boss, Aliens, golf). Its create is a
+  // room for one that nobody is invited into, so with the device known to be
+  // offline the pending lobby's question has one answer, and Start Game plays
+  // it here through Play solo's own door: the pending lobby is never drawn
+  // and nothing is left queued. A server that merely cannot be raised still
+  // gets the pending lobby, which says the run waits for the server -- never
+  // that it needs a second player -- counts one seat of one, and offers Play
+  // solo, which starts it here.
   await fresh(); await cut({ offline: true });
   await ev(`(ccMode = 'duel', Bay.show('home'), document.querySelector('#bay .launch').click(), document.querySelector('#bay .pfoot [data-launch]').click(), true)`);
   if (await until(`S.local === true && S.playing === true && S.mode === 'duel'`, 4000)) ok('9b: Start Game for Duel with no connection starts against the computer on this device at once');
   else fail('9b: duel offline start — ' + JSON.stringify(await state()));
-  for (const [mode, line] of [['boss', 'Your solo run starts as soon as the server can be reached.'], ['golf', 'Your solo round starts as soon as the server can be reached.']]) {
+  for (const mode of ['boss', 'aliens', 'golf']) {
     await fresh(); await cut({ offline: true });
-    await ev(`(ccMode = '${mode}', Bay.show('home'), document.querySelector('#bay .launch').click(), document.querySelector('#bay .pfoot [data-launch]').click(), true)`);
-    await sleep(800);
-    s = await state();
-    const seats = await ev(`[...document.querySelectorAll('#bay .ro')].map((r) => r.textContent).join('|')`);
-    if (s.lw === 'offline' && s.pend === mode && s.solo && s.text.includes(line) && !/second commander|invite other players/.test(s.text) && !s.waitSeen && /Players1 \/ 1/.test(seats))
-      ok(`9b: ${mode} Start Game with no connection — the pending lobby says the solo run waits for the server, counts 1 / 1 and offers Play solo`);
-    else fail(`9b: ${mode} offline — ` + JSON.stringify({ lw: s.lw, pend: s.pend, solo: s.solo, waitSeen: s.waitSeen, seats, text: s.text.slice(0, 200) }));
-    await ev(`(document.querySelector('#bay [data-solo]').click(), true)`);
-    if (await until(`S.local === true && S.playing === true && S.mode === '${mode}'`, 6000)) ok(`9b: ${mode} — Play solo starts it on this device`);
-    else fail(`9b: ${mode} Play solo — ` + JSON.stringify(await state()));
+    // Every title the pending lobby has, and its Play solo, noticed the
+    // moment either is written to the bay, however briefly.
+    await ev(`(() => {
+      window.__pend = [];
+      const look = () => { const t = (document.querySelector('#bay .pt') || {}).textContent || '';
+        if (document.querySelector('#bay [data-solo]') || /^(No connection|Reaching the server|Cannot reach the server)$/.test(t)) __pend.push(t); };
+      window.__pendObs = new MutationObserver(look);
+      __pendObs.observe($('bay'), { childList: true, subtree: true, characterData: true });
+      ccMode = '${mode}'; Bay.show('home'); document.querySelector('#bay .launch').click(); document.querySelector('#bay .pfoot [data-launch]').click();
+      look();
+      return true; })()`);
+    const started = await until(`S.local === true && S.playing === true && S.mode === '${mode}'`, 6000);
+    const r9 = await ev(`(() => { __pendObs.disconnect(); return { pend: __pend.slice(), lw: lobbyWait, queued: pendingIntent, toasts: __toasts.slice(), wait: !!window.__waitSeen }; })()`);
+    // A create left queued would flush into a real room the moment the server
+    // is resumed, and the next fresh page would resume into it: cancelled here,
+    // so a failure above stays one failure.
+    await ev(`(pendingIntent ? $('cancelBtn').onclick() : 0, localStorage.removeItem('cc_resume'), true)`);
+    if (started && r9.pend.length === 0 && r9.lw === null && r9.queued === null && r9.toasts.includes('Playing offline') && !r9.wait)
+      ok(`9b: ${mode} Start Game with no connection plays it on this device at once — no pending lobby drawn, nothing left queued`);
+    else fail(`9b: ${mode} offline — ` + JSON.stringify({ started, r9, s: await state() }));
   }
+  await fresh(); await cut({ offline: false });
+  await ev(`(ccMode = 'golf', Bay.show('home'), document.querySelector('#bay .launch').click(), document.querySelector('#bay .pfoot [data-launch]').click(), true)`);
+  await sleep(4800);
+  s = await state();
+  {
+    const line = 'Your solo round starts as soon as the server can be reached.';
+    const seats = await ev(`[...document.querySelectorAll('#bay .ro')].map((r) => r.textContent).join('|')`);
+    if (s.lw === 'unreachable' && s.pend === 'golf' && s.solo && s.text.includes(line) && !/second commander|invite other players/.test(s.text) && !s.waitSeen && /Players1 \/ 1/.test(seats))
+      ok('9b: golf Start Game with the server unreachable — the pending lobby says the solo round waits for the server, counts 1 / 1 and offers Play solo');
+    else fail('9b: golf unreachable — ' + JSON.stringify({ lw: s.lw, pend: s.pend, solo: s.solo, waitSeen: s.waitSeen, seats, text: s.text.slice(0, 200) }));
+  }
+  await ev(`(document.querySelector('#bay [data-solo]').click(), true)`);
+  if (await until(`S.local === true && S.playing === true && S.mode === 'golf'`, 6000)) ok('9b: golf — Play solo starts it on this device');
+  else fail('9b: golf Play solo — ' + JSON.stringify(await state()));
 
   // ---- 10. a solo room never touches the online resume record (last: storage persists)
   await fresh();
