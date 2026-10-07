@@ -174,17 +174,33 @@ const sanitizeSkin = (s, seat) => (SKINS.includes(s) ? s : SEAT_SKIN[seat % SEAT
 // second copy of a profanity list drifts, and drift here fails OPEN on the one
 // string every other player has to look at. Behaviour is unchanged — same
 // function, same lists, one home.
-// Names are NOT free text (ISSUE-015). A client may only send a callsign it
-// rolled from the two curated lists in game-core.js, OR the one chosen callsign
-// the SERVER has already validated and stored for that socket's account and
-// passed in as `allowed`. Everything else is replaced. The readonly input in
-// index.html is a convenience — THIS is the boundary, because a modified client
-// can send whatever it wants, and `allowed` is the only door, opened only from
-// the server side.
+// Names are not ANY text (ISSUE-015), and since 2026-10-07 they are not only
+// rolled ones either. A client may send a callsign it rolled from the two
+// curated lists in game-core.js, the one chosen callsign the SERVER has already
+// validated and stored for that socket's account (passed in as `allowed`), OR
+// a name of the player's own that the HOST's name check passes at this door
+// (nameCheck below — the owner: "the player is given a default name and then
+// they can change it to whatever they like, as long as it stays within the
+// guidelines"). Everything else is replaced. THIS is the boundary, because a
+// modified client can send whatever it wants; the editor's check op only tells
+// an honest player in advance what this door will say.
 //
 // Replacement is deterministic on the rejected input: random would let a
 // griefer reroll until they got something they liked, and would change a
 // reconnecting player's identity mid-match.
+//
+// THE NAME CHECK IS THE HOST'S, injected like the sinks above, because the
+// guidelines include the server's own blocklist file and this module must
+// never read a file or name one (it is served to every browser as it stands).
+// server.js installs server/display-name.js's playerName: the callsign rules,
+// the shipped blocklist and isProfane, answering the NORMALISED name or null.
+// The default is null and the offline page never installs one, so offline the
+// door stays shut exactly as it always has: nobody else is in an offline match
+// to be shown a name, and the page hands its own player's name in as `allowed`
+// instead (app.js startLocal). A check that throws, or answers anything but a
+// non-empty string, opens nothing — the name falls through to the fallback.
+let nameCheck = null;
+export function setNameCheck(fn) { nameCheck = typeof fn === 'function' ? fn : null; }
 function sanitizeName(raw, seat = 0, allowed = null) {
   const name = String(raw ?? '');
   // THE ONE EXEMPTION (design 4.5). `allowed` is the display form of a CHOSEN
@@ -223,6 +239,16 @@ function sanitizeName(raw, seat = 0, allowed = null) {
   if (typeof allowed === 'string' && allowed && !isProfane(allowed)
     && name.normalize('NFC').trim().replace(/\s+/gu, ' ') === allowed) return allowed;
   if (isGeneratedCallsign(name) && !isProfane(name)) return name;
+  // THE THIRD DOOR: a name the player typed, held to the guidelines HERE, at
+  // the moment it is presented, whatever the client claims it was told. What
+  // is returned is the CHECK's string, never the client's copy — the same rule
+  // as `allowed` above — and isProfane runs on it again, so this file's own
+  // lists stand behind every door whatever the host's check contains.
+  if (nameCheck) {
+    let shown = null;
+    try { shown = nameCheck(name); } catch { shown = null; }
+    if (typeof shown === 'string' && shown && !isProfane(shown)) return shown;
+  }
   const h = [...name].reduce((a, c) => (a * 31 + c.charCodeAt(0)) | 0, 7) + seat * 2654435761;
   return callsignFromSeed(h);
 }

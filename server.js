@@ -19,7 +19,7 @@ import http2 from 'node:http2';
 import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import {
-  rooms, send, handleClientMessage, handleClose, resolveSeatHandle, setCodeTaken,
+  rooms, send, handleClientMessage, handleClose, resolveSeatHandle, setCodeTaken, setNameCheck,
   MODE_SEATS, TEE_IDS, validRackFor, abandonRoom,
 
   setPushNudge, setAuthSink, setPushSubSink, setFaultSink, setCapacitySink, setMatchSink,
@@ -32,6 +32,11 @@ import { createStore } from './server/store.js';
 import { createSocial, SOCIAL_TYPES, codeOf } from './server/social.js';
 import { createSeatSquad } from './server/seat-squad.js';
 import { loadBlocklist, normaliseCallsign } from './server/callsign.js';
+// The name rules, for the room engine's door (setNameCheck below). The same
+// factory the social layer builds its proofs from, so the check op that tells
+// a player a name may be kept and the door that shows it to everyone else are
+// one function, not two copies of it.
+import { createNameProofs } from './server/display-name.js';
 // Which hosts a web push may be sent to. See server/push-hosts.js for why a
 // client-supplied endpoint must never choose where this process connects.
 import { webPushHostAllowed } from './server/push-hosts.js';
@@ -194,10 +199,19 @@ const seatSquad = createSeatSquad({
 // with, and every social frame is answered 'unavailable' rather than dropped.
 // A missing or malformed blocklist turns the whole layer OFF rather than
 // running it unfiltered — an unfiltered chosen callsign is the one outcome
-// this feature must never produce — and says so loudly on stderr.
+// this feature must never produce — and says so loudly on stderr. It also
+// leaves the room engine with no name check, so no typed name is shown either.
 let store = null, social = null;
 try {
   const terms = loadBlocklist(path.join(__dirname, 'server', 'blocklist.txt'));
+  // THE ROOM ENGINE'S NAME CHECK (owner, 2026-10-07: every player may name
+  // themselves, "as long as it stays within the guidelines"). Installed HERE,
+  // before and outside the Supabase test, because a lobby needs no database:
+  // a guest playing on a deploy with no secret key still meets the same rules
+  // at the door. Installed only once the blocklist has loaded, so a missing or
+  // malformed list leaves the door shut — every typed name falls back to a
+  // rolled pair, which is the fail-closed answer, and the catch below says so.
+  setNameCheck(createNameProofs({ terms }).playerName);
   if (SB_URL && SB_SECRET) {
     store = createStore({ sbAdmin });
     // resolveSeatHandle is the JOIN, and this line is the only place the two

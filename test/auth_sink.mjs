@@ -60,10 +60,29 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const HONEST_ID = '11111111-1111-4111-8111-111111111111';
 const TAMPER_ID = '22222222-2222-4222-8222-222222222222';
 const SLOW_ID = '33333333-3333-4333-8333-333333333333';
+const ODD_ID = '66666666-6666-4666-8666-666666666666';
 const HONEST = 'Marguerite Vale';
 const KEY = 'marguerite vale';
 const SLOW = 'Wren Delacroix';
-const TAMPERED = 'FOLLOW ME ON X';          // 14 chars, inside the 16 the column allows
+// 14 chars, inside the 16 the column allows — AND OUTSIDE THE GUIDELINES. Since
+// 2026-10-07 any player may present a name of their own that passes the room
+// engine's name check (the owner: "change it to whatever they like, as long as
+// it stays within the guidelines"), so a tampered string that PASSED them would
+// reach the lobby by that door whatever the sink did, and case 1 would prove
+// nothing. It was 'FOLLOW ME ON X', which passes them now. The attack this file
+// exists for is "any sixteen characters" in a column the account writes, and a
+// link is the shape it takes: the check refuses the full stop, so only a sink
+// that trusts the column can put this string on a board.
+const TAMPERED = 'GO TO EVIL.COM';
+// A STORED CHOSEN NAME ONLY THE EXEMPTION CAN ADMIT, for the two cases that
+// must see ws.chosenName itself (2 and 5). HONEST passes the guidelines, so
+// presenting it now succeeds through the name check whether or not the sink
+// filled ws.chosenName — a sink that always answered null would sail through.
+// ODD normalises to its own key exactly as HONEST does, and is refused by the
+// guidelines (the full stop), so the lobby can show it by one door alone. It is
+// the shape a chosen name takes when a term is added to the blocklist after it
+// was stored, spelled here with a full stop rather than with a slur.
+const ODD = 'Mme.Vale';
 const ROWS = {
   [HONEST_ID]: { id: HONEST_ID, callsign: HONEST, friend_code: 'ABC234', callsign_key: KEY, callsign_set_at: null },
   // callsign and callsign_key DISAGREE. This is the whole test.
@@ -71,6 +90,7 @@ const ROWS = {
   // A second honest account, reached only through the DELAYED token below —
   // the one whose verification is still in flight when the next frame lands.
   [SLOW_ID]: { id: SLOW_ID, callsign: SLOW, friend_code: 'ABC236', callsign_key: SLOW.toLowerCase(), callsign_set_at: null },
+  [ODD_ID]: { id: ODD_ID, callsign: ODD, friend_code: 'ABC237', callsign_key: ODD.toLowerCase(), callsign_set_at: null },
 };
 // A REAL ANONYMOUS ACCOUNT — what public/cloud.js mints for every player who
 // saves anything. It carries a perfectly good uuid, so it is the case a gate
@@ -81,7 +101,7 @@ const ROWS = {
 const GUEST_ID = '44444444-4444-4444-8444-444444444444';
 // An account section 10 deletes. Only its sockets may change when it goes.
 const DOOMED_ID = '55555555-5555-4555-8555-555555555555';
-const TOKENS = { 'tok-honest': HONEST_ID, 'tok-tampered': TAMPER_ID, 'tok-slow': SLOW_ID, 'tok-slower': HONEST_ID, 'tok-guest': GUEST_ID, 'tok-doomed': DOOMED_ID };
+const TOKENS = { 'tok-honest': HONEST_ID, 'tok-tampered': TAMPER_ID, 'tok-slow': SLOW_ID, 'tok-slower': HONEST_ID, 'tok-guest': GUEST_ID, 'tok-doomed': DOOMED_ID, 'tok-odd': ODD_ID };
 const ANON = new Set(['tok-guest']);
 // How long the mock GoTrue sits on each delayed token before answering. Long
 // enough that a sign-out, or a second hello, is comfortably ahead of it — and
@@ -250,16 +270,18 @@ async function presentedName(token, typed) {
 
   // ---- 2. THE CONTROL: a row the server really wrote still works ------------
   // Without this the fix could be "always null" and case 1 would still pass.
-  const good = await presentedName('tok-honest', HONEST);
+  // ODD, not HONEST: HONEST passes the guidelines and would be shown with a
+  // null ws.chosenName too (see ODD's note above).
+  const good = await presentedName('tok-odd', ODD);
   if (good.err) fail(`(2) ${good.err}`);
-  else if (good.name === HONEST) ok(`(2) a row whose callsign DOES normalise to its key is still presented verbatim (${JSON.stringify(HONEST)})`);
+  else if (good.name === ODD) ok(`(2) a row whose callsign DOES normalise to its key is still presented verbatim (${JSON.stringify(ODD)}, a name only ws.chosenName can admit)`);
   else fail(`(2) an honestly stored chosen callsign was replaced with ${JSON.stringify(good.name)} — the proof is too strict`);
 
   // ---- 3. the sink really did read both rows --------------------------------
   // Guards the shape of failure where the profile read never happened and both
   // answers above are "no chosen name" for a reason that has nothing to do
   // with the proof under test.
-  if (profileHits.includes(TAMPER_ID) && profileHits.includes(HONEST_ID)) {
+  if (profileHits.includes(TAMPER_ID) && profileHits.includes(ODD_ID)) {
     ok(`(3) the sink read both profile rows (${profileHits.length} read(s)) — cases 1 and 2 are about the proof, not a missing read`);
   } else {
     fail('(3) the sink never read one of the profile rows: ' + JSON.stringify(profileHits));
@@ -300,15 +322,16 @@ async function presentedName(token, typed) {
     const ws = await open();
     send(ws, { type: 'hello', token: 'tok-slow' });      // resolves in SLOW_MS
     await sleep(60);
-    send(ws, { type: 'hello', token: 'tok-honest' });    // resolves at once
+    send(ws, { type: 'hello', token: 'tok-odd' });       // resolves at once
     await sleep(SLOW_MS + 500);
-    send(ws, { type: 'create', name: HONEST, skin: 'olive', mode: 'duel' });
+    // ODD, for case 2's reason: only the socket's own chosenName can show it.
+    send(ws, { type: 'create', name: ODD, skin: 'olive', mode: 'duel' });
     const lobby = await wait(ws, 'lobby');
     const name = lobby && lobby.players && lobby.players[0] && lobby.players[0].name;
     try { send(ws, { type: 'leave' }); } catch {}
     try { ws.close(); } catch {}
-    if (name === HONEST) ok(`(5) the LATER hello owns the socket — the slow first one cannot overwrite it`);
-    else fail(`(5) a slow first hello overwrote the second: presenting ${JSON.stringify(HONEST)} gave `
+    if (name === ODD) ok(`(5) the LATER hello owns the socket — the slow first one cannot overwrite it`);
+    else fail(`(5) a slow first hello overwrote the second: presenting ${JSON.stringify(ODD)} gave `
       + `${JSON.stringify(name)}, so ws.chosenName belongs to the account the client already left`);
   }
 

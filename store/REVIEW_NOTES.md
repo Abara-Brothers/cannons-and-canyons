@@ -4,9 +4,10 @@
 > 2026-08-15 from the shipping code, not from the marketing copy. Keep it short in the
 > field itself — the detail below is here so whoever submits can answer follow-ups.
 
-> **OWNER — read this before you paste.** THREE things ARE behind Google sign-in from this release:
-> a callsign the player types, the Friends screen, and starting a squad or inviting friends to one
-> (joining a squad by its code or link needs no account). Apple Guideline 2.1 expects working demo
+> **OWNER — read this before you paste.** TWO things ARE behind Google sign-in from this release:
+> the Friends screen (with a unique callsign other players can search for), and starting a squad or
+> inviting friends to one (joining a squad by its code or link needs no account). Since build 8
+> every player may type their own callsign, a guest included. Apple Guideline 2.1 expects working demo
 > credentials for anything behind a login, so decide before submitting whether to supply a test
 > Google account or to say you will provide one on request, and add that line to the block below.
 > The sentence that used to stand here — "there is no review test account because there is nothing
@@ -16,8 +17,8 @@
 
 > **No account is needed to play**, and none is needed to report a callsign or block a player
 > either. Every mode is reachable without signing in. Signing in with Google is optional. It
-> saves progress across devices and it adds exactly three things: a callsign the player types instead
-> of one rolled for them, the Friends screen, and starting a squad or inviting friends to one.
+> saves progress across devices and it adds exactly two things: the Friends screen, where friends
+> find each other by a unique callsign or a friend code, and starting a squad or inviting friends to one.
 > **Joining** a squad or a game by its code or link stays open to everyone, signed in or not. No
 > mode, weapon, level or gameplay feature is behind it.
 >
@@ -34,10 +35,11 @@
 > Use ANGLE and POWER in the CONTROLS drawer, then the red **FIRE** button.
 >
 > **There is no chat. The only thing a player can type is their own callsign.** A callsign is
-> 3 to 16 characters — letters, digits and spaces — and only a signed-in player can set one; a
-> player who does not set one is given a name rolled from the game's own word lists. A typed
-> callsign is checked on our server against a blocklist before it is stored, so a rejected name
-> is never visible to anyone. Wherever another player is shown there is a menu with **Report
+> 3 to 16 characters — letters, digits and spaces — and any player may set one, at most once a day;
+> a player who does not is given a name rolled from the game's own word lists, once, and keeps it.
+> A typed callsign is checked on our server against a blocklist before a signed-in player's is
+> stored, and again every time any player's name enters a match, so a rejected name is never
+> visible to anyone. Wherever another player is shown there is a menu with **Report
 > name** and **Block**, and neither needs a signed-in account: the automatic account the game
 > gives every player once they start playing is enough, so a guest can use both. There is no
 > message field of any kind, in any mode: the callsign is the whole of what one player can put in
@@ -85,13 +87,15 @@ alphabet, shared as a link or typed in. A room is joinable only while it is wait
 Disconnects are covered by a 2-minute grace period; duels can be resumed asynchronously
 for 24 hours.
 
-**Chosen callsigns, friends, reporting and blocking (new in this version):** a signed-in player
-may set their own callsign instead of rolling one. It is 3 to 16 characters — Unicode letters,
-digits and spaces — unique across the game, changeable once a day, and rejected if a folded form
+**Chosen callsigns, friends, reporting and blocking (new in this version):** any player may set
+their own callsign instead of keeping the one rolled for them. It is 3 to 16 characters — Unicode
+letters, digits and spaces — changeable once a day, and rejected if a folded form
 of it (diacritics stripped, look-alikes mapped — 0/o, 1/i, 3/e, 4/a, 5/s, 7/t, @/a, $/s, |/i —
-and everything but a letter removed) contains any term in the server's blocklist file. The check
-runs on the server before the name is stored, so a name that fails is never shown to anyone,
-including the player's opponents. A player who has not signed in keeps a rolled name. Players add
+and everything but a letter removed) contains any term in the server's blocklist file. A signed-in
+player's callsign is also unique across the game; a guest's is kept on their own device. The check
+runs on the server, before a signed-in player's name is stored and again at the door of every
+match for every player's name, so a name that fails is never shown to anyone, including the
+player's opponents. Players add
 each other with a 6-character friend code or by searching for an exact callsign. Every player
 card — friends list, search result, lobby seat, in-match card — carries a menu with **Report
 name** and **Block**, so a player can report or block any player they are in a match with and not
@@ -104,8 +108,8 @@ signed-in account**: the automatic account the game creates for every player is 
 who sees an offensive name in a lobby can use both without ever signing in. That automatic account
 is created lazily, on the first shot a player takes, so someone who has just installed the game and
 joined a room without firing yet does not have one and the menu asks them to sign in until they do
-— see the note in "Things that look like bugs and are not". Setting a callsign and using friends do
-need a signed-in account. The published contact for any report or complaint is
+— see the note in "Things that look like bugs and are not". Using friends does need a signed-in
+account; setting a callsign does not. The published contact for any report or complaint is
 support@abarabrothers.com.
 
 **Squads and invites (new in this version):** a signed-in player can gather up to three friends into a

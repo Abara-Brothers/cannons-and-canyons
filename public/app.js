@@ -1012,7 +1012,7 @@ function mergeCloudProgression(cloud) {
 // (which always pushes after merging) heals it. No push ever blocks play.
 //
 // The worth-it gate is what keeps sign-in genuinely lazy: boot() rolls a
-// callsign for every first-time visitor, and setCallsign queues a push — so
+// callsign for every first-time visitor, and setLocalName queues a push — so
 // without this gate every drive-by page load would mint an anonymous auth
 // user four seconds in. An existing session, or any real progress, opens it.
 function cloudWorthIt() {
@@ -1884,8 +1884,12 @@ function socialPresence(m) {
 const CALLSIGN_HOLD_MS = 10000;          // how long a confirmed name outranks a null snapshot
 let csHeld = null;                       // that name, or null
 let csHeldAt = 0;                        // when it was confirmed -- the window runs from here
-let csCleared = false;                   // and THIS client has since had a Roll accepted
-function csHold(name) { csHeld = name; csHeldAt = Date.now(); csCleared = false; }
+function csHold(name) { csHeld = name; csHeldAt = Date.now(); }
+// THE DAY BETWEEN NAME CHANGES (owner, 2026-10-07), read by sendCallsign and
+// sendGuestName below and by nameWait() in the callsign section. Declared here,
+// ahead of every function that reads them.
+const NAME_DAY_MS = 86400000;
+const NAME_AT_KEY = 'cc_name_at';        // when a GUEST last kept a name on this device (ms)
 function csFresh() { return !!csHeld && Date.now() - csHeldAt < CALLSIGN_HOLD_MS; }
 // The ONE place window.CC_SOCIAL is written wholesale.
 function socialSnapshot(m) {
@@ -1906,9 +1910,9 @@ function socialSnapshot(m) {
   // flight, and a name confirmed within CALLSIGN_HOLD_MS -- a push built from a
   // read that began before the write cannot be ordered by any frame, but it can
   // be outlived. BOUNDED so the cross-device case still works: set on one
-  // device, roll on another, and the null push is believed once the ten seconds
-  // are out. It also ends early, the moment a snapshot carries a name or this
-  // client rolls one away itself.
+  // device, roll on another (an OLD build — builds 6 and 7 still offer Roll
+  // until they update), and the null push is believed once the ten seconds are
+  // out. It also ends early, the moment a snapshot carries a name.
   let held;
   if (fresh) { held = fresh; csHold(fresh); }
   else if (callsignPending > 0) held = cur ? cur.callsign : csHeld;
@@ -1932,20 +1936,17 @@ function socialSnapshot(m) {
   // day's quota for one — so a device that is showing something else adopts it.
   // Without this, choosing a name on one phone and playing on another shows the
   // rolled pair, and room-engine.js's exemption only accepts a chosen name the
-  // client actually presents. CC_SOCIAL is already written above, so the roll
-  // guard in setCallsign() sees the name it is being given and stays quiet.
-  if (held && ($('nameInput').value || '').trim() !== held) setCallsign(held);
+  // client actually presents. setLocalName, not setOwnName: the name belongs to
+  // the ACCOUNT, and the device's own is what it goes back to on sign-out.
+  if (held && ($('nameInput').value || '').trim() !== held) setLocalName(held);
 }
 // Whether THIS account holds a chosen callsign, and which. Written on every
-// accepted callsign reply — a string for Set, null for Roll — so the Bay is
-// right between snapshots.
+// accepted Set, so the Bay is right between snapshots. (A Roll used to write
+// null here; there is no Roll any more — owner, 2026-10-07.)
 function socialCallsign(v) {
   // The memory is kept whether or not there is a snapshot to put it in: it is
-  // what the server has told THIS client, and both the roll guard and the
-  // bounded window above read it. A cleared key is recorded as cleared, which is
-  // the one thing that lets the roll guard stay quiet with no snapshot in hand.
-  if (v == null) { csHeld = null; csHeldAt = 0; csCleared = true; }
-  else csHold(String(v));
+  // what the server has told THIS client, and the bounded window above reads it.
+  csHold(String(v));
   // AND NOTHING IS FABRICATED. `CC_SOCIAL === null` means NOT KNOWN YET, never
   // "empty" -- inventing a snapshot here would tell the rest of the session that
   // this account has no friends, no blocks and no friend code, and socialNeed()
@@ -2039,15 +2040,18 @@ document.addEventListener('cc:account', () => {
   window.CC_SQUAD_INVITE = null;
   // GIVE THE NAME UP -- the symmetric act to adopting it. socialSnapshot() makes
   // a chosen callsign this device's name because the name belongs to the
-  // ACCOUNT; when the account goes, the name has to go with it. Without this the
-  // home screen goes on printing a chosen name while every lobby shows the
-  // rolled pair the server gives an unproven one, a mismatch that could not
-  // happen before this feature. setLocalName(), never setCallsign(): handing
-  // back a key that is no longer ours is not this client rolling, and the roll
-  // guard must not send a clearing frame on behalf of whoever is signed in now.
+  // ACCOUNT; when the account goes, the name has to go with it, or the device
+  // goes on wearing a unique callsign the account it belongs to has left.
+  //
+  // BACK TO THE DEVICE'S OWN NAME, NOT A FRESH ROLL (owner, 2026-10-07: names
+  // are permanent, "disable the ability to cycle through new names"). That is
+  // the default this device was given once, or the name a guest set on it
+  // (ownName). Only a device that never kept one of its own — one that came up
+  // from a build before 8 with the account's name in pt_name and nothing else
+  // — is given its one default here, and it is kept from then on.
   const gone = (window.CC_SOCIAL && window.CC_SOCIAL.callsign) || csHeld;
-  csHeld = null; csHeldAt = 0; csCleared = false;
-  if (gone && ($('nameInput').value || '').trim() === gone) setLocalName(rollCallsign(gone));
+  csHeld = null; csHeldAt = 0;
+  if (gone && ($('nameInput').value || '').trim() === gone) setOwnName(ownName() || rollCallsign(gone));
   // A REFUSAL BELONGS TO THE ACCOUNT THAT ASKED FOR IT, and it is cleared here
   // BEFORE the early return below -- a refusal is precisely the case where
   // CC_SOCIAL is still null, so returning first would step over the sentence
@@ -2087,12 +2091,13 @@ function sendCallsign(name, cb) {
   const frame = { type: 'callsign', name: String(name == null ? '' : name) };
   const settle = (m, retried) => {
     callsignPending--;
-    // A ROLLED reply is {ok:true, callsign:null} and must never reach
-    // setCallsign(): writing null into #nameInput renames the player "null" and
-    // cloudQueue() pushes that to the profile row.
+    // An ok reply with NO name -- the server's answer to an old build's roll,
+    // {ok:true, callsign:null} -- must never reach setLocalName(): writing null
+    // into #nameInput renames the player "null" and cloudQueue() pushes that to
+    // the profile row.
     if (m && m.ok && typeof m.callsign === 'string') {
-      socialCallsign(m.callsign);   // BEFORE setCallsign: the roll guard there compares against it
-      setCallsign(m.callsign);
+      socialCallsign(m.callsign);   // BEFORE the name lands: the Bay repaints from cc:social
+      setLocalName(m.callsign);
       cb({ ok: true, callsign: m.callsign });
       return;
     }
@@ -2133,7 +2138,15 @@ function sendCallsign(name, cb) {
     // about a write of its own and is not re-read, or every refusal in the
     // window before the migration would spend a friends frame for nothing.
     if (err === 'offline' || (m && m.timedOut === true)) socialResync();
-    cb({ ok: false, error: err });
+    // WHEN, AS WELL AS NO (owner, 2026-10-07: "You can change your name again
+    // in 7 hours"). server/social.js puts what is left of the account's day on
+    // a too_soon refusal, in milliseconds, so the editor can say when without
+    // this device having seen the set that started it -- the account's day is
+    // the SERVER's, which is why nothing here gates a signed-in Save before
+    // asking. Bounded by a day, so a malformed number cannot claim more than
+    // the rule.
+    const wait = err === 'too_soon' && m && Number.isFinite(m.wait) && m.wait > 0 ? Math.min(m.wait, NAME_DAY_MS) : 0;
+    cb(wait ? { ok: false, error: err, wait } : { ok: false, error: err });
   };
   callsignPending++;
   socialSend(frame, (m) => settle(m, false));
@@ -2144,29 +2157,33 @@ function socialReHello() {
   } catch {}
   return Promise.resolve();
 }
-// ROLL (design 4.5: "setting a chosen name then rolling clears the key"). The
-// frame carries NO name — the rolled display name rides the existing
-// cloudQueue() path exactly as it always has, and the server touches only
-// callsign_key. callsign_set_at is deliberately left alone, so roll-then-set is
-// not a way around the once-a-day rule. A refusal leaves the held name in place,
-// which is the truth: the account still holds the key, and the next Roll asks
-// again.
-function socialRolled() {
-  callsignPending++;
-  socialSend({ type: 'callsign', rolled: true }, (m) => {
-    callsignPending--;
-    if (!m || !m.ok) return;
-    socialCallsign(null);
-    // AND PUSH THE ROLLED NAME ONCE THE KEY IS ACTUALLY GONE. The server's roll
-    // branch clears `callsign_key` and deliberately LEAVES `callsign` holding
-    // the surrendered chosen name -- its comment says the rolled display form is
-    // written by this client's own cloud queue. That queue's write is now
-    // guarded on `callsign_key=is.null` (cloud.js), so the save setCallsign()
-    // already scheduled can fire before the server has cleared the key and
-    // simply not match; without this the row would keep showing a name the
-    // account has given up until the next save happened to land. Debounced and
-    // coalescing, like every other cloudQueue() call.
-    cloudQueue();
+// A GUEST'S NAME (owner, 2026-10-07: "the player is given a default name and
+// then they can change it to whatever they like, as long as it stays within
+// the guidelines"). A guest has no account a chosen callsign could live on, so
+// their name lives on THIS device — and the server is asked FIRST, with
+// {type:'callsign', op:'check'} (server/social.js checkName), which is the very
+// test the room engine applies at the door. So a name kept here is a name a
+// lobby will show, and one the guidelines refuse is never kept. Nothing is
+// stored on the server. What is kept is the reply's NORMALISED name, never the
+// typed copy, for the reason the engine shows the server's string.
+//
+// ONCE A DAY, COUNTED ON THIS DEVICE (the controller's stated default): a guest
+// has nothing the server could count by, so the device stamps the moment a
+// name is kept and sends nothing until the day is out.
+function sendGuestName(name, cb) {
+  const wait = nameWait();
+  if (wait > 0) { cb({ ok: false, error: 'too_soon', wait }); return; }
+  // The in-page offline stand-in carries no social code (room-engine.js is the
+  // module the offline page runs), so a frame sent into it is never answered.
+  if (S.local) { cb({ ok: false, error: 'offline' }); return; }
+  socialSend({ type: 'callsign', op: 'check', name: String(name == null ? '' : name) }, (m) => {
+    if (m && m.ok && typeof m.name === 'string' && m.name) {
+      try { localStorage.setItem(NAME_AT_KEY, String(Date.now())); } catch {}
+      setOwnName(m.name);
+      cb({ ok: true, callsign: m.name });
+      return;
+    }
+    cb({ ok: false, error: (m && m.error) || 'offline' });
   });
 }
 
@@ -2673,6 +2690,13 @@ async function startLocal(m) {
   //   server", so it feeds the engine's message router.
   const engineLink = {
     readyState: 1,                     // the engine's own send() gate
+    // THIS PLAYER'S OWN NAME, admitted by the engine's `allowed` door. Offline
+    // there is no server, so no name check is installed (room-engine.js
+    // setNameCheck) and a name the player SET -- a guest's, or a signed-in
+    // account's chosen one -- would otherwise be swapped for a rolled pair in
+    // their own match. Nobody else is in an offline match to be shown it, and
+    // the engine still holds it to isProfane.
+    chosenName: myName(),
     send: (str) => {
       const msg = JSON.parse(str);
       // Async on purpose: the engine finishes its whole broadcast before any
@@ -2964,8 +2988,13 @@ function handle(m) {
 // ---------------------------------------------------------------------------
 // Home / lobby
 // ---------------------------------------------------------------------------
-// Callsigns. Nobody wants to fill in a form before they can play, so we hand out
-// an artillery/canyon-flavoured name and let the player re-roll or type over it.
+// Callsigns. Nobody wants to fill in a form before they can play, so the first
+// launch hands out an artillery/canyon-flavoured name -- ONCE, and it is kept
+// (owner, 2026-10-07: "the player ID names need to be permanent, disable the
+// ability to cycle through new names"). There is no Roll any more. A player
+// who wants another name sets one in the callsign editor (bay.js), within the
+// guidelines, once a day: a signed-in account through the server's chosen
+// callsign (sendCallsign), a guest on this device (sendGuestName).
 // The NOUN is drawn first and only adjectives that still fit are eligible, so a
 // roll can never exceed the input's maxlength and be silently truncated.
 // 37 × 41 words → 1454 valid pairs, all 9–14 chars.
@@ -3011,46 +3040,55 @@ function rollCallsign(prev) {
   }
   return 'Iron Ridge';
 }
-// The LOCAL write, with no roll guard on it. Renaming this device is not the
-// same act as giving a uniqueness key back, and the one caller that must never
-// be mistaken for a roll is signing out: the key being dropped there belongs to
-// an account this socket no longer speaks for.
+// THE NAME ON SHOW, wherever it came from: this device's own (below), or a
+// signed-in account's chosen callsign adopted from the server. It sends no
+// frame of any kind -- a current client never gives a key back, because there
+// is no Roll to give it back for.
 function setLocalName(name) {
   $('nameInput').value = name;
   try { localStorage.setItem('pt_name', name); } catch {}
   cloudQueue();          // the profile row carries the callsign too
 }
-function setCallsign(name) {
+// THE DEVICE'S OWN NAME, kept apart from the one on show. A signed-in account's
+// chosen callsign is ADOPTED as this device's name and handed back when the
+// account goes; what the device goes back to then is this -- the default it was
+// given once at its first launch, or the name a guest set on it -- and never a
+// fresh roll, because a name is permanent. pt_name alone could not say which
+// of the two it was holding.
+const OWN_NAME_KEY = 'cc_name_own';
+function ownName() { try { return localStorage.getItem(OWN_NAME_KEY) || ''; } catch { return ''; } }
+function setOwnName(name) {
+  try { localStorage.setItem(OWN_NAME_KEY, name); } catch {}
   setLocalName(name);
-  // A roll over a CHOSEN name must clear the server's uniqueness key, or the
-  // name stays reserved by an account that no longer shows it. One frame per
-  // chosen name, and never more: sendCallsign() and socialSnapshot() both set
-  // CC_SOCIAL.callsign BEFORE calling this, so taking a chosen name never looks
-  // like a roll; and once the server has cleared the key CC_SOCIAL.callsign is
-  // null, so a player mashing rerollBtn sends nothing further and never trips
-  // the 3-per-minute bucket. A guest has no key to give back, hence
-  // socialSignedIn().
-  //
-  // NOT KNOWING IS NOT KNOWING THERE IS NOTHING. `CC_SOCIAL === null` means the
-  // read model has not arrived -- or was refused, which is every social frame
-  // until the migration is applied -- and concluding "no key" from it is the
-  // expensive mistake: the player rolls, no clearing frame is sent, and the name
-  // stays reserved to an account that no longer shows it, with no way to learn
-  // that and no way to undo it. With no snapshot the client assumes a key MIGHT
-  // be held and gives it back. The server answers ok either way and does not
-  // even touch the database when there was nothing to clear (server/social.js,
-  // the rolled branch), so the wrong guess costs one frame and nothing else.
-  if (!socialSignedIn()) return;
-  const snap = window.CC_SOCIAL;
-  if (name === (snap ? snap.callsign : csHeld)) return;   // adopting a chosen name is not a roll
-  if (snap ? snap.callsign == null : csCleared) return;   // nothing left to give back
-  socialRolled();
 }
-$('rerollBtn').onclick = () => {
-  Audio.ensure();
-  setCallsign(rollCallsign(($('nameInput').value || '').trim()));
-};
-
+// A pair from the two lists above, exactly as rollCallsign spells one. bay.js
+// asks it so the editor opens on a name the player CHOSE and never on the
+// default nobody picked (pre-filling that would invite spending the day's one
+// change to freeze it), and boot() asks it to know a pre-build-8 device's own
+// name when it sees one.
+function rolledPair(name) {
+  const p = String(name == null ? '' : name).split(' ');
+  return p.length === 2 && CALL_ADJ.includes(p[0]) && CALL_NOUN.includes(p[1]);
+}
+// ONE CHANGE A DAY (owner, 2026-10-07: "player can change their name once a
+// day"). How long before THIS device's guest may change their name, in ms, 0
+// when they may now. A GUEST's day is this device's (NAME_AT_KEY, stamped by
+// sendGuestName), so the device holds the editor's Save until it is out. A
+// signed-in account's day is the SERVER's (callsign_set_at): this answers 0 for
+// one, its Save always asks, and a too_soon refusal says how long is left
+// (sendCallsign). NAME_DAY_MS and NAME_AT_KEY are declared with csHeld.
+function nameWait() {
+  if (socialSignedIn()) return 0;
+  let at = NaN;
+  try { at = Number(localStorage.getItem(NAME_AT_KEY)); } catch {}
+  if (!Number.isFinite(at) || at <= 0) return 0;
+  const left = at + NAME_DAY_MS - Date.now();
+  // A stamp from the FUTURE -- the device clock was set back -- opens the gate
+  // rather than holding it shut for longer than a day. Failing OPEN, for the
+  // server's own reason: a bad timestamp must never lock a player out of their
+  // own name.
+  return left > 0 && left <= NAME_DAY_MS ? left : 0;
+}
 function savedName() { return localStorage.getItem('pt_name') || ''; }
 function myName() {
   const n = ($('nameInput').value || '').trim() || savedName() || rollCallsign(null);
@@ -8589,7 +8627,12 @@ function boot() {
   // name the player actually owns, not one we just handed them a millisecond ago.
   const hadName = !!savedName();
   if (hadName) $('nameInput').value = savedName();
-  else setCallsign(rollCallsign(null));
+  else setOwnName(rollCallsign(null));
+  // A DEVICE FROM BEFORE BUILD 8 kept its name in pt_name alone. A rolled pair
+  // there is its own default, so it is remembered as such and a sign-out comes
+  // back to it; anything else there was an account's chosen name, which is not
+  // the device's to keep, and a sign-out gives that device its one default.
+  if (hadName && !ownName() && rolledPair(savedName())) { try { localStorage.setItem(OWN_NAME_KEY, savedName()); } catch {} }
   $('muteBtn').innerHTML = Audio.muted ? UI_IC.speakerOff : UI_IC.speakerOn;
   buildSkinRow();
   // ONE PARSER, and the legacy field is prefilled for a ROOM link only: that

@@ -7,7 +7,9 @@
 // itself PATCHes on every cloud save. It was pulled out of server/social.js when
 // a second call site needed the same rule; that call site was removed on
 // 2026-09-30, and the module stayed, because a security rule with its own suite
-// is worth more than an import count. A rule copied into two files drifts, and a
+// is worth more than an import count. It has a second caller again since
+// 2026-10-07: server.js installs its playerName as the room engine's name check
+// (section 7). A rule copied into two files drifts, and a
 // drift here fails OPEN on the one string every other player has to look at
 // (BINDING.md resolution 27). So the rule is ONE module with ONE suite, and this
 // is it.
@@ -241,6 +243,75 @@ const proofs = createNameProofs({ terms });
     else fail('(6) rolledName does not call isGeneratedCallsign — proof 2 no longer proves anything');
     if (/!isProfane\(/.test(body)) ok('(6) rolledName also refuses a profane pair, so a future list addition cannot ship one');
     else fail('(6) rolledName no longer applies isProfane — a profane pair added to the curated lists would be carried by proof 2');
+  }
+}
+
+// ---- 7. THE GUIDELINES: a name a player typed (owner, 2026-10-07) ----------
+// "The player is given a default name and then they can change it to whatever
+// they like, as long as it stays within the guidelines." checkPlayerName is the
+// guidelines — the callsign rules, the SHIPPED blocklist and the engine's own
+// isProfane — answered with the reason, for the check op that tells a player;
+// playerName is the same test as a yes-or-no, for the room engine's door. One
+// function behind both, driven here against the real list, because a name the
+// check passes and the lobby then renames would be the same broken promise the
+// two-list drift above is about.
+{
+  const { checkPlayerName, playerName } = proofs;
+  if (typeof checkPlayerName === 'function' && typeof playerName === 'function')
+    ok('(7) createNameProofs also returns checkPlayerName and playerName');
+  else fail('(7) checkPlayerName / playerName are missing from createNameProofs');
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  if (typeof checkPlayerName === 'function' && typeof playerName === 'function') {
+    // A good name, normalised the one way validateCallsign does it.
+    if (same(checkPlayerName('  Tank   Ace' + NBSP), { ok: true, name: 'Tank Ace' }) && playerName('  Tank   Ace' + NBSP) === 'Tank Ace')
+      ok('(7) a good name passes, trimmed and collapsed to the one normalised form, and that form is what playerName returns');
+    else fail(`(7) good name: ${JSON.stringify(checkPlayerName('  Tank   Ace' + NBSP))} / ${JSON.stringify(playerName('  Tank   Ace' + NBSP))}`);
+    // Every refusal says why, and playerName says null for every one.
+    const CASES = [['ab', 'length'], ['x'.repeat(17), 'length'], ['Tank<b>', 'chars'], ['', 'length'], [null, 'length']];
+    // A SHIPPED blocklist term in the shape a player types. Named by its line.
+    const term = terms.find((t) => t.length >= 3 && t.length <= 10);
+    if (term) CASES.push([`${term[0].toUpperCase()}${term.slice(1)} Ridge`, 'not_allowed', `the blocklist term on line ${line(term)}`]);
+    else fail('(7) no blocklist term short enough for the "<term> Ridge" shape');
+    // An engine-only term: refused by isProfane, PASSED by the shipped list.
+    // Derived from public/game-core.js, never spelled here.
+    const core = readFileSync(fileURLToPath(new URL('../public/game-core.js', import.meta.url)), 'utf8');
+    const listOf = (n) => [...(((core.match(new RegExp(`const ${n} = \\[([\\s\\S]*?)\\];`)) || [])[1]) || '').matchAll(/'([a-z]+)'/g)].map((m) => m[1]);
+    const gap = [...listOf('BAD_SUB'), ...listOf('BAD_WORD')]
+      .map((t) => `${t[0].toUpperCase()}${t.slice(1)} Ridge`)
+      .filter((n) => [...n].length <= 16 && validateCallsign(n, terms).ok === true);
+    if (gap.length) CASES.push([gap[0], 'not_allowed', 'an engine-only profanity term the shipped list lets through']);
+    else fail('(7) no engine term sits in the gap between the two lists — the isProfane half of the check is untested');
+    let bad = 0;
+    for (const [raw, error, label] of CASES) {
+      const v = checkPlayerName(raw);
+      // The answer is reported by its code alone: an ok answer carries the
+      // name, and for a term fixture that name IS the term.
+      if (!(same(v, { ok: false, error }) && playerName(raw) === null)) { bad++; fail(`(7) ${label || JSON.stringify(raw)} gave ${v && v.ok ? 'ok' : JSON.stringify(v && v.error)}, playerName ${playerName(raw) === null ? 'null' : 'a name'}`); }
+    }
+    if (!bad) ok(`(7) ${CASES.length} refusals carry their code and playerName answers null for each: length, chars, a shipped blocklist term, and ${gap.length} engine-only term(s) in the gap, the first of them checked`);
+    // EVERY engine-only term in the gap is refused, not a sample: the door
+    // must never show a name the lobby's isProfane would then rename.
+    const leaked = gap.filter((n) => playerName(n) !== null);
+    if (!leaked.length) ok(`(7) all ${gap.length} engine-only term(s) the shipped list lets through are refused by playerName`);
+    else fail(`(7) ${leaked.length} engine-only term(s) passed playerName`);
+    // NO ROLLED PLAYER IS REFUSED: every one of the 1,454 pairs passes, so the
+    // third door never contradicts the second.
+    let pairs = 0, refused = 0;
+    for (const a of CALL_ADJ) for (const n of CALL_NOUN) {
+      const pair = `${a} ${n}`;
+      if ([...pair].length > NAME_MAX) continue;
+      pairs++;
+      if (playerName(pair) !== pair) refused++;
+    }
+    if (pairs > 1000 && refused === 0) ok(`(7) all ${pairs} rollable pairs pass the guidelines unchanged`);
+    else fail(`(7) ${refused} of ${pairs} rollable pairs are refused or altered by playerName`);
+    // NOT A PROOF: a typed name the guidelines pass still names no ROW. A panel
+    // shows a row only by its key or a curated pair, so a typed name cannot be
+    // worn in a friends list on the strength of this check.
+    if (playerName('Tank Ace') === 'Tank Ace' && proofs.displayName({ callsign: 'Tank Ace', callsign_key: null }) === null
+        && proofs.seenName({ callsign: 'Tank Ace', callsign_key: null }) === null)
+      ok('(7) a typed name that passes the guidelines still proves no profile row: displayName and seenName answer null without a key');
+    else fail('(7) a typed name was accepted as a row name');
   }
 }
 

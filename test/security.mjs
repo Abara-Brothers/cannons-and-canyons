@@ -27,7 +27,10 @@ import { isGeneratedCallsign } from '../public/game-core.js';
 // verifies, and a local test run has no Supabase and no account. Importing the
 // engine here gives a second, independent `rooms` Map with no listeners and no
 // timers, which the section tears down when it is done.
-import { handleClientMessage } from '../public/room-engine.js';
+import { handleClientMessage, setNameCheck } from '../public/room-engine.js';
+// The guidelines a typed name must meet, built the way server.js builds them,
+// so section 6 can install the server's own check on the in-process engine.
+import { createNameProofs } from '../server/display-name.js';
 // ...and the two lists, to build section 6's profanity fixture at RUN TIME
 // instead of spelling a slur in this file. The fixture has to be a term the
 // ENGINE refuses and server/blocklist.txt does NOT, because that is exactly
@@ -229,185 +232,220 @@ async function rateLimit() {
   try { ws2.close(); } catch {}
 }
 
-// ---- 6. FREE TEXT REACHES NOBODY; ONE VERIFIED NAME DOES (ISSUE-015) --------
-// The readonly input in index.html stops honest players typing; it stops nobody
-// else. This asserts the SERVER boundary: a client sending an arbitrary string
-// must have it replaced with a rolled callsign, because that name is broadcast
-// to every opponent and painted into the shared result card.
+// ---- 6. A TYPED NAME REACHES A LOBBY ONLY THROUGH THE GUIDELINES (ISSUE-015) --
+// The SERVER is the boundary on a name, because that name is broadcast to every
+// opponent and painted into the shared result card, and a modified client can
+// send any string it likes.
 //
-// The guarantee is now NARROWER BY EXACTLY ONE STRING, and this comment says so
-// rather than pretending otherwise. A player may choose a callsign; the server
-// checks its length and characters, folds it against server/blocklist.txt,
-// stores it under a unique key, and hangs the display form on the socket as
-// ws.chosenName once that account's token verifies. sanitizeName lets that one
-// string through and nothing else. So what holds now is:
-//   * an unauthenticated or guest socket still has free text replaced, always —
-//     every case below is unchanged and must keep passing;
-//   * the exemption is NOT claimable from the wire: it is a property of the
-//     socket object, set only by server.js from the profile row, so a frame
-//     carrying its own `chosenName` field buys nothing;
-//   * a verified socket may present its ONE stored name and no other string.
-// Apple Guideline 1.2 applies from the moment the first chosen name ships,
-// which is why report and block ship in the same project (design 6.4).
+// WHAT THE BOUNDARY ADMITS CHANGED ON 2026-10-07, and this section changed with
+// it. The owner: "the player is given a default name and then they can change
+// it to whatever they like, as long as it stays within the guidelines" — so a
+// typed name is no longer replaced for being typed. This section USED TO assert
+// that every free-text name over the wire came back as a rolled pair ('Iron',
+// 'iron ridge' and 'Iron Ridge Extra' among them) and that a verified socket
+// could present no string but its own stored one. Both pinned the old rule and
+// are replaced here by the new one. What holds now:
+//   * over the wire, a name INSIDE the guidelines — 3-16 letters, digits and
+//     single spaces, nothing on server/blocklist.txt, nothing the engine's own
+//     isProfane refuses — is shown in the SERVER's normalised form, never the
+//     client's copy;
+//   * a name OUTSIDE them is still replaced with a rolled pair, and the same
+//     input always yields the same pair;
+//   * the door is the HOST's: the engine alone (the offline page, imported
+//     here in process with no check installed) still replaces every typed
+//     name, and a check that throws or answers nonsense opens nothing;
+//   * the chosen-callsign exemption is unchanged, still not claimable from the
+//     wire, and still not exempt from isProfane.
 async function noFreeTextNames() {
-  const attempts = [
-    'FOLLOW ME ON TIKTOK',        // advertising — the common real-world abuse
-    'x  x',                       // shape of a callsign, words not on the list
-    'Iron',                       // half a callsign
-    'Iron  Ridge',                // right words, wrong spacing
-    'iron ridge',                 // right words, wrong case
-    'Iron Ridge Extra',           // right words, extra token
-    '<img src=x onerror=alert(1)>',
-    '',
-  ];
-  let clean = 0;
-  for (const attempt of attempts) {
-    const before = out.errors.length;
+  const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+  const terms = loadBlocklist(path.join(ROOT, 'server', 'blocklist.txt'));
+  // The engine's own lists, read out of public/game-core.js to build fixtures
+  // at RUN TIME instead of spelling a slur in this file. game-core.js, not
+  // room-engine.js: the profanity lists moved there when server/social.js
+  // started applying the same test to a name in a friends panel, so the engine
+  // and the social layer share ONE copy.
+  const engineSrc = readFileSync(path.join(ROOT, 'public', 'game-core.js'), 'utf8');
+  const listOf = (n) => [...(((engineSrc.match(new RegExp(`const ${n} = \\[([\\s\\S]*?)\\];`)) || [])[1]) || '').matchAll(/'([a-z]+)'/g)].map((m) => m[1]);
+  const badSub = listOf('BAD_SUB'), badWord = listOf('BAD_WORD');
+  if (!badSub.length || !badWord.length) fail('could not read BAD_SUB / BAD_WORD out of public/game-core.js — the fixtures below prove nothing');
+  // The 'Xxxx Ridge' shape is the one a player actually types. GAP: the engine
+  // refuses it and the shipped blocklist does not — the names only isProfane
+  // keeps off the board. LISTED: the shipped blocklist refuses it.
+  const shape = (t) => `${t[0].toUpperCase()}${t.slice(1)} Ridge`;
+  const shapes = [...badSub, ...badWord].map(shape).filter((n) => [...n].length <= 16);
+  const gap = shapes.filter((n) => validateCallsign(n, terms).ok === true);
+  const listed = terms.map(shape).find((n) => [...n].length <= 16);
+  const lobbyName = async (name) => {
     const ws = await open();
-    send(ws, { type: 'create', name: attempt, skin: 'olive', mode: 'duel' });
+    send(ws, { type: 'create', name, skin: 'olive', mode: 'duel' });
     const m = await wait(ws, 'lobby');
-    const shown = m && m.players && m.players[0] && m.players[0].name;
     try { ws.close(); } catch {}
-    if (!shown) { fail(`no name came back for ${JSON.stringify(attempt)}`); continue; }
-    if (shown === attempt) { fail(`free-text name survived: ${JSON.stringify(attempt)}`); continue; }
-    if (!isGeneratedCallsign(shown)) {
-      fail(`replacement ${JSON.stringify(shown)} is not a callsign from the curated lists`);
-    }
-    if (out.errors.length === before) clean++;
+    return m && m.players && m.players[0] && m.players[0].name;
+  };
+
+  // a. OUTSIDE THE GUIDELINES: replaced with a curated pair, over the wire.
+  //    No term is ever printed: a refused fixture is named by its kind.
+  const refused = [
+    ['FOLLOW ME ON TIKTOK', 'too long'],          // advertising — the common real-world abuse, and 19 characters
+    ['<img src=x onerror=alert(1)>', 'markup'],
+    ['', 'empty'],
+    ['Io', 'too short'],
+    ['Iron!', 'punctuation'],
+    ['follow.me/x', 'a link'],
+  ];
+  if (listed) refused.push([listed, 'a term on the shipped blocklist']);
+  else fail('no shipped blocklist term fits the "<term> Ridge" shape — the blocklist half of the door is untested');
+  if (gap.length) refused.push([gap[0], 'a term only the engine refuses']);
+  let clean = 0;
+  for (const [attempt, why] of refused) {
+    const shown = await lobbyName(attempt);
+    if (!shown) { fail(`no name came back for ${why}`); continue; }
+    if (shown === attempt || !isGeneratedCallsign(shown)) { fail(`a name outside the guidelines (${why}) came back as ${shown === attempt ? 'itself' : 'something that is not a curated pair'}`); continue; }
+    clean++;
   }
   // Only claim success for the ones that actually passed — a blanket "all
   // replaced" alongside individual FAIL lines is how a bad run reads as good.
-  if (clean === attempts.length) step(`${attempts.length} free-text names all replaced with rolled callsigns`);
-  else fail(`only ${clean}/${attempts.length} free-text names were replaced`);
+  if (clean === refused.length) step(`${refused.length} names outside the guidelines (length, markup, punctuation, a link, the shipped blocklist, the engine's own list) all replaced with rolled callsigns`);
+  else fail(`only ${clean}/${refused.length} names outside the guidelines were replaced`);
 
-  // Deterministic, not random: the same rejected input must yield the same
-  // callsign, or a reconnecting player changes identity mid-match and a griefer
-  // can reroll until they land on something they wanted.
-  const seen = [];
-  for (let i = 0; i < 2; i++) {
-    const ws = await open();
-    send(ws, { type: 'create', name: 'SAME BAD INPUT', skin: 'olive', mode: 'duel' });
-    const m = await wait(ws, 'lobby');
-    seen.push(m && m.players && m.players[0] && m.players[0].name);
-    try { ws.close(); } catch {}
+  // EVERY engine-only term, not one: the door must never show a name the
+  // engine's own filter would refuse, whatever the shipped list is missing.
+  let leakedGap = 0;
+  for (const dirty of gap.slice(1)) { const got = await lobbyName(dirty); if (got === dirty || !got || !isGeneratedCallsign(got)) leakedGap++; }
+  if (!leakedGap) step(`all ${gap.length} engine-only term(s) the shipped blocklist lets through are replaced at the door over the wire`);
+  else fail(`${leakedGap} engine-only term(s) reached a lobby verbatim`);
+
+  // b. INSIDE THE GUIDELINES: shown, in the SERVER's normalised form.
+  const kept = [
+    ['Iron', 'Iron'],                             // half a callsign is now just a short name
+    ['iron ridge', 'iron ridge'],                 // case is the player's to choose
+    ['Iron Ridge Extra', 'Iron Ridge Extra'],     // 16 characters, the most there may be
+    ['  Tank   Ace ', 'Tank Ace'],                // trimmed and collapsed: the server's string, not the client's
+    ['x  x', 'x x'],
+  ];
+  let shownOk = 0;
+  for (const [attempt, want] of kept) {
+    const shown = await lobbyName(attempt);
+    if (shown === want) shownOk++;
+    else fail(`a name inside the guidelines ${JSON.stringify(attempt)} came back as ${JSON.stringify(shown)} (want ${JSON.stringify(want)})`);
   }
-  if (seen[0] && seen[0] === seen[1]) step(`replacement is deterministic ('${seen[0]}' twice)`);
+  if (shownOk === kept.length) step(`${kept.length} names inside the guidelines are shown over the wire, normalised by the server`);
+
+  // c. Deterministic, not random: the same rejected input must yield the same
+  //    callsign, or a reconnecting player changes identity mid-match and a
+  //    griefer can reroll until they land on something they wanted.
+  const seen = [await lobbyName('SAME BAD INPUT!'), await lobbyName('SAME BAD INPUT!')];
+  if (seen[0] && seen[0] === seen[1] && isGeneratedCallsign(seen[0])) step(`replacement is deterministic ('${seen[0]}' twice)`);
   else fail(`replacement is not deterministic: ${seen.join(' vs ')}`);
 
-  // A legitimate rolled callsign must survive untouched — the filter must not
-  // rename players who did nothing wrong.
-  const ws = await open();
-  send(ws, { type: 'create', name: 'Iron Ridge', skin: 'olive', mode: 'duel' });
-  const m = await wait(ws, 'lobby');
-  const kept = m && m.players && m.players[0] && m.players[0].name;
-  try { ws.close(); } catch {}
-  if (kept === 'Iron Ridge') step('a valid rolled callsign is preserved exactly');
-  else fail(`valid callsign 'Iron Ridge' was altered to ${JSON.stringify(kept)}`);
+  // d. A legitimate rolled callsign must survive untouched — the filter must
+  //    not rename players who did nothing wrong.
+  const rolled = await lobbyName('Iron Ridge');
+  if (rolled === 'Iron Ridge') step('a valid rolled callsign is preserved exactly');
+  else fail(`valid callsign 'Iron Ridge' was altered to ${JSON.stringify(rolled)}`);
 
-  // The exemption, checked in process against the engine, because producing it
-  // over the wire needs a real account and a real Supabase and this run has
-  // neither. CHOSEN is 15 characters and is not a pair from the curated lists,
-  // so it can only get through the one door.
+  // e. THE ENGINE ALONE KEEPS THE DOOR SHUT. In process, this engine has no
+  //    name check installed — which is exactly the offline page, whose only
+  //    player is the one on the device. Every typed name is replaced, a
+  //    verified socket included; only its ONE stored name passes.
   const CHOSEN = 'Marguerite Vale';
-  const mkLocal = () => ({ readyState: 1, chosenName: CHOSEN, _rx: [], send(s) { this._rx.push(JSON.parse(s)); } });
+  const mkLocal = (chosen = CHOSEN) => ({ readyState: 1, chosenName: chosen, _rx: [], send(s) { this._rx.push(JSON.parse(s)); } });
   const nameIn = (w) => {
     const lobby = w._rx.find((m) => m.type === 'lobby');
     return lobby && lobby.players && lobby.players[0] && lobby.players[0].name;
   };
+  const leave = (...ws) => { for (const w of ws) { try { handleClientMessage(w, { type: 'leave' }); } catch {} } };
   const mine = mkLocal();
   handleClientMessage(mine, { type: 'create', name: CHOSEN, skin: 'olive', mode: 'duel' });
   if (nameIn(mine) === CHOSEN) step(`a server-verified chosen callsign is presented verbatim ('${CHOSEN}')`);
   else fail(`a server-verified chosen callsign was replaced with ${JSON.stringify(nameIn(mine))}`);
-
-  // ...and ONLY that one. The same verified socket may not present a second
-  // string: the exemption is one name, not a licence to type.
   const other = mkLocal();
   handleClientMessage(other, { type: 'create', name: 'Someone Else Entirely', skin: 'olive', mode: 'duel' });
   const second = nameIn(other);
   if (second && second !== 'Someone Else Entirely' && isGeneratedCallsign(second))
-    step('a verified socket still may not present any OTHER free text');
-  else fail(`a second free-text name passed on a verified socket: ${JSON.stringify(second)}`);
-
-  // AND THE EXEMPTION IS NOT EXEMPT FROM THE PROFANITY FILTER. sanitizeName
-  // used to return `allowed` BEFORE isProfane() ran, which made the one
-  // player-AUTHORED string in the product the only string exempt from the
-  // product's own check — with the server blocklist as the sole authority. The
-  // two filters are not the same list and cannot be: the blocklist is
-  // substring-matched on a folded form, so the engine's whole-token BAD_WORD
-  // terms cannot go in it at all, and terms whose folded form sits inside
-  // innocent names are deliberately left out. Anything in that gap is a name
-  // the server stores happily, and THIS is what stops it reaching a lobby.
-  //
-  // The fixture is derived, never spelled here: the first term in the engine's
-  // own BAD_SUB that the shipped blocklist does not already refuse.
-  const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-  const terms = loadBlocklist(path.join(ROOT, 'server', 'blocklist.txt'));
-  // game-core.js, not room-engine.js: the profanity lists moved there when
-  // server/social.js started applying the same test to a name in a friends
-  // panel, so that the engine and the social layer share ONE copy. Read from
-  // wherever it lives — a fixture spelled out here would be the second copy
-  // this check exists to make unnecessary.
-  const engineSrc = readFileSync(path.join(ROOT, 'public', 'game-core.js'), 'utf8');
-  const listSrc = (engineSrc.match(/const BAD_SUB = \[([\s\S]*?)\];/) || [])[1] || '';
-  const badSub = [...listSrc.matchAll(/'([a-z]+)'/g)].map((m) => m[1]);
-  if (!badSub.length) {
-    fail('could not read BAD_SUB out of public/game-core.js — the fixture below proves nothing');
-  } else {
-    // The 'Xxxx Ridge' shape is the one a player actually types, and the
-    // server's own length and character rules apply to it as well.
-    //
-    // EVERY term, not a sample. The guarantee is about the two layers TOGETHER:
-    // a term is either refused by the server filter before it is ever stored,
-    // or — when it sits in the gap between the two lists — replaced by the
-    // engine at the door. Neither layer alone covers all of them, and the count
-    // of each is printed so the split is visible when either list moves.
-    const shapes = badSub
-      .map((t) => `${t[0].toUpperCase()}${t.slice(1)} Ridge`)
-      .filter((n) => [...n].length <= 16);
-    const gap = shapes.filter((n) => validateCallsign(n, terms).ok === true);
-    const leaked = [];
-    for (const dirty of gap) {
-      const w = { readyState: 1, chosenName: dirty, _rx: [], send(s) { this._rx.push(JSON.parse(s)); } };
-      handleClientMessage(w, { type: 'create', name: dirty, skin: 'olive', mode: 'duel' });
-      const got = nameIn(w);
-      try { handleClientMessage(w, { type: 'leave' }); } catch {}
-      if (got === dirty || !got || !isGeneratedCallsign(got)) leaked.push(dirty);
-    }
-    // No term is ever printed: the messages carry counts and the shape only.
-    if (!leaked.length) {
-      step(`${shapes.length} engine BAD_SUB term(s) in the typed-name shape: ${shapes.length - gap.length}`
-        + ` refused by the server filter before storage, ${gap.length} stored but replaced at the door`
-        + ' by isProfane — none reaches a lobby');
-    } else {
-      fail(`${leaked.length} of ${gap.length} stored chosen callsign(s) carrying an engine BAD_SUB term`
-        + ' were presented VERBATIM — the exemption is returning before isProfane');
-    }
-  }
-
-  // A GUEST IS NOT EXEMPT, and this is the case that actually walks in the door.
-  // public/cloud.js signs every player who saves anything into an ANONYMOUS
-  // Supabase account, so a guest socket carries a real uuid. server.js never
-  // sets chosenName for one (the auth sink skips the profile read when
-  // ws.isGuest), so the engine sees null and replaces free text as it always
-  // has. Asserting it here pins the ENGINE half: whatever the gates upstream do,
-  // a socket with no verified name gets no exemption.
+    step('with no name check installed (the offline page) a verified socket still may not present any OTHER typed name');
+  else fail(`a typed name passed an engine with no name check: ${JSON.stringify(second)}`);
   const guest = { readyState: 1, userId: 'anon-uuid', isGuest: true, chosenName: null, _rx: [], send(s) { this._rx.push(JSON.parse(s)); } };
   handleClientMessage(guest, { type: 'create', name: CHOSEN, skin: 'olive', mode: 'duel' });
   const guestName = nameIn(guest);
   if (guestName && guestName !== CHOSEN && isGeneratedCallsign(guestName))
-    step('a guest socket (anonymous account, no chosenName) gets free text replaced like anyone else');
-  else fail(`a guest presented free text: ${JSON.stringify(guestName)}`);
-  for (const w of [mine, other, guest]) { try { handleClientMessage(w, { type: 'leave' }); } catch {} }
+    step('with no name check installed a guest socket gets a typed name replaced like anyone else');
+  else fail(`a guest presented a typed name to an engine with no name check: ${JSON.stringify(guestName)}`);
+  leave(mine, other, guest);
 
-  // The exemption is not claimable from the wire. This socket has no account,
-  // and says so in the frame as loudly as it likes.
+  // f. AND THE EXEMPTION IS NOT EXEMPT FROM THE PROFANITY FILTER. sanitizeName
+  //    used to return `allowed` BEFORE isProfane() ran, which made the one
+  //    player-AUTHORED string in the product the only string exempt from the
+  //    product's own check. A stored chosen name carrying an engine-only term
+  //    (the gap above) is the name the server stores happily, and THIS is what
+  //    stops it reaching a lobby. Every term, not a sample.
+  const leaked = [];
+  for (const dirty of gap) {
+    const w = mkLocal(dirty);
+    handleClientMessage(w, { type: 'create', name: dirty, skin: 'olive', mode: 'duel' });
+    const got = nameIn(w);
+    leave(w);
+    if (got === dirty || !got || !isGeneratedCallsign(got)) leaked.push(dirty);
+  }
+  if (!leaked.length) {
+    step(`${shapes.length} engine term(s) in the typed-name shape: ${shapes.length - gap.length}`
+      + ` refused by the server filter before storage, ${gap.length} stored but replaced at the door`
+      + ' by isProfane — none reaches a lobby');
+  } else {
+    fail(`${leaked.length} of ${gap.length} stored chosen callsign(s) carrying an engine term`
+      + ' were presented VERBATIM — the exemption is returning before isProfane');
+  }
+
+  // g. THE DOOR IS THE HOST'S CHECK, and only a string from it opens it.
+  //    Installed here exactly as server.js installs it, then taken away again.
+  try {
+    setNameCheck(createNameProofs({ terms }).playerName);
+    const w1 = mkLocal(null);
+    handleClientMessage(w1, { type: 'create', name: '  Tank   Ace ', skin: 'olive', mode: 'duel' });
+    const w2 = mkLocal(null);
+    handleClientMessage(w2, { type: 'create', name: 'Iron!', skin: 'olive', mode: 'duel' });
+    if (nameIn(w1) === 'Tank Ace' && nameIn(w2) !== 'Iron!' && isGeneratedCallsign(nameIn(w2)))
+      step('with server.js\'s check installed in process, a good typed name is shown normalised and a bad one is replaced');
+    else fail(`installed check: ${JSON.stringify([nameIn(w1), nameIn(w2)])}`);
+    leave(w1, w2);
+    // A check that says yes to a name isProfane refuses is overruled at the
+    // door: this file's own lists stand behind every door.
+    setNameCheck((raw) => String(raw));
+    const w3 = mkLocal(null);
+    const dirty = gap[0] || 'Iron Ridge';
+    handleClientMessage(w3, { type: 'create', name: dirty, skin: 'olive', mode: 'duel' });
+    if (!gap.length || (nameIn(w3) !== dirty && isGeneratedCallsign(nameIn(w3))))
+      step('a host check that passes an engine-only term is overruled by isProfane at the door');
+    else fail('a host check passed an engine-only term into a lobby');
+    leave(w3);
+    // A check that throws, or answers anything but a non-empty string, opens
+    // nothing: the name falls through to the deterministic fallback.
+    let opened = 0;
+    for (const bad of [() => { throw new Error('boom'); }, () => '', () => 7, () => ({ toString: () => 'Tank Ace' }), () => true]) {
+      setNameCheck(bad);
+      const w = mkLocal(null);
+      handleClientMessage(w, { type: 'create', name: 'Tank Ace', skin: 'olive', mode: 'duel' });
+      if (nameIn(w) === 'Tank Ace' || !isGeneratedCallsign(nameIn(w))) opened++;
+      leave(w);
+    }
+    if (!opened) step('a check that throws or answers anything but a non-empty string opens nothing');
+    else fail(`${opened} broken check(s) opened the door`);
+  } finally {
+    setNameCheck(null);
+  }
+
+  // h. The exemption is not claimable from the wire. This socket has no
+  //    account, and says so in the frame as loudly as it likes. The name it
+  //    claims is one ONLY the exemption could admit — it fails the guidelines —
+  //    so the server's door cannot let it through for the other reason.
+  const CLAIMED = 'Marguerite.Vale';
   const liar = await open();
-  send(liar, { type: 'create', name: CHOSEN, skin: 'olive', mode: 'duel', chosenName: CHOSEN, userId: 'u1' });
+  send(liar, { type: 'create', name: CLAIMED, skin: 'olive', mode: 'duel', chosenName: CLAIMED, userId: 'u1' });
   const lm = await wait(liar, 'lobby');
   const claimed = lm && lm.players && lm.players[0] && lm.players[0].name;
   try { liar.close(); } catch {}
-  if (claimed && claimed !== CHOSEN && isGeneratedCallsign(claimed))
-    step('a client cannot claim a chosen callsign in the frame — replaced like any other free text');
+  if (claimed && claimed !== CLAIMED && isGeneratedCallsign(claimed))
+    step('a client cannot claim a chosen callsign in the frame — a name only the exemption could admit is replaced');
   else fail(`a client-claimed chosenName survived: ${JSON.stringify(claimed)}`);
 }
 

@@ -542,6 +542,13 @@ export function createSocial({
     // roll-then-set would be a free way around the once-a-day rule. Any `name`
     // on a rolled frame is ignored: the rolled display form is written to the
     // profile by the client's own cloud queue, as it always has been.
+    //
+    // ONLY AN OLD BUILD SENDS THIS NOW. Roll is gone from the client (owner,
+    // 2026-10-07: names are permanent, "disable the ability to cycle through
+    // new names"), so a current client never gives its key back. The branch
+    // stays, unchanged, for builds 6 and 7, which still offer Roll until they
+    // update: answering them is what keeps a name they rolled off from staying
+    // reserved to an account that no longer shows it.
     if (msg.rolled === true) {
       // ONE WRITE PER NAME GIVEN UP, NOT ONE PER FRAME. The bucket above lives
       // on the SOCKET, so reconnecting resets it, and this branch has no
@@ -592,7 +599,13 @@ export function createSocial({
     // set on record", so the change is allowed. Failing OPEN is deliberate: a
     // corrupt timestamp must not lock a player out of their own name for ever.
     const lastSet = profile && profile.callsign_set_at ? Date.parse(profile.callsign_set_at) : NaN;
-    if (Number.isFinite(lastSet) && now() - lastSet < DAY) return reply(ws, msg, { type: 'callsign', error: 'too_soon' });
+    // THE REFUSAL SAYS WHEN (owner, 2026-10-07): the editor tells a player
+    // "You can change your name again in 7 hours", and only the server knows
+    // when this account last set one — a second device, or this one after a
+    // reinstall, has nothing of its own to count from. `wait` is what is left
+    // of the 24 hours, in milliseconds, so no client clock enters into it;
+    // always above zero here, because the branch only runs inside the window.
+    if (Number.isFinite(lastSet) && now() - lastSet < DAY) return reply(ws, msg, { type: 'callsign', error: 'too_soon', wait: DAY - (now() - lastSet) });
 
     // THE WRITE IS THE AUTHORITY on uniqueness, not a read before it: two
     // sockets can both read "free" and then both write. The unique index on
@@ -616,6 +629,40 @@ export function createSocial({
     for (const w of socketsOf(ws.userId)) w.chosenName = v.name;
     ws.chosenName = v.name;
     reply(ws, msg, { type: 'callsign', ok: true, callsign: v.name });
+  }
+
+  // ---- the name check (owner, 2026-10-07) ------------------------------------
+  // A GUEST MAY NAME THEMSELVES TOO: "the player is given a default name and
+  // then they can change it to whatever they like, as long as it stays within
+  // the guidelines". A guest has no account a chosen callsign could be stored
+  // on (requireLinked, above, and BINDING resolution 2), so their name is kept
+  // on their own device — and this op is how the device learns, BEFORE it keeps
+  // one, whether the guidelines allow it. It STORES NOTHING and reads nothing:
+  // the answer is the same pure test the room engine applies at the door
+  // (server.js installs checkPlayerName's twin there), so a name this says yes
+  // to is the name a lobby shows, and one it refuses would have been replaced
+  // there anyway. The check here is what lets the player be TOLD.
+  //
+  // OPEN TO ANY SOCKET, the one callsign op that is: a guest who never saved
+  // anything has no account id at all. The 3-a-minute bucket is the same one a
+  // set spends, so the op cannot be used to probe the blocklist faster than a
+  // player can type.
+  //
+  // NOT UNIQUE, AND NO 'taken'. Saying whether a signed-in player already holds
+  // a name would make this a pre-auth oracle over every chosen callsign, from a
+  // socket with no account behind it — the same reason the code frame answers
+  // a throttled ask exactly as it answers a miss. Uniqueness lives where it
+  // always has: on callsign_key, for a linked account's search and friends.
+  //
+  // THE ONCE-A-DAY RULE FOR A GUEST IS THE DEVICE'S (the controller's stated
+  // default). There is nothing here to count a guest by that a reinstall does
+  // not reset, and a modified client could skip the op entirely: what holds a
+  // guest's name to the rules is the engine's check at the door, not this.
+  function checkName(ws, msg) {
+    if (!rateOk(ws, 'callsign', LIMITS.callsign)) return reply(ws, msg, { type: 'callsign', op: 'check', error: 'slow_down' });
+    const v = checkPlayerName(msg.name);
+    if (!v.ok) return reply(ws, msg, { type: 'callsign', op: 'check', error: v.error });
+    reply(ws, msg, { type: 'callsign', op: 'check', ok: true, name: v.name });
   }
 
   // ---- ONE SOCIAL FRAME AT A TIME, PER SOCKET -------------------------------
@@ -657,6 +704,10 @@ export function createSocial({
     try {
       switch (msg.type) {
         case 'callsign':
+          // The name check comes BEFORE the gate: it is the one callsign op
+          // a guest is entitled to (see checkName). Everything else on this
+          // type — set, and an old build's roll — still needs a linked account.
+          if (msg.op === 'check') { checkName(ws, msg); return; }
           if (!requireLinked(ws, msg)) return;
           // AWAIT, not `return callsign(...)`. Returning the promise from
           // inside a try hands the rejection to the CALLER: the catch below
@@ -828,7 +879,12 @@ export function createSocial({
   //
   // `terms` is this layer's own injected blocklist, and it is now the only list
   // this factory is ever built with — one file, one rule, one term list.
-  const { provenName, rolledName, displayName, seenName } = createNameProofs({ terms });
+  // checkPlayerName is the GUIDELINES rather than a proof: the check op below
+  // asks it about a name a player typed, and server.js installs its yes-or-no
+  // twin (playerName) as the room engine's name check, built from the same
+  // file's list — so a name this layer says may be kept is a name a lobby will
+  // show.
+  const { provenName, rolledName, displayName, seenName, checkPlayerName } = createNameProofs({ terms });
 
   // ---- squads (design 4.3) -------------------------------------------------
   // THE STATE MACHINE IS server/squads.js AND IT KNOWS NOTHING ABOUT SOCKETS.

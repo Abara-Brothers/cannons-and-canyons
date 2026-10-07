@@ -262,7 +262,10 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
   if (last(ws).ok !== true) fail('(f) the first set did not succeed: ' + JSON.stringify(last(ws)));
   clock = BASE + DAY - 1000;
   await social.handle(ws, { type: 'callsign', name: 'Marguerite Vale' });
-  if (same(last(ws), { type: 'callsign', error: 'too_soon' })) ok('(f) a second set one second inside 24 hours is refused');
+  // `wait` is new (owner, 2026-10-07: the editor says WHEN the next change is
+  // allowed). This assertion pinned the refusal without it; it now pins the
+  // exact milliseconds left, which one second inside the day is 1000.
+  if (same(last(ws), { type: 'callsign', error: 'too_soon', wait: 1000 })) ok('(f) a second set one second inside 24 hours is refused, and says 1000 ms are left');
   else fail('(f) inside the day the reply was ' + JSON.stringify(last(ws)));
   if (ws.chosenName === 'Wren Delacroix') ok('(f) the refused set left the old name on the socket');
   else fail('(f) chosenName after too_soon is ' + JSON.stringify(ws.chosenName));
@@ -272,6 +275,31 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
   else fail('(f) past the day the reply was ' + JSON.stringify(last(ws)));
   if (store.keys.get('wren delacroix') === undefined) ok('(f) the old key is released when the name changes');
   else fail('(f) the old key survived: ' + JSON.stringify([...store.keys]));
+}
+
+// ---- (f3) the refusal counts down from the server's own record -----------
+// "You can change your name again in 7 hours" needs WHEN, and only the server
+// knows when this account last set a name: a second device, or a reinstall,
+// has nothing of its own to count from. So `wait` is what is left of the 24
+// hours by the server's clock, measured from the stored callsign_set_at, and
+// a later refusal says less than an earlier one.
+{
+  clock = BASE;
+  const { store, social } = mk();
+  const ws = mkws('u1');
+  await social.handle(ws, { type: 'callsign', name: 'Wren Delacroix' });
+  const waits = [];
+  for (const h of [3, 17]) {
+    clock = BASE + h * 3600000;
+    await social.handle(ws, { type: 'callsign', name: 'Marguerite Vale', id: h });
+    waits.push(last(ws));
+  }
+  if (same(waits, [{ type: 'callsign', error: 'too_soon', wait: DAY - 3 * 3600000, id: 3 },
+                   { type: 'callsign', error: 'too_soon', wait: DAY - 17 * 3600000, id: 17 }]))
+    ok('(f3) three hours in, 21 h are left; seventeen hours in, 7 h — measured from the stored set, by the server\'s clock');
+  else fail('(f3) the countdown was ' + JSON.stringify(waits));
+  if (store.rows.get('u1').callsign === 'Wren Delacroix') ok('(f3) and neither refusal wrote anything');
+  else fail('(f3) a refused set changed the row: ' + JSON.stringify(store.rows.get('u1')));
 }
 
 // ---- (f2) no record of a previous set means the gate is open ---------------
@@ -482,6 +510,90 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
   else fail('(i2) anonymous roll reply was ' + JSON.stringify(last(anon)));
   if (store.calls.length === 0) ok('(i2) the roll never reached the store');
   else fail('(i2) anonymous roll reached the store: ' + JSON.stringify(store.calls));
+}
+
+// ---- (nc) THE NAME CHECK: every player may name themselves (2026-10-07) ----
+// The owner: "the player is given a default name and then they can change it
+// to whatever they like, as long as it stays within the guidelines". A guest
+// has no account a chosen callsign could live on, so the device keeps the name
+// and asks the server FIRST: {type:'callsign', op:'check', name}. The answer is
+// the same test the room engine applies at the door (server.js installs its
+// twin there), so what this says yes to is what a lobby shows. It stores
+// nothing, reads nothing, is open to a socket with no account at all, spends
+// the same 3-a-minute bucket a set does, and never says 'taken' — that would
+// be a pre-auth oracle over every chosen callsign.
+{
+  // A fixture the engine's own lists refuse and this suite's two-term blocklist
+  // does not: the check must apply BOTH, or a name it passes is renamed at the
+  // lobby door. Derived from public/game-core.js at run time rather than
+  // spelled here, the way test/security.mjs builds its gap fixture.
+  const { readFileSync } = await import('node:fs');
+  const coreSrc = readFileSync(new URL('../public/game-core.js', import.meta.url), 'utf8');
+  const badWord = [...((coreSrc.match(/const BAD_WORD = \[([\s\S]*?)\];/) || [])[1] || '').matchAll(/'([a-z]+)'/g)].map((m) => m[1]);
+  const PROFANE = badWord.map((t) => `${t[0].toUpperCase()}${t.slice(1)} Ridge`)
+    .find((n) => isProfane(n) && !TERMS.some((t) => n.toLowerCase().replace(/[^a-z]/g, '').includes(t)));
+  if (!PROFANE) fail('(nc) no BAD_WORD term could be read out of public/game-core.js — the isProfane case below proves nothing');
+
+  // 1. A socket with NO account at all, an anonymous guest and a linked account
+  //    are all answered, normalised, with the id echoed — and nothing is stored.
+  for (const [label, ws] of [['a socket with no account', mkws(null)], ['an anonymous guest', mkanon('anon-9')], ['a linked account', mkws('u1')]]) {
+    clock = BASE;
+    const { store, social } = mk();
+    await social.handle(ws, { type: 'callsign', op: 'check', name: '  Tank   Ace ', id: 'n1' });
+    if (same(last(ws), { type: 'callsign', op: 'check', ok: true, name: 'Tank Ace', id: 'n1' }) && store.calls.length === 0 && ws.chosenName === null)
+      ok(`(nc) ${label}: a good name is answered ok, normalised to 'Tank Ace', with no store call and no door opened on the socket`);
+    else fail(`(nc) ${label}: ` + JSON.stringify({ reply: last(ws), calls: store.calls, chosen: ws.chosenName }));
+  }
+
+  // 2. Every refusal carries its code, for the editor to say why.
+  const CASES = [['ab', 'length'], ['x'.repeat(17), 'length'], ['Bad<name>', 'chars'], ['Badword Ridge', 'not_allowed']];
+  if (PROFANE) CASES.push([PROFANE, 'not_allowed']);
+  let bad = 0;
+  for (const [name, error] of CASES) {
+    clock = BASE;
+    const { store, social } = mk();
+    const ws = mkws(null);
+    await social.handle(ws, { type: 'callsign', op: 'check', name, id: 2 });
+    // Never the reply itself: an ok reply carries the name, and for the two
+    // term fixtures that name IS the term (test/display_name.mjs's rule).
+    if (!same(last(ws), { type: 'callsign', op: 'check', error, id: 2 }) || store.calls.length) { bad++; fail(`(nc) a ${[...name].length}-character name -> ` + JSON.stringify({ ok: last(ws).ok, error: last(ws).error, calls: store.calls.length })); }
+  }
+  if (!bad) ok(`(nc) ${CASES.length} refusals each carry their code: length (short and long), chars, the blocklist, and the engine's own isProfane list`);
+
+  // 3. Three a minute, shared with a set: the check cannot probe the blocklist
+  //    faster than a player types, and a linked account cannot get a fourth
+  //    try at the day's set by mixing the two.
+  clock = BASE;
+  const { social } = mk();
+  const g = mkws(null);
+  const got = [];
+  for (let i = 0; i < 4; i++) { await social.handle(g, { type: 'callsign', op: 'check', name: 'Tank Ace' }); got.push(last(g).ok ? 'ok' : last(g).error); }
+  if (same(got, ['ok', 'ok', 'ok', 'slow_down']) && same(last(g), { type: 'callsign', op: 'check', error: 'slow_down' }))
+    ok('(nc) the fourth check in a minute is slow_down');
+  else fail('(nc) four checks gave ' + JSON.stringify(got) + ' last ' + JSON.stringify(last(g)));
+  const l = mkws('u3');
+  for (let i = 0; i < 3; i++) await social.handle(l, { type: 'callsign', op: 'check', name: 'Tank Ace' });
+  await social.handle(l, { type: 'callsign', name: 'Wren Delacroix' });
+  if (last(l).error === 'slow_down') ok('(nc) the check and the set spend ONE bucket');
+  else fail('(nc) a set after three checks gave ' + JSON.stringify(last(l)));
+
+  // 4. The op is the ONLY callsign op a guest may use: a set without it is
+  //    still refused sign_in, so naming a guest never stores anything.
+  const anon = mkanon('anon-10');
+  const { store: st2, social: so2 } = mk();
+  await so2.handle(anon, { type: 'callsign', name: 'Tank Ace', id: 4 });
+  if (same(last(anon), { type: 'social', error: 'sign_in', id: 4 }) && st2.calls.length === 0)
+    ok('(nc) a guest\'s SET is still refused sign_in — only the check is open');
+  else fail('(nc) guest set gave ' + JSON.stringify(last(anon)));
+
+  // 5. A wiring fault answers, never crashes: the same fail-closed TypeError as
+  //    (e2), through the same net.
+  const broken = createSocial({ store: mkstore(), terms: new Set(TERMS), send, now });
+  const bw = mkws(null);
+  let threw = null;
+  try { await broken.handle(bw, { type: 'callsign', op: 'check', name: 'Tank Ace', id: 5 }); } catch (e) { threw = e; }
+  if (!threw && same(last(bw), { type: 'callsign', error: 'unavailable', id: 5 })) ok('(nc) a check on a mis-wired layer answers unavailable, not a crash');
+  else fail('(nc) mis-wired check: ' + (threw ? threw.message : JSON.stringify(last(bw))));
 }
 
 // ---- (j) a store that cannot serve the read model answers rather than hangs --

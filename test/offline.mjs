@@ -402,6 +402,24 @@ try {
   if (await until(`S.local === true && S.playing === true && S.mode === 'ffa' && S.n === 4 && S.names.slice(1).every((n) => /^CPU \\d$/.test(n))`, 4000)) ok('2: Free-for-all vs Computer starts locally at once when offline, three CPUs seated');
   else fail('2: ffa vs computer did not start locally: ' + JSON.stringify(await state()));
 
+  // ---- 2b. THE PLAYER'S OWN NAME, OFFLINE (owner, 2026-10-07) ----------------
+  // Every player may now set a name of their own. Online the server's name
+  // check admits it at the door; offline there is no server and no check, so
+  // the page hands the engine its own player's name as `allowed` (app.js
+  // startLocal). Without that, a name the player SET was swapped for a rolled
+  // pair in their own offline match. Only THAT name: any other typed name is
+  // still replaced, because the offline door is otherwise shut as it was.
+  await fresh(); await cut({ offline: true });
+  await ev(`(setOwnName('Tank Ace'), intent({ type: 'ai', difficulty: 'easy', name: myName(), skin: 'olive' }), true)`);
+  const own2b = (await until(`S.local === true && S.playing === true`, 4000)) ? await ev('({ me: S.names[S.you], name: myName() })') : null;
+  await fresh(); await cut({ offline: true });
+  await ev(`(setOwnName('Tank Ace'), intent({ type: 'ai', difficulty: 'easy', name: 'Somebody Else', skin: 'olive' }), true)`);
+  const other2b = (await until(`S.local === true && S.playing === true`, 4000)) ? await ev('S.names[S.you]') : null;
+  if (own2b && own2b.me === 'Tank Ace' && own2b.name === 'Tank Ace' && typeof other2b === 'string' && other2b !== 'Somebody Else' && other2b !== 'Tank Ace' && /^[A-Z][a-z]+ [A-Z][a-z]+$/.test(other2b))
+    ok("2b: offline, the player's own name ('Tank Ace') is the name in their match; any other typed name is still replaced with a rolled pair");
+  else fail('2b: offline own name ' + JSON.stringify({ own2b, other2b }));
+  await ev(`(localStorage.removeItem('cc_name_own'), localStorage.removeItem('pt_name'), true)`);
+
   // ---- 3. server unreachable: grace, then an offer, then the real room ------
   // CHANGED (owner, 2026-10-06): the create is Match setup's own, a Solo Boss
   // Fight from Start Game, and when the server answers it becomes a run that

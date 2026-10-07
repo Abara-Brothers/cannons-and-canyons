@@ -5,10 +5,14 @@
 // server/social.js, while the friends panels were the only screens that painted
 // somebody else's callsign. They are not any more.
 //
-// IT HAS ONE CALLER, AND IT IS STILL ITS OWN MODULE:
+// IT HAS TWO CALLERS, AND IT IS STILL ITS OWN MODULE:
 //   server/social.js — the friends panel, add-by-code, search results, the
-//   blocked list, the squad roster and its invites, and the name a report
-//   records.
+//   blocked list, the squad roster and its invites, the name a report
+//   records, and the check that tells a player whether a name they typed may
+//   be kept (checkPlayerName, below).
+//   server.js — the room engine's name check (playerName, below), so the name
+//   a client presents in a lobby meets the same rule as the one the check
+//   op passed.
 //
 // It had a second. The Bay's recent-match panel and the route that fed it were
 // removed on 2026-09-30, when the Squad box took that slot, and with them went
@@ -161,8 +165,47 @@ export function createNameProofs({ terms }) {
   // nothing here can forge a line of its own.
   const seenName = (row) => provenName(row) ?? rolledName(row && row.callsign);
 
+  // ---- names a player TYPED, at the moment they are presented ----------------
+  // THE GUIDELINES, NOT A PROOF (owner, 2026-10-07: "the player is given a
+  // default name and then they can change it to whatever they like, as long as
+  // it stays within the guidelines"). Every player may now present a name they
+  // chose, a guest included, and a guest's is kept on their own device and
+  // nowhere else: there is no key to prove it by and no row to read. What the
+  // server CAN do is hold the string itself to the rules, every time it is
+  // presented — the callsign rules and the shipped blocklist (validateCallsign),
+  // and then the engine's own profanity lists (isProfane), because the lobby
+  // applies isProfane to every name it shows, and a name this check passed must
+  // not then be quietly renamed at the door.
+  //
+  // It answers WHY as well as whether, so the one function serves both callers:
+  // social.js's check op hands the code to the player ('length', 'chars',
+  // 'not_allowed'), and playerName below is the yes-or-no the room engine needs.
+  //
+  // It stands BESIDE the two proofs, never among them. A name it passes is a
+  // string the server finds acceptable, not one tied to an account — it is not
+  // unique, and two players may type the same one. displayName and seenName
+  // above are untouched: a panel still names a row only by its key or by a
+  // curated pair, so a typed name can never be worn in a friends list, and a
+  // chosen callsign stays the only name a search can find.
+  const checkPlayerName = (raw) => {
+    const v = validateCallsign(raw, terms);
+    if (!v.ok) return { ok: false, error: v.error };
+    if (isProfane(v.name)) return { ok: false, error: 'not_allowed' };
+    return { ok: true, name: v.name };
+  };
+  // What the room engine is given (server.js, setNameCheck): the normalised
+  // name when the guidelines pass it, null when they do not. The engine shows
+  // THIS string, never the client's copy, so a near-miss that normalises equal
+  // cannot carry a different sequence of characters to another player.
+  const playerName = (raw) => {
+    const v = checkPlayerName(raw);
+    return v.ok ? v.name : null;
+  };
+
   // presentable is NOT returned. It is the blocklist pass INSIDE displayName,
   // and a caller able to reach it on its own could show a name with no proof
   // behind it at all — which is the bug this module exists to remove.
-  return { provenName, rolledName, displayName, seenName };
+  // checkPlayerName and playerName are not that: they return a name only when
+  // the rules pass the string itself, and no caller uses them to name a row.
+  return { provenName, rolledName, displayName, seenName, checkPlayerName, playerName };
 }

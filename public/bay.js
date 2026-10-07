@@ -101,8 +101,29 @@ const modeOf = (id) => MODES.find((m) => m.id === id) || MODES[0];
 // 16's sentences did, so the one error line changed style depending on which
 // code came back. Every sentence in CS_ERR now ends in a full stop. The ROW
 // descriptions still carry none, because no other settings row's does.
-const CS_RULE = '3&ndash;16 letters, digits or spaces. Unique. Once a day.';
+//
+// THE RULES, SAID PLAINLY (owner, 2026-10-07: a name "must be appropriate for
+// the game (not too long and no bad words)", changed "once a day"). The same
+// three facts for every player: the server's length and character rules, its
+// blocklist, and the day between changes. Uniqueness is a signed-in account's
+// alone, and the one time it matters the 'taken' sentence says so.
+const CS_RULE = '3&ndash;16 letters, numbers or spaces. Nothing offensive. One change a day.';
 const CS_HINT = 'Friends find you by code until you choose a callsign';
+// WHAT THE ROW DOES, for a player whose name lives on this device (a guest, or
+// nobody signed in). A signed-in account's row says something about the
+// account instead -- its chosen name, or how friends find it -- and so it
+// always has. Short enough to stay on one line beside Change at 667x375.
+const CS_SAY = 'Your name in every match';
+// WHEN, IN WORDS (owner, 2026-10-07: "You can change your name again in 7
+// hours"). Rounded UP, so the time it names has always passed when it says it
+// will: a player told "in 7 hours" who comes back in seven finds the gate open.
+const waitWords = (ms) => {
+  const h = Math.ceil(ms / 3600000);
+  if (h > 1) return h + ' hours';
+  const m = Math.max(1, Math.ceil(ms / 60000));
+  return m >= 60 ? '1 hour' : m === 1 ? '1 minute' : m + ' minutes';
+};
+const csWaitLine = (ms) => 'You can change your name again in ' + waitWords(ms) + '.';
 // THE THIRD STATE. `CC_SOCIAL === null` means the snapshot has NOT ARRIVED, not
 // that the account holds no name -- and rendering it as CS_HINT told every
 // returning player who holds a callsign that they hold none, on first paint and,
@@ -111,7 +132,7 @@ const CS_HINT = 'Friends find you by code until you choose a callsign';
 // what is actually true (nothing has loaded) and how to try again, which is to
 // re-enter this screen, because that is what socialNeed() hangs off.
 const CS_WAIT = 'Not loaded yet &mdash; reopen this screen to retry';
-const CS_OUT  = 'Sign in to choose a callsign.';
+const CS_OUT  = 'Sign in to choose a callsign.';   // only ever the sign_in refusal now: a guest names themselves
 const CS_ERR = {
   taken:       'Someone has that callsign.',
   not_allowed: 'That callsign is not allowed.',
@@ -126,7 +147,11 @@ const CS_ERR = {
   _:           'That callsign could not be set.',
 };
 const KBD_PAD = 6;                                  // px of air under the field when the frame is lifted
-const callsign = { open: false, busy: false, err: '' };
+// `linked` is the kind of account the field was OPENED for. The two save to
+// different places -- a signed-in account's chosen callsign on the server, a
+// guest's name on this device -- so a sign-in or a sign-out while the field is
+// open closes it (render(), below) rather than saving a name to the wrong one.
+const callsign = { open: false, busy: false, err: '', linked: false };
 let csSeq = 0;                                      // which try an answer belongs to
 let kbdOn = null;                                   // the viewport listener, only while the editor is open
 // WHICH BOX THE LIFT IS MEASURED AGAINST. The callsign editor is no longer the
@@ -278,6 +303,7 @@ function state() {
     name: has('myName') ? myName() : 'Commander',
     social: has('CC_SOCIAL') ? CC_SOCIAL : null,      // the last social snapshot, or null before the first
     linked: fn('socialSignedIn') ? socialSignedIn() : false,   // a LINKED account, not a guest
+    nameWait: fn('nameWait') ? nameWait() : 0,                 // ms before this player may change their name, 0 when they may
     wins: has('totalWins') ? totalWins() : 0,
     muted: has('Audio') ? !!Audio.muted : false,
   };
@@ -1869,11 +1895,6 @@ SCREENS.settings = function () {
   ].map((r) => '<div class="row"><span class="rt"><span class="rn2">' + r[1] + '</span><span class="rd">' + r[2] + '</span></span>'
     + '<button class="rk2' + (r[3] ? ' on' : '') + '" data-toggle="' + r[0] + '" aria-label="' + r[1] + '"' + (r[4] ? ' disabled style="opacity:.4"' : '') + '><i></i><u>' + (r[3] ? 'On' : 'Off') + '</u></button></div>').join('');
   const row = (n, d, btn, act) => '<div class="row"><span class="rt"><span class="rn2">' + n + '</span><span class="rd">' + d + '</span></span>' + (btn ? '<button class="sbtn" ' + act + '>' + btn + '</button>' : '') + '</div>';
-  // Two buttons in one row (design 5.6: Callsign carries Roll AND Set). Same
-  // markup as row() to the character, with one more button — so the row keeps
-  // its 52u height and every existing #bay .row rule still applies to it.
-  const row2 = (n, d, b1, a1, b2, a2) => '<div class="row"><span class="rt"><span class="rn2">' + n + '</span><span class="rd">' + d + '</span></span>'
-    + '<button class="sbtn" ' + a1 + '>' + b1 + '</button><button class="sbtn" ' + a2 + '>' + b2 + '</button></div>';
   // Signed in: one line per linked provider, mark + name + address, so Apple and
   // Google both show when both are linked. esc() on the address: provider input.
   const linked = (accState === 'in' && window.CC_ACCOUNT && window.CC_ACCOUNT.accounts) || [];
@@ -1882,26 +1903,27 @@ SCREENS.settings = function () {
       ? linked.map((a) => '<span class="acl">' + (IC[a.provider] || '') + (PROVIDER_NAME[a.provider] || esc(a.provider)) + ' &middot; ' + esc(a.email || 'connected') + '</span>').join('')
       : 'Signed in &mdash; progress syncs across devices')
     : accState === 'guest' ? 'Guest &mdash; sign in to keep progress across devices' : 'Sign in to keep progress across devices';
-  // CALLSIGN (design 5.6). Roll and Set in one row; Set opens the field beneath
-  // it with the rules under that. The DESCRIPTION is the fact that matters: a
-  // chosen name is the name, a rolled one is private, so the row says how
-  // friends actually find you instead of repeating a name the home screen
-  // already prints in 38u type. Putting the sentence in the existing .rd rather
-  // than in a new paragraph is deliberate — the closed row keeps its 52u height,
-  // so the settings screen is geometrically identical to the baseline
-  // test/layout.mjs holds, which this task is not allowed to rewrite.
+  // CALLSIGN (design 5.6). One button, Change, which opens the field beneath
+  // the row with the rules under that. Roll is gone (owner, 2026-10-07: "the
+  // player ID names need to be permanent, disable the ability to cycle through
+  // new names"), and EVERY player may now set a name: a signed-in account's is
+  // its chosen callsign, stored on the server, unique, once a day; a guest's is
+  // kept on this device, checked by the server first and held to the same
+  // guidelines at every lobby door, once a day on this device.
   //
-  // A GUEST IS NOT OFFERED SET. BINDING resolution 2 reserves chosen names for a
-  // linked account, so a Set button on a guest's row is a control that can only
-  // ever fail — and a refusal a player cannot act on reads as a broken feature,
-  // not as a rule. They are told the rule instead, and Roll still works, because
-  // rolling is local and always has been.
+  // The DESCRIPTION is the fact that matters. For a signed-in account that is
+  // the account's own: its chosen name, or that friends find it by code until
+  // it has one. For a guest it is what the row is FOR -- the name every other
+  // player sees -- and, while the day is still running, when it opens again.
+  // Putting the sentence in the existing .rd rather than in a new paragraph is
+  // deliberate: the closed row keeps its 52u height, so the settings screen is
+  // geometrically identical to the baseline test/layout.mjs holds.
   const csRow = (st) => {
     // THREE STATES FOR A LINKED ACCOUNT, not two: holds a name, holds none, and
-    // NOT KNOWN YET. The third is not cosmetic -- Set is withheld while it lasts,
-    // because a save made against a snapshot this client has never seen is a
-    // guess, and the row must not say "you have no callsign" on the strength of
-    // a frame that never came back.
+    // NOT KNOWN YET. The third is not cosmetic -- Change is withheld while it
+    // lasts, because a save made against a snapshot this client has never seen
+    // is a guess, and the row must not say "you have no callsign" on the
+    // strength of a frame that never came back.
     const known = !!st.social;
     const held = st.linked && known && typeof st.social.callsign === 'string' ? st.social.callsign : '';
     // TWICE THE RULE, BECAUSE THE TWO COUNT DIFFERENT THINGS. server/callsign.js
@@ -1914,21 +1936,23 @@ SCREENS.settings = function () {
     // exceed 32 units. It stays a cap against a paste bomb; the server is still
     // the only validator, and it answers 'length' for anything longer.
     const max = (has('CALLSIGN_MAX') ? CALLSIGN_MAX : 16) * 2;
-    const desc = !st.linked ? CS_OUT : !known ? CS_WAIT : held ? esc(held) : CS_HINT;
-    if (!st.linked) return '<div class="cs">' + row('Callsign', desc, 'Roll', 'data-roll') + '</div>';
+    const wait = st.nameWait > 0 ? st.nameWait : 0;
+    const desc = st.linked ? (!known ? CS_WAIT : held ? esc(held) : CS_HINT)
+      : wait ? 'Change it again in ' + waitWords(wait) : CS_SAY;
+    // SAVE STANDS DOWN WHILE A GUEST'S DAY RUNS, and the line under the field
+    // says until when instead of the rules: a Save that can only be refused is
+    // a control that reads as broken. An error from a try still outranks it.
+    // Only a guest's day is this device's to count (app.js nameWait answers 0
+    // for a signed-in account): a signed-in Save always asks the server, whose
+    // too_soon says how long is left (submitCallsign).
     const body = callsign.open
       ? '<div class="csx"><input id="bayCall" class="cs-in" maxlength="' + max + '" placeholder="Your callsign"'
         +   ' autocomplete="off" autocapitalize="words" spellcheck="false" enterkeyhint="done" aria-label="Choose a callsign">'
         + '<div class="csb"><button class="sbtn" data-cs="cancel">Cancel</button>'
-        +   '<button class="sbtn on" data-cs="save"' + (callsign.busy ? ' disabled' : '') + '>' + (callsign.busy ? 'Saving' : 'Save') + '</button></div>'
-        + '<p class="csr' + (callsign.err ? ' bad' : '') + '">' + (callsign.err || CS_RULE) + '</p></div>'
+        +   '<button class="sbtn on" data-cs="save"' + (callsign.busy || wait ? ' disabled' : '') + '>' + (callsign.busy ? 'Saving' : 'Save') + '</button></div>'
+        + '<p class="csr' + (callsign.err ? ' bad' : '') + '">' + (callsign.err || (wait ? csWaitLine(wait) : CS_RULE)) + '</p></div>'
       : '';
-    // ROLL IS WITHHELD WHILE A SET IS IN FLIGHT. A mis-tap there hands back the
-    // very key being paid for with the day's one change, and the answer that
-    // would have confirmed it arrives to a name the client has just rolled off.
-    return '<div class="cs">' + row2('Callsign', desc,
-      'Roll', 'data-roll' + (callsign.busy ? ' disabled' : ''),
-      'Set', 'data-cs="open"' + (known ? '' : ' disabled')) + body + '</div>';
+    return '<div class="cs">' + row('Callsign', desc, 'Change', 'data-cs="open"' + (st.linked && !known ? ' disabled' : '')) + body + '</div>';
   };
   const right = row('Account', accDesc, accState === 'out' ? 'Sign in' : 'Manage', 'data-old="accountBtn"')
     + csRow(s)
@@ -1939,10 +1963,15 @@ SCREENS.settings = function () {
     // so a sixth row here would have pushed the Built by card off the screen.
     + row('Friends', friendsDesc(), 'Open', 'data-go="friends"')
     + row('Tank paint', esc(s.skin.name) + ' is fitted', 'Open', 'data-go="paint"')
-    + row('How to play', 'The six-chapter field manual', 'Open', 'data-old="helpHomeBtn"')
-    // The credit card stands down while the field is open: the editor is about
-    // 70u tall and the right column already reaches the bottom of .pbody, so
-    // something has to give and this is the part nobody is reading mid-edit.
+    // How to play and the credit card both stand down while the field is open:
+    // the editor is about 115u tall and the right column already reaches the
+    // bottom of .pbody, so something has to give, and these are the parts
+    // nobody is reading mid-edit. The card alone was not enough -- How to play
+    // then ran past .pbody at every size and off the bottom of the screen at
+    // 812x375 and 932x430 (owner, 2026-10-07: all text visible). Both are the
+    // column's LAST children, so the rows above them keep their positions and
+    // morphChildren() re-morphs nothing that stays.
+    + (callsign.open ? '' : row('How to play', 'The six-chapter field manual', 'Open', 'data-old="helpHomeBtn"'))
     + (callsign.open ? '' : '<div class="card" style="margin-top:' + u(10) + ';padding:' + u(10) + ' ' + u(13) + '"><span class="lbl">Built by</span>'
     + '<div style="font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:' + u(19) + ';text-transform:uppercase;letter-spacing:.05em;margin-top:' + u(4) + ';color:#eef3ff">Abara Brothers</div>'
     + '<div style="font-size:' + u(10.5) + ';color:#7f8fb5;margin-top:' + u(4) + ';font-weight:500">Cannons &amp; Canyons &mdash; landscape only, best with a friend.</div></div>');
@@ -2015,7 +2044,7 @@ function kbdWatch(on, sel) {
 const kbdRefit = () => { if (kbdOn) kbdFit(); };
 function openCallsign() {
   const st = state();
-  callsign.open = true; callsign.busy = false; callsign.err = ''; csSeq++;
+  callsign.open = true; callsign.busy = false; callsign.err = ''; callsign.linked = st.linked; csSeq++;
   render(current);
   const i = $('bayCall');
   if (!i) return;
@@ -2024,10 +2053,19 @@ function openCallsign() {
   // keyboard to alter one of them is worse than any accident a blank field
   // prevents: the selection means the first keystroke replaces the lot, so Save
   // is still a decision, and an empty field is still refused before it is sent.
-  // Only a CHOSEN name is offered -- pre-filling the rolled pair would invite
-  // spending the day's one change to freeze a name nobody picked.
-  const pre = st.social && typeof st.social.callsign === 'string' ? st.social.callsign : '';
+  // Only a name the player CHOSE is offered -- pre-filling the rolled default
+  // would invite spending the day's one change to freeze a name nobody picked.
+  // A signed-in account's is its chosen callsign; a guest's is this device's
+  // name when it is not a rolled pair (rolledPair, app.js).
+  const pre = st.linked
+    ? (st.social && typeof st.social.callsign === 'string' ? st.social.callsign : '')
+    : (st.name && fn('rolledPair') && !rolledPair(st.name) ? st.name : '');
   i.value = pre;
+  // INSIDE A GUEST'S DAY THE KEYBOARD STAYS DOWN. Save is held and the line
+  // under the field says when it opens again; raising a landscape keyboard over
+  // two thirds of the screen for a change that cannot be made would hide the
+  // one sentence that explains why.
+  if (st.nameWait > 0) return;
   // The focus is deferred one tick so the field exists and the entrance is over;
   // the viewport watch starts with it, because the keyboard follows the focus.
   csFocus = setTimeout(() => { try { i.focus(); if (pre) i.select(); } catch {} kbdWatch(true); }, 60);
@@ -2041,7 +2079,10 @@ function submitCallsign() {
   const i = $('bayCall');
   if (!i || callsign.busy) return;
   callsign.err = '';
-  const wire = fn('sendCallsign');
+  // WHERE THE NAME GOES is the account's kind when the field opened: a signed-in
+  // account's chosen callsign on the server, a guest's name on this device
+  // (after the server's check). render() closes the field if that kind changes.
+  const wire = callsign.linked ? fn('sendCallsign') : fn('sendGuestName');
   if (!wire) { callsign.err = CS_ERR.offline; render(current); return; }
   // An EMPTY field is the one thing this side decides, and it cannot drift: no
   // minimum length is ever below one character, so a blank Save is refused by
@@ -2065,8 +2106,11 @@ function submitCallsign() {
       return;
     }
     // A LOOKUP, never an echo: an error code this build has never heard of still
-    // gets a sentence, and nothing the server sent reaches innerHTML.
-    callsign.err = CS_ERR[res && res.error] || CS_ERR._;
+    // gets a sentence, and nothing the server sent reaches innerHTML. The one
+    // number a refusal may carry is the wait, and it is only ever counted
+    // (waitWords), never printed as it came.
+    callsign.err = res && res.error === 'too_soon' && Number.isFinite(res.wait) && res.wait > 0
+      ? csWaitLine(res.wait) : (CS_ERR[res && res.error] || CS_ERR._);
     render(current);
     kbdRefit();
     const f = $('bayCall'); if (f) f.focus();
@@ -3349,7 +3393,9 @@ SCREENS.home = function () {
     +   '<div class="mark">Cannons <i>&amp;</i> Canyons<span>Abara Brothers &middot; Launch Bay</span></div>'
     +   '<div class="grow"></div>'
     +   accountChip()
-    +   '<button class="chip" data-roll title="Roll a new callsign">' + SWORD + '<b>' + esc(s.name) + '</b></button>'
+    // THE NAME CHIP OPENS THE CALLSIGN EDITOR (owner, 2026-10-07: names are
+    // permanent, no cycling). It used to roll a new name on every tap.
+    +   '<button class="chip" data-cs="name" title="Change your name" aria-label="Your name, ' + esc(s.name) + '. Change it">' + SWORD + '<b>' + esc(s.name) + '</b></button>'
     +   '<button class="chip" data-go="career">' + CROWN + '<b>' + s.wins + '</b> W</button>'
     +   '<button class="chip sq" data-toggle="sound" title="Sound">' + (has('UI_IC') ? (s.muted ? UI_IC.speakerOff : UI_IC.speakerOn) : '') + '</button>'
     +   '<button class="chip sq" data-go="settings" title="Settings">' + IC.gear + '</button>'
@@ -3460,13 +3506,14 @@ function render(name) {
   if (next === 'setup' && current !== 'setup' && !SETUP_TRIPS.includes(current)) setupWith = null;
   // Leaving Bay controls closes the field: it belongs to that screen only, the
   // keyboard lift with it, and .stage is rebuilt outright on a screen change.
-  // Leaving Bay controls closes the field -- and so does LOSING THE ACCOUNT while
-  // it is open. csRow() returns the guest row early, before the editor markup is
-  // ever built, so the field vanished while `callsign.open` stayed true and #bay
-  // stayed in .kbd: the frame sat shoved up with no keyboard under it and no way
-  // down but leaving the screen. Closing here, at the top of the render that is
-  // about to drop the field, puts the class removal ahead of that early return.
-  if (callsign.open && (next !== 'settings' || !state().linked)) { callsign.open = false; callsign.busy = false; callsign.err = ''; csSeq++; kbdWatch(false); }
+  // Leaving Bay controls closes the field -- and so does A CHANGE OF ACCOUNT KIND
+  // while it is open, a sign-in or a sign-out. The field was opened to save to
+  // one place (a signed-in account's chosen callsign, or this device's guest
+  // name) and must not save to the other; and the frame must never sit shoved
+  // up in .kbd with no field under it. Closing here, at the top of the render
+  // that would otherwise redraw the field for the other kind, puts the class
+  // removal ahead of everything else.
+  if (callsign.open && (next !== 'settings' || state().linked !== callsign.linked)) { callsign.open = false; callsign.busy = false; callsign.err = ''; csSeq++; kbdWatch(false); }
   // The Friends screen has two fields of its own, so it owns the same duty: the
   // lift must not survive the screen it was measured on.
   if (kbdOn && current === 'friends' && next !== 'friends') kbdWatch(false);
@@ -3553,7 +3600,7 @@ function sqLockWhy(k, v) {
 }
 document.addEventListener('click', (e) => {
   const host = $('bay'); if (!host || !host.classList.contains('active')) return;
-  const t = e.target.closest('[data-go],[data-back],[data-set],[data-roll],[data-toggle],[data-launch],[data-rdy],[data-pick],[data-old],[data-skin],[data-solo],[data-cs],[data-fr],[data-sq]');
+  const t = e.target.closest('[data-go],[data-back],[data-set],[data-toggle],[data-launch],[data-rdy],[data-pick],[data-old],[data-skin],[data-solo],[data-cs],[data-fr],[data-sq]');
   if (!t || !host.contains(t)) return;
   if (has('Audio')) Audio.ensure();
   // The lobby's Back IS Cancel. Leaving any other way strands a queued create
@@ -3595,13 +3642,16 @@ document.addEventListener('click', (e) => {
     if (t.dataset.go) go(t.dataset.go); else render(current);
     return;
   }
-  if ('roll' in t.dataset) {
-    // setCallsign() also gives the server's uniqueness key back when the name
-    // being rolled over was a CHOSEN one — see public/app.js.
-    if (has('setCallsign') && has('rollCallsign')) setCallsign(rollCallsign(state().name));
-    render(current); return;
-  }
   if (t.dataset.cs) {
+    // The home name chip: Bay controls, with the field open on it. A signed-in
+    // account whose snapshot has not arrived lands on the row instead, which
+    // says so and holds Change back, for the reason csRow gives.
+    if (t.dataset.cs === 'name') {
+      go('settings');
+      const st = state();
+      if (!st.linked || st.social) openCallsign();
+      return;
+    }
     if (t.dataset.cs === 'open') { openCallsign(); return; }
     if (t.dataset.cs === 'cancel') { closeCallsign(); return; }
     if (t.dataset.cs === 'save') { submitCallsign(); return; }

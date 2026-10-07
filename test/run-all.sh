@@ -154,8 +154,10 @@ run export_shape node test/export_shape.mjs
 # folded blocklist, and the loader's own guards. Pure module, no server.
 run callsign node test/callsign.mjs
 # ONE proof of a name, for every screen that shows one: server/display-name.js.
-# It has ONE caller now -- the social layer's panels, search results, the blocked
-# list, the squad roster and its invites, and the name a report records. It stays
+# Two callers -- the social layer's panels, search results, the blocked list, the
+# squad roster and its invites, the name a report records and the name check a
+# guest asks before keeping a name; and server.js, which installs the same
+# guidelines as the room engine's name check (section 7). It stays
 # its own module because it is a security rule with its own suite against the
 # SHIPPED server/blocklist.txt (BINDING.md resolution 27), not because two files
 # import it -- a suite with its own term list would not notice the shipped list

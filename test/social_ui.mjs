@@ -1,6 +1,8 @@
-// Set callsign, in a real page: the Bay controls row that carries both Roll and
-// Set, the inline field and its rules, every error sentence the design names,
-// the exact frames that reach the socket, and the landscape keyboard lift.
+// Set callsign, in a real page: the Bay controls row and its one button,
+// Change (Roll is gone -- owner, 2026-10-07: names are permanent), the inline
+// field and its rules, every error sentence the design names, the exact frames
+// that reach the socket for a signed-in Set and for a guest's name check, the
+// once-a-day countdown, and the landscape keyboard lift.
 // Headless Chrome over CDP; skips without Chrome, like the other client suites.
 // The socket is a STUB and Supabase is never reached — this suite is the CLIENT
 // half of the callsign message, nothing else.
@@ -9,10 +11,11 @@
 // browser — index.html's legacy rack, app.js's socket, bay.js's screen and
 // styles.css's design frame. No Node suite can see any of it. Five of its
 // rules are invisible in ordinary play and each is one line long:
-//   * a ROLLED reply carries callsign:null and must not reach setCallsign(),
-//     which would rename the player "null" and push that to the cloud;
-//   * accepting a CHOSEN name must not look like a roll, or the client would
-//     immediately clear the uniqueness key it just paid a day's quota for;
+//   * an ok reply with no name (the server's answer to an OLD build's roll)
+//     carries callsign:null and must not reach setLocalName(), which would
+//     rename the player "null" and push that to the cloud;
+//   * accepting a CHOSEN name must never send a rolled frame, or the client
+//     would clear the uniqueness key it just paid a day's quota for;
 //   * a late reply to an abandoned try must not overwrite a newer one;
 //   * a REFUSED friends frame must not be read as an empty panel, or a player
 //     is told they hold no callsign because PostgREST was down;
@@ -95,7 +98,13 @@ await send('Page.addScriptToEvaluateOnNewDocument', { source: 'window.__ccNoIntr
 // EVERY SENTENCE IN THIS TABLE ENDS IN A FULL STOP. The error line used to
 // change style with the code, because 5.6's fragments carried none and
 // resolution 16's sentences did. Row descriptions still carry none.
-const RULE = '3–16 letters, digits or spaces. Unique. Once a day.';
+// THE RULES, SAID PLAINLY (owner, 2026-10-07). This line pinned the old copy,
+// '3-16 letters, digits or spaces. Unique. Once a day.', which the owner asked
+// to have say what a name may be: letters, numbers or spaces, nothing
+// offensive, one change a day.
+const RULE = '3–16 letters, numbers or spaces. Nothing offensive. One change a day.';
+// What a GUEST's Callsign row says it is for, now that a guest names themselves.
+const SAY = 'Your name in every match';
 const HINT = 'Friends find you by code until you choose a callsign';
 const WAIT = 'Not loaded yet — reopen this screen to retry';
 const OUT = 'Sign in to choose a callsign.';
@@ -275,14 +284,22 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
     ok(`${V}: the toast host is a child of #app in the markup, outside both screens`);
   else fail(`${V}: toast host parent ${JSON.stringify(host0)}`);
 
-  // 1. the row carries BOTH Roll and Set, and its height still matches every
+  // 1. the row carries ONE button, Change, and its height still matches every
   //    other settings row — the closed screen must be geometrically identical
-  //    to the one test/layout.mjs has a baseline for.
+  //    to the one test/layout.mjs has a baseline for. CHANGED (owner,
+  //    2026-10-07): it pinned 'Roll|Set'; Roll is gone, because "the player
+  //    ID names need to be permanent, disable the ability to cycle through new
+  //    names". Not on this row, not on the home chip, not anywhere in the Bay.
   await ev(`(() => { Bay.show('home'); return true; })()`);
+  const homeRoll = await ev(`(() => { const c = document.querySelector('#bay .top [data-cs="name"]');
+    return { roll: document.querySelectorAll('#bay [data-roll]').length, chip: !!c, title: c && c.title, hasName: !!(c && c.querySelector('b') && c.querySelector('b').textContent.trim()) }; })()`);
   let r = await rowInfo();
-  if (r && r.btns.join('|') === 'Roll|Set' && r.acts.join('|') === 'data-roll|data-cs=open' && r.wrapped
-      && new Set(r.heights).size === 1) ok(`${V}: Callsign row carries Roll and Set, and every settings row is still one height`);
-  else fail(`${V}: row ${JSON.stringify(r)}`);
+  const setRoll = await ev(`document.querySelectorAll('#bay [data-roll]').length + document.querySelectorAll('#rerollBtn').length`);
+  if (r && r.btns.join('|') === 'Change' && r.acts.join('|') === 'data-cs=open' && r.wrapped
+      && new Set(r.heights).size === 1 && homeRoll.roll === 0 && setRoll === 0
+      && homeRoll.chip && homeRoll.title === 'Change your name' && homeRoll.hasName)
+    ok(`${V}: no Roll anywhere (home, Bay controls, the legacy rack); the Callsign row carries Change alone, every settings row is one height, and the home name chip says it changes your name`);
+  else fail(`${V}: row ${JSON.stringify({ r, homeRoll, setRoll })}`);
 
   // 2. entering Bay controls with no snapshot asks for one, so the row can be
   //    honest about a name chosen on ANOTHER device (BINDING resolution 13:
@@ -312,45 +329,51 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   //     the state a player sits in for the whole visit. Set is withheld with it:
   //     a save made against a snapshot this client has never seen is a guess.
   r = await rowInfo();
-  if (r && r.desc === WAIT && r.btns.join('|') === 'Roll|Set' && r.dis.join('|') === 'false|true'
+  if (r && r.desc === WAIT && r.btns.join('|') === 'Change' && r.dis.join('|') === 'true'
       && new Set(r.heights).size === 1)
-    ok(`${V}: an unknown snapshot says "${WAIT}" and withholds Set, instead of claiming there is no callsign`);
+    ok(`${V}: an unknown snapshot says "${WAIT}" and withholds Change, instead of claiming there is no callsign`);
   else fail(`${V}: unknown snapshot ${JSON.stringify(r)}`);
 
-  // 2d. AND THE ROLL GUARD DOES NOT READ "no key" OUT OF IT EITHER. With no
-  //     snapshot this client cannot know whether the account holds a name;
-  //     rolling without giving the key back leaves that name reserved to an
-  //     account that no longer shows it, with no way to learn it and no way to
-  //     undo it. The server answers ok either way and does not touch the
-  //     database when there was nothing to clear, so the safe guess is cheap.
+  // 2d. THE HOME NAME CHIP, SIGNED IN, WITH NO SNAPSHOT. It used to roll a new
+  //     name on every tap -- and, for an account holding a chosen callsign,
+  //     send a frame giving the key back. It now opens Bay controls; with the
+  //     snapshot not yet in hand it lands on the row (which says so) without
+  //     opening the field, for the reason Change is withheld above. No
+  //     callsign frame of any kind leaves the page.
+  //     CHANGED (owner, 2026-10-07): this check proved a Roll with no snapshot
+  //     still gave the key back; there is no Roll for it to prove that of.
   await clearTx();
-  await ev(`(() => { Bay.show('settings'); document.querySelector('#bay [data-roll]').click(); return true; })()`);
-  await sleep(80);
+  await ev(`(() => { Bay.show('home'); document.querySelector('#bay .top [data-cs="name"]').click(); return true; })()`);
+  await sleep(120);
+  const chipLinked = await ev(`({ scr: $('bay').dataset.scr, field: !!document.getElementById('bayCall') })`);
   t = await calls('callsign');
-  if (t.length === 1 && t[0].rolled === true)
-    ok(`${V}: rolling with NO snapshot still gives the key back — not knowing is not knowing there is none`);
-  else fail(`${V}: unknown-snapshot roll ${JSON.stringify(t)}`);
-  await reply('callsign', { ok: true, callsign: null });
-  // AND THE ANSWER TO IT FABRICATES NOTHING. `CC_SOCIAL === null` means NOT KNOWN
-  // YET, never "empty": inventing a snapshot here would tell the rest of the
-  // session that this account has no friends, no blocks and no friend code, and
-  // socialNeed() would never ask again, because a snapshot exists.
+  if (chipLinked.scr === 'settings' && !chipLinked.field && t.length === 0)
+    ok(`${V}: the home name chip, signed in with no snapshot, opens Bay controls on the row and sends no callsign frame`);
+  else fail(`${V}: chip with no snapshot ${JSON.stringify({ chipLinked, t })}`);
+  await ev(`(() => { const q = window.__tx.filter((f) => f.type === 'friends'); if (q.length) handle({ type: 'friends', error: 'unavailable', id: q[q.length - 1].id }); return true; })()`);
+  await sleep(60);
+  // AND AN ACCEPTED SET WITH NO SNAPSHOT FABRICATES NONE. `CC_SOCIAL === null`
+  // means NOT KNOWN YET, never "empty": inventing a snapshot here would tell the
+  // rest of the session that this account has no friends, no blocks and no
+  // friend code, and socialNeed() would never ask again, because a snapshot
+  // exists. (This was proved through a Roll's answer; it is the same guard in
+  // socialCallsign(), reached now by the one answer that still writes it.)
+  await clearTx();
+  await ev(`(() => { sendCallsign('Tank Ace', () => {}); return true; })()`);
+  await reply('callsign', { ok: true, callsign: 'Tank Ace' });
   const nofab = await ev('window.CC_SOCIAL');
-  if (nofab === null) ok(`${V}: an accepted roll with no snapshot fabricates none \u2014 null still means not known yet`);
+  if (nofab === null) ok(`${V}: an accepted set with no snapshot fabricates none \u2014 null still means not known yet`);
   else fail(`${V}: fabricated snapshot ${JSON.stringify(nofab)}`);
-  await clearTx();
-  await ev(`(() => { document.querySelector('#bay [data-roll]').click(); return true; })()`);
-  await sleep(80);
-  t = await calls('callsign');
-  if (t.length === 0) ok(`${V}: and once one has been accepted the next Roll sends nothing — the bucket is not mashed`);
-  else fail(`${V}: repeat unknown-snapshot roll ${JSON.stringify(t)}`);
+  // Age that confirmation out of the bounded window, so check 3's null
+  // snapshot is believed as it was before this line existed.
+  await ev(`(() => { csHeldAt = Date.now() - 60000; return true; })()`);
 
   // 3. a snapshot that SAYS null is believed, and that is the difference: the
   //    row then says how friends find you, and Set is available.
   await ev(`(() => { handle(${SNAP({ callsign: null })}); return true; })()`);
   await sleep(60);
   r = await rowInfo();
-  if (r && r.desc === HINT && r.dis.join('|') === 'false|false') ok(`${V}: a rolled name shows "${HINT}", with Set offered`);
+  if (r && r.desc === HINT && r.dis.join('|') === 'false') ok(`${V}: a rolled name shows "${HINT}", with Change offered`);
   else fail(`${V}: rolled hint ${JSON.stringify(r)}`);
 
   // 4. Set opens the field with the rules under it
@@ -366,8 +389,25 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   // answers 'length' for anything past the real rule.
   if (e && e.max === 32 && e.focused && e.rule === RULE && !e.bad && e.kids === 0
       && e.btns.join('|') === 'Cancel|Save' && !e.card && e.inStage)
-    ok(`${V}: Set opens a focused field capped at 32 UTF-16 units (= 16 code points), the rules under it, Cancel and Save, all inside the design frame`);
+    ok(`${V}: Change opens a focused field capped at 32 UTF-16 units (= 16 code points), the rules under it, Cancel and Save, all inside the design frame`);
   else fail(`${V}: editor ${JSON.stringify(e)}`);
+  // 4a. EVERY ROW LEFT IN THE COLUMN IS WHOLE INSIDE THE PAGE BODY, and the
+  //     rules line is the size of the row lines above it (owner, 2026-10-07:
+  //     all text visible and easy to read). How to play stands down with the
+  //     credit card while the field is open: it used to run past .pbody at
+  //     every size and off the bottom of the screen at 812x375 and 932x430.
+  const col = await ev(`(() => {
+    const x = document.querySelector('#bay .csx'), pb = document.querySelector('#bay .pbody').getBoundingClientRect();
+    const kids = [...x.closest('.cs').parentElement.children];
+    const u = (() => { const el = document.createElement('div'); el.style.cssText = 'position:absolute;width:calc(100 * var(--u))'; $('bay').appendChild(el); const w = el.getBoundingClientRect().width / 100; el.remove(); return w; })();
+    const csr = x.querySelector('.csr'), rd = document.querySelector('#bay .row .rd');
+    return { names: kids.map((k) => (k.querySelector('.rn2') ? k.querySelector('.rn2').textContent : k.className)),
+      out: kids.filter((k) => k.getBoundingClientRect().bottom > pb.bottom + 0.5 || k.getBoundingClientRect().bottom > innerHeight).length,
+      fs: +(parseFloat(getComputedStyle(csr).fontSize) / u).toFixed(1), col: getComputedStyle(csr).color, rdCol: getComputedStyle(rd).color };
+  })()`);
+  if (col.out === 0 && !col.names.includes('How to play') && col.fs === 13 && col.col === col.rdCol)
+    ok(`${V}: with the field open every row left in the column is whole inside the page body (${col.names.join(', ')}), and the rules line is 13u in the row lines' colour`);
+  else fail(`${V}: open column ${JSON.stringify(col)}`);
 
   // 5. a valid name reaches the socket as exactly the Set frame, nothing more
   await clearTx();
@@ -378,15 +418,6 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
       && f.name === 'Rusty Ridge' && typeof f.id === 'number')
     ok(`${V}: Save sends exactly {type:'callsign', name, id} and nothing else`);
   else fail(`${V}: set frame ${JSON.stringify(t)}`);
-
-  // 5a. ROLL STANDS DOWN WHILE THAT SET IS IN FLIGHT. A mis-tap on it hands back
-  //     the very key being paid for with the day's one change, and the answer
-  //     that would have confirmed the name arrives to a client that has just
-  //     rolled off it.
-  r = await rowInfo();
-  if (r && r.dis.join('|') === 'true|false')
-    ok(`${V}: Roll is disabled while a Set is in flight — a mis-tap cannot give back the name being paid for`);
-  else fail(`${V}: roll during set ${JSON.stringify(r)}`);
 
   // 6. every error code renders its exact sentence, marked as an error, as TEXT
   let bad = 0;
@@ -400,6 +431,32 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   }
   await reply('callsign', { error: 'taken' });     // settle the last try: Save is disabled while one is in flight
   if (!bad) ok(`${V}: all ${CASES.length} error codes render the exact copy, as text, in the error colour`);
+
+  // 6b. A REFUSAL INSIDE THE DAY SAYS WHEN (owner, 2026-10-07: "You can change
+  //     your name again in 7 hours"). server/social.js puts what is left of the
+  //     account's day on too_soon as `wait`, in ms. Counted UP, so the time it
+  //     names has always passed by then; bounded by a day; and a `wait` that is
+  //     not a positive number falls back to the sentence with no time in it.
+  const WAITS = [
+    [7 * 3600000 - 1000, 'You can change your name again in 7 hours.'],
+    [6 * 3600000 + 1, 'You can change your name again in 7 hours.'],
+    [3600000 + 1, 'You can change your name again in 2 hours.'],
+    [3600000, 'You can change your name again in 1 hour.'],
+    [25 * 60000 - 5, 'You can change your name again in 25 minutes.'],
+    [30000, 'You can change your name again in 1 minute.'],
+    [10 * 86400000, 'You can change your name again in 24 hours.'],
+    ['7', 'You can change it again tomorrow.'],
+    [-5, 'You can change it again tomorrow.'],
+    [null, 'You can change it again tomorrow.'],
+  ];
+  let badWait = 0;
+  for (const [wait, copy] of WAITS) {
+    await save('Rusty Ridge');
+    await reply('callsign', { error: 'too_soon', wait });
+    e = await editor();
+    if (!(e && e.rule === copy && e.bad === true && e.kids === 0)) { badWait++; fail(`${V}: too_soon wait ${JSON.stringify(wait)} rendered ${JSON.stringify(e && e.rule)} (want ${JSON.stringify(copy)})`); }
+  }
+  if (!badWait) ok(`${V}: a too_soon carrying the server's wait says when, rounded up, bounded by a day, and falls back to "tomorrow" for a wait that is not a positive number (${WAITS.length} cases)`);
 
   // 7. an empty field is not worth a day's quota: nothing is sent and the rule
   //    is shown as the refusal it is. The one thing the client decides for
@@ -459,15 +516,18 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
     open: !!document.getElementById('bayCall'), name: $('nameInput').value,
     pt: localStorage.getItem('pt_name'),
     held: window.CC_SOCIAL && window.CC_SOCIAL.callsign, desc: rr.querySelector('.rd').textContent,
-    soc: window.__soc, card: !!document.querySelector('#bay .pbody .card') }; })()`);
+    soc: window.__soc, card: !!document.querySelector('#bay .pbody .card'),
+    howto: [...document.querySelectorAll('#bay .row .rn2')].some((x) => x.textContent === 'How to play') }; })()`);
   if (!after.open && after.name === 'Iron Bandit' && after.pt === 'Iron Bandit'
-      && after.held === 'Iron Bandit' && after.desc === 'Iron Bandit' && after.soc > 0 && after.card)
-    ok(`${V}: an accepted callsign closes the field, writes #nameInput, pt_name and CC_SOCIAL, fires cc:social and puts the Built by card back`);
+      && after.held === 'Iron Bandit' && after.desc === 'Iron Bandit' && after.soc > 0 && after.card && after.howto)
+    ok(`${V}: an accepted callsign closes the field, writes #nameInput, pt_name and CC_SOCIAL, fires cc:social and puts How to play and the Built by card back`);
   else fail(`${V}: accepted ${JSON.stringify(after)}`);
 
-  // 10. accepting a chosen name must NOT look like a roll. setCallsign() fires
-  //     on the way through; if CC_SOCIAL were updated after it rather than
-  //     before, the client would clear the very key it just set.
+  // 10. accepting a chosen name must NOT look like a roll. The client used to
+  //     give a key back whenever the name went off the held one, and a Set
+  //     answered in the wrong order cleared the very key it had just paid for.
+  //     There is no Roll now (owner, 2026-10-07) and nothing sends a rolled
+  //     frame; this stays as the guard that nothing ever starts to again.
   t = await tx();
   if (t.filter((x) => x.rolled).length === 0) ok(`${V}: setting a callsign sends no rolled frame — the key it just took is not given back`);
   else fail(`${V}: a rolled frame followed an accepted Set: ${JSON.stringify(t)}`);
@@ -486,9 +546,9 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   await closeCallsign();
 
   // 10a. and CHANGING one is the case that really bites: the name going in is
-  //      not the name held, which is exactly the shape a Roll has. If CC_SOCIAL
-  //      were updated after setCallsign() rather than before, the client would
-  //      hand back the key to the name it had just spent the day's quota on.
+  //      not the name held, which is exactly the shape a Roll had. A client
+  //      that gave keys back on a name change would hand back the key to the
+  //      name it had just spent the day's quota on.
   await clearTx();
   await openEditor();
   await save('Copper Spire');
@@ -559,28 +619,6 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   await ev('(S.ws.readyState = 1, true)');
   await ev(`(() => { document.querySelector('#bay [data-cs="cancel"]').click(); return true; })()`);
 
-  // 14. Roll over a chosen name gives the key back — once, with no name field
-  await clearTx();
-  await ev(`(() => { Bay.show('settings'); document.querySelector('#bay [data-roll]').click(); return true; })()`);
-  await sleep(80);
-  t = await tx();
-  f = t[0];
-  if (t.length === 1 && f && Object.keys(f).sort().join(',') === 'id,rolled,type' && f.type === 'callsign' && f.rolled === true)
-    ok(`${V}: Roll sends exactly {type:'callsign', rolled:true, id} — no name field`);
-  else fail(`${V}: roll frame ${JSON.stringify(t)}`);
-  await reply('callsign', { ok: true, callsign: null });
-  const rolled = await ev(`({ held: window.CC_SOCIAL && window.CC_SOCIAL.callsign, name: $('nameInput').value })`);
-  if (rolled.held === null && typeof rolled.name === 'string'
-      && rolled.name.length >= 3 && rolled.name !== 'null' && rolled.name !== 'Copper Spire')
-    ok(`${V}: the rolled reply (callsign:null) clears the held name without renaming the player "null"`);
-  else fail(`${V}: rolled reply ${JSON.stringify(rolled)}`);
-  await clearTx();
-  await ev(`(() => { document.querySelector('#bay [data-roll]').click(); return true; })()`);
-  await sleep(80);
-  t = await tx();
-  if (t.length === 0) ok(`${V}: a second Roll sends nothing — no chosen name is held, so the 3-per-minute bucket is never touched`);
-  else fail(`${V}: second roll sent ${JSON.stringify(t)}`);
-
   // 15. a friends snapshot is the AUTHORITY on this account's own chosen name
   //     (BINDING resolution 13), and a chosen name is adopted as the player's
   //     name — that is what makes it worth choosing on a second device.
@@ -594,22 +632,6 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
       && snap.name === 'Flint Rim' && snap.pt === 'Flint Rim' && snap.soc === 1 && t.length === 0)
     ok(`${V}: a snapshot fills CC_SOCIAL, fires cc:social once, and a callsign chosen elsewhere becomes this device's name without a rolled frame`);
   else fail(`${V}: snapshot ${JSON.stringify({ snap, t })}`);
-
-  // 15a. a roll the server REFUSES leaves the key on the books, which is the
-  //      truth — the account still holds it. The next Roll asks again, rather
-  //      than a name staying reserved by somebody who is no longer showing it.
-  await clearTx();
-  await ev(`(() => { Bay.show('settings'); document.querySelector('#bay [data-roll]').click(); return true; })()`);
-  await sleep(80);
-  await reply('callsign', { error: 'unavailable' });
-  const kept = await ev(`window.CC_SOCIAL && window.CC_SOCIAL.callsign`);
-  await ev(`(() => { document.querySelector('#bay [data-roll]').click(); return true; })()`);
-  await sleep(80);
-  t = await tx();
-  await reply('callsign', { error: 'unavailable' });
-  if (kept === 'Flint Rim' && t.filter((x) => x.rolled === true).length === 2)
-    ok(`${V}: a refused Roll keeps the held name and the next Roll asks again — the key is never abandoned in silence`);
-  else fail(`${V}: refused roll ${JSON.stringify({ kept, t })}`);
 
   // 16. a REFUSED friends frame is not an empty panel. The server says so
   //     itself: "a panel that renders 'no friends yet' because PostgREST was
@@ -662,19 +684,9 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   win = await ev('window.CC_SOCIAL && window.CC_SOCIAL.callsign');
   if (aged && win === null) ok(`${V}: and once the window is out the same null snapshot IS believed — the hold is bounded`);
   else fail(`${V}: window never expires ${JSON.stringify({ aged, win })}`);
-  // a snapshot carrying a NAME ends the window outright...
-  await ev(`(() => { handle(${SNAP({ callsign: 'Cobalt Salvo' })}); return true; })()`);
-  await sleep(60);
-  // ...and so does this client rolling it away, even seconds after confirming it.
-  await clearTx();
-  await ev(`(() => { Bay.show('settings'); document.querySelector('#bay [data-roll]').click(); return true; })()`);
-  await sleep(80);
-  await reply('callsign', { ok: true, callsign: null });
-  await ev(`(() => { handle(${SNAP({ callsign: null })}); return true; })()`);
-  await sleep(60);
-  win = await ev('window.CC_SOCIAL && window.CC_SOCIAL.callsign');
-  if (win === null) ok(`${V}: this client's own Roll ends the window — a null snapshot after it is believed at once`);
-  else fail(`${V}: roll did not end the window ${JSON.stringify(win)}`);
+  // (A check stood here that this client's own Roll ended the window early.
+  // There is no Roll any more -- owner, 2026-10-07 -- so the window now ends
+  // only by running out, as above, or by a snapshot that carries a name.)
 
   // 18b. THE TWELVE-SECOND TIMEOUT, and the repair that hangs off it. It is the
   //      single guard against waiting for ever and it had no test at all.
@@ -813,9 +825,13 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   //      #bay was still shoved up over a keyboard that had gone with it, and the
   //      only way down was to leave the screen.
   //      Signing out also GIVES THE CHOSEN NAME UP. It belongs to the account,
-  //      not to the device: leaving it on the home screen while every lobby
-  //      shows the rolled pair the server gives an unproven name is a mismatch
-  //      that could not happen before this feature existed.
+  //      not to the device, so the device must not go on wearing a unique
+  //      callsign its account has left. CHANGED (owner, 2026-10-07: names are
+  //      permanent): what the device goes back to is ITS OWN name -- the
+  //      default it was given once, or a name a guest set on it -- where it
+  //      used to roll a fresh one. This pinned only "not the chosen name"; it
+  //      now pins which name.
+  const own0 = await ev(`localStorage.getItem('cc_name_own')`);
   await ev(`(() => { Bay.show('settings'); return true; })()`);
   await openEditor();
   const lifted = await ev(`(() => { const vv = window.visualViewport;
@@ -831,13 +847,39 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
              pt: localStorage.getItem('pt_name') }; })()`);
   if (lifted.kbd && lifted.name === 'Granite Wash' && !flipped.field && !flipped.kbd && flipped.lift === ''
       && flipped.listeners === 0 && flipped.social === null
-      && flipped.name !== 'Granite Wash' && flipped.pt === flipped.name)
-    ok(`${V}: losing the account closes the open field, drops the lift and hands the chosen name back with it`);
+      && flipped.name !== 'Granite Wash' && flipped.pt === flipped.name && !!own0 && flipped.name === own0)
+    ok(`${V}: losing the account closes the open field, drops the lift and hands the chosen name back, returning the device to its own name ('${own0}'), not a fresh roll`);
   else fail(`${V}: account flip ${JSON.stringify({ lifted, flipped })}`);
 
-  // 21. a guest is told the truth and is not handed a button that can only
-  //     fail (BINDING resolution 2). Signing out drops the WHOLE snapshot —
-  //     the friends and blocked lists belong to the account that left.
+  // 20c. A DEVICE THAT NEVER KEPT A NAME OF ITS OWN gets ONE default and keeps
+  //      it. A device that came up from a build before 8 holds the account's
+  //      chosen name in pt_name and nothing else; its first sign-out gives it a
+  //      rolled default, and every later sign-out comes back to that same one
+  //      -- never a second roll (owner, 2026-10-07: names are permanent).
+  const pre8 = await ev(`(() => {
+    const adopt = () => {
+      window.CC_ACCOUNT = ${LINKED}; document.dispatchEvent(new CustomEvent('cc:account'));
+      const q = window.__tx.filter((f) => f.type === 'friends');
+      handle(Object.assign(${SNAP({ callsign: 'Flint Rim' })}, q.length ? { id: q[q.length - 1].id } : {}));
+      return $('nameInput').value;
+    };
+    const leave = () => { window.CC_ACCOUNT = ${GUEST}; document.dispatchEvent(new CustomEvent('cc:account')); return $('nameInput').value; };
+    const a1 = adopt(); localStorage.removeItem('cc_name_own');
+    const first = leave(), own1 = localStorage.getItem('cc_name_own');
+    const a2 = adopt(), second = leave();
+    return { a1, a2, first, own1, second, rolled: rolledPair(first), own2: localStorage.getItem('cc_name_own') };
+  })()`);
+  await clearTx();
+  if (pre8.a1 === 'Flint Rim' && pre8.a2 === 'Flint Rim' && pre8.rolled && pre8.own1 === pre8.first
+      && pre8.second === pre8.first && pre8.own2 === pre8.first)
+    ok(`${V}: a device with no name of its own is given one default on its first sign-out ('${pre8.first}') and comes back to that same name on the next`);
+  else fail(`${V}: pre-build-8 sign-out ${JSON.stringify(pre8)}`);
+
+  // 21. a guest's row says what it is for and offers Change: a guest names
+  //     themselves now (owner, 2026-10-07). CHANGED: this pinned the guest row
+  //     as "Sign in to choose a callsign." with Roll alone. Signing out still
+  //     drops the WHOLE snapshot — the friends and blocked lists belong to the
+  //     account that left.
   await clearTx();
   const out = await ev(`(() => {
     window.CC_ACCOUNT = ${GUEST};
@@ -847,9 +889,9 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   await sleep(60);
   r = await rowInfo();
   t = await tx();
-  if (out.social === null && r && r.desc === OUT && r.btns.join('|') === 'Roll' && r.acts.join('|') === 'data-roll'
-      && new Set(r.heights).size === 1 && t.length === 0)
-    ok(`${V}: a guest is told "${OUT}", is offered Roll alone, asks the server for nothing, and keeps no trace of the account that left`);
+  if (out.social === null && r && r.desc === SAY && r.btns.join('|') === 'Change' && r.acts.join('|') === 'data-cs=open'
+      && r.dis.join('|') === 'false' && new Set(r.heights).size === 1 && t.length === 0)
+    ok(`${V}: a guest's row says "${SAY}" and offers Change, asks the server for nothing, and keeps no trace of the account that left`);
   else fail(`${V}: guest ${JSON.stringify({ social: out.social, r, t })}`);
 
   // 22. the outbox Task 8 inherits. BINDING resolution 3: block, report and
@@ -894,14 +936,148 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   else fail(`${V}: same-target waiters ${JSON.stringify(pair)}`);
   await clearTx();
 
-  // 23. and a guest's Roll is still a local roll, with no frame at all
-  await ev(`(() => { document.querySelector('#bay [data-roll]').click(); return true; })()`);
-  await sleep(80);
-  t = await tx();
-  const gname = await ev(`$('nameInput').value`);
-  if (t.length === 0 && typeof gname === 'string' && gname.length >= 3 && gname !== flipped.name)
-    ok(`${V}: a guest's Roll renames them on this device and sends nothing`);
-  else fail(`${V}: guest roll ${JSON.stringify({ t, gname })}`);
+  // 23. A GUEST NAMES THEMSELVES (owner, 2026-10-07: "the player is given a
+  //     default name and then they can change it to whatever they like, as long
+  //     as it stays within the guidelines"; "once a day"). CHANGED: this check
+  //     proved a guest's Roll renamed them locally and sent nothing; there is no
+  //     Roll. A guest opens the same field, and the device asks the server's
+  //     check -- {type:'callsign', op:'check'}, the test the lobby door applies
+  //     -- before it keeps anything. The day is counted on the device.
+  await ev(`(() => { localStorage.removeItem('cc_name_at'); setOwnName('Iron Ridge'); return true; })()`);
+  await clearTx();
+  // 23a. the field opens for a guest, EMPTY when the name is the rolled
+  //      default (nobody picked it, so it is not offered to spend a day on).
+  await openEditor();
+  e = await editor();
+  const g0 = await ev(`(() => { const i = document.getElementById('bayCall'), b = document.querySelector('#bay [data-cs="save"]');
+    return { open: !!i, v: i ? i.value : null, dis: b ? b.disabled : null }; })()`);
+  if (e && e.rule === RULE && !e.bad && e.btns.join('|') === 'Cancel|Save' && e.focused && e.inStage && g0.v === '' && !g0.dis)
+    ok(`${V}: a guest's Change opens the field, empty over the rolled default, with the rules under it and Save ready`);
+  else fail(`${V}: guest editor ${JSON.stringify({ e, g0 })}`);
+  // Every step below types into that field. With no field there is nothing to
+  // drive, so they are reported as one failure here instead of a crash that
+  // ends the whole suite and hides every check after it.
+  if (!g0.open) fail(`${V}: a guest's field never opened -- 23b to 23i not run`);
+  else {
+    // 23b. Save sends EXACTLY the check frame, the name as typed but for the
+    //      ends (submitCallsign trims, as it does for a Set) -- the run of spaces
+    //      inside is the server's to collapse, never the client's.
+    await clearTx();
+    await save('  Tank   Ace ');
+    t = await tx();
+    f = t[t.length - 1];
+    if (t.length === 1 && f && Object.keys(f).sort().join(',') === 'id,name,op,type' && f.type === 'callsign'
+        && f.op === 'check' && f.name === 'Tank   Ace' && typeof f.id === 'number')
+      ok(`${V}: a guest's Save sends exactly {type:'callsign', op:'check', name, id}, the name as typed but for the ends`);
+    else fail(`${V}: guest check frame ${JSON.stringify(t)}`);
+    // 23c. every refusal is said, and NOTHING is kept: not the name, not the day.
+    const GCASES = [['length', RULE], ['chars', RULE], ['not_allowed', 'That callsign is not allowed.'],
+      ['slow_down', 'Too many tries. Wait a moment.'], ['unavailable', 'Callsigns are not available right now. Try again later.'],
+      ['a_code_from_a_newer_server', 'That callsign could not be set.']];
+    let gbad = 0;
+    for (const [code, copy] of GCASES) {
+      await reply('callsign', { op: 'check', error: code });
+      e = await editor();
+      const kept = await ev(`({ name: $('nameInput').value, pt: localStorage.getItem('pt_name'), own: localStorage.getItem('cc_name_own'), at: localStorage.getItem('cc_name_at') })`);
+      if (!(e && e.rule === copy && e.bad === true && kept.name === 'Iron Ridge' && kept.pt === 'Iron Ridge' && kept.own === 'Iron Ridge' && kept.at === null)) {
+        gbad++; fail(`${V}: guest refusal ${code} ${JSON.stringify({ rule: e && e.rule, bad: e && e.bad, kept })}`);
+      }
+      // Typed in a different case and spacing from the answer 23d gives, so
+      // keeping the TYPED copy instead of the server's cannot pass by accident.
+      await save('tank   ace');
+    }
+    if (!gbad) ok(`${V}: all ${GCASES.length} refusals of a guest's name say why, and keep nothing -- no name, no day spent`);
+    // 23d. the answer is KEPT, and what is kept is the SERVER's normalised name.
+    const t0 = await ev('Date.now()');
+    await reply('callsign', { op: 'check', ok: true, name: 'Tank Ace' });
+    const gk = await ev(`(() => { Bay.show('home'); const c = document.querySelector('#bay .top [data-cs="name"] b');
+      return { field: !!document.getElementById('bayCall'), name: $('nameInput').value, pt: localStorage.getItem('pt_name'),
+        own: localStorage.getItem('cc_name_own'), at: Number(localStorage.getItem('cc_name_at')), now: Date.now(), chip: c && c.textContent }; })()`);
+    if (!gk.field && gk.name === 'Tank Ace' && gk.pt === 'Tank Ace' && gk.own === 'Tank Ace' && gk.chip === 'Tank Ace'
+        && gk.at >= t0 && gk.at <= gk.now)
+      ok(`${V}: an ok check keeps the server's 'Tank Ace' as the device's own name, on #nameInput, pt_name and the home chip, and stamps the day`);
+    else fail(`${V}: guest kept ${JSON.stringify(gk)}`);
+    // 23e. ONCE A DAY: the row and the field say when, Save stands down, the
+    //      field opens on the name they chose, and nothing at all is sent --
+    //      not by Save, not by Enter, not by calling the wire directly.
+    r = await rowInfo();
+    await clearTx();
+    await openEditor();
+    e = await editor();
+    const g1 = await ev(`(() => { const i = document.getElementById('bayCall');
+      return { v: i.value, focused: document.activeElement === i, kbd: $('bay').classList.contains('kbd'), dis: document.querySelector('#bay [data-cs="save"]').disabled }; })()`);
+    await ev(`(() => { const i = document.getElementById('bayCall'); i.value = 'Other Name';
+      document.querySelector('#bay [data-cs="save"]').click();
+      i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return true; })()`);
+    await sleep(80);
+    const enter = await editor();
+    const direct = await ev(`new Promise((res) => sendGuestName('Other Name', res))`);
+    t = await calls('callsign');
+    if (r && r.desc === 'Change it again in 24 hours' && r.dis.join('|') === 'false'
+        && e && e.rule === 'You can change your name again in 24 hours.' && !e.bad && g1.dis
+        && g1.v === 'Tank Ace' && !g1.focused && !g1.kbd
+        && enter && enter.rule === 'You can change your name again in 24 hours.'
+        && direct && direct.ok === false && direct.error === 'too_soon' && direct.wait > 0 && t.length === 0)
+      ok(`${V}: inside the day the row says "Change it again in 24 hours", the field says when, Save stands down, the field shows 'Tank Ace' with no keyboard raised, and Save, Enter and the wire itself send nothing`);
+    else fail(`${V}: guest day ${JSON.stringify({ r, e, g1, enter: enter && enter.rule, direct, t })}`);
+    await closeCallsign();
+    // 23f. COUNTED DOWN FROM THE STAMP, rounded up; and the day ENDS.
+    const at = (ago) => ev(`(() => { localStorage.setItem('cc_name_at', String(Date.now() - ${ago})); return true; })()`);
+    const lineAfter = async (ago) => { await at(ago); await openEditor(); const x = await editor(); const d = await ev(`document.querySelector('#bay [data-cs="save"]').disabled`); await closeCallsign(); return { rule: x && x.rule, bad: x && x.bad, dis: d }; };
+    const L17 = await lineAfter(17 * 3600000);
+    const L30 = await lineAfter(86400000 - 30 * 60000);
+    const Lend = await lineAfter(86400000 + 1000);
+    // A STAMP FROM THE FUTURE -- the clock set back -- opens the gate rather
+    // than holding it shut for longer than a day.
+    const Lfut = await lineAfter(-2 * 86400000);
+    if (L17.rule === 'You can change your name again in 7 hours.' && L17.dis
+        && L30.rule === 'You can change your name again in 30 minutes.' && L30.dis
+        && Lend.rule === RULE && !Lend.dis && Lfut.rule === RULE && !Lfut.dis)
+      ok(`${V}: the day counts down from the device's stamp ("in 7 hours", "in 30 minutes"), ends after 24 hours, and a stamp from the future opens the gate`);
+    else fail(`${V}: guest countdown ${JSON.stringify({ L17, L30, Lend, Lfut })}`);
+    // 23g. no connection -- the socket down, or the in-page offline engine in
+    //      its place -- is said, and nothing is queued or kept.
+    await ev(`(() => { localStorage.removeItem('cc_name_at'); return true; })()`);
+    await clearTx();
+    await openEditor();
+    await ev('(S.ws.readyState = 3, true)');
+    await save('Wren Hollow');
+    const down = await editor();
+    await ev('(S.ws.readyState = 1, S.local = true, true)');
+    await save('Wren Hollow');
+    const local = await editor();
+    await ev('(S.local = false, true)');
+    t = await tx();
+    const keptName = await ev(`$('nameInput').value`);
+    if (down && down.rule === 'Not connected. Try again in a moment.' && down.bad && local && local.rule === 'Not connected. Try again in a moment.'
+        && t.length === 0 && keptName === 'Tank Ace')
+      ok(`${V}: with no socket, or the offline engine in its place, a guest's Save says so and nothing is sent or kept`);
+    else fail(`${V}: guest offline ${JSON.stringify({ down, local, t, keptName })}`);
+    await closeCallsign();
+    // 23h. THE HOME NAME CHIP, AS A GUEST: Bay controls with the field open on
+    //      it -- the chip used to roll a new name on every tap.
+    await clearTx();
+    const chipGuest = await ev(`(() => { Bay.show('home'); document.querySelector('#bay .top [data-cs="name"]').click();
+      return { scr: $('bay').dataset.scr, name: $('nameInput').value }; })()`);
+    await sleep(150);
+    const chipField = await ev(`({ field: !!document.getElementById('bayCall'), v: document.getElementById('bayCall') && document.getElementById('bayCall').value })`);
+    t = await tx();
+    if (chipGuest.scr === 'settings' && chipGuest.name === 'Tank Ace' && chipField.field && chipField.v === 'Tank Ace' && t.length === 0)
+      ok(`${V}: the home name chip opens Bay controls with the field open on the name, renames nobody and sends nothing`);
+    else fail(`${V}: guest chip ${JSON.stringify({ chipGuest, chipField, t })}`);
+    // 23i. A SIGN-IN WHILE THE GUEST FIELD IS OPEN CLOSES IT: it was opened to
+    //      keep a name on this device and must not save it as an account's
+    //      chosen callsign, or the other way round.
+    const signedIn = await ev(`(() => { window.CC_ACCOUNT = ${LINKED}; document.dispatchEvent(new CustomEvent('cc:account'));
+      Bay.show('settings'); return { field: !!document.getElementById('bayCall'), kbd: $('bay').classList.contains('kbd') }; })()`);
+    await ev(`(() => { const q = window.__tx.filter((f) => f.type === 'friends'); if (q.length) handle({ type: 'friends', error: 'unavailable', id: q[q.length - 1].id }); return true; })()`);
+    if (!signedIn.field && !signedIn.kbd) ok(`${V}: a sign-in while a guest's field is open closes it`);
+    else fail(`${V}: guest field survived a sign-in ${JSON.stringify(signedIn)}`);
+  }
+  // The device's own name and its day are this run's; the next viewport and
+  // Task 8 start from a device that has not spent one.
+  await ev(`(() => { localStorage.removeItem('cc_name_at'); window.CC_ACCOUNT = ${GUEST}; document.dispatchEvent(new CustomEvent('cc:account')); return true; })()`);
+  await clearTx();
 
   // ==========================================================================
   // TASK 8 — THE FRIENDS SCREEN AND THE PLAYER MENU
@@ -2095,6 +2271,29 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   const gone = await ev(`(() => ({ kbd: $('bay').classList.contains('kbd'), lift: $('bay').style.getPropertyValue('--kbd') }))()`);
   if (gone.kbd === false) ok(`${V}: friends — leaving the screen drops the lift`);
   else fail(`${V}: lift left behind ${JSON.stringify(gone)}`);
+}
+
+// ---- 45. BOOT KEEPS THE ONE DEFAULT (owner, 2026-10-07: names are permanent).
+//      A device with no name is given one at boot and remembers it as its own;
+//      a device from before build 8 that holds a ROLLED pair has that pair
+//      remembered as its own default; one holding anything else (an account's
+//      chosen callsign, adopted) is not handed it as its own. Reloads, so it
+//      runs once, after the viewports.
+{
+  const boot = async (setup) => {
+    await ev(`(() => { ${setup} return true; })()`);
+    await send('Page.navigate', { url: `http://127.0.0.1:${appPort}/` });
+    for (let i = 0; i < 80; i++) { if (await ev('!!window.Bay && typeof rolledPair === "function" && !!document.querySelector("#bay .top")').catch(() => false)) break; await sleep(200); }
+    return ev(`({ pt: localStorage.getItem('pt_name'), own: localStorage.getItem('cc_name_own'), name: $('nameInput').value })`);
+  };
+  const fresh = await boot(`localStorage.removeItem('pt_name'); localStorage.removeItem('cc_name_own');`);
+  const again = await boot('');
+  const old7 = await boot(`localStorage.setItem('pt_name', 'Dusty Crag'); localStorage.removeItem('cc_name_own');`);
+  const chosen = await boot(`localStorage.setItem('pt_name', 'Marguerite Vale'); localStorage.removeItem('cc_name_own');`);
+  if (fresh.pt && fresh.own === fresh.pt && fresh.name === fresh.pt && again.pt === fresh.pt && again.own === fresh.pt
+      && old7.own === 'Dusty Crag' && old7.name === 'Dusty Crag' && chosen.own === null && chosen.name === 'Marguerite Vale')
+    ok(`boot: a new device keeps its one default ('${fresh.pt}') across a reload; a build-7 device's rolled name becomes its own; an adopted chosen name does not`);
+  else fail(`boot own name ${JSON.stringify({ fresh, again, old7, chosen })}`);
 }
 
 clearTimeout(watchdog);
