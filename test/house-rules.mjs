@@ -365,6 +365,47 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   else ok('offline play keeps soloByConstruction and soloOfferable apart, and Play solo is the only door into a solo invite room');
 }
 
+// ---- 7e. THE MODE CARDS ARE PRECACHED UNDER THE URL BAY.JS ASKS FOR --------
+// The mode cards are stills from the game (owner, 2026-10-07; made by
+// tools/cards/capture.mjs), one per mode for each place a card is shown:
+// 'board' (home), 'tall' (Mission board), 'wide' (Match setup). bay.js asks for
+// each with its own ?v= stamp, read from its script tag (ASSET_V), and a cache
+// answers only the exact URL it holds -- so sw.js must list every one under the
+// stamp index.html loads bay.js with. A card listed bare, or still under the
+// last release's stamp, would be missing offline with nothing louder than a
+// broken picture. Also held here: every card is on disk, really is a WebP, and
+// keeps to the 120 KB budget, and no screen has gone back to the old art().
+{
+  const bay = read('public/bay.js'), sw = read('public/sw.js'), html = read('public/index.html');
+  const stamp = (html.match(/bay\.js\?v=(\d+)/) || [])[1];
+  const block = sw.match(/const SHELL = \[([\s\S]*?)\]/);
+  const shell = block ? (block[1].match(/'([^']+)'/g) || []).map(s => s.slice(1, -1)) : [];
+  const at = bay.indexOf('const MODES = [');
+  const modes = at < 0 ? '' : bay.slice(at, bay.indexOf('\n];', at));
+  const cards = [...modes.matchAll(/\bcard: '([a-z0-9-]+)'/g)].map(m => m[1]);
+  const bad = [];
+  if (!stamp) bad.push('index.html loads bay.js with no ?v= stamp');
+  if (cards.length !== 5) bad.push(`bay.js MODES names ${cards.length} cards, expected one for each of the 5 modes`);
+  if (!/const cardArt = \(mode, shape\) => 'bay\/' \+ mode\.card \+ '-' \+ shape \+ '\.webp' \+ ASSET_V;/.test(bay)) {
+    bad.push("bay.js cardArt no longer builds 'bay/<card>-<shape>.webp' plus ASSET_V");
+  }
+  if (!/const ASSET_V = [\s\S]{0,120}document\.currentScript\.src/.test(bay)) bad.push("bay.js ASSET_V no longer reads the stamp from bay.js's own script tag");
+  if (/\bart\((?:x|m|mode)\.card\)/.test(bay)) bad.push('bay.js draws a mode card with art(), the old .jpg path');
+  for (const c of cards) for (const shape of ['board', 'tall', 'wide']) {
+    const f = `bay/${c}-${shape}.webp`;
+    const p = path.join(ROOT, 'public', f);
+    if (!existsSync(p)) { bad.push(`${f} is missing`); continue; }
+    const b = readFileSync(p);
+    if (b.toString('latin1', 0, 4) !== 'RIFF' || b.toString('latin1', 8, 12) !== 'WEBP') bad.push(`${f} is not a WebP`);
+    if (b.length > 120000) bad.push(`${f} is ${b.length} bytes, over the 120 KB budget`);
+    if (stamp && !shell.includes(`${f}?v=${stamp}`)) bad.push(`sw.js SHELL does not precache ${f}?v=${stamp}`);
+  }
+  const stale = shell.filter(u => u.startsWith('bay/card-') && !u.endsWith(`?v=${stamp}`));
+  if (stale.length) bad.push(`sw.js SHELL lists mode cards under another stamp: ${stale.join(', ')}`);
+  if (bad.length) fail(`the mode cards and the offline shell disagree:\n      ${bad.join('\n      ')}`);
+  else ok(`the ${cards.length * 3} mode-card stills are WebP, within 120 KB, and precached under bay.js's ?v=${stamp}`);
+}
+
 // ---- 8. VERSION MUST AGREE ACROSS ALL THREE PROJECTS (ISSUE-016) ------------
 // package.json is the source; `npm run version:sync` pushes it into the native
 // projects. Nothing forces anyone to run it, and the failure is invisible

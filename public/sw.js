@@ -40,16 +40,31 @@ const SHELL = [
   'fonts/rajdhani-600.woff2',
   'fonts/rajdhani-700.woff2',
   'fonts/jetbrains-mono-var.woff2',
-  'bay/alpine-hero.jpg',
   'bay/alpine-wide.jpg',
-  'bay/desert-hero.jpg',
   'bay/desert-wide.jpg',
-  'bay/ice-mid.jpg',
   'bay/ice-wide.jpg',
-  'bay/ruins-mid.jpg',
   'bay/ruins-wide.jpg',
-  'bay/volcanic-hero.jpg',
   'bay/volcanic-wide.jpg',
+  // The mode cards: stills from the game, one per mode for each place a card
+  // is shown (bay.js cardArt). STAMPED, unlike the art above, because bay.js
+  // asks for them with its own ?v= and a cache answers only the exact URL it
+  // holds; house rule 7e keeps these in step with the stamp in index.html.
+  // (No apostrophes in this list: house-rules reads it by quoted string.)
+  'bay/card-duel-board.webp?v=14',
+  'bay/card-duel-tall.webp?v=14',
+  'bay/card-duel-wide.webp?v=14',
+  'bay/card-ffa-board.webp?v=14',
+  'bay/card-ffa-tall.webp?v=14',
+  'bay/card-ffa-wide.webp?v=14',
+  'bay/card-boss-board.webp?v=14',
+  'bay/card-boss-tall.webp?v=14',
+  'bay/card-boss-wide.webp?v=14',
+  'bay/card-aliens-board.webp?v=14',
+  'bay/card-aliens-tall.webp?v=14',
+  'bay/card-aliens-wide.webp?v=14',
+  'bay/card-golf-board.webp?v=14',
+  'bay/card-golf-tall.webp?v=14',
+  'bay/card-golf-wide.webp?v=14',
   'manifest.webmanifest',
   'privacy.html',        // reachable offline: it is a store requirement (ISSUE-013)
   'delete-account.html', // the web deletion pathway Play requires (no apostrophes here:

@@ -54,22 +54,22 @@ const MODES = [
   // computer, or a squad of two.
   { id: 'duel',   name: 'Duel',           players: '2',         tag: 'Head to head',
     blurb: 'One on one, against the computer or a squad mate. First to bring the other down.',
-    art: 'alpine-wide',   card: 'alpine-hero',   draft: 5 },
+    art: 'alpine-wide',   card: 'card-duel',     draft: 5 },
   // FFA SEATS 2-4 (the engine's MODE_SEATS, and the Seats line), so the card
   // says so too (fix wave E4): '3-4' beside a squad of two's "Needs 2 players"
   // read as two different minimums on one card.
   { id: 'ffa',    name: 'Free-for-all',   players: '2-4',       tag: 'Last tank standing',
     blurb: 'Two to four commanders, one ridge line. Everyone for themselves.',
-    art: 'desert-wide',   card: 'desert-hero',   draft: 5 },
+    art: 'desert-wide',   card: 'card-ffa',      draft: 5 },
   { id: 'boss',   name: 'Boss Fight',     players: '1-2 co-op', tag: 'Bring down WARLORD-7',
     blurb: 'A mech that fights back. Beat it and the Midnight paint drops.',
-    art: 'volcanic-wide', card: 'volcanic-hero', draft: 7 },
+    art: 'volcanic-wide', card: 'card-boss',     draft: 7 },
   { id: 'aliens', name: 'Alien Invasion', players: '1-2 co-op', tag: 'Hold the line',
     blurb: 'Escalating waves of xeno saucers. See how long you last.',
-    art: 'ruins-wide',    card: 'ruins-mid',     draft: 7 },
+    art: 'ruins-wide',    card: 'card-aliens',   draft: 7 },
   { id: 'golf',   name: 'Artillery Golf', players: '1-4',       tag: 'Nine holes, no damage',
     blurb: 'Driver, Iron, Wedge, Putter. Real rolling physics and a scorecard.',
-    art: 'ice-wide',      card: 'ice-mid',       draft: 5 },
+    art: 'ice-wide',      card: 'card-golf',     draft: 5 },
 ];
 const modeOf = (id) => MODES.find((m) => m.id === id) || MODES[0];
 
@@ -179,6 +179,22 @@ const SOLO_COPY = {
 };
 const SHORT = { duel: 'Duel', ffa: 'FFA', boss: 'Boss', aliens: 'Aliens', golf: 'Golf' };
 const art = (k) => 'bay/' + k + '.jpg';
+// THE MODE CARDS ARE STILLS FROM THE GAME ITSELF (owner, 2026-10-07: "the
+// actual game mode ... use actual game footage"). tools/cards/capture.mjs
+// plays a real match of each mode, freezes one moment of it and crops it once
+// for each place a mode card is shown, at that place's own shape, so no screen
+// has to crop the action out of its box: 'board' for the home screen's mode
+// boards, 'tall' for the Mission board, 'wide' for Match setup's brief.
+// They carry THIS script's own ?v= stamp, read from its tag in index.html:
+// sw.js precaches each one under that exact URL, a cache answers only the URL
+// it holds, and so an image asked for without it would miss offline. Reading
+// it here keeps the two in step when the stamp moves (test/house-rules.mjs
+// checks sw.js's side).
+const ASSET_V = (() => {
+  const m = /[?&]v=(\d+)/.exec((document.currentScript && document.currentScript.src) || '');
+  return m ? '?v=' + m[1] : '';
+})();
+const cardArt = (mode, shape) => 'bay/' + mode.card + '-' + shape + '.webp' + ASSET_V;
 
 /* ---- hand-drawn icons (house rule: no emoji, ever) ----------------------- */
 const MODE_IC = {
@@ -3294,7 +3310,7 @@ SCREENS.modes = function () {
   const cards = MODES.map((x) => {
     const on = x.id === s.mode.id;
     return '<button class="mb' + (on ? ' on' : '') + (noFit(x.id) ? ' nofit' : '') + '" data-set="mode=' + x.id + '" data-go="setup">'
-      + '<span class="mbi"><img src="' + art(x.card) + '" alt=""><span class="g"></span><span class="lip"></span>' + offBadge(x.id) + noFitPill(x.id)
+      + '<span class="mbi"><img src="' + cardArt(x, 'tall') + '" alt=""><span class="g"></span><span class="lip"></span>' + offBadge(x.id) + noFitPill(x.id)
       +   '<span class="mbicn">' + MODE_IC[x.id] + '</span><span class="mbn">' + esc(x.name) + '</span></span>'
       + '<span class="mbc"><span class="mbt' + (on ? '' : ' mbt2') + '">' + (on ? 'Armed &middot; ' : '') + esc(x.tag) + '</span>'
       +   '<span class="mbb">' + esc(x.blurb) + '</span>'
@@ -3524,7 +3540,7 @@ SCREENS.setup = function () {
       +       '<button class="ghost" style="height:' + u(32) + ';font-size:' + u(12) + ';padding:0 ' + u(14) + '" data-go="armoury">Edit</button></div></div>')
     +   '</div>'
     + '</div>'
-    + '<div class="brief" style="flex:1"><div class="bi"><img src="' + art(m.card) + '" alt=""><span class="g"></span><span>' + esc(m.name) + '</span></div>'
+    + '<div class="brief" style="flex:1"><div class="bi"><img src="' + cardArt(m, 'wide') + '" alt=""><span class="g"></span><span>' + esc(m.name) + '</span></div>'
     +   '<div class="bb">' + esc(m.blurb) + '</div>'
     +   '<div class="brow"><span class="lbl">Players</span><b>' + esc(m.players) + '</b></div>'
     +   (isGolf(m) ? '<div class="brow"><span class="lbl">Clubs in the bag</span><b class="cy">' + GOLF_BAG.length + '</b></div>'
@@ -3557,7 +3573,7 @@ SCREENS.home = function () {
   const boards = MODES.map((x, i) =>
     '<button class="board' + (x.id === m.id ? ' on' : '') + (noFit(x.id) ? ' nofit' : '') + '" style="transform:rotate(' + arc[i][0] + 'deg) translateY(' + u(arc[i][1]) + ')" '
     + 'data-set="mode=' + x.id + '" title="' + esc(x.name) + '">'
-    + '<span class="bcard"><img src="' + art(x.card) + '" alt=""><span class="bsc"></span><span class="barm"></span>'
+    + '<span class="bcard"><img src="' + cardArt(x, 'board') + '" alt=""><span class="bsc"></span><span class="barm"></span>'
     // No offline badge on the home boards (owner, 2026-09-18); the Mission
     // board keeps its badge, and offline play itself is unchanged. The squad
     // pill (noFitPill) takes the badge's slot and none of its class.

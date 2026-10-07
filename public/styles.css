@@ -1756,6 +1756,7 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
 /* The SVG canyon behind the old menu would burn GPU under an opaque bay. */
 
 @media (prefers-reduced-motion: reduce) { #bay *{ animation-duration:.01ms!important; animation-iteration-count:1!important; transition-duration:.01ms!important; } }
+@media (prefers-reduced-motion: reduce) { #bay .bcard::after,#bay .mbi::after,#bay .brief .bi::after{ animation:none!important; } }
 
 /* ---- concept 10 rules, scoped and scaled (generated from the spec) ---- */
 
@@ -1994,15 +1995,25 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .bcard{position:absolute;inset:0;border-radius:calc(6 * var(--u));overflow:hidden;display:block;
      border:1px solid rgba(140,168,214,.26);background:#0a0e18;transition:transform .22s cubic-bezier(.2,.8,.3,1),
      border-color .18s,box-shadow .22s;box-shadow:0 calc(14 * var(--u)) calc(26 * var(--u)) calc(-14 * var(--u)) rgba(0,0,0,.95)}
-  #bay .bcard img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.56;transition:.22s;
-     filter:saturate(.88)}
-  #bay .bcard .bsc{position:absolute;inset:0;background:linear-gradient(0deg,rgba(6,9,16,.95) 16%,rgba(6,9,16,.16))}
+  /* THE CARD ART IS A STILL FROM THE GAME (owner, 2026-10-07: "the actual
+     game mode ... make it look cooler"), framed by tools/cards/capture.mjs with
+     the action in the top 60% of the board, above the name. So the picture is
+     shown near full strength and only the label's strip is shaded: the old
+     0.56 opacity under a gradient across the whole card was made for generic
+     scenery and hid the very thing the card is now about. An unarmed board
+     still reads as unarmed: a little less colour, and none of the armed
+     card's lift, border and glow. */
+  #bay .bcard img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.84;transition:.22s;
+     filter:saturate(.78) brightness(.9)}
+  #bay .bcard .bsc{position:absolute;inset:0;background:linear-gradient(0deg,rgba(6,9,16,.95) 0%,rgba(6,9,16,.8) 26%,
+     rgba(6,9,16,.3) 50%,rgba(6,9,16,0) 70%)}
   #bay .board:hover .bcard{transform:translateY(calc(-6 * var(--u)));border-color:rgba(255,180,107,.65)}
-  #bay .board:hover .bcard img{opacity:.74}
+  #bay .board:hover .bcard img{opacity:.94;filter:none}
   #bay .board.on .bcard{transform:translateY(calc(-9 * var(--u))) scale(1.04);border-color:#ffb46b;
      box-shadow:0 calc(20 * var(--u)) calc(36 * var(--u)) calc(-14 * var(--u)) rgba(255,150,70,.7),0 0 0 1px rgba(255,180,107,.55)}
-  #bay .board.on .bcard img{opacity:.86}
-  #bay .bic{position:absolute;top:calc(8 * var(--u));left:calc(9 * var(--u));width:calc(19 * var(--u));height:calc(19 * var(--u));fill:rgba(238,243,255,.82)}
+  #bay .board.on .bcard img{opacity:1;filter:saturate(1.06)}
+  #bay .bic{position:absolute;top:calc(8 * var(--u));left:calc(9 * var(--u));width:calc(19 * var(--u));height:calc(19 * var(--u));fill:rgba(238,243,255,.9);
+     filter:drop-shadow(0 calc(1 * var(--u)) calc(3 * var(--u)) rgba(0,0,0,.85))}
   #bay .board.on .bic{fill:#ffc98f}
   #bay .bpl{position:absolute;top:calc(9 * var(--u));right:calc(9 * var(--u));font-family:"JetBrains Mono",monospace;font-size:calc(8.5 * var(--u));
      font-weight:700;letter-spacing:.1em;color:#9fb0d2;background:rgba(5,8,14,.72);padding:calc(2 * var(--u)) calc(5 * var(--u));border-radius:calc(3 * var(--u))}
@@ -2014,7 +2025,8 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .mbi .bof{top:calc(8 * var(--u))}
   #bay .blab{position:absolute;left:calc(9 * var(--u));right:calc(9 * var(--u));bottom:calc(8 * var(--u));display:block}
   #bay .bnm{display:block;font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:calc(14.5 * var(--u));line-height:1;
-     text-transform:uppercase;letter-spacing:.02em;color:#eef3ff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+     text-transform:uppercase;letter-spacing:.02em;color:#eef3ff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+     text-shadow:0 calc(1 * var(--u)) calc(4 * var(--u)) rgba(0,0,0,.9)}
   #bay .btg{display:block;font-family:"JetBrains Mono",monospace;font-size:calc(8 * var(--u));font-weight:500;letter-spacing:.12em;
      text-transform:uppercase;color:#9dadd0;margin-top:calc(4 * var(--u));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #bay .board.on .btg{color:#ffb46b}
@@ -2487,9 +2499,13 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .mb.on{border-color:#ffb46b;transform:translateY(calc(-8 * var(--u)));
      box-shadow:0 calc(26 * var(--u)) calc(44 * var(--u)) calc(-16 * var(--u)) rgba(255,150,70,.6),0 0 0 1px rgba(255,180,107,.5)}
   #bay .mbi{position:relative;height:calc(184 * var(--u));flex:none;overflow:hidden}
-  #bay .mbi img{width:100%;height:100%;object-fit:cover;opacity:.62;transition:.22s;filter:saturate(.85)}
-  #bay .mb:hover .mbi img, #bay .mb.on .mbi img{opacity:.86;transform:scale(1.05)}
-  #bay .mbi .g{position:absolute;inset:0;background:linear-gradient(0deg,rgba(8,11,19,.98) 6%,rgba(8,11,19,.15) 62%)}
+  /* The Mission board's still is framed with the action above its middle and
+     the ground under the name, so only the name's strip is shaded (see THE
+     CARD ART above). */
+  #bay .mbi img{width:100%;height:100%;object-fit:cover;opacity:.84;transition:.22s;filter:saturate(.8) brightness(.92)}
+  #bay .mb:hover .mbi img, #bay .mb.on .mbi img{opacity:1;filter:none;transform:scale(1.05)}
+  #bay .mbi .g{position:absolute;inset:0;background:linear-gradient(0deg,rgba(8,11,19,.98) 0%,rgba(8,11,19,.78) 16%,
+     rgba(8,11,19,.25) 34%,rgba(8,11,19,0) 50%)}
   #bay .mbi .lip{position:absolute;left:0;right:0;top:0;height:calc(3 * var(--u));background:linear-gradient(90deg,transparent,
      rgba(255,180,107,.9),transparent);opacity:.5}
   #bay .mb.on .mbi .lip{opacity:1}
@@ -2542,11 +2558,31 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .brief{flex:none;border-radius:calc(7 * var(--u));overflow:hidden;border:1px solid rgba(140,168,214,.22);display:flex;
      flex-direction:column;background:rgba(10,14,23,.7)}
   #bay .brief .bi{position:relative;height:calc(132 * var(--u));flex:none}
-  #bay .brief .bi img{width:100%;height:100%;object-fit:cover;opacity:.75}
-  #bay .brief .bi .g{position:absolute;inset:0;background:linear-gradient(0deg,rgba(8,11,19,.96),rgba(8,11,19,.1) 70%)}
+  /* Match setup's still: the ground runs under the name and the fight above
+     it, so the shade is the name's strip and no more (see THE CARD ART). */
+  #bay .brief .bi img{width:100%;height:100%;object-fit:cover;opacity:.96}
+  #bay .brief .bi .g{position:absolute;inset:0;background:linear-gradient(0deg,rgba(8,11,19,.94) 0%,rgba(8,11,19,.6) 24%,
+     rgba(8,11,19,0) 48%)}
   #bay .brief .bi span{position:absolute;left:calc(12 * var(--u));bottom:calc(9 * var(--u));font-family:Rajdhani,system-ui,sans-serif;font-size:calc(22 * var(--u));
      font-weight:700;text-transform:uppercase;letter-spacing:.03em;text-shadow:0 calc(2 * var(--u)) calc(12 * var(--u)) #000}
   #bay .brief .bb{padding:calc(10 * var(--u)) calc(12 * var(--u));font-size:calc(11.5 * var(--u));color:#b3c0de;line-height:1.45;font-weight:500}
+
+  /* THE CARD GLINT: a band of light sweeps across the armed mode's picture
+     every few seconds -- the home board that is armed, the Mission board card
+     that is armed or under the finger, and Match setup's brief. It is light
+     only (screen-blended, never a shape of its own), passes in under a
+     second, and is still the rest of the time. It sits on the card's ::after,
+     so it moves nothing and nothing in the layout can see it. A board the
+     squad cannot play (.nofit) is greyed and keeps still. Reduced motion,
+     from the OS or the in-game switch, stops it outright: the bay's blanket
+     rule shortens animations on elements, and a pseudo-element is not one,
+     so it has rules of its own below and in the in-app mirror. */
+  #bay .bcard::after,#bay .mbi::after,#bay .brief .bi::after{content:"";position:absolute;inset:0;pointer-events:none;mix-blend-mode:screen;
+     background:linear-gradient(104deg,rgba(255,214,160,0) 36%,rgba(255,214,160,.16) 45%,rgba(255,246,228,.34) 50%,rgba(255,214,160,.16) 55%,rgba(255,214,160,0) 64%);
+     transform:translateX(-130%)}
+  #bay .board.on .bcard::after,#bay .mb.on .mbi::after,#bay .mb:hover .mbi::after,#bay .brief .bi::after{animation:cardGlint 6s cubic-bezier(.45,.05,.35,1) 1.4s infinite}
+  #bay .board.nofit .bcard::after,#bay .mb.nofit .mbi::after{animation:none}
+  @keyframes cardGlint{0%{transform:translateX(-130%)}16%,100%{transform:translateX(130%)}}
   #bay .brow{display:flex;justify-content:space-between;align-items:center;padding:calc(7 * var(--u)) calc(12 * var(--u));
      border-top:1px solid rgba(140,168,214,.16)}
   #bay .brow b{font-family:Rajdhani,system-ui,sans-serif;font-size:calc(14 * var(--u));font-weight:600;color:#eef3ff;
@@ -2878,6 +2914,7 @@ body.reduce-motion #dock:not(.collapsed) .dock-tab svg { transform: rotate(180de
 body.reduce-motion #dock.collapsed .dock-tab { animation: none; }
 body.reduce-motion .fire-btn * { animation: none !important; }
 body.reduce-motion #bay * { animation-duration:.01ms!important; animation-iteration-count:1!important; transition-duration:.01ms!important; }
+body.reduce-motion #bay .bcard::after,body.reduce-motion #bay .mbi::after,body.reduce-motion #bay .brief .bi::after { animation:none!important; }
 /* in-place patching: the two images that change crossfade instead of swapping */
 #bay .tankw img,#bay .refl img{position:absolute;left:0;top:0}
 #bay .ap img,#bay .tankw img,#bay .refl img{transition:opacity .35s ease}

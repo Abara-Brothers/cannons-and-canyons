@@ -366,6 +366,12 @@ else
   # tank on its platform under every board, and the Bay controls line legible.
   # Self-hosted on its own free ports. Skips without Chrome.
   run home_fit node test/home_fit.mjs
+  # The mode cards are stills from the game (owner, 2026-10-07; made by
+  # tools/cards/capture.mjs): each screen shows its mode's own still for its
+  # shape, loaded, big enough for an iPad, not dimmed away; the glint stops for
+  # reduced motion; and with the server gone the precache still shows them.
+  # Self-hosted on its own free ports. Skips without Chrome.
+  run mode_cards node test/mode_cards.mjs
   # The cold-start intro (public/intro.js): that its last frame IS the live
   # menu at seven viewports, whatever the menu currently looks like; skipping;
   # the launches that must not play it; faults inside it; and that the iOS
