@@ -2168,6 +2168,10 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   //      this screen, and this screen's Back goes back to the window. The
   //      window's Accept and Decline send exactly the frames this screen's
   //      Accept and Ignore send.
+  //      CHANGED BY V3 (owner, 2026-10-07: "Start with two big buttons"): the
+  //      window's friends column is the invite sheet's Friends tab, which an
+  //      empty seat's "+ Invite" opens -- so the player is put in a squad of
+  //      one first -- and Back from the Friends screen returns to that sheet.
   const MIXED = `{friends:[{id:'22222222-2222-4222-8222-222222222222',callsign:'Crater Two',online:false},{id:'11111111-1111-4111-8111-111111111111',callsign:'Bunker Nine',online:true},{id:'66666666-6666-4666-8666-666666666666',callsign:'Fjord Six',online:true}],requests:{in:[{id:'33333333-3333-4333-8333-333333333333',callsign:'Dune Four'}],out:[]},blocked:[],friendCode:'ABC234',callsign:'Anvil Six'}`;
   await arm(MIXED);
   const sqf = await ev(`(() => {
@@ -2177,20 +2181,26 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
     const out = { box: rows('#bay .sqx .sqbf .sqfr'), head: (document.querySelector('#bay .sqx .sqbf .sqh') || {}).textContent };
     document.querySelector('#bay .sqx [data-go="squad"]').click();
     out.scr1 = $('bay').dataset.scr;
+    handle({ type: 'squad', op: 'state', code: 'QK7T', leader: '00000000-0000-4000-8000-0000000000aa', mode: 'duel', tees: null, max: null, you: 0, held: true,
+      members: [{ id: '00000000-0000-4000-8000-0000000000aa', rid: 'a1000000000000000000000000000000', callsign: 'Anvil Six', guest: false, online: true, ready: false, dropped: false }],
+      fits: { duel: false, ffa: false, boss: true, aliens: true, golf: true } });
+    const seat = document.querySelector('#bay .sqopen [data-sq="sheet:friends"]');
+    if (seat) seat.click();
     out.win = rows('#sqWin-friends .sqfr[data-row^="f:"]');
     out.req = rows('#sqWin-friends .sqfr[data-row^="r:"]');
     document.querySelector('#sqWin-friends [data-go="friends"]').click();
     out.scr2 = $('bay').dataset.scr;
     document.querySelector('#bay .phead [data-back]').click();
     out.scr3 = $('bay').dataset.scr;
+    out.sheet3 = !!document.getElementById('sqWin-friends');
     return out;
   })()`);
   const SQ_WIN = [['Bunker Nine', true], ['Fjord Six', true], ['Crater Two', false]];
   if (sqf && JSON.stringify(sqf.box.map((r) => [r.name, r.inv])) === '[["Bunker Nine",true],["Fjord Six",true]]' && sqf.head === 'Friends online · 2'
       && sqf.scr1 === 'squad' && JSON.stringify(sqf.win.map((r) => [r.name, r.lit])) === JSON.stringify(SQ_WIN) && sqf.win.every((r) => r.inv)
       && sqf.req.length === 1 && sqf.req[0].name === 'Dune Four' && sqf.req[0].acc && sqf.req[0].dec
-      && sqf.scr2 === 'friends' && sqf.scr3 === 'squad')
-    ok(`${V}: the box lists the friends online with Invite; the window lists every friend online first, with Invite, and the request; Add friend opens Friends, whose Back returns`);
+      && sqf.scr2 === 'friends' && sqf.scr3 === 'squad' && sqf.sheet3)
+    ok(`${V}: the box lists the friends online with Invite; the window's invite sheet lists every friend online first, with Invite, and the request; Add friend opens Friends, whose Back returns to the sheet`);
   else fail(`${V}: squad friends ${JSON.stringify(sqf)}`);
   // The same frames as this screen's own Accept and Ignore.
   const DUNE = '33333333-3333-4333-8333-333333333333';
@@ -2211,6 +2221,7 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
       && bare(winDec[0]) === bare(scrFr[0]) && bare(winAcc[0]) === bare(scrFr[1]) && winDec[0].from === DUNE && winDec[0].op === 'decline' && winAcc[0].op === 'accept')
     ok(`${V}: the window's Decline and Accept send this screen's own decline and accept frames`);
   else fail(`${V}: window request frames ${JSON.stringify({ winDec, winAcc, scrFr })}`);
+  await ev(`(handle({ type: 'squad', op: 'ended', reason: 'left' }), true)`); await sleep(40);   // V3: out of the squad 42b made
 
   // ---- 43. layout: the three columns end inside the page body and nothing
   //      clips, at both shipped phone shapes, with a long name and twenty blocks

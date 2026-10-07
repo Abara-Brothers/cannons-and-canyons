@@ -2118,26 +2118,154 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .sqfade{position:sticky;bottom:0;display:block;height:calc(10 * var(--u));pointer-events:none;
      background:linear-gradient(rgba(10,14,23,0),rgba(10,14,23,.92))}
 
-  /* ------------------------------------------- the Manage squad window -- */
-  /* Three columns in the chrome body (bay.js SCREENS.squad), each a panel
-     that scrolls on its own, so the page never grows past the 430u frame
-     however many members, friends or requests there are. */
-  #bay .sqwc,#bay .sqwp{overflow-y:auto;overflow-x:hidden;border-radius:calc(7 * var(--u));padding:calc(4 * var(--u)) calc(10 * var(--u)) calc(10 * var(--u));
-     border:1px solid rgba(140,168,214,.2);background:linear-gradient(180deg,rgba(27,36,54,.82),rgba(10,14,23,.9));
-     backdrop-filter:blur(calc(9 * var(--u)))}
-  /* The squad column's sticky footer sits on the column's own bottom edge:
-     with the panel's bottom padding under it, the rows scrolling past showed
-     through that strip, beneath Ready and Leave. */
-  #bay .sqwp.sqwq{padding-bottom:0}
-  #bay .sqwq .sqft{padding-bottom:calc(8 * var(--u))}
-  #bay .sqwc .frow .ghost{flex:1;justify-content:center}
-  /* Copy and Share with no squad code to give: dimmed as the window's other
+  /* ---------------------------------------------- the Your squad page -- */
+  /* bay.js SCREENS.squad (owner, 2026-10-07: "Start with two big buttons").
+     Both views fill the chrome body's 336u and never grow past it: the squad
+     view is two fixed columns -- the code, and four seats over a footer --
+     and the start view is a centred column that scrolls only in the worst
+     case (an invite, a line about the last squad, the code field, the check
+     and friend requests all at once). The invite sheet lies over the whole
+     body. LEGIBLE ON A PHONE, as the box is: every name at least 15u, every
+     other word at least 13u. */
+  #bay .sqw{position:relative}
+  #bay .sqv{height:100%}
+  /* THE START VIEW is centred by two flexible spacers, which shrink to nothing
+     when the content is taller than the body, so nothing is ever pushed above
+     the top, where no scroll could reach it. */
+  #bay .sqv0{display:flex;flex-direction:column;align-items:center;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain}
+  #bay .sqv0::before,#bay .sqv0::after{content:'';flex:1 1 0}
+  #bay .sqv0 > *{flex:none;width:calc(620 * var(--u));max-width:100%}
+  #bay .sqv0 .sqld .sqn{text-align:center;font-size:calc(15 * var(--u));color:#c7d3ee}
+  #bay .sqhero{margin:calc(4 * var(--u)) 0 calc(12 * var(--u));text-align:center;font-family:Rajdhani,system-ui,sans-serif;font-weight:700;
+     font-size:calc(24 * var(--u));line-height:1.15;letter-spacing:.02em;color:#eef3ff}
+  #bay .sqbig{display:flex;gap:calc(16 * var(--u))}
+  /* THE TWO BIG BUTTONS: an icon, the action in capitals, and one line under
+     it saying what it does -- or why it cannot be pressed yet. */
+  #bay .sqcta{flex:1 1 0;min-width:0;height:calc(118 * var(--u));display:flex;flex-direction:column;align-items:center;justify-content:center;
+     gap:calc(4 * var(--u));padding:0 calc(12 * var(--u));border-radius:calc(10 * var(--u));text-align:center;transition:.15s;
+     border:1px solid rgba(84,200,255,.55);background:linear-gradient(180deg,rgba(84,200,255,.22),rgba(84,200,255,.07));color:#eef3ff}
+  #bay .sqcta:hover{border-color:#54c8ff;background:linear-gradient(180deg,rgba(84,200,255,.32),rgba(84,200,255,.12))}
+  #bay .sqcta.on{border-color:#54c8ff;box-shadow:inset 0 0 0 1px #54c8ff}
+  /* Create a squad is the page's first move: the bay's orange, as Launch is. */
+  #bay .sqcta.sqmk{border-color:rgba(255,195,140,.9);background:linear-gradient(180deg,#ffa055,#ee6a1f);color:#2a1102;
+     box-shadow:0 calc(12 * var(--u)) calc(26 * var(--u)) calc(-12 * var(--u)) rgba(255,122,46,.8)}
+  #bay .sqcta.sqmk:hover{filter:brightness(1.08)}
+  #bay .sqcta[disabled]{border-color:rgba(140,168,214,.26);background:#1a2133;color:#b3c0de;box-shadow:none;filter:none;cursor:default}
+  #bay .sqci{width:calc(34 * var(--u));height:calc(34 * var(--u));display:block;flex:none}
+  #bay .sqci svg{width:100%;height:100%;display:block}
+  #bay .sqct{font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:calc(22 * var(--u));line-height:1.1;letter-spacing:.06em;text-transform:uppercase}
+  #bay .sqcs{font-family:Rajdhani,system-ui,sans-serif;font-weight:600;font-size:calc(14 * var(--u));line-height:1.2}
+  #bay .sqjn{margin-top:calc(12 * var(--u))}
+  #bay .sqjn .sqcr{width:calc(380 * var(--u));max-width:100%;margin:0 auto}
+  #bay .sqjn .sqin{height:calc(42 * var(--u));font-size:calc(22 * var(--u))}
+  #bay .sqjn .sqcr .sbtn{height:calc(42 * var(--u));padding:0 calc(22 * var(--u));font-size:calc(16 * var(--u))}
+  #bay .sqjn .sqe,#bay .sqjn .sqn,#bay .sqv0 > .sqae,#bay .sqck .sqn,#bay .sqck .sqe{text-align:center}
+  #bay .sqck .sqf{justify-content:center}
+  #bay .sqck .sqf .sbtn{flex:none;padding:0 calc(26 * var(--u))}
+  /* Friend requests waiting: one line, with the way to answer them. */
+  #bay .sqrq{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:calc(6 * var(--u)) calc(10 * var(--u));margin-top:calc(10 * var(--u));
+     font-family:Rajdhani,system-ui,sans-serif;font-weight:600;font-size:calc(14 * var(--u));line-height:1.2;color:#ffb46b}
+  #bay .sqrq .sbtn{height:calc(28 * var(--u))}
+  /* THE SQUAD VIEW: the code on the left, the four seats and the footer on
+     the right. */
+  #bay .sqv1{display:flex;gap:calc(14 * var(--u))}
+  #bay .sqcc{flex:none;width:calc(236 * var(--u));overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;border-radius:calc(8 * var(--u));
+     padding:calc(4 * var(--u)) calc(12 * var(--u)) calc(12 * var(--u));border:1px solid rgba(140,168,214,.2);
+     background:linear-gradient(180deg,rgba(27,36,54,.82),rgba(10,14,23,.9));backdrop-filter:blur(calc(9 * var(--u)))}
+  #bay .sqcc .frow .ghost{flex:1;justify-content:center;padding:0 calc(8 * var(--u))}
+  #bay .sqcc .sqrq{justify-content:flex-start}
+  /* Copy and Share with no squad code to give: dimmed as the page's other
      dead buttons are (.sqfb .ghost[disabled]), never a live-looking button
      that does nothing when tapped. */
   #bay .frow .ghost[disabled]{opacity:.45;cursor:default}
   #bay .frow .ghost[disabled]:hover{border-color:rgba(140,168,214,.34);color:#c0cce8;background:none}
   /* Two classes deep: #bay .frcode is later in this file at one class. */
-  #bay .frcode.sqcd{font-size:calc(34 * var(--u));margin-top:calc(4 * var(--u))}
+  #bay .frcode.sqcd{font-size:calc(40 * var(--u));margin-top:calc(2 * var(--u))}
+  #bay .sqsc{flex:1;min-width:0;display:flex;flex-direction:column}
+  /* FOUR NUMBERED SEATS, two by two. A seat is its number and the member's
+     two lines -- the name, then the status words and the controls -- or, when
+     empty, one big "+ Invite". */
+  #bay .sqseats{flex:none;display:grid;grid-template-columns:1fr 1fr;grid-auto-rows:calc(100 * var(--u));gap:calc(10 * var(--u))}
+  #bay .sqseat{display:flex;align-items:stretch;min-width:0;border-radius:calc(8 * var(--u));
+     border:1px solid rgba(140,168,214,.28);background:linear-gradient(180deg,rgba(27,36,54,.88),rgba(12,17,27,.94))}
+  #bay .sqseat.me{border-color:rgba(255,180,107,.6)}
+  #bay .sqsn{position:relative;flex:none;width:calc(46 * var(--u));display:grid;place-items:center;border-right:1px solid rgba(140,168,214,.2);
+     font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:calc(28 * var(--u));line-height:1;color:#54c8ff}
+  #bay .sqseat.me .sqsn{color:#ffb46b}
+  #bay .sqsb{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:calc(9 * var(--u));padding:0 calc(10 * var(--u))}
+  #bay .sqsb .sqmt{font-size:calc(17 * var(--u))}
+  #bay .sqsb .sqmy{font-size:calc(14 * var(--u))}
+  #bay .sqsb .sqm2{margin-top:0;height:calc(26 * var(--u))}
+  #bay .sqsb .sqms{padding-left:calc(18 * var(--u))}
+  /* READY and NOT READY in capitals (owner, 2026-10-07), the tick drawn. */
+  #bay .sqseat .sqr,#bay .sqseat .sql{font-size:calc(14 * var(--u));font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+  #bay .sqseat .sqr.on svg{width:calc(16 * var(--u));height:calc(16 * var(--u))}
+  /* A SEAT'S SMALL CONTROLS take a tap across 40u: a transparent layer 7u past
+     each 26u square, as the box's rows reach 6u past theirs. The leader's
+     Remove stands 18u from the menu, so the two targets never touch. */
+  #bay .sqseat .pmb,#bay .sqseat .sqic{position:relative;width:calc(26 * var(--u));height:calc(26 * var(--u));border-radius:calc(4 * var(--u))}
+  #bay .sqseat .pmb::before,#bay .sqseat .sqic::before{content:'';position:absolute;inset:calc(-7 * var(--u))}
+  #bay .sqseat .sqic::before{inset:calc(-7 * var(--u) - 1px)}
+  #bay .sqseat .pmb + .sqic{margin-left:calc(18 * var(--u))}
+  #bay .sqseat .sqic svg{width:calc(12 * var(--u));height:calc(12 * var(--u))}
+  #bay .sqseat.sqopen{border:1px dashed rgba(140,168,214,.5);background:rgba(16,21,31,.5)}
+  #bay .sqoi{flex:1;min-width:0;display:flex;align-items:stretch;border-radius:inherit;color:#8adaff;transition:.15s}
+  #bay .sqoi:hover{background:rgba(84,200,255,.1)}
+  #bay .sqoi .sqsn{color:#7f8fb5}
+  #bay .sqot{flex:1;display:flex;align-items:center;justify-content:center;gap:calc(8 * var(--u));font-family:Rajdhani,system-ui,sans-serif;
+     font-weight:700;font-size:calc(19 * var(--u));letter-spacing:.08em;text-transform:uppercase}
+  #bay .sqot svg{width:calc(18 * var(--u));height:calc(18 * var(--u));flex:none}
+  #bay .sqoi[disabled]{color:#9dadd0;cursor:default}
+  #bay .sqoi[disabled]:hover{background:none}
+  /* THE FOOTER: how a match starts and who picks the mode, then Leave squad,
+     side by side under the seats -- or the leader's "Remove <name> from the
+     squad?" with Cancel and Remove. */
+  #bay .sqsf{flex:none;display:flex;align-items:flex-end;gap:calc(14 * var(--u));margin-top:auto;padding-top:calc(10 * var(--u))}
+  #bay .sqsw{flex:1;min-width:0}
+  #bay .sqsl{font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:calc(18 * var(--u));line-height:1.2;color:#eef3ff}
+  #bay .sqsl b{color:#3ce88f;font-weight:700;letter-spacing:.04em}
+  #bay .sqsm{margin-top:calc(3 * var(--u));font-family:Rajdhani,system-ui,sans-serif;font-weight:500;font-size:calc(14 * var(--u));line-height:1.25;color:#b3c0de}
+  #bay .sqsw .sqf{justify-content:flex-start}
+  #bay .sqsw .sqf .sbtn{flex:none;padding:0 calc(22 * var(--u))}
+  #bay .sqsf > .sqfl.sqq{flex:1;min-width:0;align-self:center}
+  #bay .sqsf > .sqfb{flex:none;margin-top:0}
+  #bay .sqsf > .sqfb .go,#bay .sqsf > .sqfb .ghost{flex:none;height:calc(40 * var(--u));padding:0 calc(18 * var(--u))}
+  /* THE INVITE SHEET over the whole body: a header with its own Close, three
+     tabs, and a panel that scrolls on its own. Its colour is flat under the
+     tabs, so the panel's fade (below) is that colour wherever it stands. */
+  #bay .sqsh{position:absolute;inset:0;z-index:2;display:flex;flex-direction:column;border-radius:calc(10 * var(--u));
+     padding:calc(8 * var(--u)) calc(14 * var(--u)) calc(10 * var(--u));border:1px solid rgba(84,200,255,.42);
+     background:linear-gradient(180deg,#1a2335,#111827 calc(100 * var(--u)),#111827);box-shadow:0 calc(20 * var(--u)) calc(50 * var(--u)) rgba(0,0,0,.6)}
+  #bay .sqshh{flex:none;display:flex;align-items:center;gap:calc(10 * var(--u));height:calc(40 * var(--u))}
+  #bay .sqsht{font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:calc(19 * var(--u));letter-spacing:.06em;text-transform:uppercase;color:#eef3ff}
+  #bay .sqshn{position:relative;font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:calc(17 * var(--u));color:#54c8ff}
+  #bay .sqshx{flex:none;width:calc(40 * var(--u));height:calc(40 * var(--u));display:grid;place-items:center;border-radius:calc(6 * var(--u));
+     border:1px solid rgba(140,168,214,.36);color:#c0cce8;transition:.15s}
+  #bay .sqshx svg{width:calc(14 * var(--u));height:calc(14 * var(--u));display:block}
+  #bay .sqshx:hover{border-color:#54c8ff;color:#fff;background:rgba(84,200,255,.12)}
+  #bay .sqtabs{flex:none;display:flex;gap:calc(6 * var(--u));margin-top:calc(6 * var(--u));border-bottom:1px solid rgba(140,168,214,.26)}
+  #bay .sqtab{flex:1 1 0;min-width:0;height:calc(40 * var(--u));border-radius:calc(6 * var(--u)) calc(6 * var(--u)) 0 0;
+     border-bottom:calc(3 * var(--u)) solid transparent;font-family:Rajdhani,system-ui,sans-serif;font-weight:700;
+     font-size:calc(16 * var(--u));letter-spacing:.06em;text-transform:uppercase;color:#9dadd0;transition:.15s}
+  #bay .sqtab:hover{color:#eef3ff;background:rgba(84,200,255,.06)}
+  #bay .sqtab.on{color:#eef3ff;border-bottom-color:#54c8ff;background:rgba(84,200,255,.13)}
+  #bay .sqtp{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;padding:calc(4 * var(--u)) 0 calc(6 * var(--u))}
+  /* The panel's content stands in one centred column: a friend row is the box's
+     two-line row (D-UI-5), no wider than reads well. */
+  #bay .sqtp > *{max-width:calc(520 * var(--u));margin-left:auto;margin-right:auto}
+  /* Its "more below" fade is the box's (.sqfade: sticky, the panel's last
+     node, no taps), painted in the sheet's own colour. */
+  #bay .sqtp > .sqfade{height:calc(16 * var(--u));margin-top:calc(4 * var(--u));background:linear-gradient(rgba(17,24,39,0),rgba(17,24,39,.96))}
+  /* Find by callsign, one column: a callsign is shown as the player typed it
+     (two classes deep: #bay .sqin is later in this file at one class). */
+  #bay #sqWin-find > *{max-width:calc(480 * var(--u))}
+  #bay .sqtp .sqcr .sbtn{height:calc(34 * var(--u));padding:0 calc(18 * var(--u))}
+  #bay .sqin.sqif{text-align:left;text-transform:none;letter-spacing:.03em;color:#eef3ff;font-size:calc(18 * var(--u));padding:0 calc(12 * var(--u))}
+  #bay .sqfl2 .sqae,#bay .sqfl2 .sqnt{font-size:calc(14 * var(--u))}
+  #bay #sqWin-share .sqh,#bay #sqWin-share .sqn,#bay #sqWin-share .frcode{text-align:center}
+  #bay #sqWin-share .frcode.sqcd{font-size:calc(48 * var(--u))}
+  #bay #sqWin-share .frow{justify-content:center}
+  #bay #sqWin-share .frow .ghost{min-width:calc(150 * var(--u));justify-content:center}
 
   /* ------------------------------------------- the box and the window -- */
   #bay .sqn{font-family:Rajdhani,system-ui,sans-serif;font-size:calc(13 * var(--u));line-height:1.25;
@@ -2225,29 +2353,9 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .sqic[disabled]:hover{border-color:rgba(140,168,214,.26);color:#8798bd;background:none}
   /* Two classes deep: #bay .sbtn is later in this file at one class. */
   #bay .sqm .sbtn,#bay .sqfc .sbtn{flex:none;height:calc(22 * var(--u));padding:0 calc(8 * var(--u));font-size:calc(13 * var(--u));letter-spacing:.06em}
-  /* THE SEATS LINE (D12): wraps between modes, never inside one. */
-  #bay .sqs{margin-top:calc(8 * var(--u));font-family:Rajdhani,system-ui,sans-serif;font-size:calc(13 * var(--u));font-weight:600;
-     letter-spacing:.03em;line-height:1.35;color:#6f7fa6}
-  #bay .sqs span{white-space:nowrap}
-  #bay .sqs span.on{color:#54c8ff}
-  #bay .sqs i{font-style:normal}
   #bay .sqnote{margin-top:calc(7 * var(--u));font-family:Rajdhani,system-ui,sans-serif;font-size:calc(13 * var(--u));
      line-height:1.3;font-weight:500;color:#9dadd0}
   #bay .sqae{margin-top:calc(5 * var(--u));font-size:calc(13 * var(--u));line-height:1.25;font-weight:500;color:#ff8b8b}
-  /* THE FOOTER STAYS IN VIEW. The window's squad column scrolls, and a full
-     squad, an invite and the seats line are more than its height; Ready and
-     Leave are pinned to its visible bottom rather than scrolled out of reach.
-     The background hides the rows passing under it, and it is OPAQUE: under
-     the column's backdrop blur a .97 alpha still let the Seats line read
-     through it. At the end of the list the footer stands in its own place
-     under the last row, so no row is left hidden under it. */
-  #bay .sqft{position:sticky;bottom:0;z-index:1;margin-top:calc(8 * var(--u));padding:calc(6 * var(--u)) 0 calc(1 * var(--u));
-     border-top:1px solid rgba(140,168,214,.2);background:#0d121c}
-  /* MORE ROWS BELOW (fix wave B1): a fade over the rows just above the footer
-     says so. It is no wider than the gap the footer keeps above itself at
-     rest, so at the end of the list it covers no row, and it takes no taps. */
-  #bay .sqft::before{content:"";position:absolute;left:0;right:0;top:calc(-8 * var(--u));height:calc(8 * var(--u));
-     background:linear-gradient(rgba(13,18,28,0),#0d121c);pointer-events:none}
   #bay .sqfl{font-family:Rajdhani,system-ui,sans-serif;font-size:calc(13 * var(--u));font-weight:700;letter-spacing:.06em;
      line-height:1.25;text-transform:uppercase;color:#9dadd0}
   #bay .sqfl.sqq{font-size:calc(15 * var(--u));font-weight:600;letter-spacing:.02em;text-transform:none;color:#e6ecfb}
@@ -2255,10 +2363,6 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .sqfb .go,#bay .sqfb .ghost{flex:1;justify-content:center;height:calc(34 * var(--u));padding:0 calc(10 * var(--u));
      font-size:calc(15 * var(--u));gap:calc(6 * var(--u));box-shadow:none}
   #bay .sqfb .go svg,#bay .sqfb .ghost svg{width:calc(13 * var(--u));height:calc(13 * var(--u))}
-  #bay .sqfb .go.cy.on{background:rgba(84,200,255,.16);color:#8adaff;border:1px solid #54c8ff}
-  #bay .sqfb .go.cy.on svg{fill:#54c8ff}
-  #bay .sqfb .go.cy[disabled]{background:#1f2740;color:#616e94;border:0}
-  #bay .sqfb .go.cy[disabled] svg{fill:#616e94}
   #bay .sqfb .ghost[disabled]{opacity:.45;cursor:default}
   #bay .sqfb .ghost[disabled]:hover{border-color:rgba(140,168,214,.34);color:#c0cce8;background:none}
   /* The invite this player just received: a highlighted row at the top of the

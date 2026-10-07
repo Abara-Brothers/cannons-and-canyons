@@ -185,9 +185,24 @@ export const SQUAD_ERRORS = new Map(Object.entries({
   start: [...BASE_ERRORS, 'no_squad', 'not_leader', 'wrong_device', 'no_rack', 'duplicate_member', 'wont_fit',
     'member_offline', 'not_ready', 'member_busy', 'refused', 'capacity'],
   resume: [...BASE_ERRORS],
-  invite: [...BASE_ERRORS, 'no_squad', 'full', 'not_friend', 'already'],
+  // no_such_user is the by-callsign invite's one miss (squadInviteByName).
+  invite: [...BASE_ERRORS, 'no_squad', 'full', 'not_friend', 'already', 'no_such_user'],
 }).map(([op, codes]) => [op, Object.freeze(codes)]));
 const squadError = (op, code) => ((SQUAD_ERRORS.get(op) || BASE_ERRORS).includes(code) ? code : 'unavailable');
+
+// THE KEY AN EXACT CALLSIGN IS LOOKED UP BY, or '' for a query no stored
+// callsign could match. ONE COPY for the two lookups, friend search and the
+// squad invite by callsign, so a name one of them finds the other finds too.
+// Code points, because that is how validateCallsign measured the name that
+// was stored: one astral letter is one character on both sides.
+function callsignKeyOf(raw) {
+  const q = normaliseCallsign(raw);
+  const n = [...q].length;
+  return n < CALLSIGN_MIN || n > CALLSIGN_MAX ? '' : q.toLowerCase();
+}
+// A BLOCK EITHER WAY between the reader of `b` (blockIdsOf's answer) and `id`:
+// blocking is not a mute, and every gate in this file reads both directions.
+const blockedEither = (b, id) => b.blocked.includes(id) || b.blockedBy.includes(id);
 
 // ---- UNBLOCK KEYS (BINDING.md resolution 24, applied to the blocked list) ----
 // THE HOLE THIS CLOSES. A lobby seat carries a per-room opaque handle instead of
@@ -2488,7 +2503,7 @@ export function createSocial({
   // reason: a refusal is still a reply, and a check after the guards would
   // leave a loop of junk targets answered with no limit of its own.
   //
-  // ONE ANSWER FOR EVERY MISS OF THE PAIR, 'not_friend': not a friend,
+  // ON THIS PATH, ONE ANSWER FOR EVERY MISS OF THE PAIR, 'not_friend': not a friend,
   // blocked either way, a guest, no account, not a uuid. friendSearch fixes
   // this shape — "no such player" and "that player has blocked you" must be
   // one answer, or the frame is a way to enumerate blocks. The shape test
@@ -2530,18 +2545,15 @@ export function createSocial({
   async function squadInvite(ws, msg) {
     const no = (error) => squadReply(ws, msg, 'invite', { error });
     if (!rateOk(ws, 'friend', LIMITS.friend)) return no('slow_down');
+    // A frame that names its invitee by CALLSIGN takes the one path that does
+    // not need a friend (squadInviteByName, below); every other frame is the
+    // friend path, exactly as builds 6 and 7 send it.
+    if (typeof msg.callsign === 'string') return squadInviteByName(ws, msg, no);
     const to = wireId(msg.to);
     // `deep`: whether a row held through a socket counts as `already`. Only
     // once the friend check has passed — asked earlier, any member could
     // probe any uuid for "stands on a guest row in my squad".
-    const vet = (deep) => {
-      const found = squadOf(ws);
-      if (!found) return { error: 'no_squad' };
-      if (found.squad.members.length >= SQUAD_MAX) return { error: 'full' };
-      if (!isUuid(to)) return { error: 'not_friend' };
-      if (deep ? rowsOf(found.squad, to).length : found.squad.members.some((m) => m.key === to)) return { error: 'already' };
-      return { sq: found.squad };
-    };
+    const vet = (deep) => inviteVet(ws, to, deep, 'not_friend');
     const before = vet(false);
     if (before.error) return no(before.error);
     const me = wireId(ws.userId);
@@ -2560,13 +2572,87 @@ export function createSocial({
     if (theirs === null) theirs = await readLanded(to);
     if (wireId(ws.userId) !== me) return;
     if (!friendIds.includes(to)) return no('not_friend');
-    if (blocks.blocked.includes(to) || blocks.blockedBy.includes(to)) return no('not_friend');
+    if (blockedEither(blocks, to)) return no('not_friend');
     const after = vet(true);
     if (after.error) return no(after.error);
     // PINNED: an invite for one squad never goes out for another the
     // account has moved to while the reads were out.
     if (after.sq !== before.sq) return no('no_squad');
-    const { sq } = after;
+    return deliverInvite(ws, msg, after.sq, to, self, theirs, {});
+  }
+
+  // WHAT MEMORY ANSWERS FOR AN INVITE, asked before the reads and after them
+  // (see squadInvite): no squad, a full one, a target that is no account
+  // (`miss`, the path's own word for every miss), or one already in the
+  // squad. `to` null is a by-callsign invite before its lookup, when there is
+  // no target to vet yet.
+  function inviteVet(ws, to, deep, miss) {
+    const found = squadOf(ws);
+    if (!found) return { error: 'no_squad' };
+    if (found.squad.members.length >= SQUAD_MAX) return { error: 'full' };
+    if (to === null) return { sq: found.squad };
+    if (!isUuid(to)) return { error: miss };
+    if (deep ? rowsOf(found.squad, to).length : found.squad.members.some((m) => m.key === to)) return { error: 'already' };
+    return { sq: found.squad };
+  }
+
+  // ---- invite by callsign (owner, 2026-10-07) ------------------------------
+  // "You should also have the ability to add someone to the squad without
+  // needing to add them as a friend." His answer: by exact callsign, and by
+  // the squad code or link; blocked players cannot be found or invited. A
+  // frame that carries `callsign` names its invitee by the exact callsign
+  // friend search finds them by (callsignKeyOf, one shape test and one key
+  // for both), and it is THE ONLY PLACE 'not_friend' IS RELAXED: an Invite
+  // on a friend row still sends `to`, and still needs the friend.
+  //
+  // EVERYTHING ELSE IS THE FRIEND PATH'S, in its order: the friend bucket
+  // (squadInvite, first, as search spends it), the squad asked before the
+  // reads and after them, the identity checked after every await, the
+  // invitee's blocks with the recent-blocks log added from a seq taken before
+  // the first read, the invite dropped silently on a block between the
+  // invitee and any member, and live sockets or the push seam under the 30 s
+  // push cooldown (deliverInvite, one copy for both paths).
+  //
+  // EVERY MISS IS ONE ANSWER, 'no_such_user', AFTER ONE LEG. A callsign that
+  // names nobody, the caller's own, a player blocked either way and a guest
+  // all answer it after the SAME three reads, made together: the lookup, the
+  // caller's blocks and the caller's own row. So a block costs exactly what a
+  // miss costs, and the frame is no way to learn who has blocked you
+  // (friendSearch's rule, D-BLOCK). A guest is found by no lookup: a guest has
+  // no callsign_key, because setting one is behind requireLinked, so the key
+  // is the line that refuses one here, as the friend read is on the other
+  // path. A callsign of the wrong shape is a miss before the store, as in
+  // search. A found player's own blocks are read only once they are found, in
+  // a second leg, so what a delivered and a dropped invite cost is the same.
+  //
+  // The answer carries `callsign`, the invitee's PROVED name (displayName,
+  // null when there is none), for the inviter's "Invite sent to <name>." It
+  // is the same on a dropped invite as on a delivered one.
+  async function squadInviteByName(ws, msg, no) {
+    const before = inviteVet(ws, null, false, 'no_such_user');
+    if (before.error) return no(before.error);
+    const key = callsignKeyOf(msg.callsign);
+    if (!key) return no('no_such_user');
+    const me = wireId(ws.userId);
+    const from = blockSeq;
+    const [them, blocks, self] = await Promise.all([store.profileByCallsignKey(key), store.blockIdsOf(me), store.profileById(me)]);
+    if (wireId(ws.userId) !== me) return;
+    const to = them ? wireId(them.id) : '';
+    if (!to || to === me || blockedEither(blocks, to)) return no('no_such_user');
+    let theirs = withLanded(await store.blockIdsOf(to), to, from);
+    if (theirs === null) theirs = await readLanded(to);
+    if (wireId(ws.userId) !== me) return;
+    const after = inviteVet(ws, to, true, 'no_such_user');
+    if (after.error) return no(after.error);
+    if (after.sq !== before.sq) return no('no_squad');
+    return deliverInvite(ws, msg, after.sq, to, self, theirs, { callsign: displayName(them) });
+  }
+
+  // THE DELIVERY, ONE COPY FOR BOTH PATHS: the frame to every live socket, or
+  // the push seam, and the inviter's answer (`extra` is what a path adds to
+  // it). `theirs` is the invitee's blocks with the log added, falsy when they
+  // could not be read.
+  async function deliverInvite(ws, msg, sq, to, self, theirs, extra) {
     const live = socketsOf(to);
     const frame = { type: 'squad', op: 'invited', code: sq.code, from: { callsign: displayName(self) }, size: sq.members.length, max: SQUAD_MAX };
     // D-BLOCK 4: A BLOCK BETWEEN THE INVITEE AND ANY MEMBER DROPS THE INVITE,
@@ -2580,7 +2666,7 @@ export function createSocial({
     const dropped = !theirs || anyRowOf(sq, new Set([...theirs.blocked, ...theirs.blockedBy, ...theirs.doubt]));
     if (live.length) {
       if (!dropped) for (const w of live) safeSend(w, frame);
-      return squadReply(ws, msg, 'invite', { ok: true, delivered: 'online' });
+      return squadReply(ws, msg, 'invite', { ok: true, delivered: 'online', ...extra });
     }
     // ONE REAL PUSH PER INVITEE PER INVITE_COOLDOWN_MS (D-PUSH-1 R), whoever
     // invites: inside the window a real invite takes the dropped one's path —
@@ -2588,7 +2674,7 @@ export function createSocial({
     // before the await, so two invites racing to one friend send once.
     const real = !dropped && inviteCooldown.take(to);
     const pushed = await askPushSeam(to, { code: frame.code, from: frame.from.callsign, size: frame.size, max: frame.max }, !real);
-    squadReply(ws, msg, 'invite', { ok: true, delivered: pushed ? 'push' : 'none' });
+    squadReply(ws, msg, 'invite', { ok: true, delivered: pushed ? 'push' : 'none', ...extra });
   }
 
   // THE PUSH SEAM, ASKED ONCE FOR EVERY OFFLINE INVITE, dropped or not (see
@@ -2863,17 +2949,14 @@ export function createSocial({
   // list to page and no prefix search to abuse (design 4.2, row 3).
   async function friendSearch(ws, msg) {
     const none = () => friendReply(ws, msg, 'search', { results: [] });
-    const q = normaliseCallsign(msg.q);
-    // Code points, because that is how validateCallsign measured the name that
-    // was stored: one astral letter is one character on both sides.
-    const n = [...q].length;
-    if (n < CALLSIGN_MIN || n > CALLSIGN_MAX) return none();
-    const them = await store.profileByCallsignKey(q.toLowerCase());
+    const key = callsignKeyOf(msg.q);
+    if (!key) return none();
+    const them = await store.profileByCallsignKey(key);
     if (!them || them.id === ws.userId) return none();
     const blocks = await store.blockIdsOf(ws.userId);
     // A MISS, not an error: "no such player" and "that player has blocked you"
     // must be the same answer, or search becomes a way to enumerate blocks.
-    if (blocks.blocked.includes(them.id) || blocks.blockedBy.includes(them.id)) return none();
+    if (blockedEither(blocks, them.id)) return none();
     // BINDING resolution 19: spec 5.5 draws the found player's tank in their own
     // paint, so the result carries one — checked, never passed through.
     friendReply(ws, msg, 'search', { results: [{ id: them.id, callsign: displayName(them), skin: skinOf(them) }] });
