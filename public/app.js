@@ -5251,7 +5251,7 @@ function sliceTank(i, worldX, shred, fade, sign) {
 function drawWarp() {
   const W = S.warp; if (!W || W.t >= W.dur) return;
   const t = W.t;
-  const r = 240 * cam.zoom;                             // world-scale: sprite == hitbox at every zoom
+  const r = TANK_R * cam.zoom;                          // world-scale: sprite == hitbox at every zoom
   const ax = wx2s(W.fx), ayG = wy2s(surfaceAt(W.fx)), ay = ayG - r * 1.1;
   const bx = wx2s(W.tx), byG = wy2s(surfaceAt(W.tx)), by = byG - r * 1.1;
 
@@ -6161,8 +6161,8 @@ function draw() {
     drawHazards();
     drawMushroom();               // nuke column — biggest and furthest back, BEHIND the tanks
     drawParticles(true);          // soft discs (fire glow, smoke, dust) — BEHIND the tanks
-    // Tanks may now share an x (crossing is legal), and a hull is 648 world units
-    // wide — so draw the tank that matters LAST: the acting seat on top, then
+    // Tanks may now share an x (crossing is legal), and a hull is 2 x TANK_HW (746)
+    // world units wide — so draw the tank that matters LAST: the acting seat on top, then
     // yours. Cosmetic only; no state, no geometry change, drawTank untouched.
     {
       const order = [];
@@ -6548,16 +6548,37 @@ function panToCup() {
   S.panX = Math.max(-WW(), Math.min(WW(), g.cup.x - focus.x));
 }
 
+// ---- Battle tank size ----------------------------------------------------------
+// The radius every battle tank is drawn in multiples of, in WORLD units: the
+// sprite's r is TANK_R x zoom screen px, and game-core builds the hitbox and
+// the muzzle from the same number, so the outline you see is the outline a
+// shell hits at every zoom. A COPY of game-core's TANK_R: this is a classic
+// script and cannot import it, so test/house-rules.mjs section 4 holds the two
+// equal, the same guard as the mirrored ballistics constants. It was 240 until
+// update 8, when the owner asked for battle tanks 15% bigger in every mode
+// (2026-10-07): 240 x 1.15 = 276. The WARLORD (r x 1.8) and the alien saucers
+// are drawn off the same r, so they grew with it and kept their proportions.
+// The menu's pictures of the tank (bay.js tankURL) divide by this number, so
+// those did NOT change size.
+const TANK_R = 276;
+// game-core's muzzle origin and putter tee, derived the same way from the same
+// TANK_R, so the aim line starts where the server fires from to the unit
+// (house rules section 4 holds each multiplier equal to game-core's).
+const BARREL_LEN     = Math.round(1.71 * TANK_R);   // 472 — pivot -> muzzle tip
+const BARREL_PIVOT_X = Math.round(0.47 * TANK_R);   // 130 — pivot forward of the hull centre
+const TANK_CY        = Math.round(1.14 * TANK_R);   // 315 — pivot height above the ground point
+const PUTT_AHEAD     = Math.round(1.46 * TANK_R);   // 403 — the putt's tee ahead of the tank
+
 function tankScreen(i) {
   const t = S.tanks[i];
   // Render on the LOCAL surface so tanks visibly ride collapsing ground down
   // (matches the server's final y once the crumble settles).
-  // Tank is drawn at its TRUE world size (TANK_R 240 world units x zoom, NO
+  // Tank is drawn at its TRUE world size (TANK_R world units x zoom, NO
   // clamp): the sprite outline then matches the server's world-space hitbox
   // pixel-for-pixel at every zoom, and the tank stays locked to the world (it
   // never changes size relative to the battlefield). A clamp here would draw
   // the tank off its hitbox at zoom extremes — the old "hitbox is wrong" bug.
-  const r = 240 * cam.zoom;
+  const r = TANK_R * cam.zoom;
   return { sx: wx2s(t.x), sy: wy2s(surfaceAt(t.x)), r };
 }
 
@@ -7882,11 +7903,11 @@ function drawAim() {
   const rad = aim.angle * Math.PI / 180;
   const sx = wx2s(t.x), sy = wy2s(surfaceAt(t.x) - 24);
   const pct = aim.power / 100;
-  // Mirrors game-core's muzzle origin (BARREL_PIVOT_X 113, TANK_CY 274,
-  // BARREL_LEN 410 — the drawn barrel tip). If the muzzle is at or under the
-  // local surface the shell detonates in your own lap, so warn in red.
-  const mox = t.x + dir * 113 + Math.cos(rad) * dir * 410;
-  const moy = (t.y - 274) - Math.sin(rad) * 410;
+  // Mirrors game-core's muzzle origin (BARREL_PIVOT_X, TANK_CY, BARREL_LEN —
+  // the drawn barrel tip, all multiples of TANK_R). If the muzzle is at or
+  // under the local surface the shell detonates in your own lap, so warn in red.
+  const mox = t.x + dir * BARREL_PIVOT_X + Math.cos(rad) * dir * BARREL_LEN;
+  const moy = (t.y - TANK_CY) - Math.sin(rad) * BARREL_LEN;
   const danger = moy >= surfaceAt(mox) - 8;
 
   // THE TRUE ARC: integrate the selected weapon's exact ballistics (same
@@ -7910,7 +7931,7 @@ function drawAim() {
       const pdir = dir * (Math.cos(rad) < 0 ? -1 : 1);   // aim past 90° = putt backwards
       for (let i = 1; i <= 22; i++) {
         const f = (i / 22) * 0.6;
-        const pxg = t.x + pdir * (350 + roll * f);
+        const pxg = t.x + pdir * (PUTT_AHEAD + roll * f);   // from game-core's putt tee
         if (pxg < 0 || pxg > WW()) break;
         const gx = wx2s(pxg), gy = wy2s(surfaceAt(pxg) - 10);
         const k = 3.2 - f * 1.8;
@@ -7942,7 +7963,11 @@ function drawAim() {
     if (!dots.length) dots.push([px, py]);           // a dribbler that lands at once
     // The arc warns in RED when this shot would hurt YOU: muzzle buried, or
     // the landing sits inside your own weapon's blast radius. (No landing
-    // marker — reading the fall is part of the craft.)
+    // marker — reading the fall is part of the craft.) The point 150 above
+    // your ground point is a rough hull centre, not a copy of a game-core
+    // number, and it deliberately did not grow with TANK_R in update 8: the
+    // server measures to the outline, and moving this point UP would only
+    // shrink the warning's reach along the ground.
     const selfBlast = landed && selW.radius
       ? Math.hypot(landed[0] - t.x, landed[1] - (t.y - 150)) <= selW.radius * 1.56
       : false;                                   // 1.56 mirrors game-core DMG_REACH

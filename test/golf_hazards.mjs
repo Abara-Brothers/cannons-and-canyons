@@ -105,8 +105,13 @@ const ok = (m) => console.log('  ok — ' + m);
   const terrain = new Array(60001).fill(9000);
   for (let x = 12000; x <= 14000; x++) terrain[x] = 9400;      // dug basin
   const water = { kind: 'water', a: 12000, b: 14000, y: 9055 };
+  // Power 50 drops the ball mid-pond, about 550 short of the far wall. It was
+  // 52 until the battle tank grew 15% (update 8): from the bigger tank's
+  // muzzle, 70 units further out and higher, a 52 carried into this basin's
+  // sheer far wall and bounced back in, and the ruling then rightly dropped it
+  // on the FAR bank, which is not what this section is about.
   const r = simulateShot({ terrain, tanks: [{ x: 5000, y: 9000 }],
-    golfHazards: [water] }, { by: 0, weapon: 'golfball', angle: 30, power: 52 });
+    golfHazards: [water] }, { by: 0, weapon: 'golfball', angle: 30, power: 50 });
   const w = r.golf && r.golf.water;
   if (!w) fail('water: ball crossed the pond without a splash ruling');
   else {

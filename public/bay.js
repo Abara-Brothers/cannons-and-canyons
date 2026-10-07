@@ -43,6 +43,7 @@ const G = {
   get view()          { return typeof view          !== 'undefined' ? view          : undefined; },
   get canvas()        { return typeof canvas        !== 'undefined' ? canvas        : undefined; },
   get ctx()           { return typeof ctx           !== 'undefined' ? ctx           : undefined; },
+  get TANK_R()        { return typeof TANK_R        !== 'undefined' ? TANK_R        : undefined; },
 };
 const fn = (name) => (typeof window[name] === 'function' ? window[name] : null);   // function declarations live on window
 const has = (name) => G[name] !== undefined || !!fn(name);
@@ -344,7 +345,7 @@ const TANK_CACHE = new Map();
 function tankURL(skinId, cssW) {
   const key = skinId + '@' + cssW;
   if (TANK_CACHE.has(key)) return TANK_CACHE.get(key);
-  if (!has('drawTank') || !has('canvas') || !has('S')) return '';
+  if (!has('drawTank') || !has('canvas') || !has('S') || !has('TANK_R')) return '';
   const H = Math.round(cssW * 246 / 300), pad = tankPad(cssW);
   const CW = cssW + pad, CH = H + pad;            // the canvas: the frame, the pad above it and to its right
   const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
@@ -364,7 +365,12 @@ function tankURL(skinId, cssW) {
     ctx.translate(0, Math.round(pad * dpr) / dpr);
     view.cssW = cssW; view.cssH = H;
     const r = cssW * 0.33;                       // the hull and tracks span ~2.7r of the frame; the gun leaves it (above)
-    cam.zoom = r / 240; cam.cx = 0;
+    // drawTank draws at r = TANK_R x zoom (tankScreen), so this zoom puts the
+    // tank at exactly the frame's r whatever the battle size is. Update 8 made
+    // battle tanks 15% bigger (TANK_R 240 -> 276); dividing by TANK_R rather
+    // than a fixed 240 is what keeps this picture, and every menu that shows
+    // it, the size it was.
+    cam.zoom = r / G.TANK_R; cam.cx = 0;
     // No terrain: surfaceAt() answers a flat floor at world.h * .72, so place
     // the camera so that floor lands at 80% of the frame height.
     const floorY = S.world.h * 0.72;

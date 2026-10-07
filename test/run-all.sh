@@ -328,6 +328,13 @@ else
   # tank never crosses it. Real vs-CPU matches against its own server, a real
   # FIRE press and a real pinch. Skips without Chrome.
   run aim_focus node test/aim_focus.mjs
+  # Battle tanks 15% bigger (owner, 2026-10-07: TANK_R 240 -> 276). The page
+  # draws, aims and putts from the tank the server hits and fires from: its
+  # TANK_R is game-core's, the drawn tank is the hitbox by pixels, the drawn
+  # muzzle and the aim line are game-core's shot, the putt line starts at
+  # game-core's tee, and the menu picture did not grow. Real vs-CPU duel and
+  # solo golf against its own server. Skips without Chrome.
+  run tank_size node test/tank_size.mjs
   # SEVENTH client-side suite: the Bay's Set callsign control — the row with Roll
   # and Set, the inline field, every error sentence, the exact frames that reach
   # the socket, what a guest is told, and the landscape keyboard lift. The socket

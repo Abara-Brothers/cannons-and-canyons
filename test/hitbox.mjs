@@ -2,7 +2,7 @@
 // deterministic battlefield and assert real damage lands. Guards the three ways
 // this has broken: hitbox too small to hit, shell detonating on its own tank,
 // and fast shells tunnelling through the box.
-import { WEAPONS, simulateShot, pointHitsTank, aiShot, generateTerrain, spawnTanks, laneBounds } from '../public/game-core.js';
+import { WEAPONS, simulateShot, pointHitsTank, aiShot, generateTerrain, spawnTanks, laneBounds, TANK_R, TANK_HW, TANK_TOP } from '../public/game-core.js';
 
 const FLAT_Y = 9000, ME = 4000, ENEMY = 16000;
 const flat = () => new Array(24001).fill(FLAT_Y);
@@ -25,14 +25,33 @@ const FLOOR = {
 let failures = 0;
 const fail = (m) => { console.error('FAIL ' + m); failures++; };
 
+// 0 — THE BATTLE TANK'S SIZE (owner, 2026-10-07: 15% bigger in every mode).
+//     TANK_R was the 240 design; 240 x 1.15 = 276, and the outline's widest
+//     point and turret roof are the locked multipliers of it. A tank drawn
+//     and hit at the old size fails here first.
+if (TANK_R !== 276) fail(`TANK_R is ${TANK_R}: the battle tank is 15% bigger than the 240 design, 276`);
+if (TANK_HW !== 373 || TANK_TOP !== 375) fail(`outline extents ${TANK_HW} wide x ${TANK_TOP} tall: 1.35 and 1.36 x 276 are 373 and 375`);
+// The outline itself is the bigger one, not just the numbers: just inside the
+// new hull edge and the new hatch top hits; the old ones were further in.
+for (const [dx, up, what] of [[370, 166, 'the new hull edge (old one was 324)'], [0, 400, 'the new hatch (old top was 358)'],
+                              [360, 60, 'the new track end (old one was 319)']]) {
+  if (!pointHitsTank(ENEMY + dx, FLAT_Y - up, { x: ENEMY, y: FLAT_Y })) fail(`the 15% bigger tank does not reach ${what} (dx=${dx}, up=${up})`);
+}
+for (const [dx, up, what] of [[376, 166, 'just past the new hull edge'], [0, 414, 'just above the new hatch']]) {
+  if (pointHitsTank(ENEMY + dx, FLAT_Y - up, { x: ENEMY, y: FLAT_Y })) fail(`the outline reaches ${what} (dx=${dx}, up=${up})`);
+}
+
 // 1 — the hitbox exists where the tank is DRAWN. Every one of these points is
-//     inside the sprite the client renders, so every one must register.
+//     inside the sprite the client renders, so every one must register. They
+//     were measured on the 240 design and are scaled by the tank's size (K),
+//     so the SHAPE is checked at whatever size the battle tank is.
+const K = TANK_R / 240;
 for (const [dx, up, what] of [[0, 0, 'ground point'], [0, 120, 'hull'], [0, 300, 'turret'],
                               [300, 120, 'skirt edge'], [-300, 20, 'track edge'], [0, -20, 'tracks below grade'],
                               [240, 200, 'glacis mid-taper'], [-240, 200, 'glacis mid-taper L'],
                               [120, 310, 'turret upper'], [50, 340, 'hatch cap']]) {
-  if (!pointHitsTank(ENEMY + dx, FLAT_Y - up, { x: ENEMY, y: FLAT_Y })) {
-    fail(`pointHitsTank miss at ${what} (dx=${dx}, up=${up})`);
+  if (!pointHitsTank(ENEMY + dx * K, FLAT_Y - up * K, { x: ENEMY, y: FLAT_Y })) {
+    fail(`pointHitsTank miss at ${what} (dx=${dx}, up=${up}, x ${K})`);
   }
 }
 // …and it must NOT exist where the old box had empty-air corners the art
@@ -40,8 +59,8 @@ for (const [dx, up, what] of [[0, 0, 'ground point'], [0, 120, 'hull'], [0, 300,
 for (const [dx, up, what] of [[310, 230, 'old hull box corner'], [-310, 230, 'old hull box corner L'],
                               [170, 320, 'old turret box corner'], [312, 130, 'beside the skirt'],
                               [0, 380, 'above the hatch'], [900, 0, '900 units away']]) {
-  if (pointHitsTank(ENEMY + dx, FLAT_Y - up, { x: ENEMY, y: FLAT_Y })) {
-    fail(`pointHitsTank false positive at ${what} (dx=${dx}, up=${up})`);
+  if (pointHitsTank(ENEMY + dx * K, FLAT_Y - up * K, { x: ENEMY, y: FLAT_Y })) {
+    fail(`pointHitsTank false positive at ${what} (dx=${dx}, up=${up}, x ${K})`);
   }
 }
 
@@ -83,11 +102,30 @@ for (const [a, p, what] of [[8, 60, 'shallow'], [45, 60, 'normal'], [84, 60, 'st
 const land = fire('cannon', 45, 60);
 const endX = land.projectiles[0].path[land.projectiles[0].path.length - 1][0];
 if (endX < 15000) fail(`cannon 45/60 landed at x=${endX}, expected ~15700 (latch ordering bug)`);
-// The shell must LEAVE from the drawn barrel tip, not the hull centre.
+// The shell must LEAVE from the drawn barrel tip, not the hull centre: the
+// pivot 0.47r forward and 1.14r up, then 1.71r of tube and brake. At TANK_R
+// 276 that is 130, 315 and 472 (they were 113, 274 and 410 at the 240 design).
 {
   const p0 = land.projectiles[0].path[0];
-  if (Math.abs(p0[0] - (ME + 113 + 410 * Math.SQRT1_2)) > 2) fail(`shot origin x=${p0[0]} — not at the muzzle tip`);
-  if (Math.abs(p0[1] - (FLAT_Y - 274 - 410 * Math.SQRT1_2)) > 2) fail(`shot origin y=${p0[1]} — not at the muzzle tip`);
+  if (Math.abs(p0[0] - (ME + 130 + 472 * Math.SQRT1_2)) > 2) fail(`shot origin x=${p0[0]} — not at the muzzle tip`);
+  if (Math.abs(p0[1] - (FLAT_Y - 315 - 472 * Math.SQRT1_2)) > 2) fail(`shot origin y=${p0[1]} — not at the muzzle tip`);
+}
+// The WARLORD's gun is the same muzzle at its 1.8 scale, so it grew with the
+// tank too: a scale-1.8 firer's shell leaves 1.8 x as far out.
+{
+  const st = fresh(); st.tanks[0].scale = 1.8;
+  const p0 = simulateShot(st, { by: 0, weapon: 'cannon', angle: 45, power: 60 }).projectiles[0].path[0];
+  if (Math.abs(p0[0] - (ME + 1.8 * (130 + 472 * Math.SQRT1_2))) > 2 || Math.abs(p0[1] - (FLAT_Y - 1.8 * (315 + 472 * Math.SQRT1_2))) > 2)
+    fail(`a 1.8 scale firer's shell left from ${JSON.stringify(p0)}, not 1.8 x the muzzle tip`);
+}
+// The putter's tee is ahead of the hull, so it moved out with it: the ball is
+// struck at turf level 1.46r ahead of the ground point, 403 at TANK_R 276
+// (350 at the 240 design, which is now under the hull's 373 edge).
+{
+  const st = fresh();
+  const p0 = simulateShot(st, { by: 0, weapon: 'putter', angle: 30, power: 40 }).projectiles[0].path[0];
+  if (p0[0] !== ME + 403 || p0[1] !== FLAT_Y - 4) fail(`the putt is struck at ${JSON.stringify(p0)}, not at the tee 403 ahead of the tank, ${JSON.stringify([ME + 403, FLAT_Y - 4])}`);
+  if (!(403 > TANK_HW)) fail('the putt tee is under the hull');
 }
 
 // 5 — Teleport moves the FIRER onto the landing point, MAY cross the enemy,

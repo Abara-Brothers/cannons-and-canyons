@@ -131,13 +131,9 @@ const SPEED_PER_POWER = 52;   // power 0..100 -> speed 0..5200 u/s. Max 45° ran
                               // border; pickSpawns caps a duel gap at 26,000 so opponents always
                               // start in reach. Trimmed twice (64 → 58 → 52) because shots flew
                               // too far. GOLF DOES NOT share this: the ball's speedMul compensates.
-// Where the shell leaves the tank. These mirror the CLIENT's drawTank barrel
-// geometry (BARREL {ox:0.47, oy:-0.72, len:1.45, brake:0.26} in tank radii, plus
-// the 0.42r LIFT) at the design scale TANK_R=240 — so the projectile path now
-// begins at the DRAWN muzzle tip, not the hull centre. Multiplied by tank.scale
-// so an oversized tank's gun reaches proportionally further.
-const BARREL_LEN = 410;       // pivot -> muzzle tip (1.71 r)
-const BARREL_PIVOT_X = 113;   // pivot sits forward of the hull centre (0.47 r)
+// Where the shell leaves the tank (BARREL_LEN, BARREL_PIVOT_X, TANK_CY) is
+// derived from TANK_R in the tank hitbox section below, beside the outline it
+// belongs to.
 const DT = 1 / 120;           // physics step
 const SAMPLE_EVERY = 4;       // record a trajectory point every N steps (~30fps)
 const MAX_T = 26;             // safety cap on flight time (s)
@@ -218,21 +214,46 @@ export const biomeLavaY = (biome) => LAVA_Y - ((BIOMES[biome] || BIOMES.alpine).
 //   ±0.52 at 1.36 | commander hatch ±0.34 up to 1.49
 // The tank art is LOCKED. If drawTank's proportions ever change, retune these
 // multipliers to match it — never the other way round.
-export const TANK_R = 240;
-export const TANK_HW  = Math.round(1.35 * TANK_R);   // 324 — widest point: the hull's bottom edge
-const TANK_HULL_H     = Math.round(1.00 * TANK_R);   // 240 — hull top above the ground point
-const TANK_TUR_HW     = Math.round(0.76 * TANK_R);   // 182 — turret half-width at its base
-export const TANK_TOP = Math.round(1.36 * TANK_R);   // 326 — turret roof above the ground point
-const TANK_BELOW      = Math.round(0.10 * TANK_R);   //  24 — tracks sit this far below the ground point
-const TANK_TRACK_TOP  = Math.round(0.48 * TANK_R);   // 115 — top of the track band
-const TANK_TRACK_HW   = Math.round(1.33 * TANK_R);   // 319 — track half-width
-const TANK_SKIRT_HW   = Math.round(1.26 * TANK_R);   // 302 — side-skirt half-width
-const TANK_HULL_BOT   = Math.round(0.60 * TANK_R);   // 144 — hull wedge bottom edge (widest line)
-const TANK_HULL_TOP_HW = Math.round(0.99 * TANK_R);  // 238 — hull half-width at the hull top
-const TANK_TUR_TOP_HW = Math.round(0.52 * TANK_R);   // 125 — turret half-width at its roof
-const TANK_HAT_HW     = Math.round(0.34 * TANK_R);   //  82 — commander hatch half-width
-const TANK_HAT_TOP    = Math.round(1.49 * TANK_R);   // 358 — hatch top above the ground point
-const TANK_CY = 274;          // turret pivot height above the ground point (0.72 r + 0.42 r LIFT)
+//
+// TANK_R is the battle tank's SIZE, and only its size: every number in this
+// section, and the muzzle below, is a multiple of it, so changing it scales
+// the whole tank uniformly and the art stays locked. It was 240 until update
+// 8. The owner asked for battle tanks 15% bigger in every mode (2026-10-07),
+// and 240 x 1.15 = 276. One number for every mode on purpose: the WARLORD
+// (tank.scale 1.8) and the alien saucers are sized off it too, so they keep
+// their proportions to the players' tanks. The client draws its tank at r =
+// TANK_R x zoom from its own copy of this number (public/app.js TANK_R, held
+// equal to this one by test/house-rules.mjs section 4), and its menu pictures
+// of the tank divide by it, so those did not grow. A client built before this
+// change (builds 6 and 7) still draws 240 until it updates.
+export const TANK_R = 276;
+export const TANK_HW  = Math.round(1.35 * TANK_R);   // 373 — widest point: the hull's bottom edge
+const TANK_HULL_H     = Math.round(1.00 * TANK_R);   // 276 — hull top above the ground point
+const TANK_TUR_HW     = Math.round(0.76 * TANK_R);   // 210 — turret half-width at its base
+export const TANK_TOP = Math.round(1.36 * TANK_R);   // 375 — turret roof above the ground point
+const TANK_BELOW      = Math.round(0.10 * TANK_R);   //  28 — tracks sit this far below the ground point
+const TANK_TRACK_TOP  = Math.round(0.48 * TANK_R);   // 132 — top of the track band
+const TANK_TRACK_HW   = Math.round(1.33 * TANK_R);   // 367 — track half-width
+const TANK_SKIRT_HW   = Math.round(1.26 * TANK_R);   // 348 — side-skirt half-width
+const TANK_HULL_BOT   = Math.round(0.60 * TANK_R);   // 166 — hull wedge bottom edge (widest line)
+const TANK_HULL_TOP_HW = Math.round(0.99 * TANK_R);  // 273 — hull half-width at the hull top
+const TANK_TUR_TOP_HW = Math.round(0.52 * TANK_R);   // 144 — turret half-width at its roof
+const TANK_HAT_HW     = Math.round(0.34 * TANK_R);   //  94 — commander hatch half-width
+const TANK_HAT_TOP    = Math.round(1.49 * TANK_R);   // 411 — hatch top above the ground point
+// Where the shell leaves the tank. These mirror the CLIENT's drawTank barrel
+// geometry (BARREL {ox:0.47, oy:-0.72, len:1.45, brake:0.26} in tank radii, plus
+// the 0.42r LIFT) — so the projectile path begins at the DRAWN muzzle tip, not
+// the hull centre. Multiplied by tank.scale so an oversized tank's gun reaches
+// proportionally further. public/app.js derives the same three numbers the same
+// way for its aim line (test/house-rules.mjs section 4 holds them equal).
+const BARREL_LEN      = Math.round(1.71 * TANK_R);   // 472 — pivot -> muzzle tip (1.45 r tube + 0.26 r brake)
+const BARREL_PIVOT_X  = Math.round(0.47 * TANK_R);   // 130 — pivot sits forward of the hull centre
+const TANK_CY         = Math.round(1.14 * TANK_R);   // 315 — turret pivot height above the ground point (0.72 r + 0.42 r LIFT)
+// The putter's tee: the ball is struck at turf level this far ahead of the
+// tank's ground point, just clear of the hull's widest point (TANK_HW), so it
+// grows with the tank. public/app.js's putt pace line starts from the same
+// number (house rules section 4).
+const PUTT_AHEAD      = Math.round(1.46 * TANK_R);   // 403 — was 350 at the 240 design size
 
 // Silhouette half-width at height `up` above the ground point (world units,
 // UNSCALED — callers divide by tank.scale first). -1 = outside vertically.
@@ -656,7 +677,7 @@ export function generateTerrain(seed, n = 2, biome = 'alpine', width = WORLD_W, 
         placed.push(cx);
 
         // Deep enough to be cover and an obstacle, not a dimple: a tank is
-        // ~330u tall, so 1,600-2,500 is several tank heights of wall.
+        // ~375u tall (TANK_TOP), so 1,600-2,500 is several tank heights of wall.
         const depth = 1600 + rng() * 900;
         const x0 = Math.max(0, Math.floor(cx - halfW));
         const x1 = Math.min(width, Math.ceil(cx + halfW));
@@ -1149,7 +1170,7 @@ export function simulateShot(state, shot) {
         // 90° flips the launch vx negative and the putt rolls backwards —
         // without this a ball past the cup could never come back.
         const pdir = Math.sign(vx) || dir;
-        iox = tank.x + pdir * 350;
+        iox = tank.x + pdir * PUTT_AHEAD;
         ioy = surfaceAt(state.terrain, iox) - 4;
         ivx = speed * pdir; ivy = 0;
       }

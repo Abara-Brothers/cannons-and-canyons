@@ -221,7 +221,7 @@ try {
     // distance label is what drawEdgeIndicators() writes for each one.
     const labels = []; const ft = ctx.fillText; ctx.fillText = function (s, ...r) { labels.push(String(s)); return ft.call(this, s, ...r); };
     try { drawEdgeIndicators(); } finally { delete ctx.fillText; }
-    return { focus: aimFocusActive(), t, same, on: tz(true), off: tz(false), z: cam.zoom, r: ts.r, rOff: 240 * tz(false), opp, labels, w: view.cssW }; })()`);
+    return { focus: aimFocusActive(), t, same, on: tz(true), off: tz(false), z: cam.zoom, r: ts.r, rOff: TANK_R * tz(false), opp, labels, w: view.cssW }; })()`);
   if (fit.focus && near(fit.t.tz, fit.on) && near(fit.t.tz / fit.off, 1.35, 1e-9)) ok(`1: at the fit-all zoom the focused target is exactly 1.35x the unfocused one (${fit.t.tz.toFixed(5)} / ${fit.off.toFixed(5)})`);
   else fail('1: fit zoom factor ' + JSON.stringify(fit));
   if (near(fit.t.tz, fit.same.tz) && near(fit.t.tx, fit.same.tx) && near(fit.t.ty, fit.same.ty))

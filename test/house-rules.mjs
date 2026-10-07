@@ -98,15 +98,19 @@ const UI_FILES = ['public/index.html', 'public/app.js', 'public/bay.js', 'public
 // actually means in practice.
 {
   const core = read('public/game-core.js');
-  // TANK_HW/TANK_TOP are derived (1.35r / 1.36r), so pin the multipliers too —
-  // changing either silently resizes the hitbox that must match the drawn art.
+  // The SHAPE is the multipliers: TANK_HW/TANK_TOP are derived (1.35r /
+  // 1.36r), and so is the muzzle (1.71r tube and brake, 0.47r pivot forward,
+  // 1.14r pivot height), so pin them — changing one silently resizes the part
+  // of the hitbox or the shot origin that must match the drawn art. The SIZE
+  // is TANK_R alone: 276, the owner's 15% bigger battle tank (2026-10-07, the
+  // 240 design x 1.15). A uniform size change moves TANK_R and nothing here.
   const pinned = [
-    [/export const TANK_R\s*=\s*(\d+)/, 'TANK_R', '240'],
+    [/export const TANK_R\s*=\s*(\d+)/, 'TANK_R', '276'],
     [/TANK_HW\s*=\s*Math\.round\(([0-9.]+)\s*\*\s*TANK_R\)/, 'TANK_HW multiplier', '1.35'],
     [/TANK_TOP\s*=\s*Math\.round\(([0-9.]+)\s*\*\s*TANK_R\)/, 'TANK_TOP multiplier', '1.36'],
-    [/const BARREL_LEN\s*=\s*(\d+)/, 'BARREL_LEN', '410'],
-    [/const BARREL_PIVOT_X\s*=\s*(\d+)/, 'BARREL_PIVOT_X', '113'],
-    [/const TANK_CY\s*=\s*(\d+)/, 'TANK_CY', '274'],
+    [/const BARREL_LEN\s*=\s*Math\.round\(([0-9.]+)\s*\*\s*TANK_R\)/, 'BARREL_LEN multiplier', '1.71'],
+    [/const BARREL_PIVOT_X\s*=\s*Math\.round\(([0-9.]+)\s*\*\s*TANK_R\)/, 'BARREL_PIVOT_X multiplier', '0.47'],
+    [/const TANK_CY\s*=\s*Math\.round\(([0-9.]+)\s*\*\s*TANK_R\)/, 'TANK_CY multiplier', '1.14'],
   ];
   const wrong = [];
   for (const [re, name, want] of pinned) {
@@ -125,16 +129,42 @@ const UI_FILES = ['public/index.html', 'public/app.js', 'public/bay.js', 'public
 {
   const core = read('public/game-core.js'), app = read('public/app.js');
   const grab = (src, re, label) => { const m = src.match(re); return m ? m[1] : `<${label} not found>`; };
+  // The tank's size and where the shot leaves it: the client draws its tank
+  // at TANK_R x zoom and starts the aim line (and the putter's pace line)
+  // from its own copies of game-core's muzzle and putt tee, so a TANK_R or a
+  // multiplier moved on one side only draws a tank off its own hitbox and an
+  // aim line that starts away from the shell.
+  const mult = (name) => new RegExp(`const ${name}\\s*=\\s*Math\\.round\\(([0-9.]+)\\s*\\*\\s*TANK_R\\)`);
   const pairs = [
     ['DMG_REACH', grab(core, /DMG_REACH\s*=\s*([0-9.]+)/, 'core'), grab(app, /selW\.radius\s*\*\s*([0-9.]+)/, 'client')],
     ['gravity', grab(core, /const GRAVITY\s*=\s*(\d+)/, 'core'), grab(app, /const G\s*=\s*(\d+)\s*\*/, 'client')],
     ['SPEED_PER_POWER', grab(core, /const SPEED_PER_POWER\s*=\s*(\d+)/, 'core'), grab(app, /aim\.power\s*\*\s*(\d+)\s*\*/, 'client')],
+    ['TANK_R', grab(core, /export const TANK_R\s*=\s*(\d+)/, 'core'), grab(app, /\nconst TANK_R\s*=\s*(\d+)/, 'client')],
+    ...['BARREL_LEN', 'BARREL_PIVOT_X', 'TANK_CY', 'PUTT_AHEAD'].map((n) => [n + ' multiplier', grab(core, mult(n), 'core'), grab(app, mult(n), 'client')]),
   ];
   let bad = 0;
   for (const [name, a, b] of pairs) {
     if (a !== b) { bad++; fail(`mirrored constant ${name} disagrees: game-core has ${a}, public/app.js has ${b}`); }
   }
   if (!bad) ok(`mirrored ballistics constants agree (${pairs.map(p => p[0]).join(', ')})`);
+}
+
+// ---- 4b. EVERY BATTLE TANK IS DRAWN AT TANK_R --------------------------------
+// The battle tank's size was a bare 240 in three places on the client (the
+// tank, the warp's light columns and the menu picture's camera), and update 8
+// moved it to 276 through TANK_R. A 240 left behind draws that one thing at
+// the old size: a warp column or a tank 15% off its hitbox, or a menu picture
+// 15% too big for its frame. So the size is spelled TANK_R wherever it is used.
+{
+  const app = read('public/app.js'), bay = read('public/bay.js');
+  const stale = [];
+  app.split('\n').forEach((l, i) => { if (/\b240\s*\*\s*cam\.zoom\b|cam\.zoom\s*\*\s*240\b/.test(l.split('//')[0])) stale.push(`public/app.js:${i + 1}: ${l.trim()}`); });
+  bay.split('\n').forEach((l, i) => { if (/cam\.zoom\s*=\s*[^;]*\/\s*240\b/.test(l.split('//')[0])) stale.push(`public/bay.js:${i + 1}: ${l.trim()}`); });
+  const uses = (app.match(/const r = TANK_R \* cam\.zoom;/g) || []).length;
+  if (stale.length) fail(`a battle tank size written as 240 instead of TANK_R:\n      ${stale.join('\n      ')}`);
+  else if (uses < 2) fail(`tankScreen and drawWarp must both take r from TANK_R * cam.zoom (found ${uses})`);
+  else if (!/cam\.zoom = r \/ G\.TANK_R;/.test(bay)) fail('bay.js tankURL must set its camera from TANK_R (cam.zoom = r / G.TANK_R), or the menu picture changes size with the battle tank');
+  else ok('every battle tank size on the client is TANK_R (tank, warp, menu picture camera)');
 }
 
 // ---- 5. CALLSIGN WORD LISTS MUST AGREE (ISSUE-015) ---------------------------
