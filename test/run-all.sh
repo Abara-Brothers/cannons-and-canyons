@@ -313,6 +313,12 @@ else
   # FIFTH client-side suite: Artillery Golf's off-screen flag marker and its
   # tap-to-pan, on a local solo round. Skips without Chrome.
   run golf_marker node test/golf_marker.mjs
+  # Golf's out of bounds made obvious (owner, 2026-10-07): the stakes, the
+  # dashed line and the striped strip at both ends sit exactly on the engine's
+  # limit at every zoom, the camera can show them, and a real out-of-bounds
+  # stroke raises the banner while an in-bounds one never does. On a local solo
+  # round. Skips without Chrome.
+  run golf_bounds node test/golf_bounds.mjs
   # SIXTH client-side suite: golf for four in the page — the Players choice
   # into the create frame, four HUD cards, a four-row scorecard. Skips without Chrome.
   run golf_four_ui node test/golf_four_ui.mjs

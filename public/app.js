@@ -434,8 +434,23 @@ function fullZoom() { return view.cssW / WW(); }
 // iPhone SE in landscape with the dock COLLAPSED to its sliver, about 667x321,
 // ratio 0.481 — so on a phone the width term always wins and nothing changes.
 const TALL_CAP = 2.0;
+// GOLF IS THE ONE EXCEPTION to "the void beyond the edges never comes into
+// view", because in golf the edges are a rule: a ball that flies past either
+// end of the course is out of bounds (owner, 2026-10-07: "make it obvious that
+// either side of the end of the screen is out of bounds"). With the camera held
+// inside the map, a short hole's two ends sat exactly on the screen's own edges
+// with nothing beyond them to show. So in golf the camera may look
+// GOLF_OB_PX screen pixels past each end, and the zoom-out floor makes room for
+// both, which is where drawGolfBounds() paints the out-of-bounds strip.
+// Screen pixels, not world units, so the strip and its label are the same size
+// at every zoom. The cost: where the zoom-out floor frames a short hole whole,
+// the two strips take 80 px of the width, so the course reads about 9% smaller
+// there on an 874-wide canvas and 12% on a 667-wide one. A long hole opens
+// framed by its terrain band, well above the floor, so it opens as before.
+const GOLF_OB_PX = 40;
 function minMapZoom() {
-  return Math.max(view.cssW / WW(), view.cssH / (WH() * TALL_CAP));
+  const w = S.mode === 'golf' ? Math.max(2, view.cssW - 2 * GOLF_OB_PX) : view.cssW;
+  return Math.max(w / WW(), view.cssH / (WH() * TALL_CAP));
 }
 const clampUserZoom = (z) => Math.max(0.25, Math.min(6, Number.isFinite(z) ? z : 1));
 // A fresh match opens WIDER than the fit-all baseline (userZoom 1) — you read
@@ -530,7 +545,10 @@ function cameraTarget() {
     ty = ty + ((K.y - (view.cssH / tz) * 0.08) - ty) * K.mix;
   }
   const cw = view.cssW / tz, ch = view.cssH / tz;
-  tx = cw >= WW() ? WW() / 2 : Math.min(WW() - cw / 2, Math.max(cw / 2, tx));
+  // Golf may frame its out-of-bounds strip past each end (see GOLF_OB_PX);
+  // every other mode stops at the map's edges, exactly as before (ob = 0).
+  const ob = S.mode === 'golf' ? GOLF_OB_PX / tz : 0;
+  tx = cw >= WW() + 2 * ob ? WW() / 2 : Math.min(WW() + ob - cw / 2, Math.max(cw / 2 - ob, tx));
   ty = ch >= WH() ? WH() - ch / 2 : Math.min(WH() - ch / 2, Math.max(ch / 2, ty));
   return { tz: finite(tz, 0.05), tx: finite(tx, WW() / 2), ty: finite(ty, WH() * 0.72) };
 }
@@ -3552,6 +3570,7 @@ function applySnapshot(m) {
   updateHud(); updateAimUI(); updateFuel(); updateDock();
   closeStageMenus();      // camera + meta always start collapsed
   $('holeScore').classList.remove('show');   // a stale hole card never survives a snapshot
+  $('obBanner').classList.remove('show');    // nor a stale out-of-bounds banner (a new hole's card takes its slot)
   if (keep) setDockCollapsed(keep.dockShut, false);   // resync: dock stays as you left it
   else if (m.type === 'hole') {
     // Next golf hole: not a new game — leave the dock as the player has it.
@@ -5085,7 +5104,10 @@ function applyResolve(m) {
     S.golf = { ...(S.golf || {}), ...m.golf };
     const t = S.tanks[m.golf.noteSeat];
     const NOTES = { holed: 'SUNK IT!', hazard: 'HAZARD +1', oob: 'OUT OF BOUNDS +1', capped: 'PICKED UP', water: 'IN THE WATER — DROP +1' };
-    if (m.golf.note && t) S.floaters.push({ x: t.x, y: t.y - 420, text: NOTES[m.golf.note] || '', age: 0, life: 1.8, color: m.golf.note === 'holed' ? '#b6ff5a' : '#ffd23f' });
+    // Out of bounds is said on the banner, in the same words, instead of in a
+    // floater over the tank (see showOBBanner). Every other note keeps its floater.
+    if (m.golf.note === 'oob') showOBBanner(NOTES.oob, m.golf.noteSeat, !!(m.golf.done && m.golf.done[m.golf.noteSeat]));
+    else if (m.golf.note && t) S.floaters.push({ x: t.x, y: t.y - 420, text: NOTES[m.golf.note] || '', age: 0, life: 1.8, color: m.golf.note === 'holed' ? '#b6ff5a' : '#ffd23f' });
     // A splash SELLS the ruling: white spray + blue droplets where the replay
     // path ends (integrate parks the final point ON the waterline). Sparks and
     // rects only — round particles are banned from the front layer.
@@ -5652,6 +5674,31 @@ function showHoleScore(g) {
   holeScoreTimer = setTimeout(() => el.classList.remove('show'), 4600);
 }
 
+// A ball that leaves the course, said where nobody can miss it (owner,
+// 2026-10-07: "a clear banner when the ball goes out"). It used to be one of
+// the small floaters over the tank, and the camera does not follow the ball, so
+// a player watching a drive sail off the far end was looking somewhere else
+// when it appeared. The banner keeps the note's own words and the penalty
+// notes' yellow, in the hole card's panel and slot, and says what happens next:
+// the ball plays again from where it was struck, unless that stroke reached
+// the hole's limit and the ball was picked up. Any player's ball, named when it
+// is not yours. Text only, never markup: names come from other players.
+let obBannerTimer = 0;
+function showOBBanner(words, seat, pickedUp) {
+  const el = $('obBanner'); if (!el) return;
+  const who = seat === S.you ? '' : (S.names[seat] || 'A player');
+  const next = pickedUp
+    ? (who ? `${who} reached the stroke limit and picked up.` : 'That was the stroke limit. Ball picked up.')
+    : (who ? `${who}'s ball left the course.` : 'Your ball left the course. Play again from the same spot.');
+  el.replaceChildren();
+  const head = document.createElement('div'); head.className = 'ob-head'; head.textContent = words;
+  const sub = document.createElement('div'); sub.className = 'ob-sub'; sub.textContent = next;
+  el.append(head, sub);
+  el.classList.add('show');
+  clearTimeout(obBannerTimer);
+  obBannerTimer = setTimeout(() => el.classList.remove('show'), 3200);
+}
+
 // THE HOST FOLLOWS THE SCREEN THAT IS ON STAGE. #toast lives in #app (see
 // index.html) because `.screen { display: none }` hid every toast the Launch
 // Bay ever raised — a Report that confirmed itself into an invisible subtree.
@@ -6158,6 +6205,7 @@ function draw() {
     drawGolfWater();
     drawTeeBox();
     drawGolfCup();
+    drawGolfBounds();
     drawHazards();
     drawMushroom();               // nuke column — biggest and furthest back, BEHIND the tanks
     drawParticles(true);          // soft discs (fire glow, smoke, dust) — BEHIND the tanks
@@ -6316,7 +6364,11 @@ function drawTerrain(w, h) {
   const crustPx = Math.max(1, Math.round(26 * z));
   for (let sx = 0; sx < w; sx++) {
     const wxc = s2wx(sx + 0.5);
-    if (wxc < 0 || wxc > WW()) continue;         // letterbox when zoomed out past the map
+    // Letterbox when zoomed out past the map, except in golf: there the camera
+    // shows the out-of-bounds strip past each end on purpose, and it needs
+    // ground under it. surfaceAt() holds the end column's height, so the
+    // course runs on flat past the line, and drawGolfBounds() darkens it.
+    if ((wxc < 0 || wxc > WW()) && S.mode !== 'golf') continue;
     const surf = wy2s(surfaceAt(wxc));
     if (surf >= h) continue;
     const sc = burnt ? Math.round(scorchAt(wxc) * SCORCH_STEPS) : 0;
@@ -7539,6 +7591,100 @@ function drawGolfCup() {
   ctx.setLineDash([5, 6]);
   ctx.beginPath(); ctx.moveTo(sx - u * 1.1, gy + u * 0.35); ctx.lineTo(sx + u * 1.1, gy + u * 0.35); ctx.stroke();
   ctx.setLineDash([]);
+}
+
+// ---- Golf out of bounds ----------------------------------------------------------
+// WHERE THE COURSE ENDS, drawn exactly where the engine ends it. integrate() in
+// game-core.js rules a FLYING ball out of bounds the moment x < 0 or
+// x > terrain.length - 1, and the server then scores the stroke plus one and
+// the ball plays again from where it was struck. A ROLLING ball never gets
+// there, because integrate() stops it 200 units short of either end. These are
+// the same two numbers, so a ball the line shows past is out and a ball short
+// of it is not. test/golf_bounds.mjs holds the drawing to the engine's rule.
+function golfOBLimits() { return [0, S.terrain.length - 1]; }
+const GOLF_OB_LABEL = 'OUT OF BOUNDS';
+const GOLF_OB_FONT = '900 13px system-ui, sans-serif';
+// At each end (owner, 2026-10-07: "white OB stakes + dashed line at both ends,
+// the ground beyond darkened, striped and labelled OUT OF BOUNDS"): everything
+// past the line is darkened and striped like a hazard board, a dashed white
+// boundary line rises from a white stake, and the label sits in the strip. The
+// strip, the line and the label are in screen pixels, so they read the same at
+// every zoom, and the camera can always show the whole strip at an end (see
+// GOLF_OB_PX). The stake is world-scaled like the tee markers. Drawn after the
+// course dressing and before the tanks and the ball, so a ball that goes out
+// is seen to cross the line.
+function drawGolfBounds() {
+  if (S.mode !== 'golf' || !S.terrain) return;
+  const { cssW, cssH } = view;
+  const [lo, hi] = golfOBLimits();
+  for (const [lim, side] of [[lo, -1], [hi, 1]]) {
+    const sx = wx2s(lim);
+    // The out side runs from the line to the screen edge it faces.
+    const x0 = side < 0 ? 0 : Math.max(0, sx), x1 = side < 0 ? Math.min(cssW, sx) : cssW;
+    if (x1 > x0) {
+      ctx.save();
+      ctx.beginPath(); ctx.rect(x0, 0, x1 - x0, cssH); ctx.clip();
+      ctx.fillStyle = 'rgba(8,10,18,0.5)';
+      ctx.fillRect(x0, 0, x1 - x0, cssH);
+      // 45-degree stripes, phased off the line so they travel with the course.
+      // A stripe from (a, 0) to (a - cssH, cssH) crosses the strip when a lies
+      // in [x0, x1 + cssH].
+      ctx.strokeStyle = 'rgba(255,255,255,0.2)'; ctx.lineWidth = 6;
+      ctx.beginPath();
+      for (let a = sx + Math.ceil((x0 - sx) / 16) * 16; a <= x1 + cssH; a += 16) {
+        ctx.moveTo(a, 0); ctx.lineTo(a - cssH, cssH);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+    if (sx < -GOLF_OB_PX || sx > cssW + GOLF_OB_PX) continue;
+    const gy = wy2s(surfaceAt(lim));
+    // The line runs from the ground at the boundary to the top of the screen:
+    // white dashes on a dark under-stroke, which reads against a pale sky as
+    // well as a blue one.
+    const foot = Math.min(cssH, gy);
+    if (foot > 0) {
+      ctx.save();
+      ctx.setLineDash([9, 7]);
+      for (const [col, lw] of [['rgba(10,12,20,0.55)', 4.5], ['rgba(255,255,255,0.95)', 2.5]]) {
+        ctx.strokeStyle = col; ctx.lineWidth = lw;
+        ctx.beginPath(); ctx.moveTo(sx, foot); ctx.lineTo(sx, 0); ctx.stroke();
+      }
+      ctx.restore();
+    }
+    // The stake stands on the line at its foot: a white post about as tall as
+    // a tee marker, with a dark rim so it holds up against white snow.
+    const u = Math.max(2.4, 300 * cam.zoom);
+    const pw = Math.max(2, u * 0.22), ph = u * 1.4;
+    ctx.fillStyle = 'rgba(12,14,20,0.75)';
+    ctx.fillRect(sx - pw / 2 - 1, gy - ph - 1, pw + 2, ph + 1);
+    ctx.fillStyle = '#f4f6f8';
+    ctx.fillRect(sx - pw / 2, gy - ph, pw, ph);
+    // The label, centred on the strip's full width and turned to run along
+    // it, baseline toward the course. It rides with the line, so it slides in
+    // with the strip. It sits in the sky between the camera and scorecard
+    // buttons (top 54) and the ground when there is room, else mid-canvas.
+    const lx = sx + side * GOLF_OB_PX / 2;
+    if (lx < -12 || lx > cssW + 12) continue;
+    ctx.save();
+    ctx.font = GOLF_OB_FONT;
+    ctx.letterSpacing = '0.12em';                 // no-op on browsers without it
+    const len = ctx.measureText(GOLF_OB_LABEL).width + 20;
+    const sky = Math.min(cssH - 8, gy - ph - 8);
+    const cy = sky - 54 >= len ? (54 + sky) / 2 : (54 + cssH - 8) / 2;
+    ctx.translate(lx, cy);
+    ctx.rotate(side * Math.PI / 2);
+    ctx.fillStyle = 'rgba(8,12,26,0.88)';
+    ctx.beginPath();
+    ctx.arc(-len / 2 + 11, 0, 11, Math.PI / 2, Math.PI * 1.5);
+    ctx.arc(len / 2 - 11, 0, 11, -Math.PI / 2, Math.PI / 2);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(GOLF_OB_LABEL, 0, 1);
+    ctx.letterSpacing = '0px';
+    ctx.restore();
+  }
 }
 
 // ---- Battlefield props --------------------------------------------------------

@@ -396,6 +396,25 @@ body.golf .golf-only { display: flex; }
 #holeScore .hs-under { color: #4ce88f; }
 #holeScore .hs-over { color: #ff5a52; }
 #holeScore .hs-next { margin-top: 9px; font-size: 10.5px; letter-spacing: .14em; color: var(--muted); font-weight: 700; }
+/* Golf: the out-of-bounds banner (owner, 2026-10-07). The hole card's panel and
+   slot, the penalty notes' yellow for the headline, and a band of the
+   boundary's own white stripes along the top so it reads as the same thing as
+   the strips at the ends of the course. A new snapshot clears it, so the hole
+   card that follows a picked-up ball never sits on top of it. */
+#obBanner {
+  position: absolute; left: 50%; top: max(16%, 56px); transform: translateX(-50%) translateY(-6px);
+  background: rgba(8, 12, 26, .9); border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+  padding: 15px 22px 11px; z-index: 5; pointer-events: none; text-align: center;
+  min-width: 230px; max-width: calc(100% - 32px); box-sizing: border-box;
+  opacity: 0; transition: opacity .25s ease, transform .25s ease;
+}
+#obBanner.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+#obBanner::before {
+  content: ''; position: absolute; left: 0; right: 0; top: 0; height: 5px;
+  background: repeating-linear-gradient(135deg, rgba(255,255,255,.55) 0 6px, rgba(8,10,18,.5) 6px 12px);
+}
+#obBanner .ob-head { font-weight: 900; font-size: 22px; letter-spacing: .08em; color: #ffd23f; white-space: nowrap; }
+#obBanner .ob-sub { margin-top: 4px; font-size: 13px; font-weight: 700; color: #c9d3ef; }
 .btn.danger { color: var(--p1); }
 .zoomctl {
   position: absolute; top: 58px; left: 10px; display: flex; flex-direction: column; gap: 6px; z-index: 4;
