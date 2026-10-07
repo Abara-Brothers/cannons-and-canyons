@@ -17,6 +17,11 @@
 //      clear of every board. The same sprite, uncut, on the Paint shop and
 //      every other screen that shows it, its frame where it always stood.
 //   4. The Bay controls line under each row is larger and easily read.
+//   5. The Service record (owner, 2026-10-07): "the text gets cut off on the
+//      right. all the text must be visible and easy to read. You must allow
+//      the player to scroll through the challenges." Every word on the screen
+//      is on the screen, every challenge a whole row in a list that scrolls by
+//      touch, fades where there is more, and reaches all twelve.
 // Headless Chrome has no safe-area insets, so the iPhone 17 is emulated the
 // way the task brief says: a stylesheet sets --sa-l/--sa-r/--sa-b, from which
 // the app derives every inset.
@@ -224,6 +229,63 @@ const CARD_TANK = (sel) => `(async () => {
   const row = img.parentElement;
   const beside = [...row.children].filter((e) => e !== img && e.getClientRects().length > 0).map((e) => ({ n: e.className || e.tagName.toLowerCase(), ...R(e) }));
   return { cols, card: card.className, inner, row: R(row), beside };
+})()`;
+// THE SERVICE RECORD AS IT IS DRAWN (check 9), in CSS px. `text`: every node
+// on the screen that holds words of its own, by the box of those words (a
+// Range, so a line that runs on past its element is caught), and every box
+// that clips it on the way up -- its overflow is not visible -- by its inner
+// edges. `rows`: each challenge row's name, description and reward line by
+// their font size in u and whether they are cut (wider than their box, or
+// taller than a box that clips), and the box the row gives its words (inside its
+// border and padding). `reach`: each row's top and bottom against the list's
+// once the list is scrolled to put that row at its top -- or as far as it
+// goes, for the last rows -- and the list put back where it was. The fade is
+// the list's bottom 56u (styles.css THE CHALLENGES LIST).
+const CAREER = `(() => {
+  const len = (css) => { const d = document.createElement('div'); d.style.cssText = 'position:absolute;left:-9999px;top:0;height:0;width:' + css; document.body.appendChild(d); const w = d.getBoundingClientRect().width; d.remove(); return w; };
+  const u = len('calc(var(--u) * 1000)') / 1000;
+  const sa = { l: len('var(--sa-l)'), r: len('var(--sa-r)') };
+  const R = (b) => ({ l: b.left, t: b.top, r: b.right, b: b.bottom });
+  const words = (e) => { const g = document.createRange(); g.selectNodeContents(e); return R(g.getBoundingClientRect()); };
+  const inner = (e) => { const b = e.getBoundingClientRect(), cs = getComputedStyle(e);
+    return { l: b.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft), r: b.right - parseFloat(cs.borderRightWidth) - parseFloat(cs.paddingRight) }; };
+  const stage = document.querySelector('#bay .stage'), list = document.querySelector('#bay .achs');
+  const text = [];
+  for (const e of stage.querySelectorAll('*')) {
+    if (![...e.childNodes].some((n) => n.nodeType === 3 && n.data.trim()) || !e.getClientRects().length) continue;
+    const clips = [];
+    for (let a = e.parentElement; a && a !== document.body; a = a.parentElement) {
+      if (getComputedStyle(a).overflowX === 'visible') continue;
+      const b = a.getBoundingClientRect();
+      clips.push({ n: a.className || a.id, l: b.left + a.clientLeft, r: b.left + a.clientLeft + a.clientWidth });
+    }
+    text.push({ s: e.textContent.trim().slice(0, 40), w: words(e), clips });
+  }
+  const fs = (e) => e ? Math.round(parseFloat(getComputedStyle(e).fontSize) / u * 10) / 10 : null;
+  // Down, only where the box clips: a 15u Rajdhani name on a 1.1 line stands
+  // a pixel taller than its line box at some sizes, and shows every pixel.
+  const cut = (e) => !!e && (e.scrollWidth > e.clientWidth + 0.5 || (getComputedStyle(e).overflowY !== 'visible' && e.scrollHeight > e.clientHeight + 0.5));
+  const rows = [...list.querySelectorAll('.b-ach')].map((r) => {
+    const an = r.querySelector('.an'), ad = r.querySelector('.ad'), ar = r.querySelector('.ar'), box = inner(r);
+    const out = [an, ad, ar].filter(Boolean).filter((e) => { const w = words(e); return w.l < box.l - 0.5 || w.r > box.r + 0.5; }).map((e) => e.className);
+    const rb = r.getBoundingClientRect();
+    return { name: an ? an.textContent : '', reward: ar ? ar.textContent : null, fs: { an: fs(an), ad: fs(ad), ar: fs(ar) }, x: [rb.left, rb.right],
+      cut: [an, ad, ar].filter(cut).map((e) => e.className), out, colour: ad ? getComputedStyle(ad).color : '' };
+  });
+  const lb = list.getBoundingClientRect(), cs = getComputedStyle(list);
+  const keep = list.scrollTop;
+  list.scrollTop = 0;
+  const atTop = { st: list.scrollTop, under: [...list.querySelectorAll('.b-ach')].filter((r) => { const b = r.getBoundingClientRect(); return b.bottom > lb.bottom - 56 * u + 0.5 && b.top < lb.bottom - 0.5; }).length };
+  const reach = [...list.querySelectorAll('.b-ach')].map((r) => {
+    list.scrollTop = r.getBoundingClientRect().top - lb.top + list.scrollTop;
+    const b = r.getBoundingClientRect();
+    return { t: b.top - lb.top, b: b.bottom - lb.top };
+  });
+  list.scrollTop = keep;
+  return { u, sa, iw: innerWidth, scr: document.getElementById('bay').dataset.scr, achs: (typeof ACHS !== 'undefined' ? ACHS : []).map((a) => a[1]),
+    list: { ...R(lb), h: list.clientHeight, sh: list.scrollHeight, sw: list.scrollWidth, cw: list.clientWidth, oy: cs.overflowY, ox: cs.overflowX,
+      mask: cs.maskImage && cs.maskImage !== 'none' ? cs.maskImage : (cs.webkitMaskImage || 'none') },
+    text, rows, atTop, reach };
 })()`;
 // The point a tap at (x, y) reaches, as the chip it belongs to (or null).
 const HITS = (pts) => `(() => ${JSON.stringify(pts)}.map(([x, y]) => { const e = document.elementFromPoint(x, y); const c = e && e.closest('#bay .top .chip'); return c ? [...document.querySelectorAll('#bay .top .chip')].indexOf(c) : -1; }))()`;
@@ -524,6 +586,67 @@ for (const v of VIEWS) {
   check(`[${V}] every tank's frame stands where its screen puts it, the size it always was`, placed.length === 0, placed.join('; '));
   check(`[${V}] on the Paint shop the gun is clear of the header and the Paint locker`, shop.length === 0, shop.join('; '));
   check(`[${V}] every card's tank keeps its whole gun inside its card, 2u under the top border, and stays in its row (Match setup in every mode, Service record, a lobby seat)`, inCard.length === 0, inCard.join('; '));
+
+  // 9. THE SERVICE RECORD (owner, 2026-10-07). At 874x402 the challenges'
+  //    right column ran off the screen ("Win a battle with 5 Health or less
+  //    rema", "Finish an enemy with the Tactical Nuk"), and the player could
+  //    not scroll to the rest. Now:
+  //    a. every word on the screen is inside the safe box and inside every
+  //       box that clips it -- not only the challenges;
+  //    b. the twelve challenges are twelve rows, in order, one column, and no
+  //       name, description or reward line is cut, across or down, or runs
+  //       past its row;
+  //    c. the list scrolls up and down and never across, and at its top the
+  //       rows that do not fit run under a fade: there is more, and it shows;
+  //    d. every row can be scrolled to where all of it is above the fade;
+  //    e. a finger's drag on the list scrolls it, and the page under it does
+  //       not move;
+  //    f. legible: names at least 13u, descriptions and reward lines at
+  //       least 12u, the description at least 7:1 against the page's
+  //       brightest background stop (Bay controls' measure);
+  //    g. the two challenges that hand over a paint say which, before and
+  //       after it is earned, and no other row claims one.
+  await ev(`(() => { delete PROF.ach.untouchable; Bay.show('career'); return true; })()`);
+  await sleep(40);
+  const car = await ev(CAREER);
+  const FADE = 56 * u;                              // styles.css THE CHALLENGES LIST: the mask's 56u
+  const lost = car.text.filter((x) => x.w.l < car.sa.l - 0.5 || x.w.r > car.iw - car.sa.r + 0.5
+    || x.clips.some((c) => x.w.l < c.l - 0.5 || x.w.r > c.r + 0.5)).map((x) => `"${x.s}" ${f1(x.w.l)}-${f1(x.w.r)}`);
+  check(`[${V}] Service record: every word on the screen is inside the safe box and inside whatever clips it (${car.text.length} lines of text)`,
+    car.scr === 'career' && car.text.length >= 40 && lost.length === 0, lost.slice(0, 4).join('; '));
+  const names = car.rows.map((r) => r.name);
+  const rowsBad = car.rows.filter((r) => r.cut.length || r.out.length).map((r) => `${r.name}: cut ${r.cut.join('/')} past ${r.out.join('/')}`);
+  const oneCol = car.rows.length > 1 && car.rows.every((r) => near(r.x[0], car.rows[0].x[0], 0.5) && near(r.x[1], car.rows[0].x[1], 0.5));
+  check(`[${V}] Service record: all ${car.achs.length} challenges are rows in one column, in order, and no name, description or reward line is cut or runs past its row`,
+    car.achs.length === 12 && JSON.stringify(names) === JSON.stringify(car.achs) && oneCol && rowsBad.length === 0, rowsBad.slice(0, 4).join('; ') || JSON.stringify(names));
+  const L = car.list;
+  check(`[${V}] Service record: the challenges scroll up and down, never across, inside the screen, and at the top the rows that do not fit run under a fade (${car.atTop.under} under it)`,
+    L.oy === 'auto' && L.ox === 'hidden' && L.sh > L.h + 1 && L.sw <= L.cw && L.r <= car.iw - car.sa.r + 0.5 && L.l >= car.sa.l - 0.5
+      && /linear-gradient/.test(L.mask) && /rgba\(0, 0, 0, 0\)|transparent/.test(L.mask) && car.atTop.st === 0 && car.atTop.under >= 1,
+    JSON.stringify({ ...L, atTop: car.atTop }));
+  const unreached = car.reach.map((r, i) => (r.t >= -0.5 && r.b <= L.h - FADE + 0.5 ? null : `${names[i]} ${f1(r.t)}-${f1(r.b)} of ${f1(L.h)}`)).filter(Boolean);
+  check(`[${V}] Service record: every challenge, the last included, scrolls to where the whole row is above the fade`, car.reach.length === 12 && unreached.length === 0, unreached.join('; '));
+  {
+    const c = await ev(`(() => { const l = document.querySelector('#bay .achs'); l.scrollTop = 0; const b = l.getBoundingClientRect(); return { x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height * 0.7), d: Math.round(b.height * 0.5) }; })()`);
+    await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: c.x, y: c.y }] });
+    for (let i = 1; i <= 8; i++) { await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: c.x, y: c.y - Math.round(c.d * i / 8) }] }); await sleep(16); }
+    await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await sleep(250);
+    const s = await ev(`(() => { const l = document.querySelector('#bay .achs'), st = l.scrollTop; l.scrollTop = 0; return { st, bay: document.getElementById('bay').scrollTop, doc: document.scrollingElement.scrollTop, x: scrollX, y: scrollY }; })()`);
+    check(`[${V}] Service record: a finger dragged up the list scrolls it (${f1(s.st)}px) and the page stays put`, s.st >= 20 && !s.bay && !s.doc && !s.x && !s.y, JSON.stringify(s));
+  }
+  const rgbOf = (s) => (s.match(/\d+/g) || []).slice(0, 3).map(Number);
+  const small = car.rows.filter((r) => !(r.fs.an >= 13 && r.fs.ad >= 12 && (r.fs.ar === null || r.fs.ar >= 12))).map((r) => `${r.name} ${JSON.stringify(r.fs)}`);
+  const dim = Math.min(...car.rows.map((r) => contrast(rgbOf(r.colour), [0x1b, 0x24, 0x36])));
+  check(`[${V}] Service record: names at least 13u, descriptions and reward lines at least 12u, descriptions ${f1(dim)}:1 against the page (at least 7:1)`,
+    car.rows.length === 12 && small.length === 0 && dim >= 7, small.slice(0, 3).join('; '));
+  const earned = await ev(`(() => { PROF.ach.untouchable = true; Bay.show('career'); const r = [...document.querySelectorAll('#bay .b-ach')].map((x) => [x.querySelector('.an').textContent, x.classList.contains('got'), (x.querySelector('.ar') || {}).textContent || null]); delete PROF.ach.untouchable; Bay.show('home'); return r; })()`);
+  const rewards = car.rows.filter((r) => r.reward !== null).map((r) => `${r.name}: ${r.reward}`);
+  const after = earned.filter((r) => r[2] !== null).map((r) => `${r[0]}${r[1] ? ' (earned)' : ''}: ${r[2]}`);
+  check(`[${V}] Service record: the two paint challenges say which paint they hand over, and say so once it is earned`,
+    JSON.stringify(rewards) === JSON.stringify(['Untouchable: Unlocks the Arctic paint', 'Under Par: Unlocks the Gold paint'])
+      && JSON.stringify(after) === JSON.stringify(['Untouchable (earned): Arctic paint unlocked', 'Under Par: Unlocks the Gold paint']),
+    JSON.stringify({ rewards, after }));
 }
 
 // ---- two linked accounts still fit the Account row ---------------------------

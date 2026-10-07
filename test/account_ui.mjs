@@ -132,7 +132,10 @@ for (const [w, h] of [[667, 375], [932, 430]]) {
   if (H.scr === 'home' && H.btg === 9.5 && H.ltg === 10 && H.chip === 12 && H.ph === 10 && H.std === 9.5 && H.rk === 9.5 && H.bof === null && H.mark === 9.5) ok(`${V}: home type: tags 9.5u, launch tag 10u, chips 12u, panel heads 10u, no badge on the boards`); else fail(`${V}: home sizes ${JSON.stringify(H)}`);
   if (sizes.set.scr === 'settings' && sizes.set.lbl === 8.5 && sizes.setup.scr === 'setup' && sizes.setup.lbl === 8.5 && sizes.setup.hint === 8.5) ok(`${V}: other screens keep their sizes (labels 8.5u on settings and setup)`); else fail(`${V}: leak ${JSON.stringify({ set: sizes.set, setup: sizes.setup })}`);
   const C = sizes.career;
-  if (C.scr === 'career' && C.lbl === 10 && C.ps === 10 && C.pm === 11 && C.bn === 10 && C.bv === 11 && C.ad === 11 && C.an === 12.5 && C.bnClipped === 0) ok(`${V}: service record type: labels 10u, values 11u, descriptions 11u, names 12.5u, bar names and values unclipped`); else fail(`${V}: career sizes ${JSON.stringify(C)}`);
+  // CHANGED 2026-10-07 (owner: the Service record's text "must be visible and
+  // easy to read"): a challenge's description is 13u and its name 15u, Bay
+  // controls' row line and row name, up from 11u and 12.5u.
+  if (C.scr === 'career' && C.lbl === 10 && C.ps === 10 && C.pm === 11 && C.bn === 10 && C.bv === 11 && C.ad === 13 && C.an === 15 && C.bnClipped === 0) ok(`${V}: service record type: labels 10u, values 11u, descriptions 13u, names 15u, bar names and values unclipped`); else fail(`${V}: career sizes ${JSON.stringify(C)}`);
   if (C.statsFit && C.statsFit.fits && C.statsFit.btnInside && C.statsFit.colsInBody) ok(`${V}: service record: the stats column holds its rows, bars and the Paint shop button, and the columns end inside the page body`); else fail(`${V}: career column ${JSON.stringify(C.statsFit)}`);
   // CHANGED BY TASK 11 (R10). The join panel is GONE (design 5.3): the one code
   // field is the Squad box's, and the launch bar's Join code button went with

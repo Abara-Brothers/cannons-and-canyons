@@ -1795,9 +1795,21 @@ SCREENS.career = function () {
   const maxW = Math.max(1, ...MODES.map((m) => ((P.modes || {})[m.id] || {}).w || 0));
   const bars = MODES.map((m) => { const v = ((P.modes || {})[m.id] || {}).w || 0;
     return '<div class="bar"><span class="bn">' + esc(SHORT[m.id]) + '</span><span class="bt"><i style="width:' + Math.max(4, Math.round(v / maxW * 100)) + '%"></i></span><span class="bv">' + v + '</span></div>'; }).join('');
-  const rows = achs.map(([id, name, how]) => { const got = !!(P.ach && P.ach[id]); const paint = G.SKIN_FOR_ACH && SKIN_FOR_ACH[id] && G.SKINS && SKINS[SKIN_FOR_ACH[id]];
-    return '<div class="b-ach' + (got ? ' got' : '') + '"><span class="ai">' + (got ? IC.tick : (G.UI_IC ? UI_IC.lock : '')) + '</span>'
-      + '<span class="at"><span class="an">' + esc(name) + '</span><span class="ad">' + esc(how) + (paint ? ' &middot; ' + esc(paint.name) + ' paint' : '') + '</span></span></div>'; }).join('');
+  // ONE CHALLENGE TO A ROW, EVERY WORD OF IT ON SCREEN (owner, 2026-10-07: "the
+  // text gets cut off on the right ... allow the player to scroll through the
+  // challenges"). Two columns of one-line rows did not fit: each description
+  // was nowrap, so the grid's columns took the longest one's width and the
+  // right column ran off the screen. The rows now stack in one column that
+  // scrolls (styles.css THE CHALLENGES LIST), and the name and description
+  // wrap rather than end in an ellipsis.
+  // THE PAINT A CHALLENGE HANDS OVER, ON ITS OWN LINE. SKIN_FOR_ACH maps a
+  // challenge to the paint's NAME ('Arctic'), and SKINS is keyed by id
+  // ('arctic'), so the lookup this replaced, SKINS[SKIN_FOR_ACH[id]], was always
+  // undefined and the reward never showed. The name is all the line needs.
+  const rows = achs.map(([id, name, how]) => { const got = !!(P.ach && P.ach[id]); const paint = G.SKIN_FOR_ACH && SKIN_FOR_ACH[id];
+    return '<div class="b-ach' + (got ? ' got' : '') + '" role="listitem"><span class="ai">' + (got ? IC.tick : (G.UI_IC ? UI_IC.lock : '')) + '</span>'
+      + '<span class="at"><span class="an">' + esc(name) + '</span><span class="ad">' + esc(how) + '</span>'
+      + (paint ? '<span class="ar">' + (got ? esc(paint) + ' paint unlocked' : 'Unlocks the ' + esc(paint) + ' paint') + '</span>' : '') + '</span></div>'; }).join('');
   // 340u, not 288: the stats column (five rows, five bars, the Paint shop
   // button) needs ~334u, and at 288u it overflowed its box from the day it was
   // written, the button hanging below the column into the page body. The body
@@ -1812,7 +1824,7 @@ SCREENS.career = function () {
     +   '<div class="wlc"><b style="color:#ffb46b">' + streak + '</b><span class="lbl">Streak</span></div></div></div>'
     + '<div style="width:' + u(224) + ';display:flex;flex-direction:column">' + stats + '<div style="margin-top:' + u(12) + '"><span class="lbl">Wins by mode</span>' + bars + '</div>'
     +   '<div style="flex:1"></div><button class="ghost" style="justify-content:center;height:' + u(34) + ';font-size:' + u(13) + '" data-go="paint">Paint shop</button></div>'
-    + '<div style="flex:1;min-width:0"><span class="lbl" style="margin-bottom:' + u(6) + '">Challenges</span><div class="achs">' + rows + '</div></div>'
+    + '<div class="achc"><span class="lbl" style="margin-bottom:' + u(6) + '">Challenges</span><div class="achs" role="list" aria-label="Challenges">' + rows + '</div></div>'
     + '</div>';
   return chrome('Service record', esc(s.name) + ' &middot; ' + earned + ' of ' + achs.length + ' challenges cleared', esc(rank), body, '');
 };
