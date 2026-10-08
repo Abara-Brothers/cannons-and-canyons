@@ -8,7 +8,7 @@
 // Everything this module touches is injected — the store, the blocklist terms,
 // the engine's send(), and the clock — so the whole layer runs in process with
 // no Supabase, no sockets and no real time (test/social.mjs).
-import { validateCallsign, normaliseCallsign, lookalikeSkeleton, CALLSIGN_MIN, CALLSIGN_MAX } from './callsign.js';
+import { validateCallsign, normaliseCallsign, keyReadings, shownSpelling, CALLSIGN_MIN, CALLSIGN_MAX } from './callsign.js';
 // isUuid only — the pure shape test, not createStore. A friend op is handed an
 // account id straight off a socket, and server/store.js THROWS 'bad uuid' on a
 // malformed one; that throw would be answered 'unavailable', which is the wrong
@@ -663,9 +663,9 @@ export function createSocial({
     // NOR ANOTHER ACCOUNT'S CALLSIGN TO THE EYE (round 2 fix, 2026-10-08).
     // The unique index compares keys, and a fullwidth 'Viper', or 'Coco' spelt
     // in Cyrillic letters beside a Latin 'Coco', is a different key and the
-    // same name on screen. So the name's look-alike
-    // skeleton (server/callsign.js lookalikeSkeleton) is looked up in the
-    // in-memory index, which knows every key that reads that way
+    // same name on screen. So the look-alike readings of the key
+    // (server/callsign.js keyReadings, below) are looked up in the
+    // in-memory index, which knows every key that reads each way
     // (server/name-index.js lookalikes), and a key there that is not this
     // account's own is refused 'taken', the word the write uses for the same
     // collision. The account's own key is not a collision: a player may
@@ -679,11 +679,29 @@ export function createSocial({
     // in the same moment can both pass it; the exact key's race is still the
     // unique index's. Stated rather than hidden: closing it would need the
     // skeleton in the database, which this round does not migrate.
+    //
+    // EVERY READING OF THE KEY, NOT ONLY THE SPELLING SENT (round 2 fix,
+    // 2026-10-08). The key is what is stored, and a key can be SHOWN in more
+    // than one casing: the spelling column beside it is the account's to
+    // PATCH. This looked up the skeleton of the spelling submitted alone, so a
+    // Greek lower-case key whose capitals read as another account's name
+    // ('HYENA') was stored, and its holder could then show the capitals.
+    // keyReadings is every way the key can be shown (itself, in capitals,
+    // capitalised word by word), the same readings the index keeps for it,
+    // and shownSpelling, the one rule every reader of the column applies,
+    // never shows it any other way; so each reading is asked here, and one
+    // that belongs to another account's key is refused 'taken'.
     let alike = null;
-    try { alike = names && typeof names.lookalikes === 'function' ? names.lookalikes(lookalikeSkeleton(v.name)) : null; } catch { alike = null; }
-    if (!Array.isArray(alike)) return reply(ws, msg, { type: 'callsign', error: 'unavailable' });
-    if (alike.some((k) => k !== prevKey)) return reply(ws, msg, { type: 'callsign', error: 'taken' });
-    const res = await store.setChosenCallsign(ws.userId, v.name, v.key);
+    try { alike = names && typeof names.lookalikes === 'function' ? keyReadings(v.key).map((r) => names.lookalikes(r)) : null; } catch { alike = null; }
+    if (!Array.isArray(alike) || !alike.every(Array.isArray)) return reply(ws, msg, { type: 'callsign', error: 'unavailable' });
+    if (alike.some((keys) => keys.some((k) => k !== prevKey))) return reply(ws, msg, { type: 'callsign', error: 'taken' });
+    // WHAT IS STORED IS WHAT WILL BE SHOWN. A spelling whose capitals read as
+    // none of the key's readings (an odd mixture of Greek capitals) would be
+    // shown as the key itself by every reader (shownSpelling), so it is stored
+    // and answered that way, and the player's own screen agrees with everyone
+    // else's. Every ordinary spelling is stored exactly as it was sent.
+    const spelled = shownSpelling(v.name, v.key);
+    const res = await store.setChosenCallsign(ws.userId, spelled, v.key);
     if (!res || res.ok !== true) {
       // A closed set of codes. Anything the store invents stays inside the
       // server rather than reaching a client that has no string for it.
@@ -704,9 +722,9 @@ export function createSocial({
     // joining lobbies from their desktop under a rolled pair until that socket
     // re-hellos. It changes no seat already sitting in a room — server.js reads
     // this field when a socket joins — so nobody is renamed mid-match.
-    for (const w of socketsOf(ws.userId)) w.chosenName = v.name;
-    ws.chosenName = v.name;
-    reply(ws, msg, { type: 'callsign', ok: true, callsign: v.name });
+    for (const w of socketsOf(ws.userId)) w.chosenName = spelled;
+    ws.chosenName = spelled;
+    reply(ws, msg, { type: 'callsign', ok: true, callsign: spelled });
   }
 
   // ---- the name check (owner, 2026-10-07) ------------------------------------

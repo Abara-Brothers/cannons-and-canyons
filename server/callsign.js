@@ -116,6 +116,11 @@ const LOOKALIKE = { '0': 'o', '1': 'i', '3': 'e', '4': 'a', '5': 's', '7': 't', 
 // cost is negative: ı, ø, ŧ, ł, đ and ĸ make Turkish, Danish, Norwegian, Polish,
 // Vietnamese and Greenlandic spellings fold the way their own speakers
 // transliterate them, instead of the letter silently vanishing.
+//
+// THAT IS THE BLOCKLIST'S REASON, NOT A NAME'S. Transliteration is right for a
+// term match and wrong for "is this the same name to the eye": ø is not o on
+// screen. lookalikeSkeleton below reads the stroke letters as themselves
+// (STROKE_LETTERS), so 'Bjørn' and 'Bjorn' stay two players' names.
 export const LETTER_LOOKALIKE = Object.fromEntries([
   // Latin letters NFKD leaves alone: the strokes and bars...
   [0x0131, 'i'],   // ı  LATIN SMALL LETTER DOTLESS I
@@ -328,33 +333,111 @@ export function mixedScript(raw) {
 // compatibility forms folded (NFKD: fullwidth, mathematical letters), then
 // case, then every letter in LETTER_LOOKALIKE read as the Latin letter it
 // imitates. The table is the blocklist's own, imported rather than copied, so
-// the two cannot drift. It deliberately does NOT fold digits: 'V1per' is a
+// the two cannot drift; the stroke letters are the one part of it left out
+// (below). It deliberately does NOT fold digits: 'V1per' is a
 // visible swap, and a skeleton that read 1 as i would refuse real names.
 //
-// Two additions the blocklist does not need. The four Greek CAPITALS whose
+// Additions the blocklist does not need. The four Greek CAPITALS whose
 // lower case reads as a different letter (Eta, Upsilon, Zeta, Nu look like H,
 // Y, Z, N; their lower case like n, u, z, v) are read before the case fold,
 // so 'HIT' in Greek capitals reads 'hit'. And two Cyrillic letters the table
-// does not carry, shha and straight u (h and y to the eye), are read after it. Both live here only,
-// so the blocklist's fold and its pinned residual (test/callsign.mjs) do not
-// move.
+// does not carry, shha and straight u (h and y to the eye), are read after it,
+// with the dotless j beside them (j to the eye, as the table's dotless i is i).
+// All of them live here only, so the blocklist's fold and its pinned residual
+// (test/callsign.mjs) do not move.
 //
 // Accents stay accents: NFKD splits é and the NFC at the end puts it back, so
 // 'Zoé' and 'Zoe' are two names here, as they are to the eye.
+//
+// THE STROKE LETTERS ARE READ AS THEMSELVES (round 2 fix, 2026-10-08). The
+// blocklist's table folds ø, ł, đ, ħ, ŧ, ĸ and ƀ onto o, l, d, h, t, k and b
+// because that is how their speakers transliterate them, not because they
+// look the same: the stroke IS the letter, as visible as an accent. Read
+// through that table, 'Bjørn' and 'Bjorn', and 'Łukasz' and 'Lukasz', were one
+// name here, so a real Danish or Polish name was refused 'taken' against an
+// ASCII one that looks different, and one account holding 'Bjørn' refused
+// every guest who typed the common name 'Bjorn'. They keep that fold in the
+// blocklist (foldForBlocklist), where a term spelt with ø is still the term.
+//
+// AN i DRAWN WITH A COMBINING DOT IS AN i (round 2 fix, 2026-10-08). The
+// letters Unicode calls Soft_Dotted (i and j, and every letter the table
+// reads as them) give up their own dot to a mark placed above them, so
+// i + U+0307 COMBINING DOT ABOVE draws one dot, the same pixels as i; and the
+// dotless ı (and ȷ, read as j here) with that dot added is i (and j) again.
+// Each was a skeleton different from the plain name, so 'Viper' spelt with
+// either could be typed by a guest, or stored by the Set, beside an account
+// holding 'Viper'. So the first dot above a soft-dotted letter is dropped:
+// U+0307, and its offset forms U+0358 (above right) and U+1DF8 (above left),
+// which also sit where the letter's own dot was. A mark drawn below or
+// through the letter may stand between them (canonical order puts those
+// first, and they leave the dot where it is). Any other mark above is kept,
+// and so is a second dot: 'í' is not 'i', and 'ï' is two dots, not one.
 const SKELETON_CAPITAL = Object.fromEntries([[0x0397, 'h'], [0x03A5, 'y'], [0x0396, 'z'], [0x039D, 'n']].map(([cp, to]) => [String.fromCodePoint(cp), to]));
-const SKELETON_EXTRA = Object.fromEntries([[0x04BB, 'h'], [0x04AF, 'y']].map(([cp, to]) => [String.fromCodePoint(cp), to]));
+const SKELETON_EXTRA = Object.fromEntries([[0x04BB, 'h'], [0x04AF, 'y'], [0x0237, 'j']].map(([cp, to]) => [String.fromCodePoint(cp), to]));
+const STROKE_LETTERS = new Set([0x00F8, 0x0142, 0x0111, 0x0127, 0x0167, 0x0138, 0x0180].map((cp) => String.fromCodePoint(cp)));
+const nameLetter = (c) => (STROKE_LETTERS.has(c) ? null : LETTER_LOOKALIKE[c]) || SKELETON_EXTRA[c] || c;
+const SOFT_DOTTED = /^\p{Soft_Dotted}$/u;
+const DOT_ABOVE = new Set(['\u0307', '\u0358', '\u1DF8']);
+const A_MARK = /^\p{M}$/u;
+// A mark that canonical ordering puts AHEAD of a dot above: a lower combining
+// class, drawn below or through the letter, never in the dot's place.
+const underTheDot = (m) => A_MARK.test(m) && !DOT_ABOVE.has(m) && [...`\u0307${m}`.normalize('NFD')][0] === m;
+function dropSoftDot(chars) {
+  const out = [];
+  for (let i = 0; i < chars.length; i++) {
+    out.push(chars[i]);
+    if (!SOFT_DOTTED.test(chars[i])) continue;
+    let k = i + 1;
+    while (k < chars.length && underTheDot(chars[k])) k++;
+    if (k < chars.length && DOT_ABOVE.has(chars[k])) { out.push(...chars.slice(i + 1, k)); i = k; }
+  }
+  return out;
+}
 export function lookalikeSkeleton(raw) {
   const d = normaliseCallsign(raw).normalize('NFKD');
   const lower = [...d].map((c) => SKELETON_CAPITAL[c] || c).join('').toLowerCase();
-  return [...lower].map((c) => LETTER_LOOKALIKE[c] || SKELETON_EXTRA[c] || c).join('').normalize('NFC');
+  return dropSoftDot([...lower].map(nameLetter)).join('').normalize('NFC');
 }
 // EVERY WAY A STORED KEY CAN LOOK. A key is lower case, and the name it came
 // from may have been written in capitals: 'HIT' in Greek capitals is stored
-// as its Greek lower case (eta, iota, tau), which reads 'nit'. So a key is read twice, as itself and in capitals,
-// and a name that looks like either reading is a look-alike of it.
+// as its Greek lower case (eta, iota, tau), which reads 'nit'. So a key is
+// read as itself, in capitals, and capitalised word by word (round 2 fix,
+// 2026-10-08), the way a name is ordinarily written: the Greek name Nina
+// (nu, iota with tonos, nu, alpha) reads one way in lower case, another in
+// capitals, and a third with only its first letter a capital, because a
+// capital nu reads N and a small one v. A name that looks like any reading
+// is a look-alike of the key. These are also the only ways the key may be
+// SHOWN (shownSpelling, below), so every look a chosen callsign can have on
+// screen is a reading the index keeps for it and the Set checked.
 export function keyReadings(key) {
   const k = String(key ?? '');
-  return [...new Set([lookalikeSkeleton(k), lookalikeSkeleton(k.toUpperCase())])];
+  const titled = k.split(' ').map((t) => { const [c, ...rest] = [...t]; return c === undefined ? t : c.toUpperCase() + rest.join(''); }).join(' ');
+  return [...new Set([lookalikeSkeleton(k), lookalikeSkeleton(k.toUpperCase()), lookalikeSkeleton(titled)])];
+}
+
+// WHAT A CHOSEN CALLSIGN IS SHOWN AS (round 2 fix, 2026-10-08). The key
+// (profiles.callsign_key) is the server's: no client can write it. The
+// spelling beside it (profiles.callsign) is NOT: the phase 6 migration grants
+// the account update on that column, so a client may PATCH it to any string,
+// and the proof every reader applied was only that it lower-cases to the key.
+// That admits every mixture of capitals, and in Greek the capitals read as
+// different letters (eta as H, nu as N): an account holding the Greek
+// lower-case key eta, upsilon, epsilon, nu, alpha could show it in Greek
+// capitals, which read as another account's 'HYENA'. So
+// the spelling is believed only when it reads as one of the key's own readings
+// (keyReadings), which the Set checked against every other account and the
+// name index keeps for this one. A spelling that lower-cases to the key and
+// reads any other way is replaced by the key itself, which reads as its own
+// first reading; one that does not lower-case to the key proves nothing and
+// is null, as before. This is the ONE rule: display-name.js provenName (every
+// panel, every report), server.js's sign-in sink (ws.chosenName, the lobby)
+// and the Set (what it stores and answers) all ask it.
+export function shownSpelling(spelling, key) {
+  const k = typeof key === 'string' ? key : '';
+  if (!k) return null;
+  const shown = normaliseCallsign(spelling);
+  if (shown.toLowerCase() !== k) return null;
+  return keyReadings(k).includes(lookalikeSkeleton(shown)) ? shown : k;
 }
 
 export function loadBlocklist(filePath) {

@@ -31,7 +31,7 @@ import {
 import { createStore } from './server/store.js';
 import { createSocial, SOCIAL_TYPES, codeOf } from './server/social.js';
 import { createSeatSquad } from './server/seat-squad.js';
-import { loadBlocklist, normaliseCallsign } from './server/callsign.js';
+import { loadBlocklist, shownSpelling } from './server/callsign.js';
 // The name rules, for the room engine's door (setNameCheck below). The same
 // factory the social layer builds its proofs from, so the check op that tells
 // a player a name may be kept and the door that shows it to everyone else are
@@ -483,17 +483,24 @@ function helloSink(ws, token) {
       // The key IS the proof: server/callsign.js validateCallsign returns
       // key = normaliseCallsign(name).toLowerCase(), so a name the server
       // stored still normalises to the key beside it and a substituted one
-      // does not. normaliseCallsign is IMPORTED, not re-spelled here: a second
-      // hand-rolled copy drifts from the one that wrote the key, and every
-      // drift in this direction fails OPEN.
+      // does not. That normaliser is IMPORTED, inside shownSpelling below, and
+      // never re-spelled here: a second hand-rolled copy drifts from the one
+      // that wrote the key, and every drift in this direction fails OPEN.
       //
       // What is kept is the NORMALISED form, not the raw column: it is what
       // passed validation up to case, and it is the exact shape the engine
       // compares the client's copy against.
+      //
+      // AND ONLY A CASING THAT READS AS THE KEY (round 2 fix, 2026-10-08).
+      // "Up to case" was the gap: the client may PATCH any mixture of
+      // capitals, and a Greek key in capitals can read as another account's
+      // Latin name. shownSpelling (server/callsign.js) is the one rule every
+      // reader of the column applies: the column when it reads as one of the
+      // key's own readings, the key itself for any other casing of it, and
+      // null when it does not lower-case to the key at all.
       if (ws.authGen === gen && ws.userId === id) {
-        const shown = normaliseCallsign(p && typeof p.callsign === 'string' ? p.callsign : '');
         const key = p && typeof p.callsign_key === 'string' ? p.callsign_key : '';
-        ws.chosenName = key && shown.toLowerCase() === key ? shown : null;
+        ws.chosenName = shownSpelling(p && typeof p.callsign === 'string' ? p.callsign : '', key);
       }
     } catch {}
   }).catch(() => {}).finally(() => {

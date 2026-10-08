@@ -34,7 +34,7 @@
 // Nothing here touches the database, a socket or the clock. test/display_name.mjs
 // drives it in process against the REAL server/blocklist.txt — a suite with its
 // own term list would not notice the shipped list and the rule drifting apart.
-import { validateCallsign, normaliseCallsign, foldForBlocklist, mixedScript, lookalikeSkeleton } from './callsign.js';
+import { validateCallsign, normaliseCallsign, foldForBlocklist, mixedScript, lookalikeSkeleton, shownSpelling } from './callsign.js';
 // THE TWO PURE CALLSIGN TESTS, from the module that owns the curated lists.
 // Imported, never copied: isGeneratedCallsign is the standard the engine already
 // applies to every name any client presents (room-engine.js's sanitizeName), and
@@ -113,14 +113,20 @@ export function createNameProofs({ terms, keyState = () => 'unknown' }) {
   // asked to choose a name they already hold. Widening it here would answer a
   // rolled pair there and break both. The second proof lives in rolledName
   // below, and displayName — what ANOTHER player is shown — takes either.
+  //
+  // AND THE CAPITALS MUST READ AS THE KEY (round 2 fix, 2026-10-08). Lower-
+  // casing onto the key admits every mixture of capitals, and a Greek key in
+  // capitals can read as another account's Latin name. shownSpelling
+  // (server/callsign.js) believes the column only when it reads as one of
+  // the key's own readings, which the Set checked against every other
+  // account; any other casing of the key is shown as the key itself.
   const provenName = (row) => {
     const key = row && typeof row.callsign_key === 'string' ? row.callsign_key : '';
     if (!key) return null;
     // validateCallsign stored key = normaliseCallsign(name).toLowerCase(), so
-    // the SHARED normaliser is by construction the one that wrote it. A second
-    // copy could only drift open.
-    const shown = normaliseCallsign(row.callsign);
-    return shown.toLowerCase() === key ? shown : null;
+    // the SHARED normaliser is by construction the one that wrote it, and
+    // shownSpelling uses it. A second copy could only drift open.
+    return shownSpelling(row.callsign, key);
   };
 
   // A second pass over a name one of the two proofs has already passed. The

@@ -1083,16 +1083,21 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   // server's own normalised lowercase of what it stored, so it is the proof —
   // and it must be computed with server/callsign.js's own normaliser, because
   // a second hand-rolled copy drifts and drift here fails OPEN.
-  // test/auth_sink.mjs proves the behaviour; this pins the shared normaliser.
-  if (!/import \{[^}]*\bnormaliseCallsign\b[^}]*\} from '\.\/server\/callsign\.js'/.test(src)) {
-    bad.push('server.js does not import normaliseCallsign from server/callsign.js — the auth sink'
-      + ' cannot check a stored callsign against its own callsign_key with the SAME normalisation'
+  // test/auth_sink.mjs proves the behaviour; this pins the shared rule.
+  // shownSpelling (round 2 fix, 2026-10-08) is that normaliser AND the check
+  // that the column's capitals read as the key, the one rule display-name.js
+  // provenName applies too: a sink that went back to its own lower-case test
+  // would let a client-written casing read as another account's name.
+  if (!/import \{[^}]*\bshownSpelling\b[^}]*\} from '\.\/server\/callsign\.js'/.test(src)) {
+    bad.push('server.js does not import shownSpelling from server/callsign.js — the auth sink'
+      + ' cannot check a stored callsign against its own callsign_key with the SAME rule'
       + ' that wrote the key, and a second hand-rolled copy drifts open (see test/auth_sink.mjs)');
   }
-  if (sink && !inSink(/normaliseCallsign\(/)) {
-    bad.push('the auth sink sets ws.chosenName without normaliseCallsign — if it trusts callsign'
+  if (sink && !inSink(/ws\.chosenName = shownSpelling\(/)) {
+    bad.push('the auth sink sets ws.chosenName without shownSpelling — if it trusts callsign'
       + ' whenever callsign_key is non-null, any 16 characters the account PATCHes into its own'
-      + ' row reach every opponent\'s screen with no socket frame sent (see test/auth_sink.mjs)');
+      + ' row reach every opponent\'s screen with no socket frame sent, and a casing of the key'
+      + ' that reads as another account\'s name does too (see test/auth_sink.mjs)');
   }
 
   if (bad.length) fail(`server.js social wiring:\n      ${bad.join('\n      ')}`);
@@ -1100,7 +1105,7 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
     ok('server.js social wiring: sbAdmin\'s fetch is bounded by AbortSignal.timeout, and INSIDE the'
       + ' auth sink\'s own body (comments stripped) it verifies through sbAccountFromToken, reads'
       + ' is_anonymous fail-closed, records it as ws.isGuest, clears it on sign-out, and proves a'
-      + ' stored callsign against its key with the shared normaliser — with server/social.js'
+      + ' stored callsign against its key with the shared rule (shownSpelling) — with server/social.js'
       + ' requireLinked actually reading the flag');
   }
 }

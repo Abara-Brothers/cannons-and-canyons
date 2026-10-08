@@ -105,7 +105,16 @@ const DOOMED_ID = '55555555-5555-4555-8555-555555555555';
 // target of a report against a guest's typed name, which only the seat proves.
 const NAMELESS_ID = '77777777-7777-4777-8777-777777777777';
 ROWS[NAMELESS_ID] = { id: NAMELESS_ID, callsign: null, friend_code: 'ABC238', callsign_key: null, callsign_set_at: null };
-const TOKENS = { 'tok-honest': HONEST_ID, 'tok-tampered': TAMPER_ID, 'tok-slow': SLOW_ID, 'tok-slower': HONEST_ID, 'tok-guest': GUEST_ID, 'tok-doomed': DOOMED_ID, 'tok-odd': ODD_ID, 'tok-anon2': NAMELESS_ID };
+// A GREEK KEY WHOSE COLUMN WAS PATCHED TO A MIXTURE OF CAPITALS (case 2b,
+// round 2 fix). The key is eta upsilon epsilon nu alpha; the column lower-
+// cases onto it, so the old proof believed it, but its capitals read 'huena',
+// none of the key's own readings. Code points, because as glyphs the two
+// strings read as Latin words on the page.
+const GREEK_ID = '88888888-8888-4888-8888-888888888888';
+const GREEK_KEY = String.fromCodePoint(0x03B7, 0x03C5, 0x03B5, 0x03BD, 0x03B1);
+const GREEK_MIXED = String.fromCodePoint(0x0397, 0x03C5, 0x0395, 0x039D, 0x03B1);
+ROWS[GREEK_ID] = { id: GREEK_ID, callsign: GREEK_MIXED, friend_code: 'ABC239', callsign_key: GREEK_KEY, callsign_set_at: null };
+const TOKENS = { 'tok-honest': HONEST_ID, 'tok-tampered': TAMPER_ID, 'tok-slow': SLOW_ID, 'tok-slower': HONEST_ID, 'tok-guest': GUEST_ID, 'tok-doomed': DOOMED_ID, 'tok-odd': ODD_ID, 'tok-anon2': NAMELESS_ID, 'tok-greek': GREEK_ID };
 const ANON = new Set(['tok-guest', 'tok-anon2']);
 // How long the mock GoTrue sits on each delayed token before answering. Long
 // enough that a sign-out, or a second hello, is comfortably ahead of it — and
@@ -329,6 +338,21 @@ async function presentedName(token, typed) {
   } else {
     fail('(3) the sink never read one of the profile rows: ' + JSON.stringify(profileHits));
   }
+
+  // ---- 2b. THE COLUMN'S CAPITALS MUST READ AS THE KEY (round 2 fix) --------
+  // The column lower-cases onto its key, which was the whole proof, but its
+  // mixture of Greek capitals reads as none of the key's own readings, the
+  // ones the Set checked against every other account. The sink now presents
+  // the key itself for such a column (server/callsign.js shownSpelling): the
+  // lobby shows the key, which only ws.chosenName can admit (the third door
+  // refuses a typed name that is a held key, and this one is), and the
+  // mixture the client presents is not shown.
+  const gKey = await presentedName('tok-greek', GREEK_KEY);
+  const gMix = await presentedName('tok-greek', GREEK_MIXED);
+  if (gKey.err || gMix.err) fail(`(2b) ${gKey.err || gMix.err}`);
+  else if (gKey.name === GREEK_KEY && gMix.name !== GREEK_MIXED && isGeneratedCallsign(gMix.name))
+    ok(`(2b) a column whose capitals read as none of its key's readings is presented as the key itself; the mixture gets the default (${JSON.stringify(gMix.name)})`);
+  else fail(`(2b) the sink trusted the column's capitals: key presented as ${JSON.stringify(gKey.name)}, mixture as ${JSON.stringify(gMix.name)}`);
 
   // ---- 4. A LATE HELLO MUST NOT RESURRECT A SIGNED-OUT IDENTITY -------------
   // The sign-out branch clears ws.userId, ws.isGuest and ws.chosenName, but it

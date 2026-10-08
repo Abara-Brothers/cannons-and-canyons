@@ -749,6 +749,57 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
   else fail('(nl) fail closed: ' + JSON.stringify({ u: last(w2), n: last(w3) }));
 }
 
+// ---- (nk) THE SET CHECKS EVERY READING OF THE KEY IT STORES (round 2 fix) ----
+// The Set looked up the skeleton of the spelling sent and nothing else, but
+// the key is what is stored, and the spelling column beside it is the
+// account's to PATCH: a Greek lower-case key whose capitals read as another
+// account's 'HYENA' was stored, and its holder could then show the capitals.
+// Every reading of the key (itself, its capitals, its first letter a
+// capital) is now asked of the index. What is stored and answered is what
+// every reader will show (callsign.js shownSpelling): an odd mixture of Greek
+// capitals is stored as the key itself, and an ordinary spelling as sent. The
+// skeleton fixes ride along: an i drawn with a combining dot is refused
+// beside 'Viper', and 'Bjørn' is stored beside 'Bjorn'. Escapes, for (nl)'s reason.
+{
+  const { createNameIndex } = await import('../server/name-index.js');
+  const cp = (...c) => String.fromCodePoint(...c);
+  const GKEY = cp(0x03B7, 0x03C5, 0x03B5, 0x03BD, 0x03B1);                 // eta upsilon epsilon nu alpha
+  const MIXED = cp(0x0397, 0x03C5, 0x0395, 0x039D, 0x03B1);                // its capitals mixed: reads 'huena'
+  const TITLE = cp(0x0397, 0x03C5, 0x03B5, 0x03BD, 0x03B1);                // first letter capital: reads 'hueva'
+  const VIPER_DOT = 'V' + cp(0x0131, 0x0307) + 'per';                       // a dotless i with a dot above
+  const BJORN = 'Bj' + cp(0x00F8) + 'rn';
+  const mkSet = async (held) => {
+    const st = mkstore();
+    for (const [k, id] of held) st.keys.set(k, id);
+    const N = createNameIndex({ load: async (after) => (after === null ? held.map(([k]) => k).sort() : []) });
+    await N.refresh();
+    const S = createSocial({ store: st, terms: TERMS, send, now, names: N });
+    const run = async (who, name, id) => { clock = BASE + DAY * 10; const w = mkws(who); const before = st.calls.length; await S.handle(w, { type: 'callsign', name, id }); return { reply: last(w), calls: st.calls.slice(before), chosen: w.chosenName }; };
+    return { st, N, run };
+  };
+  // 1. 'HYENA' is held: the Greek key whose capitals read as it is refused.
+  const A = await mkSet([['hyena', 'u-x'], ['viper', 'u-v'], ['bjorn', 'u-b']]);
+  const greek = await A.run('u-y', GKEY, 'g');
+  const dot = await A.run('u-d', VIPER_DOT, 'd');
+  const bj = await A.run('u-j', BJORN, 'j');
+  if (same(greek.reply, { type: 'callsign', error: 'taken', id: 'g' }) && same(greek.calls.map((c) => c[0]), ['profileById']) && greek.chosen === null
+      && same(dot.reply, { type: 'callsign', error: 'taken', id: 'd' }) && same(dot.calls.map((c) => c[0]), ['profileById'])
+      && same(bj.reply, { type: 'callsign', ok: true, callsign: BJORN, id: 'j' }) && same(bj.calls[1], ['setChosenCallsign', 'u-j', BJORN, BJORN.toLowerCase()]))
+    ok("(nk) beside a held 'HYENA' the Set refuses the Greek lower-case key whose capitals read as it 'taken', with no write; it refuses a 'Viper' whose i is a dotless i with a dot; and it stores 'Bjørn' beside a held 'Bjorn'");
+  else fail('(nk) readings of the key: ' + JSON.stringify({ greek, dot, bj }));
+  // 2. Nothing held: an ordinary casing is stored as sent, and a mixture that
+  // reads as none of the key's readings is stored and answered as the key.
+  const B = await mkSet([]);
+  const title = await B.run('u-t', TITLE, 't');
+  const C2 = await mkSet([]);
+  const mixed = await C2.run('u-m', MIXED, 'm');
+  if (same(title.reply, { type: 'callsign', ok: true, callsign: TITLE, id: 't' }) && same(title.calls[1], ['setChosenCallsign', 'u-t', TITLE, GKEY]) && title.chosen === TITLE
+      && same(mixed.reply, { type: 'callsign', ok: true, callsign: GKEY, id: 'm' }) && same(mixed.calls[1], ['setChosenCallsign', 'u-m', GKEY, GKEY]) && mixed.chosen === GKEY
+      && C2.N.state('hyena') === 'taken')
+    ok('(nk) a casing that reads as the key is stored and answered as sent; a mixture of capitals that reads as none of its readings is stored, answered and presented as the key itself, and the key holds all its readings, its capitals included');
+  else fail('(nk) stored spelling: ' + JSON.stringify({ title, mixed, hyena: C2.N.state('hyena') }));
+}
+
 // ---- (j) a store that cannot serve the read model answers rather than hangs --
 // Task 4 wrote this when 'friends' was a stub. It still holds, for a better
 // reason: this section's store double implements the callsign methods and none

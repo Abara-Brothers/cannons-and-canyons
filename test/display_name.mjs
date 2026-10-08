@@ -23,7 +23,7 @@
 // the one readFileSync that loads the blocklist.
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { loadBlocklist, normaliseCallsign, validateCallsign } from '../server/callsign.js';
+import { loadBlocklist, normaliseCallsign, validateCallsign, lookalikeSkeleton, foldForBlocklist, keyReadings } from '../server/callsign.js';
 import { CALL_ADJ, CALL_NOUN, NAME_MAX, isGeneratedCallsign, isProfane } from '../public/game-core.js';
 import { createNameProofs, systemName } from '../server/display-name.js';
 import { createNameIndex } from '../server/name-index.js';
@@ -625,6 +625,77 @@ const proofs = createNameProofs({ terms, keyState: () => 'free' });
   if (pre === null && same(a1, ['viper']) && same(a2, ['viper', DOTLESS.toLowerCase()].sort()) && same(a3, [[DOTLESS.toLowerCase()], 'taken']) && same(a4, [[], 'free']))
     ok('(13) the index answers lookalikes for a reading (null before it loads), and add and remove keep the readings exact');
   else fail('(13) index readings: ' + JSON.stringify({ pre, a1, a2, a3, a4 }));
+}
+
+// ---- 14. THE SKELETON, CORRECTED BOTH WAYS (round 2 fix, 2026-10-08) -------
+// Two faults in (13)'s skeleton, one each way. AN i FROM COMBINING MARKS: the
+// skeleton kept every combining mark, so an i drawn as a dotless i plus a
+// combining dot, or as i plus a dot (its own dot gives way to the mark), was
+// the same pixels as 'Viper' and a different skeleton, and was let through.
+// THE STROKE LETTERS: the skeleton read the blocklist's transliteration table,
+// so 'Bjørn' was refused against 'Bjorn' (and the other way about), though
+// the stroke is as visible as an accent. And A CHOSEN NAME'S CAPITALS: the
+// column beside a key is the account's to PATCH, and lower-casing onto the
+// key was the only proof, so a Greek key could be shown in capitals that read
+// as another account's Latin name. Code points as escapes, for (13)'s reason.
+{
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const cp = (...c) => String.fromCodePoint(...c);
+  const I = createNameIndex({ load: async (after) => (after === null ? ['bjorn', 'lukasz', 'ninja', 'viper', 'zoe'] : []) });
+  await I.refresh();
+  const P = createNameProofs({ terms, keyState: (k) => I.state(k) });
+  // A second index holding one key with an i dot below, for the dot above
+  // that canonical order puts after a mark below.
+  const K = createNameIndex({ load: async (after) => (after === null ? ['v' + cp(0x1ECB) + 'per'] : []) });
+  await K.refresh();
+  const PK = createNameProofs({ terms, keyState: (k) => K.state(k) });
+  const refused = (n, X = P) => same(X.typedName(n), { ok: false, error: 'taken' }) && X.playerName(n) === null && X.guestName(n) === null;
+  // 1. AN i OR j DRAWN WITH A COMBINING DOT reads as the letter, and is refused.
+  const dotted = [
+    ['a dotless i with a dot above', 'V' + cp(0x0131, 0x0307) + 'per'],
+    ['an i with a dot above', 'Vi' + cp(0x0307) + 'per'],
+    ['a capital I with a dot above', 'V' + cp(0x0130) + 'PER'],
+    ['an i with a dot above right', 'Vi' + cp(0x0358) + 'per'],
+    ['a dotless i with a dot above left', 'V' + cp(0x0131, 0x1DF8) + 'per'],
+    ['a dotless j with a dot above', 'Nin' + cp(0x0237, 0x0307) + 'a'],
+    ['a dotless j', 'Nin' + cp(0x0237) + 'a'],
+    ['an i with a dot below and a dot above, beside a held i with a dot below', 'Vi' + cp(0x0323, 0x0307) + 'per', PK],
+  ];
+  const through = dotted.filter(([, n, X]) => !refused(n, X));
+  if (!through.length) ok(`(14) ${dotted.map(([w]) => w).join(', ')}: each reads as a held key ('Viper', 'Ninja', or the one with an i dot below) and is refused 'taken' at the check, the door and a guest's seat`);
+  else fail('(14) dotted look-alikes allowed: ' + JSON.stringify(through.map(([w, n]) => [w, P.typedName(n)])));
+  // 2. A MARK THAT SHOWS STAYS: accents, a diaeresis, a dot below, a second dot.
+  const marked = [
+    ['Zoe with an acute', 'Zo' + cp(0x00E9)], ['an i with an acute', 'V' + cp(0x00ED) + 'per'], ['an i with a diaeresis', 'V' + cp(0x00EF) + 'per'],
+    ['an i with a dot below', 'Vi' + cp(0x0323) + 'per'], ['an i with two dots above', 'Vi' + cp(0x0307, 0x0307) + 'per'],
+  ];
+  const lostM = marked.filter(([, n]) => P.playerName(n) !== normaliseCallsign(n));
+  if (!lostM.length) ok(`(14) ${marked.map(([w]) => w).join(', ')}: each still passes the door beside a held plain name, because the mark shows`);
+  else fail('(14) visible marks refused: ' + JSON.stringify(lostM.map(([w, n]) => [w, P.typedName(n)])));
+  // 3. THE STROKE LETTERS ARE NOT THEIR ASCII LETTERS, either way round, and
+  // the blocklist still reads them as those letters.
+  const J = createNameIndex({ load: async (after) => (after === null ? ['bj' + cp(0x00F8) + 'rn', cp(0x0142) + 'ukasz'] : []) });
+  await J.refresh();
+  const Q = createNameProofs({ terms, keyState: (k) => J.state(k) });
+  const names = [[P, 'Bj' + cp(0x00F8) + 'rn'], [P, cp(0x0141) + 'ukasz'], [Q, 'Bjorn'], [Q, 'Lukasz']];
+  const lostS = names.filter(([X, n]) => X.playerName(n) !== n);
+  const STROKES = [[0x00F8, 'o'], [0x0142, 'l'], [0x0111, 'd'], [0x0127, 'h'], [0x0167, 't'], [0x0138, 'k'], [0x0180, 'b']];
+  const folded = STROKES.filter(([c, to]) => lookalikeSkeleton('Za' + cp(c) + 'q') === lookalikeSkeleton('Za' + to + 'q') || foldForBlocklist('Za' + cp(c) + 'q') !== 'za' + to + 'q');
+  if (!lostS.length && !folded.length)
+    ok("(14) 'Bjørn' and 'Łukasz' pass the door beside held 'Bjorn' and 'Lukasz', and the other way about; none of the seven stroke letters reads as its ASCII letter in a name, and the blocklist still folds all seven");
+  else fail('(14) stroke letters: ' + JSON.stringify({ lost: lostS.map(([X, n]) => [n, X.typedName(n)]), folded: folded.map(([c]) => c.toString(16)) }));
+  // 4. A CHOSEN NAME IS SHOWN ONLY IN A CASING THAT READS AS ITS KEY. The key
+  // is Greek lower case, eta upsilon epsilon nu alpha. Its readings are the
+  // three the index keeps and the Set checks: itself ('nueva'), its capitals
+  // ('hyena') and its first letter a capital ('hueva').
+  const GKEY = cp(0x03B7, 0x03C5, 0x03B5, 0x03BD, 0x03B1);
+  const caps = cp(0x0397, 0x03A5, 0x0395, 0x039D, 0x0391), title = cp(0x0397, 0x03C5, 0x03B5, 0x03BD, 0x03B1);
+  const mixed = cp(0x0397, 0x03C5, 0x0395, 0x039D, 0x03B1);        // reads 'huena', none of the three
+  const shown = (callsign) => [proofs.provenName({ callsign, callsign_key: GKEY }), proofs.displayName({ callsign, callsign_key: GKEY }), proofs.seenName({ callsign, callsign_key: GKEY })];
+  if (same(keyReadings(GKEY), ['nueva', 'hyena', 'hueva']) && same(shown(GKEY), [GKEY, GKEY, GKEY]) && same(shown(caps), [caps, caps, caps]) && same(shown(title), [title, title, title])
+      && same(shown(mixed), [GKEY, GKEY, GKEY]) && same(shown('Hyena'), [null, null, null]))
+    ok("(14) a chosen name is shown in a casing that reads as one of its key's readings (lower case, capitals, first letter capital); a mixture of capitals that reads as none of them is shown as the key itself, in every panel and every report; a spelling that is not the key's is still nothing");
+  else fail('(14) shown casing: ' + JSON.stringify({ readings: keyReadings(GKEY), key: shown(GKEY), caps: shown(caps), title: shown(title), mixed: shown(mixed), latin: shown('Hyena') }));
 }
 
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall display-name checks passed');
