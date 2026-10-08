@@ -132,7 +132,19 @@ export function createNameProofs({ terms, keyState = () => 'unknown' }) {
   // character class here is letters, digits and spaces, so plenty of unwanted
   // text passes it, and a name it passes is still only a string the account
   // itself wrote unless a key stands behind it.
-  const presentable = (raw) => { const v = validateCallsign(raw, terms); return v.ok ? v.name : null; };
+  //
+  // AND THE ENGINE'S OWN LISTS, isProfane (round 2 fix, 2026-10-08). The Set
+  // in builds 6 and 7 stored a chosen callsign after validateCallsign alone,
+  // so a name the shipped blocklist passes and isProfane refuses can sit in a
+  // profile row with its key. The Set refuses such a name now
+  // (checkPlayerName), and the lobby's sanitizeName already hides it, so a
+  // friends list, a search result, a squad row and an invite card must not
+  // show it either: one standard for every screen that names another player.
+  // It falls back to null, exactly as any other refused name does. The game's
+  // own names (systemName) are deliberately NOT applied here, for the reason
+  // given at the top of this file: an old 'CPU Hard' did nothing wrong, while
+  // an old name isProfane refuses is the kind of name moderation exists for.
+  const presentable = (raw) => { const v = validateCallsign(raw, terms); return v.ok && !isProfane(v.name) ? v.name : null; };
 
   // THE SECOND PROOF: A ROLLED PAIR IS SERVER-VERIFIABLE TOO. A player does not
   // type a name, they roll one from two curated lists (ISSUE-015), so

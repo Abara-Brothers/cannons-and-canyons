@@ -24,7 +24,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { loadBlocklist, normaliseCallsign, validateCallsign } from '../server/callsign.js';
-import { CALL_ADJ, CALL_NOUN, NAME_MAX, isGeneratedCallsign } from '../public/game-core.js';
+import { CALL_ADJ, CALL_NOUN, NAME_MAX, isGeneratedCallsign, isProfane } from '../public/game-core.js';
 import { createNameProofs, systemName } from '../server/display-name.js';
 import { createNameIndex } from '../server/name-index.js';
 
@@ -516,6 +516,34 @@ const proofs = createNameProofs({ terms, keyState: () => 'free' });
   S.stop();
   if (starts === 1 && S.ready) ok('(11) start() reads once at once (a second start is a no-op), and stop() ends it');
   else fail('(11) start: ' + JSON.stringify({ starts, ready: S.ready }));
+}
+
+// ---- 12. A STORED CHOSEN CALLSIGN MEETS THE ENGINE'S LISTS TOO (round 2 fix) -
+// The build 6 and 7 Set stored a name after validateCallsign alone, so a name
+// the shipped blocklist passes and the engine's isProfane refuses may sit in a
+// profile row with its key. checkPlayerName refuses it now, and the lobby's
+// sanitizeName hides it, so displayName must not show it in a friends list, a
+// search result, a squad row or an invite card either. It falls back to null,
+// exactly as any refused name does. The PROOF is untouched: provenName still
+// proves it and seenName still records it, because a report about such a name
+// is the case moderation exists for. No term is printed: the fixture is built
+// from public/game-core.js's own list and named by its shape.
+{
+  const coreSrc = readFileSync(new URL('../public/game-core.js', import.meta.url), 'utf8');
+  const sub = [...((coreSrc.match(/const BAD_SUB = \[([\s\S]*?)\];/) || [])[1] || '').matchAll(/'([a-z]+)'/g)].map((m) => m[1]);
+  const OLD = sub.map((t) => `${t[0].toUpperCase()}${t.slice(1)} Tank`)
+    .find((n) => [...n].length <= 16 && validateCallsign(n, terms).ok && isProfane(n));
+  if (!OLD) fail('(12) no BAD_SUB term passes the shipped blocklist as "<Term> Tank": the case below proves nothing');
+  else {
+    const row = { callsign: OLD, callsign_key: OLD.toLowerCase() };
+    const shown = proofs.displayName(row), proved = proofs.provenName(row), seen = proofs.seenName(row);
+    if (shown === null && proved === OLD && seen === OLD && proofs.checkPlayerName(OLD).ok === false)
+      ok("(12) a chosen callsign stored before the Set ran isProfane is not shown (null, the fallback), though its key still proves it and a report still records it");
+    else fail('(12) old profane name: ' + JSON.stringify({ shown: shown === null ? null : 'the name', proved: proved === OLD, seen: seen === OLD }));
+  }
+  const fine = proofs.displayName({ callsign: 'Wren Delacroix', callsign_key: 'wren delacroix' });
+  if (fine === 'Wren Delacroix') ok('(12) a clean chosen callsign is still shown');
+  else fail('(12) a clean chosen callsign was lost: ' + JSON.stringify(fine));
 }
 
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall display-name checks passed');
