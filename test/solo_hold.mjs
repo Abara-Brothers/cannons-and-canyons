@@ -421,6 +421,93 @@ for (const phase of ['think', 'drive', 'aim']) {
   leave(E, ws);
 }
 
+// ---- 9. A raid finished alone is held like a match alone (round 2 fix) --------
+// The hold used to count SEATS: a partner who left, or dropped and was
+// forfeited, kept a human seat at hp 0, so the player still raiding got the
+// two-minute multiplayer forfeit instead of the day, and the raid was over
+// before they came back. The hold now counts humans still IN the match: when
+// nobody is connected and exactly one human seat is still in it, the match is
+// held for that player. Two live humans keep today's rules (section 6).
+const M = 60 * 1000;
+function raid(eng, mode, a = mkws(), b = mkws()) {
+  eng.handleClientMessage(a, { type: 'create', mode, name: 'A', skin: 'olive', loadout: LOADOUT });
+  const room = eng.rooms.get(a.roomCode);
+  eng.handleClientMessage(b, { type: 'join', code: room.code, name: 'B', skin: 'desert', loadout: LOADOUT });
+  advance(500);
+  eng.handleClientMessage(a, { type: 'startMatch' });
+  for (let i = 0; i < 120 && !(room.state === 'playing' && !room.picking); i++) advance(1000);
+  return { a, b, room, aStart: last(a, 'start'), bStart: last(b, 'start') };
+}
+for (const mode of ['boss', 'aliens']) for (const how of ['leave', 'drop']) {
+  const { a, b, room, bStart } = raid(E, mode);
+  if (how === 'leave') leave(E, a); else gone(E, a);
+  advance(3 * M);
+  const aOut = room.hp[0] <= 0;
+  gone(E, b);
+  const hpB = room.hp[bStart.you];
+  advance(23 * H);
+  const kept = E.rooms.get(room.code) === room && room.state === 'playing' && !!room.heldSince && room.hp[bStart.you] === hpB;
+  const back = resume(E, bStart);
+  if (aOut && kept && last(back, 'restore') && last(back, 'restore').you === bStart.you)
+    ok(`(9 ${mode}, partner ${how === 'leave' ? 'left' : 'dropped'}) the partner is forfeited, the player raiding on alone goes away, and the raid is held 23 hours untouched and resumes`);
+  else fail(`(9 ${mode} ${how}) partner out ${aOut}, kept ${kept} (state ${room.state}, held ${!!room.heldSince}, hp ${hpB} -> ${room.hp[bStart.you]}), resume ${JSON.stringify(back._rx.map((m) => m.type))}`);
+  leave(E, back);
+}
+{
+  // BOTH GONE, THE PARTNER FIRST: the player who stayed is held the moment the
+  // partner's forfeit lands, not forfeited two minutes after their own drop.
+  const { a, b, room, bStart } = raid(E, 'boss');
+  gone(E, a);
+  advance(30 * 1000);
+  gone(E, b);
+  advance(3 * H);
+  const kept = E.rooms.get(room.code) === room && room.state === 'playing' && room.hp[0] <= 0 && room.hp[bStart.you] > 0 && !!room.heldSince;
+  const back = resume(E, bStart);
+  if (kept && last(back, 'restore')) ok('(9) both raiders gone, the partner first: once the partner is forfeited the one still in the raid is held, and resumes three hours later');
+  else fail(`(9) both gone: state ${room.state}, hp ${JSON.stringify(room.hp)}, held ${!!room.heldSince}, resume ${JSON.stringify(back._rx.map((m) => m.type))}`);
+  leave(E, back);
+}
+{
+  // THE PARTNER COMES BACK IN TIME: they are waiting on the player who went,
+  // so that player keeps the multiplayer rule, a two-minute seat and then the
+  // forfeit, and nothing is held.
+  const { a, b, room, aStart, bStart } = raid(E, 'boss');
+  gone(E, a);
+  advance(30 * 1000);
+  gone(E, b);
+  advance(30 * 1000);
+  const aBack = resume(E, aStart);
+  advance(2 * M);
+  const f = aBack._rx.filter((m) => m.type === 'forfeit').map((m) => m.seat);
+  if (last(aBack, 'restore') && f.includes(bStart.you) && room.hp[bStart.you] <= 0 && !room.heldSince)
+    ok('(9) a partner who comes back inside the grace is waiting on the player who went: that player is forfeited after two minutes, and nothing is held');
+  else fail(`(9) partner back: forfeits ${JSON.stringify(f)}, hp ${JSON.stringify(room.hp)}, held ${!!room.heldSince}`);
+  leave(E, aBack);
+}
+{
+  // THE TWO BOUNDS SEE THE RAID'S PLAYER. A new match carrying the held
+  // raid's token ends it (releaseHeld), and moving on from a live raid whose
+  // partner has gone ends it without evicting anybody's held match at the cap.
+  const r1 = raid(E, 'aliens');
+  leave(E, r1.a); advance(3 * M); gone(E, r1.b);
+  const wasHeld = !!r1.room.heldSince;
+  const t1 = mkws();
+  E.handleClientMessage(t1, { type: 'ai', difficulty: 'easy', name: 'X', skin: 'olive', loadout: LOADOUT, held: r1.bStart.token });
+  if (wasHeld && !E.rooms.has(r1.room.code)) ok('(9) a new match carrying a held raid\'s token ends that raid, as for any held match');
+  else fail(`(9) release by token: held ${wasHeld}, still there ${E.rooms.has(r1.room.code)}`);
+  leave(E, t1);
+  const s = [];
+  for (let i = 0; i < 3; i++) { const m = solo(C, 'duel'); gone(C, m.ws); s.push(m); advance(1000); }
+  const keep = held(C).map((r) => r.code).sort().join();
+  const r2 = raid(C, 'boss');
+  leave(C, r2.a); advance(3 * M);
+  C.handleClientMessage(r2.b, { type: 'ai', difficulty: 'easy', name: 'B', skin: 'olive', loadout: LOADOUT });
+  if (held(C).map((r) => r.code).sort().join() === keep && !C.rooms.has(r2.room.code)) ok('(9) moving on from a live raid whose partner has gone ends it and evicts nobody\'s held match at the cap');
+  else fail(`(9) moving on from a raid: held ${keep} -> ${held(C).map((r) => r.code).sort().join()}, raid kept ${C.rooms.has(r2.room.code)}`);
+  leave(C, r2.b);
+  for (const m of s) leave(C, resume(C, m.start));
+}
+
 // ---- 5b. The default cap: 100 at the default MAX_ROOMS of 250 ------------------
 {
   const s = [];

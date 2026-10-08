@@ -637,11 +637,14 @@ function releasePriorRoom(ws) {
   // handleClose would first hold it for a day (holdSolo), and the hold's bounds
   // act at once: at MAX_HELD_ROOMS it would end the match another player has
   // been away from longest, for a room about to be reclaimed two lines later.
+  // "No other human" is the hold's own test (loneHuman): nobody else is
+  // connected and this player is the one the match would be held for, which
+  // since the round 2 fix includes a raid whose partner has gone.
   // The one other thing handleClose did on this path still happens: a socket
   // that queued for a quick match and then started something else leaves the
   // queue, so the next quick match is never paired with a player who is
   // already in a new battle (which would end that battle for them).
-  if (prev.state === 'playing' && soloHuman(prev) === prev.players[seat]) {
+  if (prev.state === 'playing' && !others && loneHuman(prev) === prev.players[seat]) {
     if (waiting === ws) waiting = null;
     teardown(prev);
     ws.roomCode = null;
@@ -700,17 +703,31 @@ const MAX_ROOMS = Number(env.MAX_ROOMS) || 250;
 // MAX_ROOMS.
 const MAX_HELD_ROOMS = Number(env.MAX_HELD_ROOMS) || Math.max(1, Math.floor(MAX_ROOMS * 2 / 5));
 
-// The one human seat of a room no other human plays in, or null. Bots are not
-// players here: a duel or free-for-all against the computer, a Boss or Alien
-// raid alone and a round of golf alone all have exactly one.
-function soloHuman(room) {
-  let only = null;
-  for (const p of room.players) {
-    if (!p || p.bot) continue;
-    if (only) return null;            // a second human: the room keeps the multiplayer rules
-    only = p;
-  }
-  return only;
+// A human seat still IN the match: its tank neither scuttled nor destroyed.
+// Before the match starts there are no tanks, and every seat is in it.
+const inMatch = (room, i) => !room.tanks || (!!room.tanks[i] && room.tanks[i].alive !== false && room.hp[i] > 0);
+
+// THE ONE HUMAN A MATCH IS HELD FOR, or null. Bots are not players here.
+//   * A room with ONE human seat holds that human, whatever their tank's
+//     state: a duel or free-for-all against the computer, a Boss or Alien raid
+//     alone and a round of golf alone, as it always has.
+//   * A room with MORE THAN ONE human seat holds the one still in the match
+//     when every other human seat is out of it (round 2 fix, 2026-10-08). This
+//     used to count seats, and a partner who tapped Leave, or dropped and was
+//     forfeited, keeps a human seat at hp 0, so a co-op raid finished alone was
+//     never held: the player still raiding got the two-minute forfeit instead
+//     of the day, and the raid was over before they came back. Nobody is
+//     waiting on them, which is the only thing the forfeit exists for.
+//   * Two humans still in the match: null, and the multiplayer rules stand.
+// Callers ask it only once no human is connected (handleClose, the forfeit
+// below), or for the player moving on (releasePriorRoom), or of a room that
+// is already held (releaseHeld, holdSolo).
+function loneHuman(room) {
+  const seats = [];
+  room.players.forEach((p, i) => { if (p && !p.bot) seats.push(i); });
+  if (seats.length === 1) return room.players[seats[0]];
+  const still = seats.filter((i) => inMatch(room, i));
+  return still.length === 1 ? room.players[still[0]] : null;
 }
 
 // ONE HELD MATCH PER PLAYER, AT CREATE (the second half is in holdSolo). A new
@@ -724,18 +741,18 @@ function soloHuman(room) {
 //   * THE ACCOUNT the host proved for this socket (ws.userId), which handleClose
 //     carried onto the held seat. It is never anything a client sends.
 // Only a match that is actually HELD is ended (heldSince: its one human gone,
-// nobody else in it). A match still being played, or a room other humans
-// share, is never touched here, whatever token is presented: holdSolo is the
-// only writer of heldSince and a resume, the only way back into a seat, clears
-// it.
+// nobody else still in it). A match still being played, or a room other
+// humans are still in, is never touched here, whatever token is presented:
+// holdSolo is the only writer of heldSince and a resume, the only way back
+// into a seat, clears it.
 function releaseHeld(ws, held) {
   const token = typeof held === 'string' && held ? held : null;
   const acct = (ws && ws.userId) || null;
   if (!token && !acct) return;
   for (const r of [...rooms.values()]) {
     if (!r.heldSince) continue;
-    const p = soloHuman(r);
-    if (!p) continue;                 // holdSolo marks only a one-human room; never trust that blindly
+    const p = loneHuman(r);
+    if (!p) continue;                 // holdSolo marks only a room with one human still in it; never trust that blindly
     if ((token && p.token === token) || (acct && seatAccount(p) === acct)) teardown(r);
   }
 }
@@ -1976,16 +1993,32 @@ function handleClose(ws) {
         // that cannot swing (golfShot refuses a done seat) — a stall.
         if (room.mode === 'golf') golfAdvance(room, seat); else advance(room, seat);
       }
+      // THE ONE STILL IN THE MATCH MAY BE AWAY TOO (round 2 fix). Both raiders
+      // went, this one first: the other was given this same two-minute seat,
+      // because this one was then still in the match and might have come back.
+      // Now this one is out, nobody is connected, and the other is the one
+      // human left in it, with nobody waiting on them: they are held for the
+      // day instead (holdSolo clears their forfeit), exactly as if this one
+      // had been out before they went.
+      if (!room.heldSince && !room.players.some((p) => p && !p.bot && p.connected)) {
+        const lone = loneHuman(room);
+        if (lone) { clearTimeout(room.emptyTimer); holdSolo(room, lone); }
+      }
     }, room.asyncOk ? ASYNC_GRACE_MS : RESUME_GRACE_MS);
   }
   // Every human gone: HOLD the room instead of dropping it — a window swap or
   // a phone sleep must never cost the match. Any resume cancels the hold. An
   // async duel keeps its full day: both players being offline between turns
   // is that mode's NORMAL state, and the push nudge is what brings them back.
-  // A match with no other human waits a day too (holdSolo).
+  // A match with no other human still in it waits a day too (holdSolo), for
+  // the one human it is held for (loneHuman): the player alone, or, since the
+  // round 2 fix, the one still raiding after a partner left or was forfeited.
+  // That player may have been given the forfeit seat a moment ago, because
+  // another human seat exists; holdSolo clears it.
   if (!room.players.some(p => p && !p.bot && p.connected)) {
     clearTimeout(room.emptyTimer);
-    if (!otherHumans) return holdSolo(room, player);
+    const lone = loneHuman(room);
+    if (lone) return holdSolo(room, lone);
     room.emptyTimer = safeTimeout(() => teardown(room),
       room.asyncOk ? ASYNC_GRACE_MS : EMPTY_ROOM_GRACE_MS);
   }
@@ -2016,6 +2049,8 @@ function handleClose(ws) {
 // An evicted room has no socket to tell. Its player hears on their next
 // resume, which is refused: app.js says "That match ended while you were away."
 function holdSolo(room, player) {
+  // Nobody is waiting on the player held for: no forfeit (round 2 fix).
+  clearTimeout(player.dropTimer); player.dropTimer = null;
   clearTimeout(room.botTimer); clearInterval(room.botWalker);
   room.heldSince = Date.now();
   room.emptyTimer = safeTimeout(() => teardown(room), SOLO_HOLD_MS);
@@ -2023,7 +2058,7 @@ function holdSolo(room, player) {
   const others = [];
   for (const r of [...rooms.values()]) {
     if (r === room || !r.heldSince) continue;
-    if (acct && seatAccount(soloHuman(r)) === acct) teardown(r);
+    if (acct && seatAccount(loneHuman(r)) === acct) teardown(r);
     else others.push(r);
   }
   others.sort((a, b) => a.heldSince - b.heldSince);
