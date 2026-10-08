@@ -49,6 +49,19 @@
 // Every timer is unref'd: the index never holds the process open, and
 // test/shutdown.mjs still exits on SIGTERM. Nothing here reads a socket, the
 // engine or the clock directly; `load` is the one dependency, injected.
+//
+// AND EVERY KEY'S LOOK-ALIKES (round 2 fix, 2026-10-08). An exact key match is
+// not enough: 'Viper' with a Cyrillic er, or fullwidth, is a different key and
+// the same name to the eye. So beside the keys the index keeps every key's
+// readings (server/callsign.js keyReadings: the key, and the key in capitals,
+// each with look-alike letters read as the Latin letters they imitate), each
+// mapped to the keys that read that way. `state` answers 'taken' for a string
+// that is a key OR that a key reads as, and `lookalikes` names the keys behind
+// one reading, so the Set can tell another account's look-alike from the
+// account's own key. Both are kept exactly beside the keys: a load builds them
+// from the loaded set (after the replay), and add and remove keep them in step.
+import { keyReadings } from './callsign.js';
+
 export const REFRESH_MS = 10 * 60 * 1000;
 export const RETRY_MS = 30 * 1000;
 export const PAGE = 1000;
@@ -59,6 +72,7 @@ export const MAX_PAGES = 2000;
 
 export function createNameIndex({ load, refreshMs = REFRESH_MS, retryMs = RETRY_MS, page = PAGE, maxPages = MAX_PAGES, onError = () => {} } = {}) {
   let keys = null;          // the loaded set; null until the first load lands
+  let looks = null;         // reading -> Set of keys that read that way, beside `keys`
   let loading = null;       // the load in flight, shared by every caller
   let touched = null;       // key -> 'add' | 'remove', written while a load reads
   let timer = null;
@@ -81,13 +95,19 @@ export function createNameIndex({ load, refreshMs = REFRESH_MS, retryMs = RETRY_
     throw new Error('name index: more pages than MAX_PAGES');
   }
 
+  const link = (map, k) => { for (const r of keyReadings(k)) { let s = map.get(r); if (!s) map.set(r, (s = new Set())); s.add(k); } };
+  const unlink = (map, k) => { for (const r of keyReadings(k)) { const s = map.get(r); if (s) { s.delete(k); if (!s.size) map.delete(r); } } };
+
   // ONE LOAD AT A TIME. A second caller gets the load already in flight.
   function refresh() {
     if (loading) return loading;
     touched = new Map();
     loading = readAll().then((set) => {
       for (const [k, op] of touched) { if (op === 'add') set.add(k); else set.delete(k); }
+      const map = new Map();
+      for (const k of set) link(map, k);
       keys = set;
+      looks = map;
       return true;
     }, (e) => { try { onError(e); } catch {} return false; }).finally(() => { loading = null; touched = null; });
     return loading;
@@ -100,10 +120,13 @@ export function createNameIndex({ load, refreshMs = REFRESH_MS, retryMs = RETRY_
   }
 
   return {
-    // 'free', 'taken', or 'unknown' before the first load has landed.
-    state: (key) => (keys === null ? 'unknown' : keys.has(String(key)) ? 'taken' : 'free'),
-    add(key) { const k = String(key); if (keys) keys.add(k); if (touched) touched.set(k, 'add'); },
-    remove(key) { const k = String(key); if (keys) keys.delete(k); if (touched) touched.set(k, 'remove'); },
+    // 'free', 'taken', or 'unknown' before the first load has landed. 'taken'
+    // when the string is a key, or is how some key reads.
+    state: (key) => (keys === null ? 'unknown' : keys.has(String(key)) || looks.has(String(key)) ? 'taken' : 'free'),
+    // The keys that read as `reading`, or null before the first load has landed.
+    lookalikes: (reading) => (keys === null ? null : [...(looks.get(String(reading)) || [])]),
+    add(key) { const k = String(key); if (keys && !keys.has(k)) { keys.add(k); link(looks, k); } if (touched) touched.set(k, 'add'); },
+    remove(key) { const k = String(key); if (keys && keys.has(k)) { keys.delete(k); unlink(looks, k); } if (touched) touched.set(k, 'remove'); },
     refresh,
     start() { if (!stopped) return; stopped = false; refresh().finally(arm); },
     stop() { stopped = true; if (timer) clearTimeout(timer); timer = null; },

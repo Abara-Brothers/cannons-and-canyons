@@ -546,5 +546,86 @@ const proofs = createNameProofs({ terms, keyState: () => 'free' });
   else fail('(12) a clean chosen callsign was lost: ' + JSON.stringify(fine));
 }
 
+// ---- 13. NOBODY'S CALLSIGN TO THE EYE (round 2 fix, 2026-10-08) -------------
+// The uniqueness check in (9) compares keys, which are exact, so one swapped
+// letter used to make a different key with the same pixels. Two rules close
+// it. A name that mixes writing systems is refused 'chars' (checkPlayerName,
+// so the Set, the guest's check and the engine's door alike). And a typed
+// name whose look-alike skeleton reads as a held key is refused 'taken', asked
+// of the REAL index here, which keeps every key's readings. Code points are
+// written as escapes, because written as glyphs these fixtures read as
+// identical names on the page, which is the bug.
+{
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const cp = (...c) => String.fromCodePoint(...c);
+  const VIRER = 'Vi' + cp(0x0440) + 'er';                        // Cyrillic er for p
+  const VIPER_IE = 'Vip' + cp(0x0435) + 'r';                      // Cyrillic ie for e
+  const FULL = cp(0xFF36, 0xFF49, 0xFF50, 0xFF45, 0xFF52);        // fullwidth V i p e r
+  const SMALLCAPS = cp(0x1D20, 0x026A, 0x1D18, 0x1D07, 0x0280);   // small capitals v i p e r
+  const DOTLESS = 'V' + cp(0x0131) + 'per';                       // Latin dotless i
+  const COCO = cp(0x0421, 0x043E, 0x0441, 0x043E);                // Cyrillic Es o es o: reads Coco
+  const TAXI = cp(0x03A4, 0x0391, 0x03A7, 0x0399);                // Greek capitals: reads TAXI
+  const HIT_GREEK_KEY = cp(0x03B7, 0x03B9, 0x03C4);               // the key a Greek-capital 'HIT' is stored under
+  const I = createNameIndex({ load: async (after) => (after === null ? ['coco', HIT_GREEK_KEY, 'viper'] : []) });
+  await I.refresh();
+  const P = createNameProofs({ terms, keyState: (k) => I.state(k) });
+  // 1. MIXED SCRIPTS: refused 'chars' by the rules, with no index at all.
+  const mixed = [VIRER, VIPER_IE, 'Ivan ' + cp(0x0418, 0x0432, 0x0430, 0x043D), 'Tank ' + cp(0x0391) + 'ce'];
+  const F = createNameProofs({ terms, keyState: () => 'free' });
+  const mixBad = mixed.filter((n) => !(same(F.checkPlayerName(n), { ok: false, error: 'chars' }) && same(F.typedName(n), { ok: false, error: 'chars' })
+    && F.playerName(n) === null && F.guestName(n) === null));
+  if (!mixBad.length) ok(`(13) ${mixed.length} mixed-script names ('Viper' with a Cyrillic er, with a Cyrillic ie, Latin beside Cyrillic, Latin with a Greek capital) are refused 'chars' by checkPlayerName, typedName, playerName and guestName`);
+  else fail('(13) mixed scripts allowed: ' + JSON.stringify(mixBad.map((n) => [...n].map((c) => c.codePointAt(0).toString(16)))));
+  // 2. LEGITIMATE NAMES IN ONE SCRIPT, and the mixtures real names use, still pass.
+  const legit = [
+    cp(0x0418, 0x0432, 0x0430, 0x043D) + ' ' + cp(0x041F, 0x0435, 0x0442, 0x0440, 0x043E, 0x0432),   // Cyrillic
+    cp(0x0393, 0x03B9, 0x03CE, 0x03C1, 0x03B3, 0x03BF, 0x03C2),                                       // Greek
+    cp(0x3055, 0x304F, 0x3089),                                                                       // Hiragana
+    cp(0xAE40, 0xBBFC, 0xC900),                                                                       // Hangul
+    cp(0x0645, 0x062D, 0x0645, 0x062F),                                                               // Arabic
+    cp(0x092E, 0x0939, 0x0947, 0x0936),                                                               // Devanagari, with a vowel sign
+    cp(0x0E2A, 0x0E38, 0x0E14, 0x0E32),                                                               // Thai, with a vowel mark
+    cp(0x5C71, 0x7530) + ' ' + cp(0x30B1, 0x30F3),                                                    // Han with Katakana
+    'Ken' + cp(0x3058),                                                                               // Latin with Hiragana
+    'Li ' + cp(0x674E),                                                                               // Latin with Han
+    'Zo' + cp(0x00E9) + ' Kite', 'Tank Ace', 'V1per', TAXI,
+  ];
+  const lost = legit.filter((n) => P.playerName(n) !== normaliseCallsign(n));
+  if (!lost.length) ok(`(13) ${legit.length} legitimate names still pass the door: single-script Cyrillic, Greek, Hiragana, Hangul, Arabic, Devanagari and Thai; Han with Katakana, Latin with Hiragana or Han; an accented Latin name; a digit swap; and a Greek name no account looks like`);
+  else fail('(13) legitimate names refused: ' + JSON.stringify(lost.map((n) => [n, P.typedName(n)])));
+  // 3. LOOK-ALIKES OF A HELD KEY in one script are refused 'taken'.
+  const alike = [['fullwidth', FULL], ['small capitals', SMALLCAPS], ['dotless i', DOTLESS], ['exact', '  VIPER '],
+    ['whole-Cyrillic Coco', COCO], ['Latin Hit against a Greek-capital key', 'Hit']];
+  const through = alike.filter(([, n]) => !(same(P.typedName(n), { ok: false, error: 'taken' }) && P.playerName(n) === null && P.guestName(n) === null));
+  if (!through.length) ok(`(13) ${alike.map(([w]) => w).join(', ')}: each reads as a held key and is refused 'taken' at the check, the door and a guest's seat`);
+  else fail('(13) look-alikes allowed: ' + JSON.stringify(through.map(([w, n]) => [w, P.typedName(n)])));
+  // 4. FAILS CLOSED: a skeleton the index cannot answer refuses, and a plain
+  // name still asks once.
+  const asked = [];
+  const Q = createNameProofs({ terms, keyState: (k) => { asked.push(k); return k === 'tank ace' || k === FULL.toLowerCase() ? 'free' : 'unknown'; } });
+  const q1 = Q.typedName(FULL);
+  const once = asked.length;
+  asked.length = 0;
+  Q.typedName('Tank Ace');
+  if (same(q1, { ok: false, error: 'unavailable' }) && once === 2 && same(asked, ['tank ace']))
+    ok("(13) a skeleton the index cannot answer refuses 'unavailable'; a name whose skeleton is its key asks the index once");
+  else fail('(13) skeleton fail closed: ' + JSON.stringify({ q1, once, asked }));
+  // 5. THE INDEX KEEPS THE READINGS IN STEP: lookalikes names the keys behind
+  // a reading, add and remove move them, and it is null before the first load.
+  const J = createNameIndex({ load: async (after) => (after === null ? ['viper'] : []) });
+  const pre = J.lookalikes('viper');
+  await J.refresh();
+  const a1 = J.lookalikes('viper');
+  J.add(DOTLESS.toLowerCase());
+  const a2 = J.lookalikes('viper').sort();
+  J.remove('viper');
+  const a3 = [J.lookalikes('viper'), J.state('viper')];
+  J.remove(DOTLESS.toLowerCase());
+  const a4 = [J.lookalikes('viper'), J.state('viper')];
+  if (pre === null && same(a1, ['viper']) && same(a2, ['viper', DOTLESS.toLowerCase()].sort()) && same(a3, [[DOTLESS.toLowerCase()], 'taken']) && same(a4, [[], 'free']))
+    ok('(13) the index answers lookalikes for a reading (null before it loads), and add and remove keep the readings exact');
+  else fail('(13) index readings: ' + JSON.stringify({ pre, a1, a2, a3, a4 }));
+}
+
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall display-name checks passed');
 process.exit(out.errors.length ? 1 : 0);

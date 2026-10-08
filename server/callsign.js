@@ -266,6 +266,97 @@ export function foldForBlocklist(s) {
   return [...folded].map((c) => LOOKALIKE[c] || LETTER_LOOKALIKE[c] || c).join('').replace(/[^a-z]/g, '');
 }
 
+// ---- one player's name worn by another, through look-alike letters ----------
+// (round 2 fix, 2026-10-08). A typed name may not be an account's chosen
+// callsign (server/display-name.js typedName), and that check compares
+// callsign keys, which are exact. 'Viper' with a Cyrillic er or ie in place of
+// the Latin p or e is a different key and the SAME PIXELS, so a guest could
+// wear an account's name in every lobby with one swapped letter, and a
+// signed-in player could store it as a chosen callsign of their own. Two rules
+// close that, and display-name.js and server/name-index.js apply them.
+//
+// ONE SCRIPT PER NAME (mixedScript). A name may not mix letters from two
+// writing systems, which is where every one-letter swap lives: Latin with
+// Cyrillic, Latin with Greek, Cyrillic with Greek. The allowed mixtures are
+// UTS #39's 'highly restrictive' ones, because real names use them: Japanese
+// writes Han, Hiragana and Katakana together, Chinese adds Bopomofo to Han,
+// Korean adds Hangul to Han, and any of the three may carry Latin. Digits,
+// spaces and combining marks belong to no script (Common, Inherited) and are
+// never counted. A name written wholly in one script, Cyrillic or Greek or
+// Thai included, is allowed: that is the legitimate name this rule must not
+// cost anybody. A letter of a script not named below counts as one 'Other'
+// script, so it can never ride along with Latin; two such scripts together
+// are not told apart, a gap stated rather than hidden.
+//
+// The list names scripts by their Unicode long names, every one of them
+// supported by \p{Script=...} since ES2018, so Node 18 (package.json engines)
+// compiles them. A misspelt name would throw HERE, at module load, which the
+// suite would see at once; it can never fail open.
+const SCRIPT_NAMES = [
+  'Latin', 'Greek', 'Cyrillic', 'Armenian', 'Georgian', 'Hebrew', 'Arabic', 'Syriac', 'Thaana', 'Nko',
+  'Devanagari', 'Bengali', 'Gurmukhi', 'Gujarati', 'Oriya', 'Tamil', 'Telugu', 'Kannada', 'Malayalam',
+  'Sinhala', 'Thai', 'Lao', 'Tibetan', 'Myanmar', 'Khmer', 'Mongolian', 'Ethiopic', 'Cherokee',
+  'Canadian_Aboriginal', 'Ogham', 'Runic', 'Coptic', 'Glagolitic', 'Gothic', 'Old_Italic', 'Deseret',
+  'Osage', 'Tifinagh', 'Vai', 'Adlam', 'Lisu', 'Ol_Chiki', 'Javanese', 'Balinese', 'Sundanese',
+  'Hangul', 'Hiragana', 'Katakana', 'Bopomofo', 'Han', 'Yi',
+];
+const SCRIPT_RE = SCRIPT_NAMES.map((s) => [s, new RegExp(`^\\p{Script=${s}}$`, 'u')]);
+const NO_SCRIPT = /^[\p{Script=Common}\p{Script=Inherited}]$/u;
+const SCRIPT_MIXES = [['Latin', 'Han', 'Hiragana', 'Katakana'], ['Latin', 'Han', 'Bopomofo'], ['Latin', 'Han', 'Hangul']];
+// The scripts a name's characters are written in, as a Set of names.
+export function scriptsOf(raw) {
+  const out = new Set();
+  for (const c of normaliseCallsign(raw)) {
+    if (NO_SCRIPT.test(c)) continue;
+    const hit = SCRIPT_RE.find(([, re]) => re.test(c));
+    out.add(hit ? hit[0] : 'Other');
+  }
+  return out;
+}
+// True when a name mixes writing systems in a way no real name needs.
+export function mixedScript(raw) {
+  const s = [...scriptsOf(raw)];
+  if (s.length <= 1) return false;
+  return !SCRIPT_MIXES.some((mix) => s.every((x) => mix.includes(x)));
+}
+
+// THE SAME NAME TO THE EYE (lookalikeSkeleton). A name wholly in one script
+// can still read as another script's name: 'Coco' spelt in Cyrillic letters
+// is 'Coco' on screen, and 'TAXI' spelt in Greek capitals is 'TAXI'. A
+// fullwidth 'Viper', or one with a dotless i, is Latin already and still not
+// the same key. So two names are compared by what they LOOK like: the
+// compatibility forms folded (NFKD: fullwidth, mathematical letters), then
+// case, then every letter in LETTER_LOOKALIKE read as the Latin letter it
+// imitates. The table is the blocklist's own, imported rather than copied, so
+// the two cannot drift. It deliberately does NOT fold digits: 'V1per' is a
+// visible swap, and a skeleton that read 1 as i would refuse real names.
+//
+// Two additions the blocklist does not need. The four Greek CAPITALS whose
+// lower case reads as a different letter (Eta, Upsilon, Zeta, Nu look like H,
+// Y, Z, N; their lower case like n, u, z, v) are read before the case fold,
+// so 'HIT' in Greek capitals reads 'hit'. And two Cyrillic letters the table
+// does not carry, shha and straight u (h and y to the eye), are read after it. Both live here only,
+// so the blocklist's fold and its pinned residual (test/callsign.mjs) do not
+// move.
+//
+// Accents stay accents: NFKD splits é and the NFC at the end puts it back, so
+// 'Zoé' and 'Zoe' are two names here, as they are to the eye.
+const SKELETON_CAPITAL = Object.fromEntries([[0x0397, 'h'], [0x03A5, 'y'], [0x0396, 'z'], [0x039D, 'n']].map(([cp, to]) => [String.fromCodePoint(cp), to]));
+const SKELETON_EXTRA = Object.fromEntries([[0x04BB, 'h'], [0x04AF, 'y']].map(([cp, to]) => [String.fromCodePoint(cp), to]));
+export function lookalikeSkeleton(raw) {
+  const d = normaliseCallsign(raw).normalize('NFKD');
+  const lower = [...d].map((c) => SKELETON_CAPITAL[c] || c).join('').toLowerCase();
+  return [...lower].map((c) => LETTER_LOOKALIKE[c] || SKELETON_EXTRA[c] || c).join('').normalize('NFC');
+}
+// EVERY WAY A STORED KEY CAN LOOK. A key is lower case, and the name it came
+// from may have been written in capitals: 'HIT' in Greek capitals is stored
+// as its Greek lower case (eta, iota, tau), which reads 'nit'. So a key is read twice, as itself and in capitals,
+// and a name that looks like either reading is a look-alike of it.
+export function keyReadings(key) {
+  const k = String(key ?? '');
+  return [...new Set([lookalikeSkeleton(k), lookalikeSkeleton(k.toUpperCase())])];
+}
+
 export function loadBlocklist(filePath) {
   let src;
   // "missing" must mean missing. EACCES, or a directory sitting where the file

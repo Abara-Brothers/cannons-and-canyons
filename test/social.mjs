@@ -18,6 +18,8 @@ import { CALL_ADJ, CALL_NOUN, isGeneratedCallsign, isProfane } from '../public/g
 // rather than restated, because the whole point of (t6j) is that the handler's
 // log line and the stored row are one string and not two that look alike.
 import { NO_CALLSIGN, reportCallsign } from '../server/store.js';
+// The look-alike readings server/name-index.js keeps, for the fake index below.
+import { keyReadings } from '../server/callsign.js';
 
 const out = { errors: [] };
 const ok = (m) => console.log('  ok — ' + m);
@@ -99,7 +101,15 @@ function mkstore(over = {}) {
 // THE NAME INDEX (round 2): an index that has loaded and holds no key, so a
 // typed name is judged by the rules alone, as these sections expect. (nu)
 // drives a held key, an index that has not loaded, and no index at all.
-const freeNames = () => { const keys = new Set(); return { keys, state: (k) => (keys.has(k) ? 'taken' : 'free'), add: (k) => keys.add(k), remove: (k) => keys.delete(k) }; };
+// `lookalikes` answers as server/name-index.js does, from the same readings
+// (round 2 fix): the Set asks it, and an index without it refuses the Set.
+const freeNames = () => {
+  const keys = new Set();
+  return {
+    keys, state: (k) => (keys.has(k) ? 'taken' : 'free'), add: (k) => keys.add(k), remove: (k) => keys.delete(k),
+    lookalikes: (r) => [...keys].filter((k) => keyReadings(k).includes(r)),
+  };
+};
 const mk = (over) => { const store = mkstore(over); return { store, social: createSocial({ store, terms: TERMS, send, now, names: freeNames() }) }; };
 
 // ---- (a) the frame types this layer owns ------------------------------------
@@ -687,6 +697,56 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
   if (same(last(w4), { type: 'callsign', error: 'taken', id: 't' }) && N4.keys.size === 0)
     ok("(nu) a Set the store refuses 'taken' changes nothing in the index: only a write that landed moves it");
   else fail('(nu) refused set: ' + JSON.stringify({ reply: last(w4), keys: [...N4.keys] }));
+}
+
+// ---- (nl) THE SET REFUSES ANOTHER ACCOUNT'S NAME TO THE EYE (round 2 fix) ----
+// The unique index compares keys, so a fullwidth copy of a held name, or a
+// whole-Cyrillic name that reads as one, used to be stored as a key of its
+// own. The Set now refuses a mixed-script name 'chars' before any store call,
+// and a name whose look-alike skeleton reads as ANOTHER account's key 'taken'
+// before the write, from the in-memory index. The account's own key is not a
+// collision, a legitimate single-script name is stored, and an index that has
+// not loaded refuses 'unavailable'. Code points as escapes, for the reason
+// test/display_name.mjs (13) gives.
+{
+  const { createNameIndex } = await import('../server/name-index.js');
+  const cp = (...c) => String.fromCodePoint(...c);
+  const FULL = cp(0xFF36, 0xFF49, 0xFF50, 0xFF45, 0xFF52);         // fullwidth Viper
+  const COCO = cp(0x0421, 0x043E, 0x0441, 0x043E);                 // Cyrillic, reads Coco
+  const VIRER = 'Vi' + cp(0x0440) + 'er';                          // Cyrillic er inside Latin
+  const IVAN = cp(0x0418, 0x0432, 0x0430, 0x043D) + ' ' + cp(0x041F, 0x0435, 0x0442, 0x0440, 0x043E, 0x0432);
+  const st = mkstore();
+  st.keys.set('viper', 'u-other-1'); st.keys.set('coco', 'u-other-2');
+  st.rows.set('u-coco', { id: 'u-coco', friend_code: 'COC234', callsign: 'Coco Two', callsign_key: 'coco two', callsign_set_at: null });
+  const N = createNameIndex({ load: async (after) => (after === null ? ['coco', 'coco two', 'viper'] : []) });
+  await N.refresh();
+  const S = createSocial({ store: st, terms: TERMS, send, now, names: N });
+  const run = async (who, name, id) => { clock = BASE + DAY * 10; const w = mkws(who); const before = st.calls.length; await S.handle(w, { type: 'callsign', name, id }); return { reply: last(w), calls: st.calls.slice(before).map((c) => c[0]), chosen: w.chosenName }; };
+  const full = await run('u-a', FULL, 'f');
+  const coco = await run('u-b', COCO, 'c');
+  const mixed = await run('u-c', VIRER, 'm');
+  const ivan = await run('u-d', IVAN, 'i');
+  if (same(full.reply, { type: 'callsign', error: 'taken', id: 'f' }) && same(full.calls, ['profileById']) && full.chosen === null
+      && same(coco.reply, { type: 'callsign', error: 'taken', id: 'c' }) && same(coco.calls, ['profileById'])
+      && same(mixed.reply, { type: 'callsign', error: 'chars', id: 'm' }) && same(mixed.calls, [])
+      && same(ivan.reply, { type: 'callsign', ok: true, callsign: IVAN, id: 'i' }) && same(ivan.calls, ['profileById', 'setChosenCallsign']) && N.state(IVAN.toLowerCase()) === 'taken')
+    ok("(nl) the Set refuses a fullwidth copy and a whole-Cyrillic look-alike of another account's callsign 'taken' with no write, a mixed-script name 'chars' with no store call, and stores a legitimate Cyrillic name");
+  else fail('(nl) look-alike Set: ' + JSON.stringify({ full, coco, mixed, ivan }));
+  // THE ACCOUNT'S OWN KEY IS NOT A COLLISION: re-casing its own name passes.
+  const own = await run('u-coco', 'COCO TWO', 'o');
+  if (same(own.reply, { type: 'callsign', ok: true, callsign: 'COCO TWO', id: 'o' }) && same(own.calls, ['profileById', 'setChosenCallsign']))
+    ok("(nl) an account re-casing its own callsign is not refused: its own key is not a look-alike of somebody else's");
+  else fail('(nl) own key: ' + JSON.stringify(own));
+  // AN INDEX THAT HAS NOT LOADED, or none at all, refuses the Set 'unavailable'.
+  const S2 = createSocial({ store: mkstore(), terms: TERMS, send, now, names: createNameIndex({ load: async () => [] }) });
+  const S3 = createSocial({ store: mkstore(), terms: TERMS, send, now });
+  const w2 = mkws('u-x'), w3 = mkws('u-y');
+  clock = BASE;
+  await S2.handle(w2, { type: 'callsign', name: 'Tank Ace', id: 'u' });
+  await S3.handle(w3, { type: 'callsign', name: 'Tank Ace', id: 'n' });
+  if (same(last(w2), { type: 'callsign', error: 'unavailable', id: 'u' }) && same(last(w3), { type: 'callsign', error: 'unavailable', id: 'n' }) && w2.chosenName === null && w3.chosenName === null)
+    ok("(nl) with the index not loaded, or no index wired, the Set refuses 'unavailable' rather than store a name it could not compare");
+  else fail('(nl) fail closed: ' + JSON.stringify({ u: last(w2), n: last(w3) }));
 }
 
 // ---- (j) a store that cannot serve the read model answers rather than hangs --

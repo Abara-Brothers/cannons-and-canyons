@@ -8,7 +8,7 @@
 // Everything this module touches is injected — the store, the blocklist terms,
 // the engine's send(), and the clock — so the whole layer runs in process with
 // no Supabase, no sockets and no real time (test/social.mjs).
-import { validateCallsign, normaliseCallsign, CALLSIGN_MIN, CALLSIGN_MAX } from './callsign.js';
+import { validateCallsign, normaliseCallsign, lookalikeSkeleton, CALLSIGN_MIN, CALLSIGN_MAX } from './callsign.js';
 // isUuid only — the pure shape test, not createStore. A friend op is handed an
 // account id straight off a socket, and server/store.js THROWS 'bad uuid' on a
 // malformed one; that throw would be answered 'unavailable', which is the wrong
@@ -324,7 +324,9 @@ const BLOCK_KEY_RE = /^[0-9a-f]{32}$/;
 //
 // names — the in-memory index of chosen callsign keys (server/name-index.js,
 // round 2): state(key) -> 'free' | 'taken' | 'unknown', and add(key) and
-// remove(key), which the Set and the roll call when their write lands. A
+// remove(key), which the Set and the roll call when their write lands, and
+// lookalikes(reading) -> the keys that read that way, or null before the
+// index has loaded (the Set's look-alike check, round 2 fix). A
 // typed name a guest checks, and the name a guest's squad seat shows, may not
 // be one an account holds (display-name.js typedName). THE DEFAULT KNOWS
 // NOTHING: every key is 'unknown', so a host that wires no index refuses every
@@ -347,7 +349,7 @@ export function createSocial({
   seatSquad = () => ({ ok: false, error: 'unavailable' }),
   schedule = (fn, ms) => { const t = setTimeout(fn, ms); if (typeof t.unref === 'function') t.unref(); return () => clearTimeout(t); },
   pushInvite = async () => false,
-  names = { state: () => 'unknown', add() {}, remove() {} },
+  names = { state: () => 'unknown', lookalikes: () => null, add() {}, remove() {} },
   seatName = () => null,
 }) {
 
@@ -658,6 +660,29 @@ export function createSocial({
     // The key this account holds now, read off the profile BEFORE the write
     // replaces it, so the index can free it once the write lands.
     const prevKey = profile && typeof profile.callsign_key === 'string' ? profile.callsign_key : '';
+    // NOR ANOTHER ACCOUNT'S CALLSIGN TO THE EYE (round 2 fix, 2026-10-08).
+    // The unique index compares keys, and a fullwidth 'Viper', or 'Coco' spelt
+    // in Cyrillic letters beside a Latin 'Coco', is a different key and the
+    // same name on screen. So the name's look-alike
+    // skeleton (server/callsign.js lookalikeSkeleton) is looked up in the
+    // in-memory index, which knows every key that reads that way
+    // (server/name-index.js lookalikes), and a key there that is not this
+    // account's own is refused 'taken', the word the write uses for the same
+    // collision. The account's own key is not a collision: a player may
+    // re-case their own name, or move off an old look-alike of it. An index
+    // that has not loaded, is missing or throws refuses 'unavailable', so the
+    // check fails closed; the index loads at boot and retries in thirty
+    // seconds (server.js). Mixed scripts never reach here: checkPlayerName
+    // refused them above.
+    //
+    // A READ BEFORE A WRITE, so two accounts setting look-alikes of each other
+    // in the same moment can both pass it; the exact key's race is still the
+    // unique index's. Stated rather than hidden: closing it would need the
+    // skeleton in the database, which this round does not migrate.
+    let alike = null;
+    try { alike = names && typeof names.lookalikes === 'function' ? names.lookalikes(lookalikeSkeleton(v.name)) : null; } catch { alike = null; }
+    if (!Array.isArray(alike)) return reply(ws, msg, { type: 'callsign', error: 'unavailable' });
+    if (alike.some((k) => k !== prevKey)) return reply(ws, msg, { type: 'callsign', error: 'taken' });
     const res = await store.setChosenCallsign(ws.userId, v.name, v.key);
     if (!res || res.ok !== true) {
       // A closed set of codes. Anything the store invents stays inside the

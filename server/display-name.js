@@ -34,7 +34,7 @@
 // Nothing here touches the database, a socket or the clock. test/display_name.mjs
 // drives it in process against the REAL server/blocklist.txt — a suite with its
 // own term list would not notice the shipped list and the rule drifting apart.
-import { validateCallsign, normaliseCallsign, foldForBlocklist } from './callsign.js';
+import { validateCallsign, normaliseCallsign, foldForBlocklist, mixedScript, lookalikeSkeleton } from './callsign.js';
 // THE TWO PURE CALLSIGN TESTS, from the module that owns the curated lists.
 // Imported, never copied: isGeneratedCallsign is the standard the engine already
 // applies to every name any client presents (room-engine.js's sanitizeName), and
@@ -255,9 +255,17 @@ export function createNameProofs({ terms, keyState = () => 'unknown' }) {
   // and seenName above are untouched: a panel still names a row only by its key
   // or by a curated pair, so a typed name can never be worn in a friends list,
   // and a chosen callsign stays the only name a search can find.
+  //
+  // ONE WRITING SYSTEM PER NAME (round 2 fix, 2026-10-08): a name that mixes
+  // scripts the way no real name does (server/callsign.js mixedScript) is
+  // refused 'chars', the character rule's own word, because that mixture is
+  // how one swapped letter makes a different key look like somebody else's
+  // name. It applies to every name chosen from now on, typed or set; a name
+  // stored before it keeps proving itself by its key, as the system names do.
   const checkPlayerName = (raw) => {
     const v = validateCallsign(raw, terms);
     if (!v.ok) return { ok: false, error: v.error };
+    if (mixedScript(v.name)) return { ok: false, error: 'chars' };
     if (isProfane(v.name) || systemName(v.name)) return { ok: false, error: 'not_allowed' };
     return { ok: true, name: v.name, key: v.key };
   };
@@ -277,12 +285,27 @@ export function createNameProofs({ terms, keyState = () => 'unknown' }) {
   // player's. A keyState that throws counts as 'unknown'.
   //
   // THE SET DOES NOT ASK THIS. Its uniqueness is the unique index's, at the write
-  // (social.js callsign), and a read before that write would only race it.
+  // (social.js callsign), and a read before that write would only race it. Its
+  // look-alike check is its own (social.js), because it must tell another
+  // account's key from the account's own.
+  //
+  // NOR A LOOK-ALIKE OF ONE (round 2 fix, 2026-10-08). The key is exact, so
+  // a whole-script name that reads as an account's callsign ('Coco' spelt
+  // in Cyrillic letters) or a fullwidth copy is a different key and the same pixels. So
+  // the index is asked a second time with the name's look-alike skeleton
+  // (server/callsign.js lookalikeSkeleton), and the in-memory index answers
+  // 'taken' for a string that is a key or that a key reads as
+  // (server/name-index.js). Asked only when the skeleton differs from the key,
+  // so a plain name costs one question, as before. Mixed scripts never get
+  // this far: checkPlayerName refuses them. Either answer that is not 'free'
+  // refuses, 'unknown' as 'unavailable', so the rule still fails closed.
   const typedName = (raw) => {
     const v = checkPlayerName(raw);
     if (!v.ok) return v;
-    let s = 'unknown';
-    try { s = keyState(v.key); } catch { s = 'unknown'; }
+    const ask = (k) => { try { return keyState(k); } catch { return 'unknown'; } };
+    let s = ask(v.key);
+    const look = lookalikeSkeleton(v.name);
+    if (s === 'free' && look !== v.key) s = ask(look);
     if (s === 'free') return v;
     return { ok: false, error: s === 'taken' ? 'taken' : 'unavailable' };
   };
