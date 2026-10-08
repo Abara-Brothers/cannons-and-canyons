@@ -1042,10 +1042,13 @@ const sqAErr = (s) => '<p class="sqae' + (s ? '' : ' hidden') + '">' + esc(s || 
 // the whole Geometric Shapes block). DROPPED OUTRANKS READY: a dropped row can
 // arrive ready -- readied from another device before the drop -- and Start
 // refuses it all the same (task 5), so it is never shown a tick. The menu is on
-// every row but your own (report.self and block.self can only fail) and a
-// guest's (a guest has no id to report); the leader's Remove is on every row
-// but their own, a guest's included, and names the row by its handle, `rid`
-// (D-UI-3): a row the server gave no handle is a row no kick can name.
+// every row but your own (report.self and block.self can only fail). A GUEST
+// row has no id, so its menu is aimed by the row's handle, `rid` (round 2 fix:
+// server/social.js names a guest row only when the row can be reported, and
+// resolves the handle to the guest's account); a nameless guest row, or one
+// with no handle, has no menu. The leader's Remove is on every row but their
+// own, a guest's included, and names the row by its handle, `rid` (D-UI-3): a
+// row the server gave no handle is a row no kick can name.
 // TWO LINES (D-UI-5): the name has the first line (.sqm1) to itself, and the
 // status words (.sqms) and the controls share the second (.sqm2), so no status
 // word or button ever takes width from a name. The friend rows are built the
@@ -1076,7 +1079,8 @@ function sqRowParts(p, i, sn, ctl) {
     + '<span class="pdot' + (lit ? ' on' : '') + '" title="' + (p.dropped ? 'Reconnecting' : lit ? 'Online' : 'Offline') + '">' + IC.dot + '</span>'
     + '<span class="sqmn"><span class="sqmt">' + esc(name) + '</span>' + (you ? '<span class="sqmy">(you)</span>' : '') + '</span></div>'
     + '<div class="sqm2"><span class="sqms">' + (lead ? '<span class="sql">Leader</span>' : '') + st + '</span>'
-    + (you || p.id == null ? '' : menuBtn(p.id, 'id', name, false, !named(p)))
+    + (you ? '' : p.id != null ? menuBtn(p.id, 'id', name, false, !named(p))
+      : p.guest && named(p) && sqRid(p) ? menuBtn(sqRid(p), 'rid', name, false, false) : '')
     // Never "Remove No callsign" to a screen reader (review T9-R1-12): the
     // question in the footer says "this player", and so does the label.
     + (kick ? '<button class="sqic" data-sq="kick:' + esc(sqRid(p)) + '" title="Remove from the squad" aria-label="Remove '
@@ -2647,10 +2651,11 @@ function frPaint() {
 const named = (p) => !!(p && typeof p.callsign === 'string' && p.callsign);
 const nameOf = (p) => (named(p) ? p.callsign : 'No callsign');
 // THE MENU BUTTON. `key` is either an account uuid the SERVER handed this
-// client (a friends list, a search result, a blocked list) or a per-room seat
-// HANDLE (a lobby payload, an in-match snapshot). They are different fields on
-// the wire and are never interchangeable — BINDING resolution 24, and
-// task 6b section 2. Nothing here logs or stores either one.
+// client (a friends list, a search result, a blocked list), a per-room seat
+// HANDLE (a lobby payload, an in-match snapshot), or a squad GUEST row's
+// handle, `rid` (round 2 fix). They are different fields on the wire and are
+// never interchangeable — BINDING resolution 24, and task 6b section 2.
+// Nothing here logs or stores any of them.
 // `anon` marks a card whose name is the PLACEHOLDER, not a name — nameOf()'s
 // 'No callsign' fallback, which server/social.js really does produce (its
 // displayName returns null for an unprovable name and for one blocklisted after
@@ -2707,7 +2712,7 @@ function pmOpen(key, kind, name, anon) {
   // focus and drops it on the floor leaves a keyboard player at the top of the
   // document, hunting for the card they were on.
   pmFrom = (document.activeElement && document.activeElement !== document.body) ? document.activeElement : null;
-  pm = { key, kind: kind === 'handle' ? 'handle' : 'id', name: name || '', anon: !!anon, err: '', busy: '' };
+  pm = { key, kind: kind === 'handle' || kind === 'rid' ? kind : 'id', name: name || '', anon: !!anon, err: '', busy: '' };
   pa = null;
   pmPaint();
 }
@@ -2794,7 +2799,9 @@ function pmPaint() {
 // a handle goes in `handle` and a uuid in `id`, and a uuid is refused in
 // `handle` by design — that refusal is what stops a modified client addressing
 // a player it was never given (task 6b, section 2).
-const pmAim = (t) => (t.kind === 'handle' ? { handle: t.key } : { id: t.key });
+// A squad guest row's handle goes in `rid` (round 2 fix), resolved by the
+// server in this player's own squad, and never in `id` either.
+const pmAim = (t) => (t.kind === 'handle' ? { handle: t.key } : t.kind === 'rid' ? { rid: t.key } : { id: t.key });
 function pmClick(e) {
   const t = e.target.closest ? e.target.closest('[data-pm]') : null;
   if (!t) { if (!(e.target.closest && e.target.closest('[data-pmstop]'))) pmClose(); return; }

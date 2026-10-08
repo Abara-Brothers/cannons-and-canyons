@@ -1821,6 +1821,37 @@ if (want('t9')) try {
         && !a7.rows[0].menu && !a7.rows.some((r) => r.over))
       ok(`${V}: a null callsign keeps its row, its menu and its placeholder mark; a guest row has Remove but no menu; Remove says "this player" to a screen reader; nothing overflows`);
     else fail(`${V}: null callsign ${JSON.stringify(a7 && a7.rows)}`);
+    // A7c. A GUEST ROW THAT SHOWS A NAME HAS REPORT AND BLOCK (round 2 fix).
+    //      The server names a guest row only when the row can be reported, and
+    //      a guest row's id is null, so its menu is aimed by the row's handle,
+    //      `rid`: Report sends {report, rid}, Block sends {block, add, rid},
+    //      and neither carries an id. A named guest row with no handle has no
+    //      menu, and the nameless guest row above still has none.
+    const A7N = T9R('e8');
+    await t9state({ members: [T9YOU({ ready: true }), T9M({ guest: true, rid: A7N, callsign: 'Tank Ace' }), T9M({ guest: true, rid: '', callsign: 'Night Owl' })] });
+    const a7c = await t9box();
+    const a7m = await ev(`(() => { const b = document.querySelector('#bay [data-pmenu="${A7N}"]'); return b ? { kind: b.dataset.pmkind, name: b.dataset.pmname, anon: b.dataset.pmanon || '' } : null; })()`);
+    const a7pm = () => ev(`(() => { const m = document.getElementById('pmenu'); return m && !m.hidden ? { items: [...m.querySelectorAll('button')].map((b) => b.textContent.trim()), head: (m.querySelector('.pmh') || {}).textContent } : null; })()`);
+    await clearTx();
+    await t9click(`#bay [data-pmenu="${A7N}"]`); await sleep(60);
+    const a7menu = await a7pm();
+    await t9click('#pmenu [data-pm="report"]'); await sleep(40);
+    await t9click('#pmenu [data-pm="ok"]'); await sleep(40);
+    const a7rep = (await tx()).filter((f) => f.type === 'report');
+    if (a7rep.length) await answer(a7rep[a7rep.length - 1].id, { type: 'report', ok: true });
+    await clearTx();
+    await t9click(`#bay [data-pmenu="${A7N}"]`); await sleep(60);
+    await t9click('#pmenu [data-pm="block"]'); await sleep(40);
+    await t9click('#pmenu [data-pm="ok"]'); await sleep(40);
+    const a7blk = (await tx()).filter((f) => f.type === 'block');
+    if (a7blk.length) await answer(a7blk[a7blk.length - 1].id, { type: 'block', op: 'add', ok: true });
+    const strip = (f) => { const c = { ...f }; delete c.id; return c; };
+    if (a7c && a7c.rows[1].name === 'Tank Ace' && a7c.rows[1].menu && !a7c.rows[1].anon && a7c.rows[2].name === 'Night Owl' && !a7c.rows[2].menu
+        && a7m && a7m.kind === 'rid' && a7m.name === 'Tank Ace' && a7menu && a7menu.head === 'Tank Ace' && a7menu.items.join('|') === 'Report name|Block|Close'
+        && a7rep.length === 1 && JSON.stringify(strip(a7rep[0])) === JSON.stringify({ type: 'report', rid: A7N }) && typeof a7rep[0].id === 'number'
+        && a7blk.length === 1 && JSON.stringify(strip(a7blk[0])) === JSON.stringify({ type: 'block', op: 'add', rid: A7N }))
+      ok(`${V}: a guest row that shows a name has Report and Block, aimed by the row's handle and never an id; a named guest row with no handle has no menu`);
+    else fail(`${V}: guest row menu ${JSON.stringify({ rows: a7c && a7c.rows.map((r) => [r.name, r.menu, r.anon]), a7m, a7menu, a7rep, a7blk })}`);
     // A7b. A ROW THE SERVER GAVE NO HANDLE IS A ROW NO KICK CAN NAME (D-UI-3):
     //      it keeps its menu, and it has no Remove.
     await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true, rid: undefined })] });

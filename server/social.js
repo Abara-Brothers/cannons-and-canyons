@@ -1396,7 +1396,25 @@ export function createSocial({
   // admits it, and nothing about the account it became may reach a member who
   // might have blocked it. Its guest-time name is withheld as well, so the
   // door's row reads exactly as it always has.
-  const guestRowName = (m) => (squadGuest(m.ws) ? guestName(m.name) : null);
+  //
+  // AND ONLY FOR A GUEST ROW THAT CAN BE REPORTED (round 2 fix, 2026-10-08).
+  // Every shown player can be reported and blocked, and a guest row's `id` is
+  // null by the frame's own rule, so a guest row is named for both by its row
+  // handle (`rid`, see rowTarget below), which resolves to the ANONYMOUS
+  // account the guest's socket is signed in as. A guest with no account at
+  // all has nothing a report row or a block could be filed against (the
+  // engine gives such a lobby seat no handle for the same reason), so its row
+  // shows no name: no player text without a report path. guestRowAccount is
+  // that account, read off the row's socket, or, for a row inside its drop
+  // window, off the socket it dropped from (droppedAcct, written as the row
+  // drops), so a dropped row keeps its name and its report path together.
+  const droppedAcct = new WeakMap();
+  const guestRowAccount = (m) => {
+    if (!m || !m.guest) return '';
+    if (m.ws) return squadGuest(m.ws) && m.ws.userId ? wireId(m.ws.userId) : '';
+    return droppedAcct.get(m) || '';
+  };
+  const guestRowName = (m) => (guestRowAccount(m) ? guestName(m.name) : null);
   async function squadSnapshot(sq) {
     const ids = sq.members.filter((m) => m.userId).map((m) => m.userId);
     let names = new Map();
@@ -2220,6 +2238,15 @@ export function createSocial({
         return;
       }
       const at = now();
+      // A GUEST ROW REMEMBERS ITS ACCOUNT THROUGH THE DROP (round 2 fix): the
+      // row loses its socket here, and guestRowAccount reads this instead,
+      // so the row keeps its name and its report path until the window ends.
+      // A socket with no account clears any account an earlier socket left.
+      const held = squads.memberOf(key);
+      if (held && held.member.guest) {
+        const acct = squadGuest(ws) && ws.userId ? wireId(ws.userId) : '';
+        if (acct) droppedAcct.set(held.member, acct); else droppedAcct.delete(held.member);
+      }
       const sq = squads.markDropped(key, at);
       if (!sq) return;
       armDropSweep(key, at);
@@ -3054,7 +3081,29 @@ export function createSocial({
   // who has left the room — comes back as '' and is answered no_such_user, which
   // is the honest word for it and the reason Task 8 must not offer Report on a
   // card whose room has ended.
-  const targetId = (ws, msg) => wireId(msg.handle === undefined ? msg.id : resolveHandle(ws, msg.handle));
+  //
+  // A THIRD ROUTE, `rid` (round 2 fix, 2026-10-08): a GUEST row of the
+  // caller's own squad, named by its row handle, the one handle a guest row
+  // has (its `id` is null by the frame's rule). It resolves to the anonymous
+  // account behind the row (rowTarget), and to nothing for a guest with no
+  // account, a member's row, or a row of any other squad. Same rule: when
+  // `handle` is present it is the target, else `rid`, else `id`; never two.
+  const targetId = (ws, msg) => wireId(msg.handle !== undefined ? resolveHandle(ws, msg.handle)
+    : msg.rid !== undefined ? (rowTarget(ws, msg.rid) || {}).id : msg.id);
+
+  // THE GUEST ROW A `rid` NAMES, in the caller's own squad, as { id, shown }:
+  // the anonymous account behind it and the name the row shows now, or null.
+  // Only a GUEST row: a member's row already carries its account id, which
+  // the friends-panel route takes, and a guest row whose socket has signed in
+  // is the sign-in door's (guestRowAccount answers nothing for it).
+  function rowTarget(ws, rid) {
+    if (typeof rid !== 'string' || !rid) return null;
+    const own = squadOf(ws);
+    if (!own) return null;
+    const m = own.squad.members.find((x) => rowRid(x) === rid);
+    const id = m && m.guest ? guestRowAccount(m) : '';
+    return id ? { id, shown: guestRowName(m) } : null;
+  }
 
   async function handleFriends(ws, msg) {
 
@@ -3685,7 +3734,10 @@ export function createSocial({
     // AND THE NAME THAT SEAT SHOWED, read in the same tick as the handle
     // resolved, before any await can let the seat leave the room. See `seen`
     // below for why a seat's name outranks the profile's.
-    const shown = msg.handle === undefined ? null : seatShown(seatName(ws, msg.handle));
+    // A GUEST ROW named by `rid` records the name the row showed (round 2
+    // fix), through the same shape test, so the log line stays safe.
+    const shown = msg.handle !== undefined ? seatShown(seatName(ws, msg.handle))
+      : msg.rid !== undefined ? seatShown((rowTarget(ws, msg.rid) || {}).shown) : null;
     if (!isUuid(id)) return reply(ws, msg, { type: 'report', error: 'no_such_user' });
 
     if (id === wireId(ws.userId)) return reply(ws, msg, { type: 'report', error: 'self' });
