@@ -2608,10 +2608,19 @@ export function createSocial({
   // already names — a guest may block and be blocked (requireAccount) — so the
   // block's own teardown has to be able to find them.
   //
-  // A DROPPED guest row has no socket to read and is not found. It can never
-  // be resumed (markResumed is by account) and Start refuses it
-  // (member_offline), and it is gone within the drop window.
-  const rowAccounts = (m) => [typeof m.key === 'string' ? m.key : '', m.ws ? wireId(m.ws.userId) : ''].filter(Boolean);
+  // A DROPPED GUEST ROW IS FOUND TOO (round 2 fix, 2026-10-08), by the
+  // account its socket was signed in as when it dropped (droppedAcct, the same
+  // account guestRowAccount names it by). It has no socket to read, and this
+  // used to say it could not come back. It can: its player resumes it by its
+  // secret (squadResume, guestBySecret) inside the drop window. A block by the
+  // row's handle (rowTarget) landed on that account, but the teardown below
+  // found no row for it, so nobody was parted at block time: the blocked
+  // guest came back to the whole roster, the blocker included, and was then
+  // removed by the sign-in door as 'kicked', while a blocker who does not
+  // lead stayed in the squad, against R16. Found here, the dropped row is
+  // parted at block time like any other, and the join, invite and sign-in
+  // doors see it as well.
+  const rowAccounts = (m) => [typeof m.key === 'string' ? m.key : '', m.ws ? wireId(m.ws.userId) : (m.guest && droppedAcct.get(m)) || ''].filter(Boolean);
   const rowsOf = (sq, id) => (id ? sq.members.filter((m) => rowAccounts(m).includes(id)) : []);
   // True when any row of `sq` stands for an account in `ids` (a Set).
   const anyRowOf = (sq, ids) => sq.members.some((m) => rowAccounts(m).some((a) => ids.has(a)));

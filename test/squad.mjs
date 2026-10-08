@@ -10031,6 +10031,65 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     else fail('(gr) block by rid: ' + JSON.stringify({ b1: ans6(wa2, 'b1'), blocks: [...st.blocks], after, ended: last6(gb, 'squad', 'ended') }));
   }
 
+  // ---- (gd) A DROPPED GUEST ROW BLOCKED BY ITS HANDLE IS PARTED AT ONCE (round 2 fix)
+  // The block by `rid` landed on the dropped row's anonymous account, but the
+  // teardown found rows only by key or by a live socket, so nobody was parted:
+  // the guest came back by their secret to the whole roster, the blocker
+  // included, and the sign-in door then removed them as 'kicked', while a
+  // blocker who does not lead stayed in the squad. R16 parts the pair at
+  // block time for any row: the leader blocking takes the guest's row out
+  // (their resume is answered gone and shows them nobody), and a member
+  // blocking leaves (the guest comes back to a roster without them, and stays).
+  {
+    const { createNameIndex } = await import('../server/name-index.js');
+    const index = createNameIndex({ load: async () => [] });
+    await index.refresh();
+    const GX = uid6(41), GY = uid6(42);
+    const st = t6store([...ROWS6,
+      { id: GX, callsign: 'Ghost X', friend_code: 'GXX234', callsign_key: null, callsign_set_at: null },
+      { id: GY, callsign: 'Ghost Y', friend_code: 'GYY234', callsign_key: null, callsign_set_at: null }]);
+    for (const who of ['leader', 'member']) {
+      const S = mkSocial6(st, { names: index });
+      const wa = up6(S, A), wc = up6(S, C);
+      const code = await create6(S, wa);
+      await join6(S, wc, code, 'Crater Two');
+      const G = who === 'leader' ? GY : GX;
+      const g = t6ws(G, true);
+      S.onAuth(g);
+      await join6(S, g, code, 'Tank Ace');
+      const gk = (last6(g, 'squad', 'state') || {}).gk;
+      const rid = ((last6(wc, 'squad', 'state') || { members: [] }).members[2] || {}).rid;
+      g.readyState = 3; S.onClose(g); await settle6();
+      const dropped = ((last6(wa, 'squad', 'state') || { members: [] }).members[2] || {}).dropped === true;
+      const blocker = who === 'leader' ? wa : wc, blockerId = who === 'leader' ? A : C;
+      clear6(wa, wc);
+      await S.handle(blocker, { type: 'block', op: 'add', rid, id: 'bx' });
+      await settle6();
+      const answered = same6(ans6(blocker, 'bx'), { type: 'block', op: 'add', ok: true, id: 'bx' }) && st.blocks.has(blockerId + '>' + G);
+      const roster = ((last6(wa, 'squad', 'state') || { members: [] }).members).map((m) => m.callsign);
+      const endedC = last6(wc, 'squad', 'ended');
+      // The guest comes back by their secret, hello first.
+      const g2 = t6ws(G, true);
+      S.onAuth(g2);
+      await S.handle(g2, { type: 'squad', op: 'resume', code, gk, id: 'r1' });
+      await settle6();
+      const back = ans6(g2, 'r1');
+      const sawBlocker = JSON.stringify(g2.rx).includes(who === 'leader' ? 'Anvil Six' : 'Crater Two');
+      const endedG = last6(g2, 'squad', 'ended');
+      const atBlock = who === 'leader'
+        ? same6(roster, ['Anvil Six', 'Crater Two']) && endedC === null
+        : same6(roster, ['Anvil Six', 'Tank Ace']) && same6(endedC, { type: 'squad', op: 'ended', reason: 'left' });
+      const onReturn = who === 'leader'
+        ? same6(back, { type: 'squad', op: 'gone', id: 'r1' }) && !g2.rx.some((f) => f.type === 'squad' && f.op === 'state')
+        : !!back && back.op === 'state' && same6(back.members.map((m) => m.callsign), ['Anvil Six', 'Tank Ace']) && back.members[back.you].guest === true && endedG === null;
+      if (dropped && answered && atBlock && onReturn && !sawBlocker)
+        ok(who === 'leader'
+          ? "(gd) the leader blocks a dropped guest row by its handle: the row is removed at block time, the squad's roster loses it, and the guest's return by secret is answered gone with no roster"
+          : "(gd) a member blocks a dropped guest row by its handle: the blocker leaves at block time, and the guest returns by secret to a roster without them and is not kicked");
+      else fail(`(gd ${who}) ` + JSON.stringify({ dropped, answered, roster, endedC, back: back && { op: back.op, members: back.members && back.members.map((m) => m.callsign) }, endedG, sawBlocker }));
+    }
+  }
+
   // ---- (gx) A GUEST'S RENAME REACHES THEIR SQUAD ROW AND SEAT (round 2 fix) -
   // A guest renames with the check op; its yes is the name the guest keeps.
   // The guest's squad row, on every member's screen and their own, and the
