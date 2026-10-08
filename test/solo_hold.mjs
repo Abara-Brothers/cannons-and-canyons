@@ -541,6 +541,49 @@ for (const mode of ['boss', 'aliens']) for (const how of ['leave', 'drop']) {
   for (const m of s) leave(C, resume(C, m.start));
 }
 
+// ---- 9b. A partner who came back to watch cannot end the held raid (round 2 fix)
+// A raid held for the player still raiding loses its hold when the forfeited
+// partner's client resumes them into it (app.js does that on launch). If the
+// partner then tapped Leave, or started any new match, the raid was torn
+// down, because nobody else was connected, and the player it was held for
+// came back to "That match ended while you were away". Only a closed socket
+// put the hold back. Every way out now does: Leave, a vs-Computer start, a
+// new lobby and a join of another lobby each hold the raid again for its
+// player, who resumes it hours later. The closed socket is the control.
+{
+  const exits = {
+    close: (w) => gone(E, w),
+    leave: (w) => leave(E, w),
+    ai: (w) => E.handleClientMessage(w, { type: 'ai', difficulty: 'easy', name: 'A', skin: 'olive', loadout: LOADOUT }),
+    create: (w) => E.handleClientMessage(w, { type: 'create', mode: 'duel', name: 'A', skin: 'olive', loadout: LOADOUT }),
+    join: (w, code) => E.handleClientMessage(w, { type: 'join', code, name: 'A', skin: 'olive', loadout: LOADOUT }),
+  };
+  for (const [how, exit] of Object.entries(exits)) {
+    const { a, b, room, aStart, bStart } = raid(E, 'boss');
+    gone(E, a);                          // A closes the app
+    advance(3 * M);                      // and is forfeited
+    gone(E, b);                          // B, raiding on alone, goes too: held
+    const heldB = !!room.heldSince;
+    advance(1 * H);
+    const aBack = resume(E, aStart);     // A's client resumes them on launch
+    const unheld = !!last(aBack, 'restore') && !room.heldSince;
+    advance(10 * 1000);
+    // A lobby somebody else is hosting, for the join.
+    const host = mkws();
+    if (how === 'join') E.handleClientMessage(host, { type: 'create', mode: 'duel', name: 'H', skin: 'desert', loadout: LOADOUT });
+    exit(aBack, host.roomCode);
+    const reheld = E.rooms.get(room.code) === room && room.state === 'playing' && !!room.heldSince;
+    advance(5 * H);
+    const bBack = resume(E, bStart);
+    if (heldB && unheld && reheld && last(bBack, 'restore') && last(bBack, 'restore').you === bStart.you && !last(bBack, 'resumeError'))
+      ok(`(9b ${how}) the forfeited partner back to watch ${how === 'close' ? 'closes the app' : how === 'leave' ? 'taps Leave' : 'starts a new match (' + how + ')'}: the raid is held again for the player still in it, who resumes it five hours later`);
+    else fail(`(9b ${how}) held ${heldB}, unheld by the resume ${unheld}, held again ${reheld} (room ${E.rooms.get(room.code) === room}, state ${room.state}), B's resume ${JSON.stringify(bBack._rx.map((m) => m.type))}`);
+    if (E.rooms.has(room.code)) leave(E, bBack);
+    if (aBack.roomCode && E.rooms.has(aBack.roomCode)) leave(E, aBack);
+    if (host.roomCode && E.rooms.has(host.roomCode)) leave(E, host);
+  }
+}
+
 // ---- 5b. The default cap: 100 at the default MAX_ROOMS of 250 ------------------
 {
   const s = [];

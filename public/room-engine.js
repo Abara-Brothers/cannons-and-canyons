@@ -659,8 +659,16 @@ function releasePriorRoom(ws) {
   // of those is still a denial of service, just a slower one. If no human remains,
   // reclaim it now. If someone else IS still in there, handleClose has already done
   // the right thing and the room stays theirs.
+  //
+  // AND IF handleClose HAS JUST HELD IT, it stays (round 2 fix, 2026-10-08). The
+  // player moving on may be a raid partner who was forfeited and came back to
+  // watch, while the one still raiding is away: handleClose holds the raid a day
+  // for that player (holdSolo sets heldSince), and tearing it down here ended it
+  // under them, so they came back to "That match ended while you were away".
+  // The hold is never the mover's own: a match held for the player moving on
+  // was ended by the branch above, before handleClose was reached.
   const stillHuman = prev.players.some((p) => p && !p.bot && p.connected);
-  if (!stillHuman && rooms.has(prev.code)) teardown(prev);
+  if (!stillHuman && !prev.heldSince && rooms.has(prev.code)) teardown(prev);
   ws.roomCode = null;
   ws.seat = null;
 }
@@ -2411,8 +2419,20 @@ export function handleClientMessage(ws, msg) {
       // freed while waiting, tank scuttled mid-match, room reclaimed once the
       // last human is gone), so route through it and only tear down when this
       // really is the last human present.
+      //
+      // NOR FOR A PLAYER WHO IS AWAY BUT STILL IN THE MATCH (round 2 fix,
+      // 2026-10-08). A co-op raid whose partner was forfeited is held a day
+      // for the one still raiding (loneHuman, holdSolo). The forfeited partner
+      // can come back into it to watch (their client resumes them on launch),
+      // and that resume takes the hold off, because somebody is connected
+      // again. When that partner then taps Leave, nobody else is connected,
+      // so this used to end the raid, and the player it was held for was
+      // told "That match ended while you were away" when they came back.
+      // Their raid is not the leaver's to end: handleClose holds it for them
+      // again, exactly as it does when the partner's socket simply closes.
       const others = room.players.some((p, i) => p && !p.bot && p.connected && i !== ws.seat);
-      if (others) { handleClose(ws); ws.roomCode = null; ws.seat = null; }
+      const away = !others && room.state === 'playing' ? loneHuman(room) : null;
+      if (others || (away && away !== room.players[ws.seat])) { handleClose(ws); ws.roomCode = null; ws.seat = null; }
       else teardown(room, true);
       break;
     }
