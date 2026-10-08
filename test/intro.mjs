@@ -20,6 +20,12 @@
 // home mid-intro, faults inside the intro (A11), and the iOS launch image
 // still being the intro's own frame 0 (A15). Criteria are numbered as
 // in the governance spec, docs/superpowers/specs/2026-10-02-cold-start-intro-design.md.
+// V9 (owner, 2026-10-07) adds the quick doors: a reopen within ten minutes of
+// last use, a held seat, a link and reduced motion get no intro and no cut,
+// but the sealed doors -- the launch image's own frame 0 -- opening in about
+// half a second onto the last view or the match (faded under reduced motion);
+// after ten minutes the intro again; and the native launch hold let go once on
+// every path.
 //
 // Self-hosted (its own server and Chrome on free ports, never 3000). Skips
 // cleanly (exit 3) without Chrome, like every other client-side suite.
@@ -190,9 +196,31 @@ const INSTR = `(() => {
       return [el.tagName, el.className && el.className.baseVal === undefined ? el.className : '', anim ? null : PROPS.map((p) => cs.getPropertyValue(p))];
     });
   };
+  // THE QUICK DOORS, frame by frame (V9): how far they have opened, where
+  // they stand, the canvas's own opacity, what is under them, and three
+  // canvas readings -- the middle of the screen and a point well inside each
+  // door -- plus a ring of points round the top-left beacon, which must turn
+  // while the doors hold. At the first frame they open: what they open onto,
+  // and whether anything in the bay is still animating its entrance.
+  S.quick = [];
+  function px(cv, x, y) { const q = cv.getContext('2d'); return q.getImageData(Math.max(0, Math.min(cv.width - 1, Math.round(x))), Math.max(0, Math.min(cv.height - 1, Math.round(y))), 1, 1).data; }
+  function quickFrame(I, cv) {
+    const d = cv.width / (cv.clientWidth || 1), g = I.geo || [0, 0, 1], bay = document.getElementById('bay');
+    const ring = [];
+    for (let k = 0; k < 12; k++) { const a = k / 12 * 6.283, p = px(cv, (g[0] + (932 * .085 + Math.cos(a) * 40) * g[2]) * d, (g[1] + (430 * .12 + Math.sin(a) * 40) * g[2]) * d); ring.push(p[0] + p[1] + p[2]); }
+    const row = { t: Math.round(I.t), open: I.open || 0, shift: I.shift || 0, seam: g[0] + 466 * g[2], u: g[2], opacity: +getComputedStyle(cv).opacity,
+      mid: px(cv, cv.width / 2, cv.height / 2)[3], left: px(cv, cv.width * .04, cv.height / 2)[3], right: px(cv, cv.width * .96, cv.height / 2)[3],
+      ring: ring.join(','), scr: bay.dataset.scr || '', game: document.getElementById('game').classList.contains('active') };
+    if (row.open > 0 && !S.quickOpen) {
+      const anims = bay.getAnimations ? bay.getAnimations({ subtree: true }).filter((a) => { const it = a.effect && a.effect.getComputedTiming && a.effect.getComputedTiming(); return it && isFinite(it.iterations) && a.playState === 'running'; }).length : 0;
+      S.quickOpen = { t: row.t, scr: row.scr, game: row.game, anims, resume: localStorage.getItem('cc_resume') !== null };
+    }
+    if (S.quick.length < 400) S.quick.push(row);
+  }
   function loop() {
     const I = window.__ccIntro, cv = document.getElementById('intro');
-    if (I && I.state === 'running' && cv) {
+    if (I && I.state === 'running' && cv && I.mode === 'quick') quickFrame(I, cv);
+    if (I && I.state === 'running' && cv && I.mode === 'full') {
       if (I.tp < 2100) { const r = alphaRange(cv); S.a1Checks++; if (r[0] < 255) S.a1Fails.push([Math.round(I.tp), r[0]]); }
       if (I.tp >= 2105 && I.tp < 2400 && S.revealOpacity === null) {
         const top = document.querySelector('#bay .stage .top');
@@ -209,9 +237,62 @@ const INSTR = `(() => {
   requestAnimationFrame(loop);
 })();`;
 const NAME = "try { localStorage.setItem('pt_name', 'TESTPILOT'); } catch (e) {}";
+// THE NATIVE LAUNCH HOLD, counted (V9). iOS keeps the launch image up until
+// intro.js calls CCLaunch.hide(); this stands in for the plugin and records
+// every call, and what was on screen at it: the overlay and its middle pixel
+// (the sealed doors are opaque there), or the menu with no overlay at all.
+// It is handed to intro.js ALONE (the caller's stack names it): a page that
+// sees window.Capacitor takes itself for the native shell, and config.js
+// would aim its socket at the production host.
+const LAUNCH = `(() => {
+  const L = window.__launch = { hides: 0, at: [] };
+  const stub = { Plugins: { CCLaunch: { hide() {
+    L.hides++;
+    const cv = document.getElementById('intro');
+    let a = -1;
+    try { if (cv) a = cv.getContext('2d').getImageData(cv.width >> 1, cv.height >> 1, 1, 1).data[3]; } catch (e) {}
+    L.at.push({ canvas: !!cv, alpha: a, scr: document.getElementById('bay').dataset.scr || '' });
+    return Promise.resolve();
+  } } } };
+  Object.defineProperty(window, 'Capacitor', { configurable: true, get() { return /\\/intro\\.js/.test(new Error().stack || '') ? stub : undefined; } });
+})();`;
+// The last view a page left behind (app.js cc_last_view), planted before any
+// page script runs: ageMs ago (negative: from the future), with these fields.
+const LAST = (ageMs, rec) => `try { localStorage.setItem('cc_last_view', JSON.stringify(Object.assign({ t: Date.now() - (${ageMs}) }, ${JSON.stringify(rec)}))); } catch (e) {}`;
+const HELD = "try { localStorage.setItem('cc_resume', JSON.stringify({ code: 'ABCD', seat: 0, token: 'x', t: Date.now() })); } catch (e) {}";
+// A server slow to answer a held seat. A local server answers a resume in a
+// few milliseconds, inside the doors' first frames, so a wait for it could not
+// be told from no wait at all: from the resume's answer on, every frame the
+// page receives is held for RESUME_SLOW ms and then handed over in order.
+const RESUME_SLOW = 700;
+const SLOW_ANSWER = `(() => {
+  const Real = window.WebSocket;
+  const Slow = function (url, proto) {
+    const s = new Real(url, proto);
+    let fn = null, q = null;
+    Object.defineProperty(s, 'onmessage', { configurable: true, get: () => fn, set: (f) => { fn = f; } });
+    s.addEventListener('message', (e) => {
+      let t = null; try { t = JSON.parse(e.data).type; } catch (x) {}
+      if (q === null && (t === 'restore' || t === 'resumeError')) {
+        q = [];
+        setTimeout(() => { const held = q; q = false; held.forEach((ev) => { if (fn) fn.call(s, ev); }); }, ${RESUME_SLOW});
+      }
+      if (q) { q.push(e); return; }
+      if (fn) fn.call(s, e);
+    });
+    return s;
+  };
+  Slow.prototype = Real.prototype;
+  Slow.CONNECTING = 0; Slow.OPEN = 1; Slow.CLOSING = 2; Slow.CLOSED = 3;
+  window.WebSocket = Slow;
+})();`;
 
-async function openPage({ w = 844, h = 390, dpr = 2, insets = null, name = true, noIntro = false, extra = [], media = null, slowBay = 0 } = {}) {
-  const { browserContextId } = await send('Target.createBrowserContext', { disposeOnDetach: true });
+// context: open the page in an existing browser context, so it shares that
+// context's localStorage with an earlier page (a reopened app) while getting
+// a sessionStorage of its own (a genuine launch). Closing such a page leaves
+// the context to its owner.
+async function openPage({ w = 844, h = 390, dpr = 2, insets = null, name = true, noIntro = false, extra = [], media = null, slowBay = 0, context = null } = {}) {
+  const { browserContextId } = context ? { browserContextId: context } : await send('Target.createBrowserContext', { disposeOnDetach: true });
   const { targetId } = await send('Target.createTarget', { url: 'about:blank', browserContextId });
   const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
   const logs = [];
@@ -257,8 +338,8 @@ async function openPage({ w = 844, h = 390, dpr = 2, insets = null, name = true,
       await sleep(20);
     }
   };
-  const close = async () => { listeners.delete(sessionId); try { await send('Target.closeTarget', { targetId }); } catch {} try { await send('Target.disposeBrowserContext', { browserContextId }); } catch {} };
-  return { s, ev, go, intro, until, close, logs };
+  const close = async () => { listeners.delete(sessionId); try { await send('Target.closeTarget', { targetId }); } catch {} if (!context) { try { await send('Target.disposeBrowserContext', { browserContextId }); } catch {} } };
+  return { s, ev, go, intro, until, close, logs, context: browserContextId };
 }
 
 // What a redraw of the bay finds to change, right now. The morph re-asserts
@@ -333,6 +414,58 @@ async function settled(p) {
   await sleep(120);
 }
 
+// ---- the quick doors, read and judged (V9) ----------------------------------
+async function quickRun(p, ms = 9000) {
+  const st = await p.until((x) => x.state === 'ended', ms);
+  await settled(p);
+  const T = await p.ev('window.__t'), L = await p.ev('window.__launch ? JSON.parse(JSON.stringify(window.__launch)) : null');
+  const after = await p.ev("({ cv: !!document.getElementById('intro'), inert: document.getElementById('bay').inert, scr: document.getElementById('bay').dataset.scr, game: document.getElementById('game').classList.contains('active') })");
+  return { st, T, L, after, logs: p.logs.slice() };
+}
+// One launch that should get the quick doors, judged on everything the owner
+// asked of them: not the intro, up before anything is drawn, open onto the
+// destination (`dest`: a bay screen, or 'game' for a resumed match), at once
+// when it is ready (`prompt`), in about half a second and in frames, never a
+// cut; parting from the seam with the gap clear onto the destination and the
+// seam still, or under reduced motion (`fade`) not moving at all but fading;
+// on a screen already at rest; the launch hold let go once, with them up.
+const QUICK_OPEN = 500, QUICK_FADE = 400;
+function doorsOk(label, R, { dest, fade = false, prompt = true }) {
+  const { st, T, L, after } = R, rows = (T && T.quick) || [], at = T && T.quickOpen;
+  const onto = dest === 'game' ? !!at && at.game && after.game : !!at && !at.game && at.scr === dest && after.scr === dest && !after.game;
+  check(`[${label}] the quick doors, not the intro: up before anything is drawn, opening onto ${dest}, nothing left after`,
+    !!st && st.mode === 'quick' && st.reason === 'done' && !!st.fade === fade && T.coverAtStage === 255 && onto && !after.cv && !after.inert,
+    JSON.stringify({ st, cover: T && T.coverAtStage, at, after }));
+  const dur = st && typeof st.openAt === 'number' ? st.t - st.openAt : NaN, want = fade ? QUICK_FADE : QUICK_OPEN;
+  const moving = rows.filter((r) => r.open > 0 && r.open < 1).length;
+  check(`[${label}] they open ${prompt ? 'at once, ' : ''}in about ${want} ms (${Math.round(dur)} ms, ${moving} frames in between), never a cut`,
+    (!prompt || st.openAt <= 250) && dur >= want - 1 && dur <= want + 60 && moving >= 8, JSON.stringify({ openAt: st && st.openAt, dur, moving }));
+  if (!fade) {
+    const mid = rows.filter((r) => r.open > .25 && r.open < .55), g0 = rows[0];
+    check(`[${label}] the doors part from the seam: mid-way the middle is clear onto the destination, both doors still on screen, the seam never moving`,
+      mid.length >= 2 && mid.every((r) => r.mid === 0 && r.left === 255 && r.right === 255 && r.opacity === 1)
+      && !!g0 && rows.every((r) => Math.abs(r.seam - g0.seam) < .01 && Math.abs(r.u - g0.u) < 1e-6),
+      JSON.stringify({ mid: mid.slice(0, 3), seams: [...new Set(rows.map((r) => r.seam.toFixed(3) + '/' + r.u.toFixed(5)))] }));
+  } else {
+    const ops = rows.map((r) => r.opacity), inner = new Set(ops.filter((o) => o > 0 && o < 1));
+    check(`[${label}] under reduced motion the doors do not move: they fade (${inner.size} steps)`,
+      rows.length > 0 && rows.every((r) => r.shift === 0 && r.mid === 255 && r.left === 255 && r.right === 255)
+      && ops.every((o, i) => i === 0 || o <= ops[i - 1]) && ops[0] === 1 && Math.min(...ops) < .2 && inner.size >= 4,
+      JSON.stringify({ ops: ops.filter((_, i) => i % 3 === 0).map((o) => +o.toFixed(3)), shifts: [...new Set(rows.map((r) => r.shift))] }));
+  }
+  check(`[${label}] nothing under them is still dealing itself in when they open, and the launch hold is let go once, with the doors up`,
+    !!at && at.anims === 0 && !!L && L.hides === 1 && L.at[0].canvas && L.at[0].alpha === 255, JSON.stringify({ anims: at && at.anims, L }));
+  check(`[${label}] no console errors`, R.logs.length === 0 && T.errors === 0, R.logs.slice(0, 3).join(' | '));
+}
+async function bayReady(p) {
+  for (let i = 0; i < 200; i++) {
+    if (await p.ev("!!window.Bay && !!document.querySelector('#bay .stage') && !document.getElementById('bay').classList.contains('enter')").catch(() => false)) return true;
+    await sleep(40);
+  }
+  return false;
+}
+const SCR = "document.getElementById('bay').dataset.scr";
+
 // ---- the full playthroughs: A1, A2, A3 and the seam, per viewport -----------
 const VIEWS = [
   { label: '844x390 phone', w: 844, h: 390, dpr: 3 },
@@ -355,7 +488,7 @@ for (const v of VIEWS) {
   await c.close();
   if (v === VIEWS[0]) check('control: a redraw of an untouched menu changes nothing (validates the method)', cRedraw.length === 0, cRedraw.slice(0, 6).join(', '));
 
-  const p = await openPage(v);
+  const p = await openPage({ ...v, extra: [LAUNCH] });
   await p.go();
   const st0 = await p.until((x) => x.state !== 'off', 3000);
   check(`[${v.label}] plays on a genuine launch`, st0 && st0.state === 'running', JSON.stringify(st0));
@@ -401,6 +534,8 @@ for (const v of VIEWS) {
     (() => { const a = sub.split('\n'), b = controlSubtree[v.label].split('\n'); const i = a.findIndex((x, k) => x !== b[k]); return i < 0 ? 'length differs' : `first difference: ${a[i]}  vs  ${b[i]}`; })());
   check(`[${v.label}] no canvas, no inert left behind`, !(await p.ev("!!document.getElementById('intro') || document.getElementById('bay').inert")));
   check(`[${v.label}] A11 no console errors`, p.logs.length === 0 && T.errors === 0, p.logs.slice(0, 3).join(' | '));
+  { const L = await p.ev('JSON.parse(JSON.stringify(window.__launch))');
+    check(`[${v.label}] V9 the launch hold is let go once, with frame 0 up`, L.hides === 1 && L.at[0].canvas && L.at[0].alpha === 255, JSON.stringify(L)); }
   // THE INTRO'S TANK ENDS ON THE MENU'S. At rest (tp 5650-5800, before the
   // menu's own image has faded in over it) the wrapper stands on the menu
   // image's box with nothing left of the drive in either layer, and the two
@@ -444,6 +579,11 @@ for (const v of VIEWS) {
 }
 
 // ---- A5 and A6: launches that must not play it ------------------------------
+// V9 (owner, 2026-10-07): none of these plays the intro, and none of them is
+// left with a cut either. On iOS each starts on the launch image, the sealed
+// doors, and a cut from those straight to the menu is the "split second" the
+// owner saw; so each gets the quick doors, faded under reduced motion. Only
+// the test switch, and a load that is not a launch (A4), have no doors.
 async function offCase(label, opts, url = BASE) {
   const p = await openPage(opts);
   await p.go(url); await sleep(900);
@@ -451,11 +591,22 @@ async function offCase(label, opts, url = BASE) {
   check(label, st && st?.state === 'off' && !(await p.ev("!!document.getElementById('intro')")), JSON.stringify(st));
   await p.close();
 }
-await offCase('A5 a room link with a saved name skips it', {}, BASE + '?room=ABCD');
-await offCase('A5 a squad link with a saved name skips it', {}, BASE + '?squad=ABCD');
-await offCase('A5 a held seat skips it', { extra: ["try { localStorage.setItem('cc_resume', JSON.stringify({ code: 'ABCD', seat: 0, token: 'x', t: Date.now() })); } catch (e) {}"] });
-await offCase('A6 the OS reduced-motion setting skips it', { media: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
-await offCase("A6 the in-game Reduce motion toggle skips it", { extra: ["try { localStorage.setItem('cc_motion', '1'); } catch (e) {}"] });
+async function quickCase(label, opts, url, want) {
+  const p = await openPage({ w: 844, h: 390, dpr: 3, ...opts, extra: [...(opts.extra || []), LAUNCH] });
+  await p.go(url);
+  const R = await quickRun(p);
+  doorsOk(label, R, want);
+  if (want.also) await want.also(p, R);
+  await p.close();
+  return R;
+}
+await quickCase('A5 a room link with a saved name: the quick doors, never the intro', {}, BASE + '?room=ABCD', { dest: 'home' });
+await quickCase('A5 a squad link with a saved name: the quick doors, never the intro', {}, BASE + '?squad=ABCD', { dest: 'home' });
+await quickCase('A5 a held seat the server no longer has: the doors wait for its answer, then open onto home', { extra: [HELD, SLOW_ANSWER] }, BASE, { dest: 'home', prompt: false,
+  also: async (p, R) => check(`A5 that held seat was answered (${RESUME_SLOW} ms late) and cleared before the doors opened, at ${R.st && Math.round(R.st.openAt)} ms`,
+    !!R.st && R.st.openAt >= RESUME_SLOW && R.T.quickOpen && R.T.quickOpen.resume === false && !(await p.ev("localStorage.getItem('cc_resume')")), JSON.stringify(R.T.quickOpen)) });
+await quickCase('A6 the OS reduced-motion setting: no intro, the doors fade', { media: [{ name: 'prefers-reduced-motion', value: 'reduce' }] }, BASE, { dest: 'home', fade: true });
+await quickCase('A6 the in-game Reduce motion toggle: no intro, the doors fade', { extra: ["try { localStorage.setItem('cc_motion', '1'); } catch (e) {}"] }, BASE, { dest: 'home', fade: true });
 await offCase('test switch: window.__ccNoIntro skips it', { noIntro: true });
 {
   // R8: a first-time visitor on an invite link is not routed anywhere, so they get the intro
@@ -464,6 +615,149 @@ await offCase('test switch: window.__ccNoIntro skips it', { noIntro: true });
   const st = await p.until((x) => x.state !== 'off', 2000);
   check('A5/R8 a nameless invite launch (boot routes nowhere) still plays it', st && st?.state === 'running', JSON.stringify(st));
   await p.close();
+}
+
+// ---- V9: A QUICK REOPEN -------------------------------------------------------
+// The owner (2026-10-07): "skip it, the doors open fast but when the doors
+// open they open into whatever the player was viewing last ... if they were
+// mid game and close the app, they would then reopen the app to see the bay
+// doors open to the game their currently playing". Within ten minutes of last
+// use: no intro, the quick doors onto the last view; after that, the intro.
+// A reopen is a new tab in the SAME browser context: localStorage carries
+// over, sessionStorage does not, which is exactly an app killed and launched.
+{
+  // The real thing: the player arms golf, opens its setup and the Armoury,
+  // and the page is put away (the tab closed). Reopened: the doors open onto
+  // the Armoury, golf still armed, and Back goes the way they came.
+  const { browserContextId: X } = await send('Target.createBrowserContext', { disposeOnDetach: true });
+  const a = await openPage({ w: 844, h: 390, dpr: 3, noIntro: true, context: X });
+  await a.go(); await bayReady(a);
+  await a.ev(`(document.querySelector('#bay [data-set="mode=golf"]').click(), Bay.go('setup'), Bay.go('armoury'), true)`);
+  const left = await a.ev(`({ scr: ${SCR}, mode: ccMode, rec: localStorage.getItem('cc_last_view') })`);
+  await a.go('about:blank'); await sleep(200); await a.close();
+  const b = await openPage({ w: 844, h: 390, dpr: 3, context: X, extra: [LAUNCH] });
+  await b.go();
+  const rec = await b.ev("JSON.parse(localStorage.getItem('cc_last_view') || 'null')");
+  check('V9 putting the page away keeps the last view: the screen, the way back to it and the armed mode',
+    left.scr === 'armoury' && left.mode === 'golf' && left.rec === null && !!rec && rec.scr === 'armoury' && JSON.stringify(rec.path) === '["home","setup"]' && rec.mode === 'golf' && Math.abs(Date.now() - rec.t) < 15000,
+    JSON.stringify({ left, rec }));
+  const R = await quickRun(b);
+  doorsOk('V9 reopened within ten minutes', R, { dest: 'armoury' });
+  const way = await b.ev(`(() => { const out = [ccMode]; Bay.back(); out.push(${SCR}); Bay.back(); out.push(${SCR}); return out; })()`);
+  check('V9 the reopened Armoury is golf\'s, and Back goes to its Match setup, then home', JSON.stringify(way) === '["golf","setup","home"]', JSON.stringify(way));
+  check('V9 after the quick doors a redraw finds nothing to change', (await b.ev(REDRAW_DIFF)).length === 0);
+  await b.close();
+  try { await send('Target.disposeBrowserContext', { browserContextId: X }); } catch {}
+}
+{
+  // Each of the two ways a page is put away keeps the view on its own:
+  // pagehide (a tab closed or navigated away; the event an unload is sure to
+  // send on every engine), and, on iOS, the app going to the background, the
+  // last thing a page hears before the app may be killed, which it hears
+  // only as becoming hidden. Chrome also turns a page hidden as it unloads,
+  // so the real close above cannot tell the two apart: each is fired here
+  // alone.
+  const p = await openPage({ w: 844, h: 390, dpr: 3, noIntro: true });
+  await p.go(); await bayReady(p);
+  const before = await p.ev("localStorage.getItem('cc_last_view')");
+  const onHide = await p.ev("(Bay.go('paint'), window.dispatchEvent(new Event('pagehide')), JSON.parse(localStorage.getItem('cc_last_view') || 'null'))");
+  check('V9 pagehide on its own keeps the last view', before === null && !!onHide && onHide.scr === 'paint' && Math.abs(Date.now() - onHide.t) < 5000, JSON.stringify({ before, onHide }));
+  const rec = await p.ev(`(() => {
+    Bay.go('career');
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+    return JSON.parse(localStorage.getItem('cc_last_view') || 'null');
+  })()`);
+  check('V9 the app going to the background keeps the last view too', !!rec && rec.scr === 'career' && JSON.stringify(rec.path) === '["home","paint"]' && Math.abs(Date.now() - rec.t) < 5000, JSON.stringify(rec));
+  await p.close();
+}
+await quickCase('V9 a reopen 9 min 50 s after last use', { extra: [LAST(590000, { scr: 'settings', path: ['home'], mode: 'boss' })] }, BASE, { dest: 'settings',
+  also: async (p) => check('V9 that reopen has Boss Fight armed again, as it was left', (await p.ev('ccMode')) === 'boss') });
+for (const [label, age] of [['V9 10 min 10 s after last use: the full intro again', 610000], ['V9 a last use stamped in the future (a clock set back): the full intro', -60000]]) {
+  const p = await openPage({ w: 844, h: 390, dpr: 3, extra: [LAST(age, { scr: 'settings', path: ['home'], mode: 'boss' })] });
+  await p.go();
+  const st = await p.until((x) => x.state === 'running' && x.tp >= 300, 6000);
+  check(label, !!st && st.mode === 'full' && st.state === 'running', JSON.stringify(st));
+  await p.close();
+}
+await quickCase('V9 a last view naming a screen that cannot come back (a lobby)', { extra: [LAST(60000, { scr: 'lobby', path: ['home'], mode: 'duel' })] }, BASE, { dest: 'home' });
+await quickCase('V9 a last view with junk in its way back and its mode', { extra: [LAST(60000, { scr: 'paint', path: ['home', 'lobby', 7, 'settings', '__proto__'], mode: 'nuke' })] }, BASE, { dest: 'paint',
+  also: async (p) => {
+    const way = await p.ev(`(() => { const out = [ccMode]; Bay.back(); out.push(${SCR}); Bay.back(); out.push(${SCR}); return out; })()`);
+    check('V9 only the screens that can come back are kept on the way back, and an unknown mode is not armed', JSON.stringify(way) === '["duel","settings","home"]', JSON.stringify(way));
+  } });
+await quickCase('V9 a launch boot takes somewhere (a room link) is boot\'s to route: the quick doors open onto home, not the last view',
+  { extra: [LAST(60000, { scr: 'settings', path: ['home'], mode: 'boss' })] }, BASE + '?room=ABCD', { dest: 'home' });
+{
+  // With no doors there is no reopen: the screen comes back only under them.
+  const p = await openPage({ w: 844, h: 390, dpr: 3, noIntro: true, extra: [LAST(60000, { scr: 'settings', path: ['home'], mode: 'boss' })] });
+  await p.go(); await bayReady(p);
+  check('V9 with the doors switched off a recent last view is not put back: home, as always', (await p.ev(SCR)) === 'home' && (await p.ev('ccMode')) === 'duel' && (await p.intro())?.state === 'off');
+  await p.close();
+}
+await quickCase('V9 a reopen within ten minutes under reduced motion', { media: [{ name: 'prefers-reduced-motion', value: 'reduce' }], extra: [LAST(60000, { scr: 'career', path: ['home'], mode: 'duel' })] }, BASE, { dest: 'career', fade: true });
+{
+  // A HELD SEAT, the real way: a match against the computer is running when
+  // the page is put away; the server holds the seat. Reopened, the doors wait
+  // for the resume and open onto the match itself. On an iPhone 17's safe
+  // areas, where the bay's stage and a hidden bay's measure differ: the doors
+  // must not move when the match takes the bay's place under them.
+  const { browserContextId: X } = await send('Target.createBrowserContext', { disposeOnDetach: true });
+  const IP17 = { w: 874, h: 402, dpr: 3, insets: { left: 62, right: 62, top: 0, bottom: 21 } };
+  const a = await openPage({ ...IP17, noIntro: true, context: X });
+  await a.go(); await bayReady(a);
+  // Started from Match setup, as a player does: the bay's last screen before
+  // the match is setup, and the view kept is still home, not setup.
+  await a.ev("(Bay.go('setup'), ccMode = 'duel', document.getElementById('createBtn').onclick(), true)");
+  let playing = false;
+  for (let i = 0; i < 150 && !playing; i++) { playing = await a.ev("!!(S.playing && localStorage.getItem('cc_resume'))"); if (!playing) await sleep(100); }
+  await a.go('about:blank'); await sleep(200); await a.close();
+  const b = await openPage({ ...IP17, context: X, extra: [LAUNCH, SLOW_ANSWER] });
+  await b.go();
+  const rec = await b.ev("JSON.parse(localStorage.getItem('cc_last_view') || 'null')");
+  const R = await quickRun(b);
+  check('V9 a match was running when the page was put away, and the view kept is home: the match is the held seat\'s to bring back', playing && !!rec && rec.scr === 'home', JSON.stringify(rec));
+  doorsOk('V9 reopened on a held seat', R, { dest: 'game', prompt: false });
+  check(`V9 the doors waited for the resume, answered ${RESUME_SLOW} ms late (they opened at ${R.st && Math.round(R.st.openAt)} ms), and the match under them is the one that was held, back in play`,
+    !!R.st && R.st.openAt >= RESUME_SLOW && await b.ev("!!(S.playing && S.code && localStorage.getItem('cc_resume'))"), JSON.stringify(R.st));
+  await b.close();
+  try { await send('Target.disposeBrowserContext', { browserContextId: X }); } catch {}
+}
+{
+  // A held seat with no server to answer: the doors may not wait for ever.
+  // They hold, alive (the beacons turn), for their ceiling, then open onto
+  // what is there.
+  const NOSOCK = `window.WebSocket = function () { this.readyState = 0; this.send = function () {}; this.close = function () {}; };
+    window.WebSocket.CONNECTING = 0; window.WebSocket.OPEN = 1; window.WebSocket.CLOSING = 2; window.WebSocket.CLOSED = 3;`;
+  await quickCase('V9 a held seat with no server to answer', { extra: [HELD, NOSOCK] }, BASE, { dest: 'home', prompt: false,
+    also: async (p, R) => {
+      const hold = R.T.quick.filter((r) => r.open === 0 && r.t >= 300);
+      check(`V9 those doors hold for their ceiling and no longer (opened at ${R.st && Math.round(R.st.openAt)} ms)`, !!R.st && R.st.openAt >= 3000 && R.st.openAt <= 3060, JSON.stringify(R.st));
+      check(`V9 and while they hold they are not a frozen frame: the beacons turn (${new Set(hold.map((r) => r.ring)).size} different looks in ${hold.length} frames)`,
+        hold.length >= 20 && new Set(hold.map((r) => r.ring)).size >= hold.length / 2, JSON.stringify(hold.slice(0, 2)));
+    } });
+}
+{
+  // THE NATIVE LAUNCH HOLD ON THE PATHS WITH NO DOORS: let go once, after the
+  // menu has painted (the doors' paths are checked above, and the intro's
+  // in every playthrough).
+  const p = await openPage({ w: 844, h: 390, dpr: 3, extra: [LAUNCH] });
+  await p.go(); await p.until((x) => x.state === 'running' && x.t >= 300, 6000);
+  await p.s('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', text: 'a' });
+  await p.s('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA' });
+  await settled(p);
+  const L1 = await p.ev('JSON.parse(JSON.stringify(window.__launch))');
+  check('V9 a skipped intro lets the launch hold go once, with the doors up', L1.hides === 1 && L1.at[0].canvas && L1.at[0].alpha === 255, JSON.stringify(L1));
+  await p.go(); await sleep(900);
+  const L2 = await p.ev('JSON.parse(JSON.stringify(window.__launch))');
+  check('V9 a load that is not a launch lets it go once, onto the drawn menu', (await p.intro())?.state === 'off' && L2.hides === 1 && !L2.at[0].canvas && L2.at[0].scr === 'home', JSON.stringify(L2));
+  await p.close();
+  const q = await openPage({ w: 844, h: 390, dpr: 3, noIntro: true, extra: [LAUNCH] });
+  await q.go(); await sleep(900);
+  const L3 = await q.ev('JSON.parse(JSON.stringify(window.__launch))');
+  check('V9 the test switch lets it go once, onto the drawn menu', L3.hides === 1 && !L3.at[0].canvas && L3.at[0].scr === 'home', JSON.stringify(L3));
+  await q.close();
 }
 
 // ---- A7: skipping ------------------------------------------------------------
@@ -669,14 +963,19 @@ async function injectAt(tpAt, label) {
   try { contents = JSON.parse(readFileSync(join(SET, 'Contents.json'), 'utf8')); } catch {}
   const files = contents ? [...new Set(contents.images.map((i) => i.filename))] : [];
   check('A15 the launch imageset uses launch-doors.png at every scale', files.length === 1 && files[0] === 'launch-doors.png' && contents.images.length === 3, JSON.stringify(files));
-  if (png) {
-    const p = await openPage({ w: SIDE, h: SIDE, dpr: 1, extra: ['window.__ccIntroFrame0 = true;'] });
+  // V9: the quick doors start on the same frame 0, so a reopen, a held seat
+  // or a link opens on exactly the launch image too, and nothing jumps when
+  // iOS lets it go.
+  for (const [mode, extra, label] of [['full', [], 'A15 the launch image is the intro\'s frame 0 (re-run tools/splash/render-doors.mjs if not)'],
+    ['quick', [LAST(60000, { scr: 'settings', path: ['home'], mode: 'duel' })], 'A15/V9 the launch image is the quick doors\' frame 0 too']]) {
+    if (!png) break;
+    const p = await openPage({ w: SIDE, h: SIDE, dpr: 1, extra: ['window.__ccIntroFrame0 = true;', ...extra] });
     await p.go();
     const st = await p.until((x) => x.state === 'running', 10000);
     await sleep(600);
     const size = await p.ev("(() => { const cv = document.getElementById('intro'); return cv ? cv.width + 'x' + cv.height : 'missing'; })()");
-    if (st?.state !== 'running' || size !== `${SIDE}x${SIDE}` || png.w !== SIDE || png.h !== SIDE) {
-      check('A15 frame 0 renders at the launch image size', false, `intro ${st?.state}, canvas ${size}, png ${png.w}x${png.h}`);
+    if (st?.state !== 'running' || st?.mode !== mode || size !== `${SIDE}x${SIDE}` || png.w !== SIDE || png.h !== SIDE) {
+      check(`A15 frame 0 renders at the launch image size (${mode})`, false, `intro ${st?.state} ${st?.mode}, canvas ${size}, png ${png.w}x${png.h}`);
     } else {
       const { rgb, opaque } = await readCanvasRGB(p.ev, SIDE, SIDE);
       // Same Chrome, same pixels. A different Chrome may dither a gradient a
@@ -689,11 +988,35 @@ async function injectAt(tpAt, label) {
         if (d > worst) worst = d;
       }
       const px = SIDE * SIDE;
-      check('A15 the launch image is the intro\'s frame 0 (re-run tools/splash/render-doors.mjs if not)', opaque && off <= px * 0.0005,
+      check(label, opaque && off <= px * 0.0005,
         `${opaque ? 'opaque' : 'NOT opaque'}; ${(100 * exact / px).toFixed(3)}% exact, ${off} pixels off by more than 2, worst ${worst}`);
     }
     await p.close();
   }
+}
+// V9: and the quick doors' first frame is the intro's first frame, pixel for
+// pixel: one door painter, one layout. On an iPhone 17's safe areas, and where
+// the seam falls between two device pixels, so the column the two halves
+// share is the intro's too. The seam is the safe box's middle, so with whole
+// CSS px it falls between device pixels only at a fractional scale (the
+// canvas works at 2x at most): 845 wide at 1.5x puts it at 633.75.
+for (const v of [{ label: '874x402 on an iPhone 17\'s safe areas', w: 874, h: 402, dpr: 3, insets: { left: 62, right: 62, top: 0, bottom: 21 } },
+  { label: '845x390 @1.5x, the seam between two device pixels', w: 845, h: 390, dpr: 1.5 }]) {
+  const shots = {};
+  for (const [mode, extra] of [['full', []], ['quick', [LAST(60000, { scr: 'settings', path: ['home'], mode: 'duel' })]]]) {
+    const p = await openPage({ ...v, extra: ['window.__ccIntroFrame0 = true;', ...extra] });
+    await p.go();
+    const st = await p.until((x) => x.state === 'running', 10000);
+    await sleep(600);
+    const [w, h] = await p.ev("(() => { const cv = document.getElementById('intro'); return cv ? [cv.width, cv.height] : [0, 0]; })()");
+    shots[mode] = st?.mode === mode && w ? { w, h, ...(await readCanvasRGB(p.ev, w, h)) } : null;
+    await p.close();
+  }
+  const F = shots.full, Qk = shots.quick;
+  let diff = -1;
+  if (F && Qk && F.w === Qk.w && F.h === Qk.h) { diff = 0; for (let i = 0; i < F.rgb.length; i++) if (F.rgb[i] !== Qk.rgb[i]) diff++; }
+  check(`V9 at ${v.label} the quick doors' frame 0 is the intro's, pixel for pixel`, diff === 0 && F.opaque && Qk.opaque,
+    JSON.stringify({ full: F && [F.w, F.h, F.opaque], quick: Qk && [Qk.w, Qk.h, Qk.opaque], diff }));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

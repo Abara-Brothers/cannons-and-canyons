@@ -477,7 +477,10 @@ await send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
   let tap = null, intro = null;
   try { tap = sessionStorage.getItem('cc_test_tap'); sessionStorage.removeItem('cc_test_tap'); } catch {}
   try { intro = sessionStorage.getItem('cc_test_intro'); sessionStorage.removeItem('cc_test_intro'); } catch {}
-  if (intro) { gate = true; window.__ccNoIntro = false; try { sessionStorage.removeItem('cc_intro'); } catch {} }
+  // A case about the intro is a launch long after the app was last used: the
+  // view this tab's earlier loads kept would make it a quick reopen (V9),
+  // which gets the quick doors and never the intro.
+  if (intro) { gate = true; window.__ccNoIntro = false; try { sessionStorage.removeItem('cc_intro'); localStorage.removeItem('cc_last_view'); } catch {} }
   if (tap) notify('pushNotificationActionPerformed', JSON.parse(tap));
 })();` });
 // HOLDING THE SERVER'S ANSWER, AND HEARING WHAT THE PAGE SAYS. Two more

@@ -17,9 +17,20 @@
 // state in the same microtask, before paint, so a redraw never shows.
 //
 // LOADED AFTER app.js AND BEFORE bay.js (index.html): after, so the launch
-// decision reuses boot's own answer (BOOT_CLAIM) and MOTION_OK rather than a
-// second copy of that policy; before, so the doors are up before the menu is
-// ever drawn and no frame of the dashboard can flash.
+// decision reuses boot's own answers (BOOT_CLAIM, REOPEN) and MOTION_OK rather
+// than a second copy of that policy; before, so the doors are up before the
+// menu is ever drawn and no frame of the dashboard can flash, and so bay.js
+// can read which doors are up (CC_DOORS) before it draws.
+//
+// THE QUICK DOORS (owner, 2026-10-07). A launch that does not get the full
+// intro but did start on the sealed doors (on iOS the launch image IS them)
+// must not cut from them to the menu: they stay up until the destination is
+// drawn underneath and then part in half a second onto it, or fade under
+// reduced motion. That is a reopen within ten minutes of last use (app.js
+// REOPEN, onto the screen the player left), a launch boot is taking somewhere
+// (BOOT_CLAIM: a held seat's match, a link), reduced motion and a native
+// sign-in return. The quick doors write nothing into the menu: they only
+// cover it.
 //
 // Owner decisions and the acceptance criteria are recorded in the governance
 // repo, docs/superpowers/specs/2026-10-02-cold-start-intro-design.md.
@@ -49,47 +60,61 @@
   }
 
   // ---------------------------------------------------------------------------
-  // WHETHER TO PLAY. Decided once, synchronously, before bay.js has run.
+  // WHETHER TO PLAY, AND WHICH DOORS. Decided once, synchronously, before
+  // bay.js has run: 'full' for the intro, 'quick' for the quick doors, '' for
+  // neither.
   //   - Only a genuine launch: a sessionStorage marker survives "Back to menu",
   //     "Leave game", a refresh and the sign-in round trip (all page loads in
   //     the same tab) and is empty in a new tab or a freshly launched app. If
-  //     storage cannot be used the intro never plays: a player must never be
-  //     trapped in a repeat after every match.
-  //   - Not when boot is taking the player somewhere: a held seat, or a room or
-  //     squad link boot is acting on. BOOT_CLAIM is boot's own expression.
-  //   - Not under reduced motion (the OS setting or the in-game toggle), as the
-  //     killcam is not.
-  //   - Not on a native sign-in return: the pending flag lives in localStorage
-  //     there (cloud.js:81), and a sign-in finishing is somewhere to go.
+  //     storage cannot be used neither plays: a player must never be trapped
+  //     in a repeat after every match.
+  //   - The quick doors, never the intro, when boot is taking the player
+  //     somewhere: a held seat, or a room or squad link boot is acting on.
+  //     BOOT_CLAIM is boot's own expression.
+  //   - The quick doors when the app was last in use under ten minutes ago
+  //     (REOPEN, boot's own answer too): they open onto what the player left.
+  //   - The quick doors, faded rather than parted, under reduced motion (the
+  //     OS setting or the in-game toggle), as the killcam is not played.
+  //   - The quick doors on a native sign-in return: the pending flag lives in
+  //     localStorage there (cloud.js:81), and a sign-in finishing is somewhere
+  //     to go.
   function decide() {
-    if (window.__ccNoIntro) return false;
+    if (window.__ccNoIntro) return '';
     let fresh = false;
     try {
       fresh = sessionStorage.getItem('cc_intro') === null;
       sessionStorage.setItem('cc_intro', '1');
-    } catch (e) { return false; }
-    if (!fresh) return false;
+    } catch (e) { return ''; }
+    if (!fresh) return '';
     // typeof on a binding still in its TDZ throws, which is the case if app.js
-    // died before declaring these. No app, no intro.
-    try { if (typeof BOOT_CLAIM === 'undefined' || BOOT_CLAIM) return false; } catch (e) { return false; }
-    try { if (typeof MOTION_OK === 'undefined' || !MOTION_OK) return false; } catch (e) { return false; }
+    // died before declaring these. No app, no doors.
+    let quick = false;
+    try { if (typeof BOOT_CLAIM === 'undefined') return ''; if (BOOT_CLAIM) quick = true; } catch (e) { return ''; }
+    try { if (typeof MOTION_OK === 'undefined') return ''; if (!MOTION_OK) quick = true; } catch (e) { return ''; }
+    try { if (typeof REOPEN !== 'undefined' && REOPEN) quick = true; } catch (e) {}
     try {
       const cap = window.Capacitor;
-      if (cap && cap.isNativePlatform && cap.isNativePlatform() && localStorage.getItem('cc_oauth_pending') === '1') return false;
+      if (cap && cap.isNativePlatform && cap.isNativePlatform() && localStorage.getItem('cc_oauth_pending') === '1') quick = true;
     } catch (e) {}
-    if (!document.getElementById('bay') || !document.getElementById('app')) return false;
-    if (typeof Path2D === 'undefined' || typeof requestAnimationFrame !== 'function') return false;
-    return true;
+    if (!document.getElementById('bay') || !document.getElementById('app')) return '';
+    if (typeof Path2D === 'undefined' || typeof requestAnimationFrame !== 'function') return '';
+    return quick ? 'quick' : 'full';
   }
 
-  let play = false;
-  try { play = decide(); } catch (e) { play = false; }
-  if (!play) {
+  let mode = '';
+  try { mode = decide(); } catch (e) { mode = ''; }
+  // For bay.js, which puts a reopened screen back only under the quick doors.
+  try { window.CC_DOORS = mode; } catch (e) {}
+  if (!mode) {
     // Release the launch image once the menu has painted, not before: bay.js
     // has not run yet, and releasing now would show a frame of flat dark.
     afterTwoFrames(releaseLaunch);
     return;
   }
+  const QUICK = mode === 'quick';
+  let FADE = false;
+  try { FADE = QUICK && !MOTION_OK; } catch (e) {}
+  status.mode = mode; status.fade = FADE;
 
   // ---------------------------------------------------------------------------
   // ONE GUARD ROUND EVERY ENTRY POINT. Anything that throws ends the intro and
@@ -1288,6 +1313,84 @@
   });
 
   // ---------------------------------------------------------------------------
+  // THE QUICK DOORS. Their frame 0 is the intro's own frame 0, the launch
+  // image: while they are shut the interior is painted under them as the
+  // intro paints it, so even the column a fractional seam shares between the
+  // two halves is the same pixel. While the destination is not drawn yet (a
+  // held seat's resume in flight, a first font load) they hold, and are not a
+  // frozen frame: the studio mark and the beacons power on and the beacons
+  // turn, as in the intro's first quarter second. Then they part in Q.open
+  // with the gap between them clear onto the destination itself. Under
+  // reduced motion nothing on them moves or lights: they hold as the launch
+  // image held, and the canvas fades in Q.fade instead of parting.
+  // Q.hold is the visible time they may wait: past it they open onto whatever
+  // is there, and a resume that lands later takes the player to the match as
+  // it always has. Where the doors stand is measured once, at boot, from the
+  // probe stage (the launch image's own geometry), and again only if the
+  // overlay changes size: under them the bay may give way to the match, a
+  // hidden bay measures as nothing, and a seam that moved mid-open would split
+  // the doors.
+  const Q = { power: 250, open: 500, fade: 400, hold: 3000 };
+  let openAt = -1;
+  function doorTravel() {                   // how far each half goes: as far as the intro's doorShift
+    const g = doorGeom();
+    return Math.max(W * .52 * 1.16, Math.max(g.seam, cw - g.seam) / u + 30);
+  }
+  function gameUp() { const g = document.getElementById('game'); return !!(g && g.classList.contains('active')); }
+  // The destination is drawn: a held seat's match once its resume has been
+  // answered, either way (restored, or refused and cleared by boot); else the
+  // screen the bay has drawn, in its own type and with its pictures in.
+  function quickReady() {
+    if (gameUp()) return true;
+    let held = false;
+    try { held = BOOT_CLAIM === 'resume' && typeof loadResume === 'function' && !!loadResume(); } catch (e) {}
+    if (held || !fontsOk || !bay.dataset.scr || !bay.classList.contains('active')) return false;
+    return Array.prototype.every.call(bay.querySelectorAll('img'), function (i) { return i.complete; });
+  }
+  function paintQuick(t, p) {
+    const shift = FADE ? 0 : eInOut(p) * doorTravel(), po = FADE ? 0 : eOut(seg(t, 0, Q.power));
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.filter = 'none';
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    if (shift <= 0) { toOverlay(); paintInterior(); }
+    toStage();
+    const BIG = 4000;
+    ctx.save(); ctx.translate(-shift, 0); ctx.beginPath(); ctx.rect(-BIG, -BIG, W / 2 + BIG, H + 2 * BIG); ctx.clip();
+    paintDoorHalf(-1); markPaths(t, W / 2, 0, po);
+    paintBeacon(W * .085, H * .12, t, 0, po); paintBeacon(W * .085, H * .88, t, Math.PI, po);
+    ctx.restore();
+    ctx.save(); ctx.translate(shift, 0); ctx.beginPath(); ctx.rect(W / 2, -BIG, W / 2 + BIG, H + 2 * BIG); ctx.clip();
+    paintDoorHalf(1); markPaths(t, W / 2, 0, po);
+    paintBeacon(W * .915, H * .12, t, Math.PI * .5, po); paintBeacon(W * .915, H * .88, t, Math.PI * 1.5, po);
+    ctx.restore();
+    if (FADE) cv.style.opacity = p >= 1 ? '0' : (1 - eInOut(p)).toFixed(4);
+    status.shift = shift; status.geo = [sx, sy, u];
+  }
+  const quickFrame = guard(function (now) {
+    rafId = requestAnimationFrame(quickFrame);
+    if (document.visibilityState === 'hidden' || document.prerendering) { last = now; return; }
+    const dt = last ? clamp(now - last, 0, 50) : 0;
+    last = now;
+    const key = sizeKey;
+    fitBacking();
+    if (sizeKey !== key) measure();
+    if (started) {
+      t += dt;
+      if (openAt < 0 && (quickReady() || t >= Q.hold)) {
+        openAt = t;
+        status.openAt = t; status.dest = gameUp() ? 'game' : bay.dataset.scr || '';
+        // A screen drawn under the doors is still dealing itself in: it is
+        // finished now, while the doors are shut, so they open onto it at rest.
+        finishEntrance();
+      }
+    }
+    const p = openAt < 0 ? 0 : seg(t, openAt, openAt + (FADE ? Q.fade : Q.open));
+    status.t = t; status.tp = t; status.open = p;
+    paintQuick(t, p);
+    if (p >= 1) end('done');
+  });
+
+  // ---------------------------------------------------------------------------
   // GO. The overlay and frame 0 are up before bay.js runs, so the first painted
   // frame is the doors. The clock starts once the doors are on screen: on iOS
   // after the native launch hold has been released (with a ceiling, in case the
@@ -1297,14 +1400,17 @@
     hadInert = !!bay.inert;
     bay.inert = true;
     app.appendChild(cv);
-    app.appendChild(hint);
+    if (!QUICK) app.appendChild(hint);         // the quick doors are gone before it could be read
     wrapped.forEach(function (p) { window.addEventListener(p[0], p[1], true); });
     measure();
-    paint(0, 0);
-    mo = new MutationObserver(guard(onMutations));
-    mo.observe(bay, { subtree: true, childList: true, attributes: true, attributeFilter: ['style', 'class', 'data-scr'] });
+    if (QUICK) paintQuick(0, 0); else paint(0, 0);
+    // The quick doors write nothing into the menu, so there is nothing to put back after a redraw.
+    if (!QUICK) {
+      mo = new MutationObserver(guard(onMutations));
+      mo.observe(bay, { subtree: true, childList: true, attributes: true, attributeFilter: ['style', 'class', 'data-scr'] });
+    }
     watchdog = setTimeout(guard(function () { end('watchdog'); }), 30000);
-    rafId = requestAnimationFrame(frame);
+    rafId = requestAnimationFrame(QUICK ? quickFrame : frame);
     if (window.__ccIntroFrame0) return;        // the launch-image renderer holds frame 0
     afterTwoFrames(guard(function () {
       let go = false;

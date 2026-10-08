@@ -8788,11 +8788,39 @@ function drawFloaters() {
 // ---------------------------------------------------------------------------
 // What boot is about to do with this launch, published for the cold-start
 // intro (intro.js), which must stay out of the way of a launch that is going
-// somewhere. Set from the SAME expression boot routes on below, so the two can
-// never disagree: 'resume' for a held seat, 'room' or 'squad' for a link boot
-// is acting on, null for a launch that lands on home. A link without a saved
+// somewhere: such a launch gets the quick doors, never the full intro. Set
+// from the SAME expression boot routes on below, so the two can never
+// disagree: 'resume' for a held seat, 'room' or 'squad' for a link boot is
+// acting on, null for a launch that lands on home. A link without a saved
 // name is only prefilled, so it is null too.
 let BOOT_CLAIM = null;
+// THE LAST VIEW, FOR A QUICK REOPEN (owner, 2026-10-07: "the doors open fast
+// but when the doors open they open into whatever the player was viewing
+// last"). Whenever the page is put away -- the app sent to the background,
+// which is the last thing iOS tells a page before it may kill it, or the tab
+// closed -- the time and what the bay was showing are kept in cc_last_view:
+// the screen, the screens Back returns through and the armed mode
+// (Bay.where()). A match is not kept here: cc_resume already holds it, and
+// boot's resume takes the player back to it. REOPEN is that view when the app
+// was last in use under REOPEN_MS ago, read ONCE at boot beside BOOT_CLAIM and
+// for the same readers: intro.js opens its quick doors instead of playing the
+// full intro, and bay.js puts the screen back under them. A record from the
+// future (a clock set back) is not recent, or it would stay recent until the
+// clock caught up with it.
+const LAST_VIEW_KEY = 'cc_last_view', REOPEN_MS = 10 * 60 * 1000;
+let REOPEN = null;
+function noteLastView() {
+  const v = window.Bay && typeof window.Bay.where === 'function' ? window.Bay.where() : null;
+  try { localStorage.setItem(LAST_VIEW_KEY, JSON.stringify({ t: Date.now(), scr: v ? v.scr : 'home', path: v ? v.path : [], mode: ccMode })); } catch {}
+}
+function lastView() {
+  let v = null;
+  try { v = JSON.parse(localStorage.getItem(LAST_VIEW_KEY) || 'null'); } catch { return null; }
+  const age = v && typeof v.t === 'number' ? Date.now() - v.t : NaN;
+  return age >= 0 && age < REOPEN_MS ? v : null;
+}
+window.addEventListener('pagehide', noteLastView);
+document.addEventListener('visibilitychange', () => { if (document.hidden) noteLastView(); });
 function boot() {
   // Capture this BEFORE seeding — the deep-link auto-join must still require a
   // name the player actually owns, not one we just handed them a millisecond ago.
@@ -8837,6 +8865,7 @@ function boot() {
   // above: a name the player has never seen is not a name to enter someone's
   // squad under.
   BOOT_CLAIM = loadResume() ? 'resume' : (link && hadName ? link.kind : null);
+  REOPEN = lastView();
   if (link && hadName && !loadResume()) {
     if (link.kind === 'room') {
       setTimeout(() => intent({ type: 'join', code: link.code, name: savedName(), skin: mySkin() }), 300);

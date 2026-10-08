@@ -44,6 +44,8 @@ const G = {
   get canvas()        { return typeof canvas        !== 'undefined' ? canvas        : undefined; },
   get ctx()           { return typeof ctx           !== 'undefined' ? ctx           : undefined; },
   get TANK_R()        { return typeof TANK_R        !== 'undefined' ? TANK_R        : undefined; },
+  get REOPEN()        { return typeof REOPEN        !== 'undefined' ? REOPEN        : undefined; },
+  get BOOT_CLAIM()    { return typeof BOOT_CLAIM    !== 'undefined' ? BOOT_CLAIM    : undefined; },
 };
 const fn = (name) => (typeof window[name] === 'function' ? window[name] : null);   // function declarations live on window
 const has = (name) => G[name] !== undefined || !!fn(name);
@@ -4129,7 +4131,39 @@ function landSquad() {
   render('home');
 }
 
-window.Bay = { show: render, go, back, state, tankURL, MODES, haptic, rankFor, applyMotion, landSquad };
+// A QUICK REOPEN PUTS THE SCREEN BACK (owner, 2026-10-07: "when the doors open
+// they open into whatever the player was viewing last"). app.js keeps what
+// where() says whenever the page is put away, and publishes it as REOPEN when
+// that was under ten minutes ago; intro.js then opens its quick doors instead
+// of the full intro, and boot (the end of this file) draws the screen they
+// open onto. Only these screens come back: each is drawn from what the page
+// rebuilds on its own, storage and the socket's answers, which every one of
+// them already waits for, and none of them holds a room, a sheet or a field
+// in progress. Anything else is home, a room's lobby among them: its room did
+// not survive the close. The record is storage, so every field of it is
+// checked here, as anything read from storage is.
+const REOPEN_OK = ['home', 'setup', 'squad', 'career', 'settings', 'friends', 'paint', 'armoury', 'modes'];
+const REOPEN_PATH = 8;                  // the screens Back returns through, at most
+function where() {
+  const host = $('bay');
+  return host && host.classList.contains('active') ? { scr: current, path: stack.slice(-REOPEN_PATH) } : null;
+}
+// Only under the quick doors, and only on a launch boot is not taking
+// anywhere. With no doors (the intro switched off, or unable to run) a launch
+// lands on home as it always has, so nothing that opens the page without them
+// meets a screen it did not ask for; a held seat or a link is boot's to route.
+function reopenView() {
+  const v = G.REOPEN;
+  if (!v || typeof v !== 'object' || window.CC_DOORS !== 'quick' || G.BOOT_CLAIM) return null;
+  const ok = (s) => typeof s === 'string' && REOPEN_OK.includes(s);
+  return {
+    scr: ok(v.scr) ? v.scr : 'home',
+    path: Array.isArray(v.path) ? v.path.filter(ok).slice(-REOPEN_PATH) : [],
+    mode: typeof v.mode === 'string' && MODES.some((m) => m.id === v.mode) ? v.mode : '',
+  };
+}
+
+window.Bay = { show: render, go, back, state, tankURL, MODES, haptic, rankFor, applyMotion, landSquad, where };
 
 // refreshAccountChip() fires this the moment a session changes; the two screens
 // that show the account (home chip, Bay controls row) redraw in place. Only
@@ -4405,6 +4439,14 @@ if (fn('renderLobby')) { const orig = renderLobby; renderLobby = function (m) { 
 // whatever room came before.
 if (fn('showLobby'))   { const orig = showLobby;   showLobby   = function (mode) { lobby.mode = mode; lobby.m = null; return orig.apply(this, arguments); }; }
 
-// BOOT. The bay is the menu: take the route in, once.
-if (has('showScreen')) showScreen('home');
+// BOOT. The bay is the menu: take the route in, once. On a quick reopen it is
+// the screen the player left, with Back through the screens they came by and
+// the mode they had armed (reopenView); the mode first, so home is drawn with
+// it too.
+const reopen = reopenView();
+if (reopen && reopen.mode && has('ccMode')) { ccMode = reopen.mode; if (fn('syncCreateRow')) syncCreateRow(); }
+if (has('showScreen')) {
+  showScreen('home');
+  if (reopen && reopen.scr !== 'home') { stack.push(...reopen.path); render(reopen.scr); }
+}
 })();
