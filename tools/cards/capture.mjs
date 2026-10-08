@@ -4,7 +4,7 @@
 // game"; his answer: real game scenes, styled).
 //
 //   node tools/cards/capture.mjs [--port 3105] [--only duel,golf] [--out DIR]
-//                                [--raw DIR] [--sheet FILE]
+//                                [--raw DIR] [--sheet FILE] [--subjects FILE]
 //                                [--explore DIR] [--raw DIR --burst N]
 //
 // For each mode this starts its OWN server (server.js on --port, default 3105,
@@ -16,8 +16,11 @@
 // and drawn by the game's own draw(). Every pixel of the scene is the game's.
 // What is staged is said plainly: the combatants are stood closer together
 // than a match deals them (a whole duel spans 12,500-20,000 units, and at a
-// card's size a tank across that is a few pixels), on the real map near their
-// real spawns, and the shells in the air at once were fired for the picture.
+// card's size a tank across that is a few pixels), on the real map, and the
+// shells in the air at once were fired for the picture. Most stand near their
+// real spawns; Boss Fight's WARLORD-7 is stood on ground above the player's
+// tank, and Alien Invasion's fight is stood on a shelf west of the player's
+// spawn (see each scene for why).
 //
 // Each moment is cropped three ways, one per place a mode card is shown, at
 // twice the largest size that place is ever drawn (an iPad Pro 13" in
@@ -28,12 +31,27 @@
 // graded (colour, glow, tone, vignette; studio.js finish) and written as WebP
 // to public/bay/card-<mode>-<shape>.webp, each held to MAX_BYTES.
 //
+// THE NAMED SUBJECTS STAND CLEAR (owner, 2026-10-07: Boss Fight must read at
+// once as a boss fight, FFA shows four tanks, Aliens shows saucers raining
+// fire). The bay lays a players pill, an offline badge, the mode's icon, its
+// name and its tag line over these pictures, and a crop that put WARLORD-7's
+// head or a saucer under the pill showed the mode's very subject covered. So
+// each scene names its subjects, and for every crop the tool records the box
+// each one was drawn in (studio.js boxes) in tools/cards/subjects.json, with
+// the sha256 of the picture it was measured in. test/mode_cards.mjs (6) holds
+// every box clear of every pill, badge, icon and label on every screen, in
+// every state a card is shown in. A crop frames its subjects in the room
+// those leave: on a home board, below the pill and above the name, or beside
+// the name where the words end.
+//
 // DETERMINISTIC: two runs write byte-identical files. The server's map, biome
 // and bots come from the seed; once the match is live the page runs on the
 // studio's clock (seeded Math.random, a performance.now that moves only with
 // its fixed 60 fps steps); and the canvas is rasterised in software. A scene
 // names the biome it was framed for; if a seed ever stops giving it (a change
 // to map generation), the tool searches the next seeds and says which to pin.
+// All of it holds only while the server answering is the tool's own seeded
+// one, so a port another server still holds is refused (see portFree).
 //
 // --raw DIR       also write each crop ungraded as PNG (to compare the grade)
 // --sheet FILE    also write a contact sheet of every card, labelled
@@ -41,9 +59,13 @@
 //                 of its field (where everyone stands), for framing a scene
 // --burst N       with --raw: instead of the cards, N frames of each wide crop
 //                 1/20 s apart from the staged moment, to choose the moment
+// --subjects FILE where the subjects' boxes go (default: beside this tool for
+//                 the pictures in public/bay, beside the pictures for --out)
 // After a capture: a NEW file must be added to public/sw.js SHELL under the
-// ?v= stamp (house rule 7e checks it), then run test/mode_cards.mjs.
+// ?v= stamp (house rule 7e checks it); commit tools/cards/subjects.json with
+// the pictures it was written for; then run test/mode_cards.mjs.
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import net from 'node:net';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -64,6 +86,9 @@ const EXPLORE = arg('explore', null);
 const ONLY = arg('only', '') ? arg('only', '').split(',') : null;
 const BURST = Number(arg('burst', 0));   // explore: N raw frames of the wide crop, 1/20 s apart
 const MAX_BYTES = 120000;
+// The subjects' boxes go beside the tool for the pictures the app ships, and
+// beside the pictures for any other --out.
+const SUBJECTS = arg('subjects', OUT === join(ROOT, 'public', 'bay') ? join(HERE, 'subjects.json') : join(OUT, 'subjects.json'));
 
 // THE THREE SHAPES. `u` is the box in bay units (styles.css: .bcard, .mbi,
 // .brief .bi at the 932 x 430 frame); `out` is the file's pixel size, the
@@ -99,6 +124,10 @@ const get = (url) => fetch(url, { signal: AbortSignal.timeout(2000) });
 // world point to centre (or the ground line and where it sits; see worldY),
 // the zoom (game pixels per world unit) and `sy`, how far down the 430-high
 // screen the crop sits, which picks the sky's band. `look` tunes the grade.
+// It also returns `subjects`, the moment's named subjects (studio.js boxes:
+// a seat, a shot or the cup), and a shape may list in `out` the ones its crop
+// leaves wholly out; the test then holds those wholly out of that picture, so
+// none is ever cut in half at its edge.
 const SCENES = [
   // DUEL: two tanks trading shells. The foe's shell is over the top of its arc
   // and coming in; the player's gun has just answered.
@@ -112,58 +141,74 @@ const SCENES = [
       st.fire([{ seat: foe, weapon: 'cannon', angle: b.angle, power: b.p }, { seat: me, weapon: 'cannon', angle: a.angle, power: a.p, delay: D }]);
       st.runTo(D); st.blastOf(me); st.run(0.12);
       const mx = (x0 + x1) / 2, gy = Math.min(S.tanks[me].y, S.tanks[foe].y);
-      return { board: { x: mx, gy, g: 0.58, zoom: 0.03, sy: 150 }, tall: { x: mx, gy, g: 0.66, zoom: 0.03, sy: 230 }, wide: { x: mx, gy, g: 0.74, zoom: 0.058, sy: 140 } };
+      return { board: { x: mx, gy, g: 0.58, zoom: 0.03, sy: 150 }, tall: { x: mx, gy, g: 0.66, zoom: 0.0279, sy: 230 }, wide: { x: mx, gy, g: 0.74, zoom: 0.058, sy: 140 },
+        subjects: [{ name: 'your tank', seat: me }, { name: "the computer's tank", seat: foe }, { name: "the computer's shell", shot: 0 }, { name: 'your shell', shot: 1 }] };
     })()` },
-  // FREE-FOR-ALL: four tanks on one ridge line, shells in the air both ways
-  // and one of them just landing on a tank.
+  // FREE-FOR-ALL: four tanks on one ridge line and a shell in the air from
+  // each of them, both ways across the line, none of them landed yet: a
+  // burst on a tank hid that tank, and the card is about four of them. They
+  // stand 1,600 apart, on ground a little higher in the middle (the row's
+  // `rise`), so on a home board the middle two stand above the name and the
+  // end two beside it, below the icon and the players pill.
   { mode: 'ffa', biome: 'desert', seed: 22, look: { glow: 0.25 },
     stage: `(() => {
-      const st = __studio, a = st.row([0, 2500, 5000, 7500], S.world.w / 2 - 3750), xs = [0, 1, 2, 3].map((k) => a + k * 2500);
+      const st = __studio, SP = 1600, a = st.row([0, SP, 2 * SP, 3 * SP], S.world.w / 2 - 1.5 * SP, 9000, [0, 250, 250, 0]), xs = [0, 1, 2, 3].map((k) => a + k * SP);
       xs.forEach((x, i) => st.put(i, x, { face: i < 2 ? 1 : -1 }));
-      const s1 = st.solve(1, 'cannon', [58, 54, 62], xs[2]), s3 = st.solve(3, 'cannon', [52, 48, 56], xs[0]), s0 = st.solve(0, 'cannon', [62, 58, 66], xs[3]);
-      const s2 = st.solve(2, 'mortar', [64, 60, 68], xs[1]);
-      const T = s1.len;
-      st.fire([{ seat: 1, weapon: 'cannon', angle: s1.angle, power: s1.p },
-               { seat: 3, weapon: 'cannon', angle: s3.angle, power: s3.p, delay: Math.max(0, T - Math.round(s3.len * 0.45)) },
-               { seat: 0, weapon: 'cannon', angle: s0.angle, power: s0.p, delay: Math.max(0, T - Math.round(s0.len * 0.62)) },
-               { seat: 2, weapon: 'mortar', angle: s2.angle, power: s2.p, delay: Math.max(0, T - Math.round(s2.len * 0.3)) }]);
-      st.runTo(T); st.run(0.15);
+      const plan = [[0, 'cannon', [42, 38, 46], 2, 0.56], [3, 'cannon', [44, 40, 48], 1, 0.44], [1, 'mortar', [52, 48, 56], 3, 0.34], [2, 'cannon', [40, 36, 44], 0, 0.66]];
+      const sol = plan.map(([seat, w, angs, at]) => st.solve(seat, w, angs, xs[at]));
+      const T = Math.max(...sol.map((q, k) => Math.round(q.len * plan[k][4])));
+      st.fire(plan.map(([seat, w], k) => ({ seat, weapon: w, angle: sol[k].angle, power: sol[k].p, delay: T - Math.round(sol[k].len * plan[k][4]) })));
+      st.runTo(T);
       const mx = (xs[0] + xs[3]) / 2, gy = Math.min(...xs.map((x) => st.groundAt(x)));
-      return { board: { x: mx, gy, g: 0.58, zoom: 0.0195, sy: 170 }, tall: { x: (xs[1] + xs[2]) / 2, gy, g: 0.66, zoom: 0.030, sy: 220 }, wide: { x: mx, gy, g: 0.74, zoom: 0.046, sy: 170 } };
+      return { board: { x: mx + 46, gy, g: 0.462, zoom: 0.026, sy: 170 }, tall: { x: mx, gy, g: 0.62, zoom: 0.0259, sy: 220 }, wide: { x: mx, gy, g: 0.5, zoom: 0.05, sy: 170 },
+        subjects: xs.map((x, i) => ({ name: 'tank ' + (i + 1), seat: i })) };
     })()` },
-  // BOSS FIGHT: WARLORD-7 towering over the player's tank, its rocket rack
-  // raining down as the player's gun fires back.
+  // BOSS FIGHT: WARLORD-7 towering over the player's tank from the ground
+  // about 560 above it, its rocket rack raining down as the player's gun
+  // fires back. They stand 1,450 apart so that on a home board WARLORD-7
+  // fits whole between the icon and the players pill, above the name, with
+  // the tank below it beside the name.
   { mode: 'boss', biome: 'volcanic', seed: 32,
     stage: `(() => {
-      const st = __studio, me = S.you, B = S.boss;
-      const x0 = st.row([0, 3400], S.tanks[B].x - 3400, 9000), bx = x0 + 3400;
+      const st = __studio, me = S.you, B = S.boss, D = 1450;
+      const x0 = st.row([0, D], S.tanks[B].x - D, 9000, [0, 630]), bx = x0 + D;
       st.put(me, x0, { face: 1 }); st.put(B, bx, { face: -1 });
-      const c = st.solve(me, 'cannon', [40, 36, 44, 48], bx), h = st.solve(B, 'b_hellstorm', [64, 60, 68], x0 - 500);
+      const c = st.solve(me, 'cannon', [52, 48, 56, 60, 44], bx), h = st.solve(B, 'b_hellstorm', [72, 68, 76, 64, 80], x0 - 500);
       const T = Math.round(h.len * 0.78);
       st.fire([{ seat: B, weapon: 'b_hellstorm', angle: h.angle, power: h.p }, { seat: me, weapon: 'cannon', angle: c.angle, power: c.p, delay: T }]);
       st.runTo(T); st.blastOf(me); st.run(0.1);
-      const gy = S.tanks[me].y;
-      return { board: { x: (x0 + bx) / 2 + 100, gy, g: 0.64, zoom: 0.03, sy: 190 }, tall: { x: (x0 + bx) / 2 + 250, gy, g: 0.66, zoom: 0.031, sy: 230 }, wide: { x: (x0 + bx) / 2, gy, g: 0.74, zoom: 0.06, sy: 200 } };
+      const gy = S.tanks[B].y;
+      return { board: { x: bx + 1200, gy, g: 0.505, zoom: 0.025, sy: 190 }, tall: { x: (x0 + bx) / 2 + 250, gy, g: 0.6, zoom: 0.045, sy: 230 }, wide: { x: (x0 + bx) / 2 + 600, gy, g: 0.56, zoom: 0.045, sy: 200 },
+        subjects: [{ name: 'WARLORD-7', seat: B }, { name: 'your tank', seat: me }] };
     })()` },
   // ALIEN INVASION: the saucers hold the high ground and rain plasma down on
-  // the player's tank, three bolts in the air at once.
-  { mode: 'aliens', biome: 'ruins', seed: 45,
+  // the player's tank, three bolts in the air at once, on low arcs coming in.
+  // On a home board the saucers stand in the strip between the players pill
+  // and the name, so they need a shelf where all three float within about 60
+  // world units of one height. A search of the ruins maps of seeds 40 to 75
+  // found the best one on seed 73, at x 3,100, west of the player's spawn.
+  // The Mission board's tall crop holds two of the three, at a size that
+  // reads, and the third is left wholly out of it.
+  { mode: 'aliens', biome: 'ruins', seed: 73,
     stage: `(() => {
       const st = __studio, me = S.you;
       const al = S.kinds.map((k, i) => (k === 'alien' ? i : -1)).filter((i) => i >= 0);
-      const offs = [0, 2500, 4000, 5500], x0 = st.row(offs, S.tanks[me].x + 3000, 9000, [0, 800, 900, 1000]);
+      const offs = [0, 2400, 4000, 5450], x0 = st.row(offs, 3100, 300, [0, 450, 450, 450]);
       st.put(me, x0, { face: 1 });
       al.forEach((s, k) => st.put(s, x0 + offs[k + 1], { face: -1 }));
-      const ang = [[50, 46, 54], [56, 52, 60], [62, 58, 66]], at = [x0 - 500, x0 + 350, x0 + 1000], part = [0.86, 0.66, 0.46];
+      const ang = [[38, 36, 40], [38, 36, 40], [40, 38, 42]], at = [x0 - 400, x0 + 300, x0 + 900], part = [0.92, 0.78, 0.72];
       const sol = al.map((s, k) => st.solve(s, 'a_plasma', ang[k], at[k]));
       const T = Math.max(...sol.map((q, k) => Math.round(q.len * part[k])));
       st.fire(al.map((s, k) => ({ seat: s, weapon: 'a_plasma', angle: sol[k].angle, power: sol[k].p, delay: T - Math.round(sol[k].len * part[k]) })));
       st.runTo(T);
       const y0 = S.tanks[me].y;
-      return { board: { x: x0 + 2100, gy: y0, g: 0.62, zoom: 0.03, sy: 190 }, tall: { x: x0 + 1700, gy: y0, g: 0.66, zoom: 0.036, sy: 230 }, wide: { x: x0 + 2800, gy: y0, g: 0.74, zoom: 0.06, sy: 190 } };
+      return { board: { x: x0 + 2833, gy: y0, g: 0.627, zoom: 0.024, sy: 190 }, tall: { x: x0 + 2001, gy: y0, g: 0.64, zoom: 0.0302, sy: 230, out: ['saucer 3'] }, wide: { x: x0 + 3300, gy: y0, g: 0.65, zoom: 0.05, sy: 190 },
+        subjects: al.map((s, k) => ({ name: 'saucer ' + (k + 1), seat: s })).concat(al.map((s, k) => ({ name: 'plasma bolt ' + (k + 1), shot: k })), [{ name: 'your tank', seat: me }]) };
     })()` },
   // ARTILLERY GOLF: the ball coming down out of its arc toward the flag, the
-  // shot played with the Iron from the fairway past the water.
+  // shot played with the Iron from the fairway past the water. The moment is
+  // late in the flight, the ball low and near the flag, so on a home board
+  // both stand left of the players pill and above the name.
   { mode: 'golf', biome: 'alpine', seed: 51, look: { glow: 0.3 },
     stage: `(() => {
       const st = __studio, me = S.you, cup = S.golf.cup;
@@ -171,9 +216,10 @@ const SCENES = [
       st.put(me, x0, { face: 1 });
       const w = st.solve(me, 'golfball', [40, 36, 44], cup.x - 250, true);
       st.fire([{ seat: me, weapon: 'golfball', angle: w.angle, power: w.p }]);
-      st.runTo(Math.round(w.land * 0.8));
+      st.runTo(Math.round(w.land * 0.88));
       const gy = cup.y;
-      return { board: { x: cup.x - 1900, gy, g: 0.6, zoom: 0.032, sy: 170 }, tall: { x: cup.x - 900, gy, g: 0.66, zoom: 0.034, sy: 220 }, wide: { x: (x0 + cup.x) / 2, gy, g: 0.74, zoom: 0.058, sy: 170 } };
+      return { board: { x: cup.x - 829, gy, g: 0.479, zoom: 0.03, sy: 170 }, tall: { x: cup.x - 388, gy, g: 0.678, zoom: 0.058, sy: 220 }, wide: { x: (x0 + cup.x) / 2, gy, g: 0.74, zoom: 0.058, sy: 170 },
+        subjects: [{ name: 'the ball', shot: 0 }, { name: 'the flag', cup: true }] };
     })()` },
 ];
 
@@ -232,16 +278,29 @@ await send('Page.addScriptToEvaluateOnNewDocument', { source: `window.__ccNoIntr
 await send('Emulation.setDeviceMetricsOverride', { width: 932, height: 430, deviceScaleFactor: 2, mobile: false });
 
 // ---- a server per scene, on the one port --------------------------------------
+// THE PORT IS TRIED THE WAY server.js TAKES IT: server.listen(PORT) with no
+// host, every address. A check on 127.0.0.1 alone passes while a stale server
+// still holds the port on every address (a crashed run's child, say); the new
+// server then fails to start, the stale one answers /health, and the cards are
+// drawn from its unseeded map, a different one every run.
 async function portFree(port) {
-  return new Promise((res) => { const s = net.createServer(); s.once('error', () => res(false)); s.listen(port, '127.0.0.1', () => s.close(() => res(true))); });
+  return new Promise((res) => { const s = net.createServer(); s.once('error', () => res(false)); s.listen(port, () => s.close(() => res(true))); });
 }
 async function startServer(seed) {
   if (srv) { srv.kill('SIGKILL'); srv = null; }
   for (let i = 0; i < 50 && !(await portFree(PORT)); i++) await sleep(100);
   if (!(await portFree(PORT))) throw new Error(`port ${PORT} is busy: pass --port`);
-  srv = spawn(process.execPath, ['--import', join(HERE, 'seeded-random.mjs'), 'server.js'],
+  const me = spawn(process.execPath, ['--import', join(HERE, 'seeded-random.mjs'), 'server.js'],
     { cwd: ROOT, env: { ...process.env, PORT: String(PORT), CARD_SEED: String(seed) }, stdio: 'ignore' });
-  for (let i = 0; i < 80; i++) { try { await get(`http://127.0.0.1:${PORT}/health`); return; } catch {} await sleep(150); }
+  let gone = false; me.once('exit', () => { gone = true; });
+  srv = me;
+  // Only OUR server may answer: one that exited (the port taken after all)
+  // means whatever answers /health is somebody else's.
+  for (let i = 0; i < 80; i++) {
+    if (gone) throw new Error(`the seeded server exited before it answered: is port ${PORT} taken?`);
+    try { await get(`http://127.0.0.1:${PORT}/health`); if (!gone) return; } catch {}
+    await sleep(150);
+  }
   throw new Error('server never came up');
 }
 
@@ -326,7 +385,40 @@ for (const scene of SCENES) {
       const png = await ev(`__studio.raw(${render}, ${JSON.stringify(crop)}, ${S0.out[0]}, ${S0.out[1]})`);
       writeFileSync(join(RAW, name + '.png'), Buffer.from(png.split(',')[1], 'base64'));
     }
+    // Where the scene's named subjects landed in this crop (studio.js boxes).
+    const boxes = await ev(`__studio.boxes(${cx}, ${cy}, ${f.zoom}, ${VIEW[0]}, ${VIEW[1]}, ${RENDER_SS}, ${!!scene.aim}, ${JSON.stringify(crop)}, ${JSON.stringify(frames.subjects)})`);
+    const outs = f.out || [];
+    files[files.length - 1].subjects = boxes.filter((b) => !outs.includes(b.name));
+    files[files.length - 1].out = boxes.filter((b) => outs.includes(b.name));
+    for (const b of boxes) {
+      const off = b.box && (b.box[0] < 0 || b.box[1] < 0 || b.box[2] > 1 || b.box[3] > 1);
+      const gone = !b.box || b.box[2] <= 0 || b.box[0] >= 1 || b.box[3] <= 0 || b.box[1] >= 1;
+      if (outs.includes(b.name)) { if (!gone) console.log(`  WARN ${name}: ${b.name} should be out of the picture ${JSON.stringify(b.box)}`); }
+      else if (!b.box) console.log(`  WARN ${name}: ${b.name} is not in the picture`);
+      else if (off) console.log(`  WARN ${name}: ${b.name} runs off the picture ${JSON.stringify(b.box)}`);
+    }
   }
+}
+
+// ---- the subjects' boxes ----------------------------------------------------
+// One file for every card the bay can show, kept beside this tool (or beside
+// --out's pictures): each card's size, the sha256 of its exact bytes and the
+// box of each named subject in it. A run with --only updates its own modes and
+// keeps the rest. test/mode_cards.mjs reads it, checks every hash against the
+// picture in public/bay, and holds each box clear of the bay's overlays.
+if (files.length) {
+  const path = SUBJECTS;
+  let rec = { cards: {} };
+  try { rec = JSON.parse(readFileSync(path, 'utf8')); } catch {}
+  rec.about = 'Written by tools/cards/capture.mjs: where each mode card\'s named subjects are drawn in its picture, in fractions of the picture [x0, y0, x1, y1]. Read by test/mode_cards.mjs.';
+  for (const f of files) {
+    rec.cards[f.name] = { w: f.w, h: f.h, sha256: createHash('sha256').update(readFileSync(f.path)).digest('hex'), subjects: f.subjects, out: f.out };
+  }
+  rec.cards = Object.fromEntries(Object.entries(rec.cards).sort(([a], [b]) => a.localeCompare(b)));
+  // One line per box, so a change to a card reads as a change to its boxes.
+  const text = JSON.stringify({ about: rec.about, cards: rec.cards }, null, 1).replace(/\[\s+(-?[\d.]+),\s+(-?[\d.]+),\s+(-?[\d.]+),\s+(-?[\d.]+)\s+\]/g, '[$1, $2, $3, $4]');
+  writeFileSync(path, text + '\n');
+  console.log('subject boxes ->', path);
 }
 
 // ---- the contact sheet --------------------------------------------------------

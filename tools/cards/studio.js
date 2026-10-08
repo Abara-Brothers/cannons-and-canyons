@@ -277,6 +277,54 @@
       g.drawImage(src, crop.x, crop.y, crop.w, crop.h, 0, 0, outW, outH);
       return c.toDataURL('image/png');
     },
+
+    // WHERE EACH NAMED SUBJECT IS DRAWN IN A CROP (WARLORD-7, a saucer, a
+    // tank, a shell, the ball, the flag). The moment is rendered once as it
+    // is and once more for each subject with that one subject left out; the
+    // subject is every pixel the two renders differ in, so its box is exactly
+    // what the game drew for it, its gun and glow included. The renders are
+    // compared over the whole screen, not only the crop, so a subject the
+    // crop cuts off comes back reaching past the crop's edge instead of as a
+    // smaller box that looks whole. Each box is in fractions of the crop (0
+    // to 1 across and down, the card picture's own frame), or null when the
+    // subject is not drawn at all. test/mode_cards.mjs holds every box clear
+    // of the pills, badges, icons and labels the bay lays over the card.
+    //   { seat }  a combatant: a tank, WARLORD-7 or a saucer (drawn only
+    //             while S.alive[seat] is not false);
+    //   { shot }  a projectile in the air, by its index in the shot frame;
+    //   { cup }   the golf cup and its flag.
+    boxes(cx, cy, zoom, cssW, cssH, ss, aim, crop, subjects) {
+      const pixels = (cv) => cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+      const draw1 = () => pixels(api.render(cx, cy, zoom, cssW, cssH, ss, aim));
+      const base = draw1();
+      const W = Math.round(cssW * ss);
+      return subjects.map((sub) => {
+        let undo;
+        if (sub.seat != null) { const was = S.alive[sub.seat]; S.alive[sub.seat] = false; undo = () => { S.alive[sub.seat] = was; }; }
+        else if (sub.shot != null) {
+          const pr = S.anim && S.anim.projectiles[sub.shot];
+          if (!pr) throw new Error(`no projectile ${sub.shot} for ${sub.name}`);
+          const was = [pr.done, pr.exploded]; pr.done = true; pr.exploded = true;
+          undo = () => { pr.done = was[0]; pr.exploded = was[1]; };
+        } else if (sub.cup) { const f = window.drawGolfCup; window.drawGolfCup = () => {}; undo = () => { window.drawGolfCup = f; }; }
+        else throw new Error(`subject ${sub.name} names nothing to leave out`);
+        let d;
+        try { d = draw1(); } finally { undo(); }
+        // The two renders are identical wherever the subject is not (the page
+        // runs on the studio's clock and draw() spends no randomness), so the
+        // floor of 12, summed over the four channels, only drops the faintest
+        // fringe of a glow.
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        for (let k = 0; k < d.length; k += 4) {
+          if (Math.abs(d[k] - base[k]) + Math.abs(d[k + 1] - base[k + 1]) + Math.abs(d[k + 2] - base[k + 2]) + Math.abs(d[k + 3] - base[k + 3]) <= 12) continue;
+          const p = k >> 2, x = p % W, y = (p - x) / W;
+          if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+        }
+        const r4 = (v) => Math.round(v * 1e4) / 1e4;
+        return { name: sub.name, box: x1 < 0 ? null
+          : [r4((x0 - crop.x) / crop.w), r4((y0 - crop.y) / crop.h), r4((x1 + 1 - crop.x) / crop.w), r4((y1 + 1 - crop.y) / crop.h)] };
+      });
+    },
   };
   window.__studio = api;
 })();

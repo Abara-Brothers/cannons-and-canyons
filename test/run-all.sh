@@ -401,7 +401,10 @@ else
   # The mode cards are stills from the game (owner, 2026-10-07; made by
   # tools/cards/capture.mjs): each screen shows its mode's own still for its
   # shape, loaded, big enough for an iPad, not dimmed away; the glint stops for
-  # reduced motion; and with the server gone the precache still shows them.
+  # reduced motion; with the server gone the precache still shows them; and
+  # each card's named subjects (WARLORD-7, FFA's four tanks, the saucers...)
+  # stand clear of every pill, badge, icon and label on all three screens,
+  # from the boxes the capture tool recorded in tools/cards/subjects.json.
   # Self-hosted on its own free ports. Skips without Chrome.
   run mode_cards node test/mode_cards.mjs
   # The cold-start intro (public/intro.js): that its last frame IS the live

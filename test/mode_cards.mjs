@@ -18,12 +18,19 @@
 //   5. offline: from a clean slate the service worker precaches every card at
 //      install under the URL the page asks for, and with the server gone a
 //      reload still shows them all; the old pictures are neither asked for
-//      nor precached.
-// Checked at 874 x 402 with the iPhone 17's safe areas and at 932 x 430.
+//      nor precached;
+//   6. each card shows its named subjects (owner: Boss Fight reads at once as
+//      a boss fight, FFA shows four tanks, Aliens shows saucers raining fire)
+//      clear of every pill, badge, icon and label laid over it, on every screen
+//      and in every state the card is shown in, from the subject boxes the
+//      capture tool recorded for exactly these pictures.
+// Checked at 874 x 402 with the iPhone 17's safe areas and at 932 x 430 (6
+// also at 667 x 375 and on the iPad Pro 13").
 //
 // Self-hosted: spawns its own server on a free port. Exit 3 = SKIP when Chrome
 // is absent.
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import net from 'node:net';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -48,7 +55,9 @@ const OLD = ['alpine-hero', 'desert-hero', 'volcanic-hero', 'ruins-mid', 'ice-mi
 // Every CDP call has a deadline, and so does the whole run; every way out
 // takes Chrome and the server with it.
 const CDP_MS = 15000;
-const RUN_MS = 240000;
+// Section 6 visits every screen once per mode at four sizes, which adds about
+// a minute to the run; the hang guard keeps its old margin over that.
+const RUN_MS = 360000;
 const get = (url) => fetch(url, { signal: AbortSignal.timeout(2000) });
 let srv = null, chrome = null, prof = null;
 const cleanup = () => {
@@ -145,6 +154,94 @@ async function brightness(sel, index, top, bottom) {
   })()`);
 }
 const glint = (sel) => `(() => { const el = document.querySelector(${JSON.stringify(sel)}); return el ? getComputedStyle(el, '::after').animationName : 'missing'; })()`;
+
+// ---- 6's measure: is each named subject clear on the card as it is shown?
+// THE OWNER'S NAMED SUBJECTS (2026-10-07, binding): Boss Fight must read at
+// once as a boss fight, FFA shows four tanks, Aliens shows saucers raining
+// fire; his answer named "WARLORD-7 over your tank, saucers raining fire,
+// ball arcing to the flag, shells crossing in Duel, four tanks in FFA". Every
+// card of a mode must carry at least these, under the names the capture tool
+// records them by: [name prefix, how many]. (The Mission board's tall crop of
+// Alien Invasion holds two of the three saucers, so the third is not drawn
+// at a few pixels; it is recorded as out of that crop and must stay wholly out.)
+const NAMED = {
+  duel: [['your tank', 1], ["the computer's tank", 1], ['your shell', 1], ["the computer's shell", 1]],
+  ffa: [['tank ', 4]],
+  boss: [['WARLORD-7', 1], ['your tank', 1]],
+  aliens: [['saucer ', 2], ['plasma bolt ', 1], ['your tank', 1]],
+  golf: [['the ball', 1], ['the flag', 1]],
+};
+// How clear, in bay units (--u, which every card's size, pill and label scale
+// with): GAP_U between a subject and anything laid over the card, EDGE_U from
+// the edge of what the card shows (the vignette darkens the last few units,
+// and the armed card's top bar and the Mission board's lip sit there).
+const GAP_U = 2, EDGE_U = 3;
+// In the page: card `idx` of `sel`, against its record `rec`. Returns the
+// picture's natural size, how many checks were made and every problem found.
+const CLEAR = `(sel, idx, rec, gapU, edgeU) => {
+  const card = document.querySelectorAll(sel)[idx];
+  const board = card.closest('.board');
+  const was = board ? board.style.transform : '';
+  // The home boards stand in an arc, each turned a few degrees by its own
+  // inline transform. That turns the whole card, picture, pills and labels
+  // together, so nothing on it moves against anything else; it is taken off
+  // for the measure so every box is upright and comparable. The lift and the
+  // scale of an armed or hovered card are on the card itself and stay on.
+  if (board) board.style.transform = was.replace(/rotate\\([^)]*\\)/, '');
+  try {
+    const img = card.querySelector('img');
+    const cr = card.getBoundingClientRect(), k = cr.width / card.offsetWidth;
+    const clip = { l: cr.left + card.clientLeft * k, t: cr.top + card.clientTop * k, r: cr.right - card.clientLeft * k, b: cr.bottom - card.clientTop * k };
+    const probe = document.createElement('div');
+    probe.style.cssText = 'position:absolute;visibility:hidden;width:calc(100 * var(--u))';
+    document.getElementById('bay').appendChild(probe);
+    const u = probe.getBoundingClientRect().width / 100 * k;
+    probe.remove();
+    // object-fit: cover, centred. The picture is scaled to fill the img's
+    // box (the Mission board's 1.05 under the finger is already in that box)
+    // and the overflow is split evenly; the card clips whatever spills out.
+    const ir = img.getBoundingClientRect(), nw = img.naturalWidth, nh = img.naturalHeight;
+    const s = Math.max(ir.width / nw, ir.height / nh), W = nw * s, H = nh * s;
+    const ox = ir.left + (ir.width - W) / 2, oy = ir.top + (ir.height - H) / 2;
+    const at = (b) => ({ l: ox + b[0] * W, t: oy + b[1] * H, r: ox + b[2] * W, b: oy + b[3] * H });
+    const WHAT = [['.bpl', 'players pill'], ['.bnf', 'squad pill'], ['.bof', 'offline badge'], ['.bic, .mbicn', 'mode icon'],
+      ['.bnm, .mbn, .bi > span', 'mode name'], ['.btg', 'tag line']];
+    const els = [...card.querySelectorAll('.bic, .bpl, .bnf, .bof, .mbicn, .bnm, .btg, .mbn')];
+    if (card.classList.contains('bi')) els.push(...card.querySelectorAll(':scope > span:not(.g)'));
+    const over = els.filter((el) => el.getClientRects().length).map((el) => {
+      const r = el.getBoundingClientRect();
+      let b = { l: r.left, t: r.top, r: r.right, b: r.bottom };
+      // A LABEL IS ITS WORDS: the name and tag blocks run the card's width
+      // with the words centred in them. Pills, badges and icons are their
+      // whole box, background and padding included.
+      if (el.matches('.bnm, .btg, .mbn, .bi > span')) {
+        const q = document.createRange(); q.selectNodeContents(el); const t = q.getBoundingClientRect();
+        b = { l: Math.max(b.l, t.left), t: Math.max(b.t, t.top), r: Math.min(b.r, t.right), b: Math.min(b.b, t.bottom) };
+      }
+      return { what: WHAT.find(([c]) => el.matches(c))[1], ...b };
+    });
+    const g = gapU * u, e = edgeU * u, out = { nw, nh, n: 0, problems: [] };
+    // A subject with no box is already a failure of 6's record check; it has
+    // nothing to measure here. A subject left out of the crop with none was
+    // not drawn anywhere on the screen, as far out of the crop as it gets.
+    for (const sub of rec.subjects) {
+      if (!Array.isArray(sub.box)) continue;
+      const b = at(sub.box); out.n++;
+      for (const [side, d] of [['left', b.l - clip.l], ['top', b.t - clip.t], ['right', clip.r - b.r], ['bottom', clip.b - b.b]]) {
+        if (d < e) out.problems.push(sub.name + (d < 0 ? ' runs ' + (-d / u).toFixed(1) + 'u past the ' + side + ' edge' : ' is ' + (d / u).toFixed(1) + 'u from the ' + side + ' edge, under ' + edgeU));
+      }
+      for (const o of over) {
+        if (b.r > o.l - g && b.l < o.r + g && b.b > o.t - g && b.t < o.b + g) out.problems.push(sub.name + ' is under the ' + o.what + ' (or within ' + gapU + 'u of it)');
+      }
+    }
+    for (const sub of rec.out || []) {
+      if (!Array.isArray(sub.box)) continue;
+      const b = at(sub.box); out.n++;
+      if (b.r > clip.l && b.l < clip.r && b.b > clip.t && b.t < clip.b) out.problems.push(sub.name + ', left out of this crop, shows at its edge');
+    }
+    return out;
+  } finally { if (board) board.style.transform = was; }
+}`;
 
 try {
   for (const [w, h, sa, label] of [[874, 402, IPHONE17, '874x402 iPhone 17'], [932, 430, null, '932x430']]) {
@@ -243,6 +340,72 @@ try {
     const small = cs.filter((c) => c.nw < 2 * c.bw * c.k - 1 || c.nh < 2 * c.bh * c.k - 1);
     if (!small.length) ok(`2 1376x1032 iPad Pro 13" ${screen}: each picture (${cs[0].nw}x${cs[0].nh}) is at least twice its shown size (${(cs[0].bw * cs[0].k).toFixed(0)}x${(cs[0].bh * cs[0].k).toFixed(0)})`);
     else fail(`2 iPad ${screen}: pictures under twice their shown size: ` + JSON.stringify(small.map((c) => [c.mode, c.nw, c.nh, c.bw, c.bh])));
+  }
+
+  // 6. THE SUBJECT IS CLEAR. The capture tool records, for every card, the box
+  // each named subject was drawn in (tools/cards/subjects.json). First the
+  // record itself: it belongs to exactly the pictures in public/bay (their
+  // sha256), and every card of a mode carries the owner's named subjects.
+  let subjects = null;
+  try { subjects = JSON.parse(readFileSync(join(ROOT, 'tools/cards/subjects.json'), 'utf8')).cards; }
+  catch (e) { fail('6 tools/cards/subjects.json could not be read: ' + e.message); }
+  if (subjects) {
+    for (const mode of MODES) {
+      for (const shape of Object.values(SCREENS)) {
+        const name = `card-${mode}-${shape}`, rec = subjects[name];
+        if (!rec) { fail(`6 ${name}: no subject boxes recorded`); continue; }
+        const sha = createHash('sha256').update(readFileSync(join(ROOT, 'public/bay', name + '.webp'))).digest('hex');
+        const lost = rec.subjects.filter((s) => !Array.isArray(s.box) || s.box.length !== 4);
+        const short = NAMED[mode].filter(([pre, n]) => rec.subjects.filter((s) => s.name.startsWith(pre) && Array.isArray(s.box)).length < n);
+        if (rec.sha256 !== sha) fail(`6 ${name}: the subject boxes were recorded for another picture (sha256 ${String(rec.sha256).slice(0, 12)}, the file is ${sha.slice(0, 12)}); run tools/cards/capture.mjs`);
+        else if (lost.length) fail(`6 ${name}: subjects the capture did not find in the frame: ${lost.map((s) => s.name).join(', ')}`);
+        else if (short.length) fail(`6 ${name}: missing the named subjects ${short.map(([pre, n]) => n + ' x ' + pre.trim()).join(', ')} (has ${rec.subjects.map((s) => s.name).join(', ')})`);
+        else ok(`6 ${name}: its boxes are for this exact picture, and it shows ${rec.subjects.map((s) => s.name).join(', ')}`);
+      }
+    }
+    // Then the screens. Every subject box, mapped onto the card exactly as
+    // the page draws the picture, must lie inside what the card shows, EDGE_U
+    // in from its edges, and GAP_U clear of every pill, badge, icon and label
+    // laid over it; a subject recorded as out of a crop must be wholly out.
+    // In every state each card is shown in: a home board unarmed, armed
+    // (lifted and scaled) and under the finger; a Mission board card unarmed,
+    // armed and under the finger (its picture scaled 1.05 inside the card, so
+    // the edges move in); Match setup's brief. A greyed card (.nofit, the squad
+    // cannot play that mode) is not held to it: its picture is dimmed to grey
+    // on purpose and the pill across it is what the card has to say.
+    const sub = JSON.stringify(subjects);
+    for (const [w, h, sa, label] of [[874, 402, IPHONE17, '874x402 iPhone 17'], [932, 430, null, '932x430'], [667, 375, null, '667x375'], [1376, 1032, null, '1376x1032 iPad Pro 13"']]) {
+      await load(w, h, sa);
+      await ev(`(window.__subj = ${sub}, window.__clear = ${CLEAR}, true)`);
+      for (const [screen, shape] of Object.entries(SCREENS)) {
+        const sel = { home: '#bay .board .bcard', modes: '#bay .mb .mbi', setup: '#bay .brief .bi' }[screen];
+        const problems = [];
+        let n = 0;
+        const check = async (i, mode, state) => {
+          const r = await ev(`__clear(${JSON.stringify(sel)}, ${i}, __subj[${JSON.stringify(`card-${mode}-${shape}`)}], ${GAP_U}, ${EDGE_U})`);
+          const rec = subjects[`card-${mode}-${shape}`];
+          if (r.nw !== rec.w || r.nh !== rec.h) problems.push(`${mode} ${state}: the picture is ${r.nw}x${r.nh}, the record ${rec.w}x${rec.h}`);
+          for (const p of r.problems) problems.push(`${mode} ${state}: ${p}`);
+          n += r.n;
+        };
+        for (const [k, armed] of MODES.entries()) {
+          await show(screen, armed);
+          if (screen === 'setup') { await check(0, armed, 'brief'); continue; }
+          for (const [i, mode] of MODES.entries()) await check(i, mode, i === k ? 'armed' : 'unarmed');
+          // Under the finger: the next card along, which is not the armed one.
+          const j = (k + 1) % MODES.length;
+          const c = await ev(`(() => { const r = document.querySelectorAll(${JSON.stringify(sel)})[${j}].getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+          await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: c.x, y: c.y });
+          await sleep(450);
+          await check(j, MODES[j], 'hovered');
+          await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1 });
+          await sleep(300);
+        }
+        const states = screen === 'setup' ? 'brief in Match setup' : screen === 'home' ? 'home boards unarmed, armed and hovered' : 'Mission board unarmed, armed and hovered';
+        if (!problems.length) ok(`6 ${label} ${screen}: on the ${states}, every named subject is inside the picture (${EDGE_U}u in) and ${GAP_U}u clear of every pill, badge, icon and label (${n} checks)`);
+        else fail(`6 ${label} ${screen}: ${problems.length} subject(s) not clear: ` + problems.slice(0, 12).join('; '));
+      }
+    }
   }
 
   // 5. offline. From a clean slate -- no worker, no caches -- the page shows

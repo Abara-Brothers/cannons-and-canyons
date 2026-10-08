@@ -2016,7 +2016,8 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
      border-color .18s,box-shadow .22s;box-shadow:0 calc(14 * var(--u)) calc(26 * var(--u)) calc(-14 * var(--u)) rgba(0,0,0,.95)}
   /* THE CARD ART IS A STILL FROM THE GAME (owner, 2026-10-07: "the actual
      game mode ... make it look cooler"), framed by tools/cards/capture.mjs with
-     the action in the top 60% of the board, above the name. So the picture is
+     every named subject clear of the players pill, the icon and the name and
+     tag (test/mode_cards.mjs 6 holds it to that). So the picture is
      shown near full strength and only the label's strip is shaded: the old
      0.56 opacity under a gradient across the whole card was made for generic
      scenery and hid the very thing the card is now about. An unarmed board
@@ -2521,9 +2522,9 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .mb.on{border-color:#ffb46b;transform:translateY(calc(-8 * var(--u)));
      box-shadow:0 calc(26 * var(--u)) calc(44 * var(--u)) calc(-16 * var(--u)) rgba(255,150,70,.6),0 0 0 1px rgba(255,180,107,.5)}
   #bay .mbi{position:relative;height:calc(184 * var(--u));flex:none;overflow:hidden}
-  /* The Mission board's still is framed with the action above its middle and
-     the ground under the name, so only the name's strip is shaded (see THE
-     CARD ART above). */
+  /* The Mission board's still is framed with the action between the icon and
+     badge and the name, and the ground under the name, so only the name's
+     strip is shaded (see THE CARD ART above). */
   #bay .mbi img{width:100%;height:100%;object-fit:cover;opacity:.84;transition:.22s;filter:saturate(.8) brightness(.92)}
   #bay .mb:hover .mbi img, #bay .mb.on .mbi img{opacity:1;filter:none;transform:scale(1.05)}
   #bay .mbi .g{position:absolute;inset:0;background:linear-gradient(0deg,rgba(8,11,19,.98) 0%,rgba(8,11,19,.78) 16%,
