@@ -29,22 +29,29 @@ if (end < 0) { fail('exportMyData() body never closes — the brace scan ran off
 const BODY = SRC.slice(at + HEAD.length, end);
 
 // Run the real body with every browser thing it touches stubbed, and catch the
-// JSON on its way into the Blob.
+// JSON on its way into the Blob -- or, on a phone (IS_NATIVE), on its way into
+// the panel bay.js draws it in (window.Bay.showData). Everything the player
+// would see or get is recorded: Blobs made, links clicked, toasts said.
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-const run = new AsyncFunction('Cloud', 'savedName', 'progressionSnapshot', 'Blob', 'document', 'URL', 'setTimeout', 'showToast', 'window', BODY);
+const run = new AsyncFunction('Cloud', 'savedName', 'progressionSnapshot', 'Blob', 'document', 'URL', 'setTimeout', 'showToast', 'window', 'IS_NATIVE', BODY);
 
-async function exportWith({ social, blocked, name = 'Iron Hare', who = { anonymous: false, google: true, apple: false, email: 'a@b.c' } }) {
-  let text = null;
-  class StubBlob { constructor(parts) { text = parts.join(''); } }
-  const doc = { createElement: () => ({ click() {}, remove() {} }), body: { appendChild() {} } };
+async function exportRun({ social, blocked, name = 'Iron Hare', who = { anonymous: false, google: true, apple: false, email: 'a@b.c' }, native = false, bay = true }) {
+  const seen = { text: null, blobs: 0, clicks: [], toasts: [], shown: [] };
+  class StubBlob { constructor(parts) { seen.blobs++; seen.text = parts.join(''); } }
+  const doc = { createElement: () => { const a = { click() { seen.clicks.push(a.download); }, remove() {} }; return a; }, body: { appendChild() {} } };
   const url = { createObjectURL: () => 'blob:stub', revokeObjectURL: () => {} };
   const Cloud = { restore: async () => ({ callsign: name, wins: 7 }), whoami: async () => who, userId: () => 'u-1111' };
   const win = {};
   if (social !== undefined) win.CC_SOCIAL = social;   // absent = a player who never opened Friends
   if (blocked !== undefined) win.CC_SOCIAL_BLOCKED = blocked;  // bay.js's guest-only blocked-list size
-  await run(Cloud, () => name, () => ({ career: { wins: 7 } }), StubBlob, doc, url, () => {}, () => {}, win);
-  if (text === null) throw new Error('nothing reached the Blob — the download path changed');
-  return JSON.parse(text);
+  if (bay) win.Bay = { showData: (t) => { seen.shown.push(t); } };
+  await run(Cloud, () => name, () => ({ career: { wins: 7 } }), StubBlob, doc, url, () => {}, (m) => { seen.toasts.push(m); }, win, native);
+  return seen;
+}
+async function exportWith(opts) {
+  const seen = await exportRun(opts);
+  if (seen.text === null) throw new Error('nothing reached the Blob — the download path changed');
+  return JSON.parse(seen.text);
 }
 
 const SNAP = { friends: [{ id: 'a' }, { id: 'b' }, { id: 'c' }], requests: { in: [], out: [] }, blocked: [{ id: 'z' }], friendCode: 'K7M2QP', callsign: 'Iron Hare' };
@@ -122,6 +129,41 @@ const KEYS = ['exported_at', 'account_id', 'account_type', 'sign_in', 'callsign'
   } else {
     fail('not_included is missing an entry: ' + JSON.stringify(Object.keys(ni)));
   }
+}
+
+// 7. ON THE WEB, A DOWNLOAD, AS ALWAYS: one Blob, one click on a link that
+//    saves cannons-and-canyons-data.json, then "Data downloaded", and the panel
+//    is never asked for.
+{
+  const w = await exportRun({ social: SNAP });
+  if (w.blobs === 1 && JSON.stringify(w.clicks) === JSON.stringify(['cannons-and-canyons-data.json']) && JSON.stringify(w.toasts) === JSON.stringify(['Data downloaded']) && !w.shown.length)
+    ok('web: the file is saved through one link and the toast says "Data downloaded" (unchanged)');
+  else fail('web export: ' + JSON.stringify({ blobs: w.blobs, clicks: w.clicks, toasts: w.toasts, shown: w.shown.length }));
+}
+// 8. IN THE APP NOTHING CAN BE DOWNLOADED (round 2 review, 2026-10-08): the
+//    iOS WebView hands a blob: link to the system, which opens nothing, and the
+//    Android shell has no download handler, yet the toast said "Data
+//    downloaded". On a phone the SAME text goes to the panel (bay.js showData):
+//    no Blob, no link, and nothing that says a file was downloaded.
+{
+  const w = await exportRun({ social: SNAP });
+  const n = await exportRun({ social: SNAP, native: true });
+  const strip = (t) => { const d = JSON.parse(t); delete d.exported_at; return JSON.stringify(d); };
+  let same = false, keys = [];
+  try { keys = Object.keys(JSON.parse(n.shown[0])); same = strip(n.shown[0]) === strip(w.text) && n.shown[0] === JSON.stringify(JSON.parse(n.shown[0]), null, 2); } catch {}
+  if (n.shown.length === 1 && same && JSON.stringify(keys) === JSON.stringify(KEYS))
+    ok('in the app: the panel is handed the very JSON the web saves, with every documented key, laid out the same');
+  else fail('native export text: ' + JSON.stringify({ shown: n.shown.length, same, keys }));
+  if (n.blobs === 0 && n.clicks.length === 0 && n.toasts.length === 0)
+    ok('in the app: no Blob, no download link clicked, and no toast claims a download');
+  else fail('native export side effects: ' + JSON.stringify({ blobs: n.blobs, clicks: n.clicks, toasts: n.toasts }));
+  // bay.js not there to draw it: still no download and no claim of one.
+  const x = await exportRun({ social: SNAP, native: true, bay: false });
+  if (x.blobs === 0 && x.clicks.length === 0 && JSON.stringify(x.toasts) === JSON.stringify(['Your data could not be shown. Try again.']))
+    ok('in the app without the panel: no download, and the toast says the data could not be shown');
+  else fail('native export without Bay: ' + JSON.stringify({ blobs: x.blobs, clicks: x.clicks, toasts: x.toasts }));
+  if (![...n.toasts, ...x.toasts].some((t) => /download|saved/i.test(t))) ok('in the app no toast says downloaded or saved');
+  else fail('a native toast claims a download: ' + JSON.stringify([...n.toasts, ...x.toasts]));
 }
 
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall export checks passed');

@@ -146,9 +146,11 @@ start_server() {             # start_server [extra env assignments...]
 
 echo "== headless (no server needed) =="
 run house_rules node test/house-rules.mjs
-# The account data export's shape, which privacy.html describes field by field.
-# Headless: it lifts exportMyData() out of app.js by brace-matching and runs that
-# one function against stubs, because app.js itself cannot be loaded under Node.
+# The account data export's shape, which privacy.html describes field by field,
+# and where it goes: a download on the web, the in-game panel on a phone, with
+# no claim of a download there. Headless: it lifts exportMyData() out of app.js
+# by brace-matching and runs that one function against stubs, because app.js
+# itself cannot be loaded under Node.
 run export_shape node test/export_shape.mjs
 # The chosen-callsign rules (design 4.5): normalising, length, characters, the
 # folded blocklist, and the loader's own guards. Pure module, no server.
@@ -321,7 +323,9 @@ else
   # row reads the bundled page into a full-screen panel, legible inside the
   # safe area at four phone sizes; Close, Escape and Back close it without a
   # reload; its links never navigate the game's page; and with the server gone
-  # the service worker still opens it. Self-hosted on its own free ports; its
+  # the service worker still opens it. On a stand-in phone, Download my data
+  # opens in the same panel with Copy (and Share where the sheet takes text),
+  # and nothing claims a download. Self-hosted on its own free ports; its
   # Chrome resolves no host but this machine. Skips without Chrome.
   run privacy_panel node test/privacy_panel.mjs
   # FIFTH client-side suite: Artillery Golf's off-screen flag marker and its

@@ -18,7 +18,7 @@
 <body>
 <main>
   <h1>Privacy Policy — Cannons &amp; Canyons</h1>
-  <p class="muted">Made by Abara Brothers · Last updated: 30 September 2026</p>
+  <p class="muted">Made by Abara Brothers · Last updated: 8 October 2026</p>
   <p class="muted">Abara Brothers is a small Australian business. This policy is written to
   meet Australian privacy law, the EU and UK GDPR where they apply to you, and the app
   stores' own privacy rules.</p>
@@ -27,10 +27,11 @@
   <p>Cannons &amp; Canyons is an online artillery game for up to four players. There are no ads,
   no analytics, no trackers, no chat, and nothing to buy. The game keeps a small cloud save so
   your progress can follow you between devices, and — only if you turn them on — push
-  subscriptions so we can tell you when it's your turn. If you sign in you can choose your own
-  callsign and add friends: the only things another player sees about you are your callsign, the
-  tank paint you are using in a match with them, and — if they are a friend — whether you are
-  online. Reporting or blocking another player does not need a signed-in account. You can download
+  subscriptions so we can tell you when it's your turn. The game gives you a callsign, which you
+  can change once a day, and if you sign in you can add friends: the only things another player
+  sees about you are your callsign, the tank paint you are using in a match with them, and — if
+  they are a friend or in a squad with you — whether you are online. Reporting or blocking another
+  player does not need a signed-in account. You can download
   the data attached to your account, or delete all of it, from inside the game. We never sell your data and never
   share it for anyone else's purposes.</p>
 
@@ -62,7 +63,7 @@
     <tr><td>Account identifier (random)</td><td>Ties your save to you</td><td>Our database</td></tr>
     <tr><td>Email address (only if you link Google)</td><td>Signing in from another device</td><td>Our database</td></tr>
     <tr><td>Google account id, name and profile picture (only if you link Google)</td><td>Returned by Google with the sign-in and kept by our sign-in provider as part of that record</td><td>Our database</td></tr>
-    <tr><td>Callsign — rolled from the game's word lists, or one you choose</td><td>Shown on your profile, in matches, and to your friends</td><td>Our database</td></tr>
+    <tr><td>Callsign — the default one the game gave you from its word lists, or one you choose — and, if you are signed in, when you last set it</td><td>Shown on your profile, in matches and squads, and to your friends and anyone you invite; the time holds a name to one change a day</td><td>Our database</td></tr>
     <tr><td>Friend code (6 characters, generated for you)</td><td>So someone can add you without searching for your name</td><td>Our database</td></tr>
     <tr><td>Friends and friend requests (which accounts, and when)</td><td>Your friends list, and adding or accepting a friend</td><td>Our database</td></tr>
     <tr><td>Blocks (which accounts you blocked, and when)</td><td>Keeping a blocked player away from you, both ways</td><td>Our database</td></tr>
@@ -85,7 +86,8 @@
   <p>Off unless you turn them on, and one switch covers both kinds: a nudge when it is your turn
   in a match, and a notification when a friend invites you to their squad while you are away
   from the game. An invite notification shows your friend's callsign and how many are in their
-  squad. If you enable nudges, your browser or device
+  squad. An invite from a player who is not your friend is never sent as a notification. If you
+  enable nudges, your browser or device
   issues a push subscription — a delivery address plus encryption keys — which we store against
   your account so notifications work in every future match and on every device you enabled them
   on. Delivery goes through your platform's push service — Firebase Cloud Messaging (Google) in
@@ -106,7 +108,9 @@
   <h2>During a match, and after it</h2>
   <p>Your callsign, tank paint, shots, aim and movement are relayed between the players in
   your room to run the match. Match state lives in server memory only and is discarded when
-  the room ends or times out.</p>
+  the room ends or times out. A match with no other person in it — you against the computer, or
+  a mode you play alone — is kept for up to 24 hours after you leave it, so you can come back to
+  it.</p>
   <p>The <b>result</b> of an online match is kept. When the match ends we write one row holding the
   mode, the account identifier of every player who had one — the automatic guest account counts —
   who won, how many played, whether a computer opponent was involved, the golf card where the mode
@@ -117,14 +121,20 @@
   are also part of your progression, written by your device.</p>
 
   <h2>Friends, blocking and reporting</h2>
-  <p>If you sign in, you can set your own callsign instead of rolling one. We check it on our
-  server against a list of banned terms before we store it, so a name that fails the check is
-  never shown to anyone. Your callsign and your 6-character friend code are the only things
+  <p>The game gives you a callsign from its word lists the first time you play, and you keep it
+  until you set one of your own, which any player can do once a day, signed in or not. We check
+  every name a player sets on our server against a list of banned terms before another player can
+  see it, so a name that fails the check is never shown to anyone. Your callsign and your
+  6-character friend code are the only things
   another player can use to find you — never your email address, never the name or picture Google
-  returned when you signed in, and never your account identifier. Friends can see whether you are
-  online; nobody else can.</p>
-  <p><b>Report a callsign.</b> Wherever another player is shown — your friends list, a search
-  result, a seat in a lobby, a card in a match — there is a menu with <b>Report name</b>.
+  returned when you signed in, and never your account identifier. Friends, and the players in a
+  squad with you, can see whether you are online; nobody else can. If you set a callsign while
+  signed in, anyone signed in who knows it can invite you to their squad; if they are not your friend,
+  the invite reaches you only while you are in the game, never as a notification, and the answer
+  they get never says whether you are online.</p>
+  <p><b>Report a callsign.</b> Where another player is shown — your friends list, a search
+  result, a signed-in player in your squad, a squad invite from someone who is not your friend, a
+  seat in a lobby, a card in a match — there is a menu with <b>Report name</b>.
   Reporting records the reported account, your account, and the callsign exactly as you saw it, so
   we can act on it. Nothing is emailed anywhere: the report is written to our database for us to
   read, and the same three details are also printed to our game server's log, which our hosting
@@ -132,12 +142,13 @@
   and aim to act within 7 days. You can also write to
   <a href="mailto:support@abarabrothers.com">support@abarabrothers.com</a>.</p>
   <p><b>Block a player.</b> The same menu has <b>Block</b>. A blocked player cannot find you in a
-  search, cannot add you by your friend code, cannot send you a friend request, cannot see whether
-  you are online, and disappears from your friends panel — it works in both directions. It does
+  search, cannot add you by your friend code, cannot send you a friend request, cannot invite you
+  to a squad, cannot see whether you are online, and disappears from your friends panel — it works
+  in both directions. It does
   not keep the two of you out of the same battle, and the game says so when you block rather than
   letting you assume otherwise. The Friends screen lists everyone you have blocked, with Unblock.</p>
-  <p><b>You do not need to sign in to report or block.</b> Choosing a callsign and using friends
-  need a signed-in account; reporting and blocking do not — the automatic account the game gives
+  <p><b>You do not need to sign in to report or block.</b> Using friends needs a signed-in
+  account; reporting and blocking do not — the automatic account the game gives
   you when you start playing is enough — because the player who most needs to report a name is
   usually a stranger in a lobby.</p>
 
@@ -147,8 +158,8 @@
   tees), your progression, a match-resume token, the menu screen you were last on and when you
   left it (so a quick reopen opens there), and your sign-in session. Your callsign and
   progression are also sent to us as described above, and your sign-in session is exchanged
-  with our sign-in provider; your preferences, resume token and last screen stay on your
-  device.</p>
+  with our sign-in provider; your preferences and last screen stay on your device, and your
+  resume token is only ever sent back to our game server, which issued it.</p>
 
   <h2>What we do NOT do</h2>
   <ul>
@@ -159,7 +170,7 @@
     <li>No location data, contacts, photos, or device files</li>
     <li>No chat, no messages, and no message field of any kind — the only things other players see
       about you are your callsign, the tank paint you are using in a match with them, and, if they
-      are a friend, whether you are online</li>
+      are a friend or in a squad with you, whether you are online</li>
     <li>No payment details — the game is free, with nothing to buy</li>
   </ul>
 
@@ -198,7 +209,8 @@
   whichever comes first; a friend request nobody answers stops counting after 30 days and is
   deleted. A name report is kept while we may still need to act on it, and is erased when either
   account involved is deleted. Crash reports are deleted after 30 days. Match state disappears
-  with the room. Ordinary infrastructure logs (such as connection logs, and the line a name report
+  with the room — for a match with no other person in it, at most 24 hours after you leave it.
+  Ordinary infrastructure logs (such as connection logs, and the line a name report
   writes to our game server's log) are kept only for as long as our hosting provider's ordinary log
   retention lasts, and are not used to build profiles.</p>
   <p><b>The one thing deleting your account does not erase</b> is the match-result rows described
@@ -213,7 +225,8 @@
   <ul>
     <li><b>Download my data</b> — in the game's account panel: your account identifier, linked
       email (if any), callsign, friend code, how many friends and how many blocked players you
-      have, cloud save and this device's progression, as one JSON file. If a count reads
+      have, cloud save and this device's progression, as one JSON file; in the iOS and Android
+      apps the same data opens on screen instead, with a Copy button. If a count reads
       <b>null</b> rather than a number, this device had not loaded that list when you exported;
       it does not mean zero, and the file says so. Friends and a friend code need a signed-in
       account, so for a guest those stay null until they sign in. For anything held about you that
@@ -232,8 +245,8 @@
     <li><b>Withdraw consent</b> — turn off notifications in your browser or device settings;
       withdrawing does not affect notifications already sent.</li>
     <li><b>Sign out</b> — any time; your account keeps its progress for your next sign-in.</li>
-    <li><b>Change your callsign</b> — roll a new one whenever you like, or, if you are signed
-      in, set one of your own, which you can change again a day later.</li>
+    <li><b>Change your callsign</b> — set one of your own in Bay controls, signed in or not, and
+      change it again a day later.</li>
     <li>You have the right to complain to your local data-protection authority. In Australia
       that is the OAIC; in the EEA or UK it is your national supervisory authority.</li>
   </ul>

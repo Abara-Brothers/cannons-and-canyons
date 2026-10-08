@@ -2942,6 +2942,15 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   padding:0 calc(20 * var(--u));border-radius:999px;background:#54c8ff;color:#06101f;font-weight:700;text-decoration:none}
 #docp .dpw{color:#b3c0de}
 #docp .dpr{margin-top:calc(14 * var(--u))}
+/* Your data (bay.js dataOpen, in the app): Copy and Share in a row under the
+   first line, each the size of Close, and the JSON itself in a box that wraps
+   instead of widening the page. It is 15u, above the bay's 13u label floor, in
+   the panel's brightest text. It can be selected like the page's other words
+   (.dpc), so it can still be copied by hand where Copy cannot. */
+#docp .dpb{display:flex;flex-wrap:wrap;gap:calc(12 * var(--u));margin-top:calc(14 * var(--u))}
+#docp .dpd{margin-top:calc(16 * var(--u));padding:calc(14 * var(--u)) calc(16 * var(--u));border:1px solid rgba(140,168,214,.24);
+  border-radius:calc(8 * var(--u));background:rgba(84,200,255,.05);font-family:"JetBrains Mono",monospace;font-size:calc(15 * var(--u));
+  line-height:1.5;color:#eef3ff;white-space:pre-wrap;overflow-wrap:anywhere}
 
   /* -------------------------------------------------------------- entrance -- */
   #bay.enter .boards .board{animation:brise .5s cubic-bezier(.2,.8,.3,1) both}

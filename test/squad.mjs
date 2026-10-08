@@ -9809,10 +9809,11 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   // ---- (inv-cs i) A STRANGER'S INVITE HAS ONE ANSWER (round 2, 2026-10-08) -
   // The reply to an invite to a player who is not a friend must not say
   // whether they are online, whether they have a device to notify, or whether
-  // a block dropped the invite: privacy.html says only friends can see whether
-  // a player is online. Five worlds, one reply, byte for byte; none of them
-  // asks the push seam; and a seam that would never answer holds none of them
-  // up, because a stranger's invite never waits on it.
+  // a block dropped the invite: privacy.html says only friends, and the players
+  // in a squad with them, can see whether a player is online, and that a
+  // stranger's invite never says it. Five worlds, one reply, byte for byte;
+  // none of them asks the push seam; and a seam that would never answer holds
+  // none of them up, because a stranger's invite never waits on it.
   {
     const run = async (kind) => {
       const st = t6store(ROWS6);

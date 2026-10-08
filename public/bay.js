@@ -2875,11 +2875,12 @@ const DOCS = new Map([['privacy.html', 'Privacy policy'], ['delete-account.html'
 let doc = null;           // the page on show: { name, id }, id a heading to start at or ''
 let docEl = null;         // the panel
 let docFrom = null;       // the control that opened it, to hand the keyboard back to
-let docUnder = null;      // what the panel made inert, to wake again on close
+let docUnder = [];        // what the panel made inert, to wake again on close
 let docSeq = 0;           // which read is current, so a slow one never lands on a later page
 let docEntry = false;     // the panel holds a history entry of its own (docPush)
 let docBacking = false;   // a history.back() of our own is on its way
 const docText = new Map(); // a page read once is drawn from here after: no network at all
+let dataText = '';        // the data export last shown (dataOpen), for its Copy and Share
 function docHost() {
   if (!docEl) {
     docEl = document.createElement('div');
@@ -2898,18 +2899,22 @@ function docHost() {
 }
 function docOpen(name, id) {
   if (!DOCS.has(name)) return;
-  const el = docHost();
-  if (el.hidden) {
-    docFrom = (document.activeElement && document.activeElement !== document.body) ? document.activeElement : null;
-    // The page under the panel takes no tap and no focus while it is up, so a
-    // keyboard's Tab cannot wander into Bay controls behind a full-screen page.
-    const bay = $('bay');
-    docUnder = bay && !bay.inert ? bay : null;
-    if (docUnder) docUnder.inert = true;
-    docPush();
-    el.hidden = false;
-  }
+  docRaise(['bay']);
   docShow(name, id);
+}
+// The panel goes up over what is on screen, once: the control that opened it
+// is kept to hand the keyboard back to, and `under` (element ids) is what it
+// covers. That takes no tap and no focus while the panel is up, so a
+// keyboard's Tab cannot wander into Bay controls, or the account panel, behind
+// a full-screen page.
+function docRaise(under) {
+  const el = docHost();
+  if (!el.hidden) return;
+  docFrom = (document.activeElement && document.activeElement !== document.body) ? document.activeElement : null;
+  docUnder = under.map((id) => $(id)).filter((n) => n && !n.inert);
+  for (const n of docUnder) n.inert = true;
+  docPush();
+  el.hidden = false;
 }
 // One page into the panel, from memory when it has been read before. The
 // keyboard goes to the page itself, so the arrow keys and Space scroll it.
@@ -3000,6 +3005,8 @@ function docClick(e) {
   if (t.dataset.dpl) e.preventDefault();
   const a = t.dataset.dp || t.dataset.dpl;
   if (a === 'close' || a === 'home') docClose();
+  else if (a === 'copy') dataCopy();
+  else if (a === 'share') dataShare();
   else if (a === 'retry') { if (doc) docShow(doc.name, doc.id); }
   else if (a === 'jump') docJump(t.dataset.dpid);
   else if (a === 'page') docShow(t.dataset.dpname, t.dataset.dpid);
@@ -3020,7 +3027,8 @@ function docClose(popped) {
   docSeq++; doc = null;
   docEl.hidden = true;
   $('docpC').replaceChildren();
-  if (docUnder) { docUnder.inert = false; docUnder = null; }
+  for (const n of docUnder) n.inert = false;
+  docUnder = [];
   docPop(popped);
   const back = docFrom; docFrom = null;
   if (back && back.isConnected && typeof back.focus === 'function') back.focus();
@@ -3063,6 +3071,70 @@ document.addEventListener('keydown', (e) => {
 // starts under it (a squad's leader starting, a notification tap) takes it
 // down, the way showScreen takes the player menu down.
 if (fn('showScreen')) { const orig = showScreen; showScreen = function () { docClose(); return orig.apply(this, arguments); }; }
+
+/* ---- your data, inside the game (app.js exportMyData, in the app) --------- */
+// DOWNLOAD MY DATA OPENS HERE IN THE APP. On the web exportMyData saves a JSON
+// file; in the iOS and Android apps nothing can save one (app.js says why), and
+// the game used to say "Data downloaded" over a download that never happened.
+// So in the app the same text is drawn into this panel, over the account panel
+// it was asked from, with Copy, and Share where the phone's share sheet takes
+// text. It closes as the policy does (Close, Escape, Back), and the keyboard
+// goes back to Download my data. The text is set as text, never as markup.
+function dataOpen(text) {
+  docRaise(['bay', 'accountModal']);
+  doc = { name: '', id: '' };
+  docSeq++;               // a read of the policy still out never lands on this
+  dataText = String(text);
+  const share = dataCanShare(dataText), s = $('docpS'), c = $('docpC');
+  $('docpT').textContent = 'Your data';
+  c.innerHTML = '<p>This is the data the game holds about you, as JSON: the same file the website downloads.'
+    + ' To keep a copy, copy it' + (share ? ' or share it' : '') + '.</p>'
+    + '<div class="dpb"><button type="button" class="dpx" data-dp="copy">' + IC.copy + '<span>Copy</span></button>'
+    + (share ? '<button type="button" class="dpx" data-dp="share">' + IC.share + '<span>Share</span></button>' : '') + '</div>'
+    + '<pre class="dpd"></pre>';
+  c.querySelector('.dpd').textContent = dataText;
+  s.scrollTop = 0;
+  s.focus({ preventScroll: true });
+}
+// COPY SAYS ONLY WHAT HAPPENED. The clipboard first; where it refuses, the
+// older copy command on the same text; and where both refuse, the toast says
+// so and how to copy it by hand, since the text on screen can be selected.
+// Never "Copied." for a copy that did not happen.
+function dataCopy() {
+  const text = dataText;
+  const said = (done) => { if (fn('showToast')) showToast(done ? 'Copied.' : 'Copy did not work here. Press and hold the text to select it.'); };
+  let p = null;
+  try { p = navigator.clipboard && typeof navigator.clipboard.writeText === 'function' ? navigator.clipboard.writeText(text) : null; } catch { p = null; }
+  if (p) p.then(() => said(true), () => said(dataCopyCmd(text)));
+  else said(dataCopyCmd(text));
+}
+// The older copy command reads a selection, so the text goes into a field the
+// player never sees for the moment it takes, and the keyboard goes back to
+// where it was.
+function dataCopyCmd(text) {
+  const back = document.activeElement;
+  const t = document.createElement('textarea');
+  t.value = text;
+  t.readOnly = true;
+  t.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0';
+  docEl.appendChild(t);
+  let done = false;
+  try { t.focus({ preventScroll: true }); t.select(); done = document.execCommand('copy') === true; } catch { done = false; }
+  t.remove();
+  if (back) back.focus({ preventScroll: true });
+  return done;
+}
+// SHARE, where the phone's share sheet takes text, as the squad's Share does:
+// the same text, under a title. A dismissed sheet is not an error, and nothing
+// says it was sent.
+function dataCanShare(text) {
+  if (typeof navigator.share !== 'function') return false;
+  if (typeof navigator.canShare !== 'function') return true;
+  try { return navigator.canShare({ text }) === true; } catch { return false; }
+}
+function dataShare() {
+  try { const p = navigator.share({ title: 'Cannons & Canyons: my data', text: dataText }); if (p && p.catch) p.catch(() => {}); } catch {}
+}
 
 /* ---- the three columns --------------------------------------------------- */
 function frFind(on) {
@@ -4191,7 +4263,7 @@ function reopenView() {
   };
 }
 
-window.Bay = { show: render, go, back, state, tankURL, MODES, haptic, rankFor, applyMotion, landSquad, where };
+window.Bay = { show: render, go, back, state, tankURL, MODES, haptic, rankFor, applyMotion, landSquad, where, showData: dataOpen };
 
 // refreshAccountChip() fires this the moment a session changes; the two screens
 // that show the account (home chip, Bay controls row) redraw in place. Only

@@ -1672,5 +1672,60 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   else ok(`no link or window.open in the game's own page points at a bundled page, and docOpen's ${names.length} pages (${names.join(', ')}) are precached under the URL it fetches`);
 }
 
+// ---- 23. THE POLICY SAYS WHAT THE GAME DOES NOW (round 2, 2026-10-08) -------
+// The policy has been read inside the game since e52647a (Bay controls, then
+// Privacy policy), so a sentence that is false is false in front of every
+// player and every reviewer who opens it. Round 2 changed what it describes and
+// left the old sentences standing: it still offered a Roll that 9239c11
+// removed, said a callsign needs a signed-in account when every player may set
+// one once a day, said only friends can see whether you are online when a
+// squad's members see it too, and said nothing of an invite by callsign from a
+// stranger (b4d14be, made in-app only by the invites fix), of a match with no
+// other person in it being held for a day (item 21), or of a data export that
+// in the app opens on screen. Its date still read 30 September.
+// Each corrected statement is pinned here, so a rewrite that drops one fails,
+// and no sentence of the old name system may come back. The page is read as a
+// reader reads it: comments blanked (as rules 16 and 19 do), tags dropped,
+// entities decoded and every run of white space one space, so a sentence the
+// page wraps still matches.
+{
+  const text = read('public/privacy.html').replace(/<!--[\s\S]*?-->/g, ' ').replace(/<[^>]+>/g, ' ')
+    .replace(/&amp;/g, '&').replace(/\s+/g, ' ');
+  const MUST = [
+    [/Last updated: 8 October 2026/, 'its date is the day round 2\'s corrections were made'],
+    [/The game gives you a callsign, which you can change once a day,/, 'the short version: a callsign is given, and changed once a day'],
+    [/and — if they are a friend or in a squad with you — whether you are online\./, 'the short version: a squad\'s members see whether you are online'],
+    [/Callsign — the default one the game gave you from its word lists, or one you choose — and, if you are signed in, when you last set it/, 'the data table: the default name, a chosen one, and the time a signed-in name was set'],
+    [/An invite from a player who is not your friend is never sent as a notification\./, 'Notifications: a stranger\'s invite is never a push'],
+    [/A match with no other person in it — you against the computer, or a mode you play alone — is kept for up to 24 hours after you leave it, so you can come back to it\./, 'During a match: the day a match with no other person in it is held'],
+    [/The game gives you a callsign from its word lists the first time you play, and you keep it until you set one of your own, which any player can do once a day, signed in or not\./, 'Friends: a default name, kept, and any player may set one once a day'],
+    [/We check every name a player sets on our server against a list of banned terms before another player can see it,/, 'Friends: every set name is checked on the server'],
+    [/Friends, and the players in a squad with you, can see whether you are online; nobody else can\./, 'Friends: who can see whether you are online'],
+    [/If you set a callsign while signed in, anyone signed in who knows it can invite you to their squad; if they are not your friend, the invite reaches you only while you are in the game, never as a notification, and the answer they get never says whether you are online\./, 'Friends: the invite by callsign, in-app only from a stranger'],
+    [/your friends list, a search result, a signed-in player in your squad, a squad invite from someone who is not your friend, a seat in a lobby, a card in a match — there is a menu with Report name/, 'Report a callsign: every place the menu is'],
+    [/cannot send you a friend request, cannot invite you to a squad, cannot see whether you are online/, 'Block a player: a block stops a squad invite'],
+    [/Using friends needs a signed-in account; reporting and blocking do not/, 'sign-in: only friends need it, not a callsign'],
+    [/your callsign \(and, if you play as a guest, when you last changed it, so a name changes at most once a day\)/, 'On your device: a guest\'s name-change time'],
+    [/the menu screen you were last on and when you left it \(so a quick reopen opens there\)/, 'On your device: the quick reopen\'s record of the last screen'],
+    [/your preferences and last screen stay on your device, and your resume token is only ever sent back to our game server, which issued it\./, 'On your device: where the resume token goes'],
+    [/and, if they are a friend or in a squad with you, whether you are online/, 'What we do NOT do: a squad\'s members see whether you are online'],
+    [/Match state disappears with the room — for a match with no other person in it, at most 24 hours after you leave it\./, 'How long we keep it: the held match\'s day'],
+    [/as one JSON file; in the iOS and Android apps the same data opens on screen instead, with a Copy button\./, 'Download my data: on screen in the app'],
+    [/Change your callsign — set one of your own in Bay controls, signed in or not, and change it again a day later\./, 'Your rights: changing a callsign'],
+  ];
+  const STALE = [
+    [/\brol(?:l|ls|led|ling)\b/i, 'a Roll, which 9239c11 removed'],
+    [/Choosing a callsign/i, 'choosing a callsign needing a signed-in account'],
+    [/If you sign in,? you can (?:choose|set) your own callsign/i, 'a callsign for signed-in players only'],
+    [/Friends can see whether you are online; nobody else can/, 'presence for friends only'],
+    [/if they are a friend\s*[—,]\s*whether you are online/, 'presence for friends only'],
+    [/resume token[^.]*stays? on your device/, 'the resume token never leaving the device'],
+  ];
+  const missing = MUST.filter(([re]) => !re.test(text)).map(([, why]) => `missing — ${why}`);
+  const stale = STALE.filter(([re]) => re.test(text)).map(([re, why]) => `stale — ${why}: "${(text.match(re) || [''])[0]}"`);
+  if (missing.length || stale.length) fail(`privacy.html no longer says what the game does:\n      ${missing.concat(stale).join('\n      ')}`);
+  else ok(`privacy.html states round 2's names, presence, invites, held match, last screen and in-app export (${MUST.length} statements), and none of the ${STALE.length} old ones`);
+}
+
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nALL GOOD');
 process.exit(out.errors.length ? 1 : 0);

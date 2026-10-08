@@ -1446,7 +1446,8 @@ $('accSignOutBtn').onclick = async () => {
 $('accExportBtn').onclick = () => exportMyData();
 $('accDeleteBtn').onclick = () => deleteMyAccount();
 
-// Everything the game holds about the player, as one JSON download. The cloud
+// Everything the game holds about the player, as one JSON download (on screen
+// in the iOS and Android apps, which cannot save a file; see below). The cloud
 // row comes through the player's own RLS-scoped read; the local half works
 // even offline. GDPR calls this data portability; the stores call it table
 // stakes.
@@ -1497,7 +1498,21 @@ async function exportMyData() {
         + 'you sign in: sign in, open Friends, then export again.',
     },
   };
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const text = JSON.stringify(data, null, 2);
+  // IN THE APP THERE IS NOTHING TO DOWNLOAD TO. The link below is how a browser
+  // saves a file, but the iOS app is one WKWebView: Capacitor hands a
+  // navigation it does not serve to the system, nothing there opens a blob:
+  // address, and the Android shell registers no download handler either. So
+  // the app saved nothing while this toast said "Data downloaded". In the app
+  // the same text opens on screen instead, in the privacy policy's panel, with
+  // Copy (and Share where the phone's share sheet takes text): bay.js
+  // showData. Nothing here claims a download, and the web is unchanged.
+  if (IS_NATIVE) {
+    if (window.Bay && typeof window.Bay.showData === 'function') window.Bay.showData(text);
+    else showToast('Your data could not be shown. Try again.');
+    return;
+  }
+  const blob = new Blob([text], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'cannons-and-canyons-data.json';
@@ -4726,8 +4741,16 @@ function stopClipRecording() { try { if (clipRec && clipRec.state !== 'inactive'
 async function shareBlob(blob, filename, fallbackName) {
   const file = new File([blob], filename, { type: blob.type });
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    try { await navigator.share({ files: [file], title: 'Cannons & Canyons', text: 'Cannons & Canyons — play me: https://tanks.abarabrothers.com' }); return; } catch {}
+    try { await navigator.share({ files: [file], title: 'Cannons & Canyons', text: 'Cannons & Canyons — play me: https://tanks.abarabrothers.com' }); return; } catch (e) {
+      // IN THE APP A SHEET THAT DID NOT SHARE IS THE END OF IT: the download
+      // below saves nothing there (exportMyData says why). A sheet the player
+      // dismissed is not an error, and any other failure is said plainly.
+      if (IS_NATIVE) { if (!e || e.name !== 'AbortError') showToast('That could not be shared.'); return; }
+    }
   }
+  // And with no share sheet that takes a file, the app says so, rather than
+  // clicking a link that saves nothing and calling it saved.
+  if (IS_NATIVE) { showToast('Sharing is not available on this device.'); return; }
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob); a.download = fallbackName || filename;
   document.body.appendChild(a); a.click(); a.remove();

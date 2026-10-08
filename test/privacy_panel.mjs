@@ -23,7 +23,12 @@
 //   5. a read that fails says so with Try again, a slow read never lands on a
 //      later page, and a page read once opens again with no network;
 //   6. offline for real: from a clean slate the service worker precaches the
-//      page, and with the server gone a reloaded game opens the policy.
+//      page, and with the server gone a reloaded game opens the policy;
+//   7. Download my data in the app (round 2 review, 2026-10-08): on a phone
+//      it opens in this panel with Copy, and Share where the share sheet takes
+//      text, readable at every size, and nothing claims a download; on the web
+//      it is still a download; and shareBlob in the app never claims a file
+//      was saved. It runs before 6, which takes the server down.
 // NOTHING REACHES THE INTERNET: this Chrome resolves no host but this machine,
 // so the links that do open a window open it onto an error page.
 //
@@ -107,6 +112,37 @@ await send('Page.enable'); await send('Runtime.enable');
 mainFrame = (await send('Page.getFrameTree')).frameTree.frame.id;
 // No intro: it covers the bay for six seconds and test/intro.mjs owns it.
 await send('Page.addScriptToEvaluateOnNewDocument', { source: `window.__ccNoIntro = true;` });
+// A PHONE, FOR A LOAD THAT ASKS FOR ONE (section 7: sessionStorage
+// cc_test_native). window.Capacitor stands in for the iOS shell from document
+// start, so app.js's IS_NATIVE is true. config.js aims any page with
+// window.Capacitor at PRODUCTION, so CC_SERVER is pinned to null (a getter, a
+// setter that ignores config.js, not configurable), and any socket or fetch to
+// the production host is refused and recorded -- on top of this Chrome
+// resolving no host but this machine. loadAs() proves each phone load is on
+// this suite's own server before anything else is read.
+await send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
+  let phone = false;
+  try { phone = sessionStorage.getItem('cc_test_native') === '1'; } catch (e) {}
+  if (!phone) return;
+  Object.defineProperty(window, 'CC_SERVER', { get: () => null, set: () => {}, configurable: false });
+  const PROD = 'tanks.abarabrothers.com';
+  window.__prodBlocked = [];
+  const Real = window.WebSocket;
+  const Guard = function (url, proto) {
+    if (String(url).indexOf(PROD) !== -1) { window.__prodBlocked.push(String(url)); throw new Error('privacy_panel: refused a socket to production'); }
+    return new Real(url, proto);
+  };
+  Guard.prototype = Real.prototype;
+  Guard.OPEN = Real.OPEN; Guard.CONNECTING = Real.CONNECTING; Guard.CLOSING = Real.CLOSING; Guard.CLOSED = Real.CLOSED;
+  window.WebSocket = Guard;
+  const realFetch = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    const u = typeof input === 'string' ? input : String((input && input.url) || input);
+    if (u.indexOf(PROD) !== -1) { window.__prodBlocked.push(u); return Promise.reject(new TypeError('privacy_panel: refused a fetch to production')); }
+    return realFetch(input, init);
+  };
+  window.Capacitor = { getPlatform: () => 'ios', isNativePlatform: () => true, Plugins: {} };
+})();` });
 
 const IPHONE17 = ':root{--sa-l:62px;--sa-r:62px;--sa-b:21px;--sa-t:0px}';
 let docN = 0;
@@ -499,6 +535,250 @@ try {
     await tap('#docp [data-dp="close"]');
     await sleep(300);
     await stayed('5 the slow read', d, url, before);
+  }
+
+  // ---- 7. Download my data, in the app (round 2 review, 2026-10-08) -------
+  // Before section 6, which takes the server down. In the iOS app the account
+  // panel's Download my data clicked an <a download href="blob:..."> that the
+  // WebView hands to the system, where nothing opens it, and then said "Data
+  // downloaded". In the app the export now opens in this panel (bay.js
+  // dataOpen) with Copy, and Share where the phone's share sheet takes text; on
+  // the web it is still a file. Every toast the page says is recorded, and every
+  // link it clicks: a click on a download link is recorded and not followed,
+  // so nothing is saved on this machine.
+  {
+    const KEYS = ['exported_at', 'account_id', 'account_type', 'sign_in', 'callsign', 'friend_code', 'friends_count', 'blocked_count', 'cloud_profile', 'local_progression', 'not_included'];
+    const HEARD = `(() => { window.__said = []; window.showToast = (m) => { window.__said.push(String(m)); };
+      window.__links = []; const real = HTMLAnchorElement.prototype.click;
+      HTMLAnchorElement.prototype.click = function () { window.__links.push({ download: this.download || '', href: String(this.href || '').slice(0, 5) }); if (!this.download) return real.call(this); };
+      return true; })()`;
+    // navigator.share and canShare as a case needs them: absent, or stand-ins.
+    const SHARE = (share, can) => `(() => { Object.defineProperty(navigator, 'share', { configurable: true, value: ${share} });
+      Object.defineProperty(navigator, 'canShare', { configurable: true, value: ${can} }); return true; })()`;
+    const loadAs = async (phone, w, h, sa) => {
+      await ev(`(() => { try { ${phone ? "sessionStorage.setItem('cc_test_native', '1')" : "sessionStorage.removeItem('cc_test_native')"}; } catch (e) {} return true; })()`);
+      const d = await load(w, h, sa);
+      await until(`!!(S.ws && S.ws.readyState === 1)`, 8000);
+      const s = await ev(`({ native: typeof IS_NATIVE !== 'undefined' && IS_NATIVE === true, server: window.CC_SERVER === null ? null : String(window.CC_SERVER),
+        url: S.ws && S.ws.url ? String(S.ws.url) : null, refused: Array.isArray(window.__prodBlocked) ? window.__prodBlocked : null })`);
+      const local = `ws://127.0.0.1:${appPort}/ws`;
+      if (phone && !(s.native && s.server === null && s.url === local && s.refused && s.refused.length === 0)) throw new Error('7: the phone page is not provably on this suite\'s server: ' + JSON.stringify(s));
+      if (!phone && (s.native || s.url !== local)) throw new Error('7: the web page is not a plain web page on this suite\'s server: ' + JSON.stringify(s));
+      await ev(HEARD);
+      return d;
+    };
+    // The account panel, as a guest, the way Bay controls' Account row opens
+    // it, and a real tap on Download my data.
+    const exportTap = async () => {
+      await ev(`(() => { const b = document.getElementById('accountBtn'); b.dataset.state = 'guest'; b.onclick();
+        document.getElementById('accExportBtn').scrollIntoView({ block: 'center' }); return true; })()`);
+      await sleep(60);
+      await tap('#accExportBtn');
+    };
+    const dataUp = `${isOpen} && document.getElementById('docpT').textContent === 'Your data' && !!document.querySelector('#docpC .dpd')`;
+    const DATA = `(() => { const p = document.getElementById('docp'), c = document.getElementById('docpC'), d = c.querySelector('.dpd'), a = document.activeElement;
+      let keys = null; try { keys = Object.keys(JSON.parse(d.textContent)); } catch (e) {}
+      const r = p.getBoundingClientRect(), at = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
+      return { title: document.getElementById('docpT').textContent, lead: c.querySelector('p') ? c.querySelector('p').textContent : '', keys,
+        btns: [...c.querySelectorAll('.dpb button')].map((b) => b.textContent.trim()),
+        cover: r.left === 0 && r.top === 0 && r.width === innerWidth && r.height === innerHeight && !!at && p.contains(at),
+        inert: { bay: document.getElementById('bay').inert, acc: document.getElementById('accountModal').inert }, focus: !!a && p.contains(a),
+        acc: !document.getElementById('accountModal').classList.contains('hidden'), said: window.__said.slice(), links: window.__links.slice() }; })()`;
+
+    // a. A phone: the panel, the JSON, and no download.
+    let d = await loadAs(true, 874, 402, IPHONE17);
+    let url = await ev('location.href');
+    let h0 = await hist();
+    let before = mark();
+    await ev(SHARE('undefined', 'undefined'));
+    await exportTap();
+    check('7 in the app, Download my data opens the panel titled "Your data"', await until(dataUp, 5000));
+    const a = await ev(DATA);
+    check('7 the panel covers the screen over the account panel, with the bay and the account panel inert and the keyboard in it',
+      a.cover && a.inert.bay === true && a.inert.acc === true && a.focus && a.acc, JSON.stringify(a));
+    check(`7 it holds the export as JSON with every documented key, in order (${(a.keys || []).length} keys)`, JSON.stringify(a.keys) === JSON.stringify(KEYS), JSON.stringify(a.keys));
+    check('7 nothing claims a download: no download link was clicked and no toast was said',
+      a.links.length === 0 && a.said.length === 0, JSON.stringify({ links: a.links, said: a.said }));
+    check('7 with no share sheet that takes text there is Copy and no Share, and the first line says so',
+      JSON.stringify(a.btns) === '["Copy"]' && a.lead === 'This is the data the game holds about you, as JSON: the same file the website downloads. To keep a copy, copy it.', JSON.stringify({ btns: a.btns, lead: a.lead }));
+    const h1 = await hist();
+    check('7 the open panel holds one history entry of its own', h1.i === h0.i + 1, JSON.stringify([h0.i, h1.i]));
+
+    // b. Copy says only what happened.
+    const copy = async (setup) => {
+      await ev(`(() => { window.__said = []; window.__copied = null; window.__cmd = null; ${setup}; return true; })()`);
+      await tap('#docp [data-dp="copy"]');
+      await until('window.__said.length > 0', 3000);
+      await sleep(80);
+      return ev(`(() => { const t = document.querySelector('#docpC .dpd').textContent, a = document.activeElement;
+        return { said: window.__said.slice(), copied: window.__copied === t, n: t.length, cmd: window.__cmd, left: document.querySelectorAll('#docp textarea').length,
+          focus: !!a && a.matches('#docp [data-dp="copy"]') }; })()`);
+    };
+    const CLIP = (fnSrc) => `Object.defineProperty(navigator, 'clipboard', { configurable: true, value: ${fnSrc} })`;
+    const EXEC = (ret) => `document.execCommand = (c) => { const e = document.activeElement; window.__cmd = { c, n: e && typeof e.value === 'string' ? e.value.length : -1, ro: !!(e && e.readOnly) }; return ${ret}; }`;
+    // WebKit's select() leaves an unfocused field unfocused, and a selection in
+    // a field without focus is not the page's selection, so the copy command
+    // would copy nothing there. Chrome's select() focuses the field itself, so
+    // this stand-in select() behaves as WebKit's does.
+    const WEBKIT_SELECT = "HTMLTextAreaElement.prototype.select = function () { this.setSelectionRange(0, this.value.length); }";
+    const c1 = await copy(CLIP(`{ writeText: (t) => { window.__copied = t; return Promise.resolve(); } }`));
+    check('7 Copy puts the whole text on the clipboard and says "Copied."', c1.copied && c1.n > 500 && JSON.stringify(c1.said) === '["Copied."]', JSON.stringify(c1));
+    const c2 = await copy(CLIP(`{ writeText: () => Promise.reject(new DOMException('refused', 'NotAllowedError')) }`) + '; ' + EXEC('true') + '; ' + WEBKIT_SELECT);
+    check('7 a clipboard that refuses falls back to the copy command on the whole text, in a focused read-only field (no keyboard on a phone), says "Copied." only because that worked, and hands the keyboard back',
+      JSON.stringify(c2.said) === '["Copied."]' && c2.cmd && c2.cmd.c === 'copy' && c2.cmd.n === c2.n && c2.cmd.ro === true && c2.left === 0 && c2.focus, JSON.stringify(c2));
+    const c3 = await copy(CLIP('undefined') + '; ' + EXEC('true'));
+    check('7 with no clipboard at all the copy command is used, and "Copied." is said only because it worked', JSON.stringify(c3.said) === '["Copied."]' && c3.cmd && c3.cmd.n === c3.n, JSON.stringify(c3));
+    const c4 = await copy(CLIP(`{ writeText: () => Promise.reject(new DOMException('refused', 'NotAllowedError')) }`) + '; ' + EXEC('false'));
+    check('7 when nothing can copy, it says so and how to copy by hand, never "Copied."',
+      JSON.stringify(c4.said) === '["Copy did not work here. Press and hold the text to select it."]' && c4.left === 0, JSON.stringify(c4));
+    const c5 = await copy(CLIP(`{ writeText: () => Promise.reject(new DOMException('refused', 'NotAllowedError')) }`) + "; document.execCommand = () => { throw new DOMException('no', 'SecurityError'); }");
+    const c6 = await copy(`Object.defineProperty(navigator, 'clipboard', { configurable: true, get() { throw new TypeError('no clipboard here'); } }); ` + EXEC('true'));
+    check('7 a copy command that throws is a copy that failed, said so; a clipboard that throws falls back to the command',
+      JSON.stringify(c5.said) === '["Copy did not work here. Press and hold the text to select it."]' && c5.left === 0 && c5.focus
+      && JSON.stringify(c6.said) === '["Copied."]' && c6.cmd && c6.cmd.n === c6.n, JSON.stringify({ c5, c6 }));
+    // And that is true: the whole text can be selected, though the game's own
+    // page cannot (body is user-select:none).
+    const sel = await ev(`(() => { const d = document.querySelector('#docpC .dpd'), g = getSelection(); g.removeAllRanges(); g.selectAllChildren(d);
+      const n = g.toString().length; g.removeAllRanges(); g.selectAllChildren(document.querySelector('#bay .pbody') || document.getElementById('bay'));
+      const bay = g.toString().length; g.removeAllRanges(); return { n, of: d.textContent.length, bay, css: getComputedStyle(d).userSelect || getComputedStyle(d).webkitUserSelect }; })()`);
+    check(`7 the whole text can be selected by hand (${sel.n} of ${sel.of} characters), as the toast says, where the game's own page cannot`, sel.n === sel.of && sel.n > 500 && sel.bay === 0, JSON.stringify(sel));
+
+    // c. Close, Escape and Back each close it, back onto the account panel.
+    const closed = async (how) => {
+      await sleep(300);
+      const s = await ev(`(() => { const a = document.activeElement; return { open: ${isOpen}, acc: !document.getElementById('accountModal').classList.contains('hidden'),
+        inert: { bay: document.getElementById('bay').inert, acc: document.getElementById('accountModal').inert }, focus: !!a && a.id === 'accExportBtn',
+        empty: !document.getElementById('docpC').firstChild }; })()`);
+      const h = await hist();
+      check(`7 ${how} closes it onto the account panel, awake again, with the keyboard on Download my data and the history where it was`,
+        !s.open && s.acc && s.inert.bay === false && s.inert.acc === false && s.focus && s.empty && h.i === h0.i, JSON.stringify({ s, h: [h.i, h.n], h0: [h0.i, h0.n] }));
+    };
+    await tap('#docp [data-dp="close"]'); await closed('Close');
+    await ev(`(document.getElementById('accExportBtn').focus(), true)`);
+    await tap('#accExportBtn'); await until(dataUp, 5000); await key('Escape', 27); await closed('Escape');
+    await tap('#accExportBtn'); await until(dataUp, 5000);
+    await send('Page.navigateToHistoryEntry', { entryId: (await hist()).entries[h0.i].id });
+    await closed('Back');
+    await stayed('7 the panel, Copy, Close, Escape and Back', d, url, before);
+
+    // d. Share, where the phone's share sheet takes text: the same text.
+    await ev(SHARE(`(o) => { window.__shared = o; return Promise.resolve(); }`, `(o) => !!o && typeof o.text === 'string' && !o.files`));
+    await tap('#accExportBtn'); await until(dataUp, 5000);
+    const sh = await ev(DATA);
+    check('7 where the share sheet takes text there is Share beside Copy, and the first line says to copy or share it',
+      JSON.stringify(sh.btns) === '["Copy","Share"]' && /To keep a copy, copy it or share it\.$/.test(sh.lead), JSON.stringify({ btns: sh.btns, lead: sh.lead }));
+    await ev('(window.__said = [], true)');
+    await tap('#docp [data-dp="share"]');
+    await sleep(150);
+    const sv = await ev(`({ shared: window.__shared ? { title: window.__shared.title, same: window.__shared.text === document.querySelector('#docpC .dpd').textContent } : null, said: window.__said.slice() })`);
+    check('7 Share hands the sheet the whole text under a title, and says nothing about it', !!sv.shared && sv.shared.same && sv.shared.title === 'Cannons & Canyons: my data' && sv.said.length === 0, JSON.stringify(sv));
+    await ev(SHARE(`() => Promise.reject(new DOMException('dismissed', 'AbortError'))`, `() => true`));
+    await tap('#docp [data-dp="share"]');
+    await sleep(150);
+    check('7 a dismissed share sheet is not an error and says nothing', (await ev('window.__said.length')) === 0);
+    await ev(SHARE(`() => { throw new DOMException('not now', 'InvalidStateError'); }`, `() => true`));
+    await tap('#docp [data-dp="share"]');
+    await sleep(150);
+    check('7 a share sheet that throws says nothing (and the page throws nothing: see "no page errors")', (await ev('window.__said.length')) === 0);
+    await tap('#docp [data-dp="close"]'); await sleep(300);
+    await ev(SHARE(`() => Promise.resolve()`, `() => false`));
+    await tap('#accExportBtn'); await until(dataUp, 5000);
+    check('7 a share sheet that does not take text offers no Share', JSON.stringify((await ev(DATA)).btns) === '["Copy"]');
+    await tap('#docp [data-dp="close"]'); await sleep(300);
+    await ev(SHARE(`() => Promise.resolve()`, `() => { throw new TypeError('cannot tell'); }`));
+    await tap('#accExportBtn'); await until(dataUp, 5000);
+    const ct = await ev(DATA);
+    check('7 a share sheet that cannot say what it takes offers no Share, and the panel is drawn whole', JSON.stringify(ct.btns) === '["Copy"]' && JSON.stringify(ct.keys) === JSON.stringify(KEYS), JSON.stringify(ct.btns));
+    await tap('#docp [data-dp="close"]'); await sleep(300);
+
+    // e. The text is text: markup in an export never becomes markup.
+    await ev(`(Bay.showData('{\\n  "callsign": "<img src=x onerror=window.__pwned=1><b>bold</b>"\\n}'), true)`);
+    await sleep(200);
+    const mk = await ev(`(() => { const d = document.querySelector('#docpC .dpd'); return { kids: d.children.length, img: !!document.querySelector('#docp img'), pwned: !!window.__pwned, lit: d.textContent.includes('<img src=x') }; })()`);
+    check('7 markup inside the export is shown as text and never runs', mk.kids === 0 && !mk.img && !mk.pwned && mk.lit, JSON.stringify(mk));
+    await tap('#docp [data-dp="close"]'); await sleep(300);
+    // A read of the policy still out when the data is drawn never lands on it.
+    await ev(`(() => { const real = window.fetch; let n = 0;
+      window.fetch = (u, o) => (String(u).endsWith('privacy.html') && n++ === 0 ? new Promise((r) => setTimeout(r, 700)).then(() => real(u, o)) : real(u, o));
+      document.querySelector(${JSON.stringify(ROW)}).click(); Bay.showData('{\\n  "slow": "read"\\n}'); return true; })()`);
+    await sleep(1200);
+    const sr = await ev(`({ title: document.getElementById('docpT').textContent, data: (document.querySelector('#docpC .dpd') || {}).textContent || '', h1: !!document.querySelector('#docpC h1') })`);
+    check('7 a read of the policy still out when the data opens never lands over it', sr.title === 'Your data' && /"slow": "read"/.test(sr.data) && !sr.h1, JSON.stringify(sr));
+    await tap('#docp [data-dp="close"]'); await sleep(300);
+
+    // f. shareBlob in the app (the result card and the replay): no download
+    // link, and nothing called saved.
+    const blobRun = (setup) => ev(`(async () => { window.__said = []; const n0 = window.__links.length; window.__shared = null; ${setup};
+      await shareBlob(new Blob(['x'], { type: 'image/png' }), 'cannons-result.png');
+      await new Promise((r) => setTimeout(r, 60));
+      return { said: window.__said.slice(), links: window.__links.slice(n0), shared: window.__shared && window.__shared.files ? window.__shared.files.map((f) => f.name) : null }; })()`);
+    const FILES_OK = `(o) => !!o && Array.isArray(o.files)`;
+    const nb1 = await blobRun(SHARE('undefined', 'undefined'));
+    const nb2 = await blobRun(SHARE(`(o) => { window.__shared = o; return Promise.resolve(); }`, FILES_OK));
+    const nb3 = await blobRun(SHARE(`() => Promise.reject(new DOMException('dismissed', 'AbortError'))`, FILES_OK));
+    const nb4 = await blobRun(SHARE(`() => Promise.reject(new DOMException('refused', 'NotAllowedError'))`, FILES_OK));
+    const nb5 = await blobRun(SHARE(`() => Promise.reject()`, FILES_OK));
+    check('7 shareBlob in the app: with no share sheet for files it says sharing is not available, and clicks no download link',
+      JSON.stringify(nb1.said) === '["Sharing is not available on this device."]' && nb1.links.length === 0, JSON.stringify(nb1));
+    check('7 shareBlob in the app: a sheet that shares says nothing and clicks no link, a dismissed one says nothing, and a failed one says it could not be shared',
+      nb2.said.length === 0 && JSON.stringify(nb2.shared) === '["cannons-result.png"]' && nb2.links.length === 0
+      && nb3.said.length === 0 && nb3.links.length === 0
+      && JSON.stringify(nb4.said) === '["That could not be shared."]' && nb4.links.length === 0
+      && JSON.stringify(nb5.said) === '["That could not be shared."]' && nb5.links.length === 0, JSON.stringify({ nb2, nb3, nb4, nb5 }));
+    await stayed('7 the phone\'s shares', d, url, before);
+
+    // g. Readable at every phone size: the first line and the JSON in the
+    // panel's type, Copy and Share at least 44px tall, everything inside the
+    // safe box, nothing wider than the screen, and the JSON's last line clear
+    // of the home indicator.
+    const DPANEL = `(() => {
+      const len = (css) => { const e = document.createElement('div'); e.style.cssText = 'position:fixed;left:0;top:0;height:1px;width:' + css; document.body.appendChild(e); const w = e.getBoundingClientRect().width; e.remove(); return w; };
+      const u = len('calc(var(--u) * 1000)') / 1000;
+      const sa = { l: len('var(--sa-l)'), r: len('var(--sa-r)'), t: len('var(--sa-t)'), b: len('var(--sa-b)') };
+      const p = document.getElementById('docp'), s = document.getElementById('docpS'), c = document.getElementById('docpC'), d = c.querySelector('.dpd');
+      const W = innerWidth, H = innerHeight, fs = (e) => Math.round(parseFloat(getComputedStyle(e).fontSize) / u * 10) / 10;
+      const lead = c.querySelector('p'), btns = [...c.querySelectorAll('.dpb button')];
+      const out = [lead, d, ...btns].filter((e) => { const r = e.getBoundingClientRect(); return r.left < sa.l - 0.5 || r.right > W - sa.r + 0.5; }).map((e) => e.className || e.tagName);
+      const colours = [lead, d, ...btns].map((e) => getComputedStyle(e).color);
+      const sw = { s: s.scrollWidth - s.clientWidth, c: c.scrollWidth - c.clientWidth, d: d.scrollWidth - d.clientWidth };
+      s.scrollTop = s.scrollHeight;
+      const end = { bottom: d.getBoundingClientRect().bottom, limit: H - sa.b };
+      s.scrollTop = 0;
+      return { u, sa, out, lead: fs(lead), data: fs(d), btn: btns.map((b) => ({ h: b.getBoundingClientRect().height, fs: fs(b.querySelector('span')) })),
+        colours, bg: getComputedStyle(p).backgroundColor, sw, end, scroll: { sh: s.scrollHeight, ch: s.clientHeight } };
+    })()`;
+    for (const [w, h, sa, V] of [[667, 375, null, '667x375'], [812, 375, null, '812x375'], [874, 402, IPHONE17, '874x402 iPhone 17'], [932, 430, null, '932x430']]) {
+      await loadAs(true, w, h, sa);
+      await ev(SHARE(`() => Promise.resolve()`, `() => true`));
+      await exportTap();
+      if (!(await until(dataUp, 5000))) { fail(`7 [${V}] the panel did not open`); continue; }
+      const m = await ev(DPANEL);
+      check(`7 [${V}] the first line, the JSON, Copy and Share all sit inside the safe box (insets ${f1(m.sa.l)}/${f1(m.sa.r)}/${f1(m.sa.b)}px)`, m.out.length === 0, m.out.join(', '));
+      check(`7 [${V}] the first line is ${m.lead}u and the JSON ${m.data}u; Copy and Share are ${m.btn.map((b) => f1(b.h)).join(' and ')}px tall with ${m.btn.map((b) => b.fs).join('u and ')}u labels`,
+        m.lead >= 17 && m.data >= 13 && m.btn.length === 2 && m.btn.every((b) => b.h >= 44 - 0.5 && b.fs >= 13), JSON.stringify(m));
+      const worst = Math.min(...m.colours.map((c) => contrast(rgbOf(c), rgbOf(m.bg))));
+      check(`7 [${V}] all of it is at least 7:1 on the panel (${f1(worst)}:1)`, worst >= 7, JSON.stringify({ colours: m.colours, bg: m.bg }));
+      check(`7 [${V}] nothing is wider than the screen, the JSON wraps, and its last line comes up clear of the home indicator`,
+        m.sw.s <= 0 && m.sw.c <= 0 && m.sw.d <= 0 && m.scroll.sh > m.scroll.ch && m.end.bottom <= m.end.limit - 24 * m.u + 0.5, JSON.stringify({ sw: m.sw, end: m.end, scroll: m.scroll }));
+    }
+
+    // h. On the web it is still a file: one download link, "Data downloaded",
+    // and no panel; and shareBlob still falls back to a download there.
+    d = await loadAs(false, 874, 402, IPHONE17);
+    url = await ev('location.href');
+    before = mark();
+    await exportTap();
+    await until(`window.__said.length > 0`, 5000);
+    await sleep(150);
+    const wb = await ev(`({ said: window.__said.slice(), links: window.__links.slice(), open: ${isOpen} })`);
+    check('7 on the web, Download my data saves cannons-and-canyons-data.json through one download link, says "Data downloaded" and opens no panel',
+      JSON.stringify(wb.links) === JSON.stringify([{ download: 'cannons-and-canyons-data.json', href: 'blob:' }]) && JSON.stringify(wb.said) === '["Data downloaded"]' && !wb.open, JSON.stringify(wb));
+    const wb1 = await blobRun(SHARE('undefined', 'undefined'));
+    const wb2 = await blobRun(SHARE(`() => Promise.reject(new DOMException('dismissed', 'AbortError'))`, FILES_OK));
+    check('7 on the web, shareBlob still saves through a download link when it cannot share, as before',
+      JSON.stringify(wb1.links) === JSON.stringify([{ download: 'cannons-result.png', href: 'blob:' }]) && JSON.stringify(wb1.said) === '["Saved — share it anywhere"]'
+      && JSON.stringify(wb2.links) === JSON.stringify([{ download: 'cannons-result.png', href: 'blob:' }]) && JSON.stringify(wb2.said) === '["Saved — share it anywhere"]', JSON.stringify({ wb1, wb2 }));
+    await stayed('7 the web download', d, url, before);
   }
 
   // ---- 6. offline for real ---------------------------------------------------
