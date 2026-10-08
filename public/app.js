@@ -1857,9 +1857,9 @@ function socialInvite(m) {
   // `hello` reaches it, so an invite sent to that account can land AFTER the
   // account event below has emptied the slot, and be offered to whoever uses
   // the device next. A guest can be neither invited nor the one an invite
-  // was for (the server's invite needs a friend, and only a linked account
-  // has friends), so an invite reaching a page that is not signed in is
-  // always the old account's. At boot, before the page has read its own
+  // was for (the server's invite needs a friend or a chosen callsign, and only
+  // a linked account has either), so an invite reaching a page that is not
+  // signed in is always the old account's. At boot, before the page has read its own
   // account, one is dropped here too -- which is what the boot's first
   // account event would do to it anyway.
   if (!socialSignedIn()) return;
@@ -1868,12 +1868,20 @@ function socialInvite(m) {
 // THE SLOT'S ONE WRITER OF AN INVITE, for a fresh one (above) and a carried one
 // (below): the frame read field by field, stamped `at`, and a timer that
 // empties the slot of THIS invite when its time is up.
+// A STRANGER'S INVITE NAMES ITS SENDER'S ACCOUNT (round 2, 2026-10-08):
+// server/social.js puts `from.id` on an invite from a player who is not a
+// friend, so the card can offer Report and Block like every other place a
+// player is shown. It is kept only in the one shape an account id has, and
+// only when it is there: a friend's invite is read exactly as it always was.
+const INVITER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 function squadInviteSet(m, at, ms) {
   const f = m.from && typeof m.from === 'object' ? m.from : {};
   const n = (v, d) => (Number.isInteger(v) && v >= 1 && v <= 4 ? v : d);
+  const from = { callsign: typeof f.callsign === 'string' && f.callsign ? f.callsign : null };
+  if (typeof f.id === 'string' && INVITER_ID.test(f.id)) from.id = f.id;
   const inv = window.CC_SQUAD_INVITE = {
     code: m.code,
-    from: { callsign: typeof f.callsign === 'string' && f.callsign ? f.callsign : null },
+    from,
     size: n(m.size, 1),
     max: n(m.max, 4),
     at,

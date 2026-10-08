@@ -2405,6 +2405,9 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .sqib{display:flex;gap:calc(6 * var(--u));margin-top:calc(6 * var(--u))}
   #bay .sqib .sbtn{flex:1;height:calc(28 * var(--u));padding:0 calc(8 * var(--u));font-size:calc(13 * var(--u))}
   #bay .sqib .sbtn.on{border-color:#54c8ff;color:#fff;background:rgba(84,200,255,.18)}
+  /* A stranger's invite also carries the player menu (Report, Block): a square
+     the height of Join and Ignore, at the end of their row. */
+  #bay .sqib .pmb{width:calc(28 * var(--u));height:calc(28 * var(--u))}
   /* The friend rows reuse the member row (.sqm); the rest is theirs. */
   #bay .sqnt{margin-top:calc(4 * var(--u));font-size:calc(13 * var(--u));line-height:1.25;font-weight:500;color:#9dadd0}
   #bay .sqfc{display:flex;align-items:center;gap:calc(6 * var(--u));margin-top:calc(6 * var(--u));font-family:Rajdhani,system-ui,sans-serif;

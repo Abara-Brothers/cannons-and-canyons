@@ -684,6 +684,62 @@ function lobbyOf(...sockets) {
   leave(golf);
 }
 
+// ---- (p) A TYPED NAME ON A SEAT, AND THE REPORT AGAINST IT (round 2) --------
+// The engine's third door, with the host's real check installed the way
+// server.js installs it (display-name.js playerName over a name index), and
+// the social layer joined to the engine's resolveSeatName the way server.js
+// joins it. A guest's typed name reaches the seat; a report against that seat
+// by handle records THAT name, where seenName alone gave '(no name)'. A typed
+// name that is an account's chosen callsign, or a computer's name, never
+// reaches a seat: the door shows the seat's default instead, and a report
+// records the default it showed.
+{
+  const { createNameProofs } = await import('../server/display-name.js');
+  const { createNameIndex } = await import('../server/name-index.js');
+  const index = createNameIndex({ load: async (after) => (after === null ? ['bunker nine'] : []) });
+  await index.refresh();
+  engine.setNameCheck(createNameProofs({ terms: [], keyState: (k) => index.state(k) }).playerName);
+  try {
+    const st = memStore(ROWS);
+    const S = createSocial({
+      store: st, terms: [], send: (ws, frame) => ws._rx.push(frame), now: () => 1700000000000,
+      resolveHandle: resolveSeatHandle, seatName: engine.resolveSeatName,
+    });
+    // Two lobbies of three and two, so neither fills and starts: a guest's
+    // typed name and an account's chosen callsign typed by another account in
+    // one, a computer's name in the other.
+    const wa = mkws(A), wg = mkws(GUEST, true), wi = mkws(C), wx = mkws(uid(4)), wc = mkws(B);
+    handleClientMessage(wa, { type: 'create', mode: 'ffa', max: 4, name: ROLLED, skin: 'olive' });
+    handleClientMessage(wg, { type: 'join', code: wa.roomCode, name: '  Tank   Ace ', skin: 'olive' });
+    handleClientMessage(wi, { type: 'join', code: wa.roomCode, name: 'bunker NINE', skin: 'olive' });
+    handleClientMessage(wx, { type: 'create', mode: 'ffa', max: 4, name: ROLLED, skin: 'olive' });
+    handleClientMessage(wc, { type: 'join', code: wx.roomCode, name: 'CPU 2', skin: 'olive' });
+    S.onAuth(wa); S.onAuth(wx);
+    const names = (lastOf(wa, 'lobby') || { players: [] }).players.map((p) => p && p.name)
+      .concat([((lastOf(wx, 'lobby') || { players: [] }).players[1] || {}).name]);
+    const hG = wireHandle(wa, 1), hI = wireHandle(wa, 2), hC = wireHandle(wx, 1);
+    const seatNames = [engine.resolveSeatName(wa, hG), engine.resolveSeatName(wa, hI), engine.resolveSeatName(wa, 'nope'), engine.resolveSeatName(mkws(A), hG)];
+    const l1 = await withLog(() => S.handle(wa, { type: 'report', handle: hG, id: 1 }));
+    const l2 = await withLog(() => S.handle(wa, { type: 'report', handle: hI, id: 2 }));
+    const l3 = await withLog(() => S.handle(wx, { type: 'report', handle: hC, id: 3 }));
+    const rows = st.reports.map((r) => [r.reported, r.callsign]);
+    const isPair = (n) => typeof n === 'string' && /^[A-Z][a-z]+ [A-Z][a-z]+$/.test(n);
+    if (names[1] === 'Tank Ace' && isPair(names[2]) && names[2] !== 'Bunker Nine' && isPair(names[3]) && names[3] !== 'CPU 2')
+      ok("(p) the door shows a guest's typed name, normalised, and refuses an account's chosen callsign typed by someone else and a computer's name, showing the seat's default pair instead");
+    else fail('(p) seat names: ' + JSON.stringify(names));
+    if (seatNames[0] === 'Tank Ace' && seatNames[1] === names[2] && seatNames[2] === null && seatNames[3] === null)
+      ok('(p) resolveSeatName answers the name a seat holds, under resolveSeatHandle\'s rules: nothing for an unknown handle or a socket with no seat in the room');
+    else fail('(p) resolveSeatName: ' + JSON.stringify(seatNames));
+    if (rows.length === 3 && rows[0][0] === GUEST && rows[0][1] === 'Tank Ace' && rows[1][0] === C && rows[1][1] === names[2] && rows[2][0] === B && rows[2][1] === names[3]
+        && l1[0] === `[report] ${GUEST} "Tank Ace" by ${A}`)
+      ok("(p) a report against each seat records the name that seat SHOWED, the guest's typed 'Tank Ace' included, where a profile row alone gave '(no name)'");
+    else fail('(p) reports: ' + JSON.stringify({ rows, l1, l2, l3 }));
+    leave(wc); leave(wx); leave(wi); leave(wg); leave(wa);
+  } finally {
+    engine.setNameCheck(null);
+  }
+}
+
 // ---- (j) nothing escaped, and nothing was left behind ---------------------
 if (!escaped) ok('(j) no throw escaped the engine');
 else fail('(j) uncaught: ' + escaped.message);

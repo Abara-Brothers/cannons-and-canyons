@@ -19,7 +19,7 @@ import http2 from 'node:http2';
 import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import {
-  rooms, send, handleClientMessage, handleClose, resolveSeatHandle, setCodeTaken, setNameCheck,
+  rooms, send, handleClientMessage, handleClose, resolveSeatHandle, resolveSeatName, setCodeTaken, setNameCheck,
   MODE_SEATS, TEE_IDS, validRackFor, abandonRoom,
 
   setPushNudge, setAuthSink, setPushSubSink, setFaultSink, setCapacitySink, setMatchSink,
@@ -37,6 +37,9 @@ import { loadBlocklist, normaliseCallsign } from './server/callsign.js';
 // a player a name may be kept and the door that shows it to everyone else are
 // one function, not two copies of it.
 import { createNameProofs } from './server/display-name.js';
+// Which callsign keys an account holds, kept in memory so the engine's door
+// can ask synchronously whether a typed name is somebody's chosen callsign.
+import { createNameIndex } from './server/name-index.js';
 // Which hosts a web push may be sent to. See server/push-hosts.js for why a
 // client-supplied endpoint must never choose where this process connects.
 import { webPushHostAllowed } from './server/push-hosts.js';
@@ -201,7 +204,7 @@ const seatSquad = createSeatSquad({
 // running it unfiltered — an unfiltered chosen callsign is the one outcome
 // this feature must never produce — and says so loudly on stderr. It also
 // leaves the room engine with no name check, so no typed name is shown either.
-let store = null, social = null;
+let store = null, social = null, names = null;
 try {
   const terms = loadBlocklist(path.join(__dirname, 'server', 'blocklist.txt'));
   // THE ROOM ENGINE'S NAME CHECK (owner, 2026-10-07: every player may name
@@ -211,9 +214,26 @@ try {
   // at the door. Installed only once the blocklist has loaded, so a missing or
   // malformed list leaves the door shut — every typed name falls back to a
   // rolled pair, which is the fail-closed answer, and the catch below says so.
-  setNameCheck(createNameProofs({ terms }).playerName);
+  //
+  // AND NOBODY'S CHOSEN CALLSIGN (round 2, 2026-10-08). `keyState` asks the
+  // name index built below, read when a name is checked, never at boot. With
+  // no Supabase there are no accounts, so no key can be taken and every key is
+  // free. With Supabase configured but no index (createStore threw), every key
+  // is unknown, and the door refuses typed names rather than guess.
+  const keyState = (key) => (names ? names.state(key) : SB_URL && SB_SECRET ? 'unknown' : 'free');
+  setNameCheck(createNameProofs({ terms, keyState }).playerName);
   if (SB_URL && SB_SECRET) {
     store = createStore({ sbAdmin });
+    // THE NAME INDEX (server/name-index.js): every chosen callsign's key, read
+    // at boot and every ten minutes, and kept exact between reads by the Set
+    // and the roll, which call add and remove in the social layer. It refuses
+    // every typed name until its first read lands, and that read retries after
+    // thirty seconds when it fails. Its timers are unref'd.
+    names = createNameIndex({
+      load: (after, limit) => store.chosenCallsignKeys(after, limit),
+      onError: (e) => console.error(`[names] index read failed: ${e && e.message}`),
+    });
+    names.start();
     // resolveSeatHandle is the JOIN, and this line is the only place the two
     // halves meet (BINDING.md resolution 24). The room engine mints a per-room
     // opaque handle for every occupied, accounted seat and puts it in the lobby
@@ -248,6 +268,12 @@ try {
       // `const` would still be in its temporal dead zone here: the throw would
       // land in the catch below as '[boot] social off'.
       pushInvite: pushSquadInvite,
+      // AND THE NAME INDEX, so the guest check op and a guest's squad seat ask
+      // the same question the door above asks, of the same memory.
+      names,
+      // AND THE NAME ON A SEAT, beside resolveHandle and across the same seam:
+      // a report against a lobby seat records the name the reporter saw.
+      seatName: resolveSeatName,
     });
     // ONE CODE NAMESPACE (plan R4). makeCode has always collided against
     // `rooms` alone, so a squad code drawn from the same 31-character

@@ -2199,6 +2199,83 @@ if (want('t9')) try {
       ok(`${V}: a nameless sender reads "A player", a sender's markup is text, a malformed invite changes nothing, and a size or seat count out of bounds reads 1 / 4`);
     else fail(`${V}: invite names ${JSON.stringify({ a: c2a && c2a.inv, b: c2b && c2b.inv, imgs: c2imgs, c: c2c, d: c2d, e: c2e && c2e.inv, f: c2f && c2f.inv })}`);
 
+    // ---- C2b. A STRANGER'S INVITE CARRIES THE PLAYER MENU (round 2,
+    //      2026-10-08). The server puts the inviter's account id on an
+    //      invite from a player who is not a friend (`from.id`); the card
+    //      then offers Report and Block like every other place a player is
+    //      shown, aimed by that id, and a Block from it takes the card away
+    //      (that squad could not be joined now anyway). A friend's invite
+    //      (no id) and an id that is not an account id's shape get no menu.
+    //      A block aimed at anybody else leaves the card where it is.
+    const STR = '0000000a-000b-400c-800d-00000000000e', OTHER = '0000000a-000b-400c-800d-00000000000f';
+    const c2bCard = () => ev(`(() => { Bay.show('squad'); const i = document.querySelector('#bay .sqi'); if (!i || !i.getClientRects().length) return null;
+      const m = i.querySelector('[data-pmenu]'); const r = (e) => e ? e.getBoundingClientRect() : null; const jb = r(i.querySelector('[data-sq^="join:"]')), mb = r(m);
+      return { t: (i.querySelector('.sqit') || {}).textContent, menu: m ? { key: m.dataset.pmenu, kind: m.dataset.pmkind, label: m.getAttribute('aria-label'), h: +mb.height.toFixed(1), jh: +jb.height.toFixed(1), inside: mb.right <= i.getBoundingClientRect().right + 0.5 } : null,
+        slotFrom: JSON.stringify((window.CC_SQUAD_INVITE || {}).from) }; })()`);
+    const pmState = () => ev(`(() => { const m = document.getElementById('pmenu'); return m && !m.hidden ? { items: [...m.querySelectorAll('button')].map((b) => b.textContent.trim()), head: (m.querySelector('.pmh') || {}).textContent } : null; })()`);
+    await invite({ code: 'ZT4P', from: { callsign: 'Rook Vale', id: STR }, size: 2 });
+    const c2s = await c2bCard();
+    // AND IN THE HOME BOX, which draws the same card in its narrower slot: the
+    // menu is there, inside the card and as tall as Join, and Join and Ignore
+    // still show their whole words beside it.
+    const c2home = await ev(`(() => { Bay.show('home'); const p = document.querySelector('#bay .sqx'); const i = p && p.querySelector('.sqi'); if (!i || !i.getClientRects().length) return null;
+      const m = i.querySelector('[data-pmenu]'), j = i.querySelector('[data-sq^="join:"]'), g = i.querySelector('[data-sq^="ignore:"]'); if (!m || !j || !g) return { menu: !!m };
+      const r = (e) => e.getBoundingClientRect(), ir = r(i), mr = r(m);
+      return { menu: m.dataset.pmenu, inside: mr.left >= ir.left - 0.5 && mr.right <= ir.right + 0.5, h: +mr.height.toFixed(1), jh: +r(j).height.toFixed(1),
+        clip: [j, g].filter((b) => b.scrollWidth > b.clientWidth + 1).map((b) => b.textContent), words: j.textContent + '|' + g.textContent }; })()`);
+    await ev(`(Bay.show('squad'), true)`);
+    if (c2home && c2home.menu === STR && c2home.inside && c2home.h === c2home.jh && c2home.clip.length === 0 && c2home.words === 'Join|Ignore')
+      ok(`${V}: on home the box's card carries the same menu, inside the card and as tall as Join, and Join and Ignore are not clipped`);
+    else fail(`${V}: stranger card on home ${JSON.stringify(c2home)}`);
+    await invite({ code: 'ZT5P', from: { callsign: 'Rook Vale', id: 'NOT-AN-ID' }, size: 2 });
+    const c2junk = await c2bCard();
+    await invite({ code: 'ZT6P', from: { callsign: 'Steel Mule' }, size: 2 });
+    const c2friend = await c2bCard();
+    if (c2s && c2s.menu && c2s.menu.key === STR && c2s.menu.kind === 'id' && c2s.menu.label === 'More for Rook Vale' && c2s.menu.h === c2s.menu.jh && c2s.menu.inside
+        && c2s.slotFrom === JSON.stringify({ callsign: 'Rook Vale', id: STR })
+        && c2junk && !c2junk.menu && c2junk.slotFrom === '{"callsign":"Rook Vale"}' && c2friend && !c2friend.menu)
+      ok(`${V}: a stranger's invite card carries the player menu, aimed by the inviter's id and as tall as Join, inside the card; a friend's invite and an id of the wrong shape carry none`);
+    else fail(`${V}: stranger card ${JSON.stringify({ c2s, c2junk, c2friend })}`);
+    // REPORT from the card: the menu, the confirm sheet, the frame by id.
+    await invite({ code: 'ZT4P', from: { callsign: 'Rook Vale', id: STR }, size: 2 });
+    await ev(`(window.__c2bToast = [], window.__c2bSt = window.showToast, window.showToast = (t) => { window.__c2bToast.push(t); }, true)`);
+    await clearTx();
+    await t9click('#bay .sqi [data-pmenu]'); await sleep(60);
+    const c2menu = await pmState();
+    await t9click('#pmenu [data-pm="report"]'); await sleep(40);
+    await t9click('#pmenu [data-pm="ok"]'); await sleep(40);
+    const c2rep = (await tx()).filter((f) => f.type === 'report');
+    if (c2rep.length) await answer(c2rep[c2rep.length - 1].id, { type: 'report', ok: true });
+    const c2afterRep = await c2bCard();
+    // BLOCK from the card: the frame by id, and the card goes.
+    await clearTx();
+    await t9click('#bay .sqi [data-pmenu]'); await sleep(60);
+    await t9click('#pmenu [data-pm="block"]'); await sleep(40);
+    await t9click('#pmenu [data-pm="ok"]'); await sleep(40);
+    const c2blk = (await tx()).filter((f) => f.type === 'block');
+    if (c2blk.length) await answer(c2blk[c2blk.length - 1].id, { type: 'block', op: 'add', ok: true });
+    const c2afterBlk = await c2bCard();
+    const c2toasts = await ev('window.__c2bToast.slice()');
+    if (c2menu && c2menu.head === 'Rook Vale' && c2menu.items.join('|') === 'Report name|Block|Close'
+        && c2rep.length === 1 && JSON.stringify(c2rep[0]) === JSON.stringify({ type: 'report', id: STR })
+        && c2blk.length === 1 && JSON.stringify(c2blk[0]) === JSON.stringify({ type: 'block', op: 'add', id: STR })
+        && c2afterRep && c2afterRep.menu && c2afterBlk === null && c2toasts.join('|') === 'Reported. Thank you.|Blocked.')
+      ok(`${V}: from the card, Report and Block go through their confirm sheets as frames aimed by the inviter's id; a report leaves the card, a block takes it away`);
+    else fail(`${V}: card menu ${JSON.stringify({ c2menu, c2rep, c2blk, c2afterRep, c2afterBlk, c2toasts })}`);
+    // A BLOCK AIMED AT SOMEBODY ELSE leaves another stranger's card alone.
+    await invite({ code: 'ZT7P', from: { callsign: 'Rook Vale', id: STR }, size: 2 });
+    await clearTx();
+    await ev(`(() => { const b = document.createElement('button'); b.id = 'c2bOther'; b.dataset.pmenu = ${JSON.stringify(OTHER)}; b.dataset.pmkind = 'id'; b.dataset.pmname = 'Somebody'; document.body.appendChild(b); b.click(); b.remove(); return true; })()`); await sleep(60);
+    await t9click('#pmenu [data-pm="block"]'); await sleep(40);
+    await t9click('#pmenu [data-pm="ok"]'); await sleep(40);
+    const c2oth = (await tx()).filter((f) => f.type === 'block');
+    if (c2oth.length) await answer(c2oth[c2oth.length - 1].id, { type: 'block', op: 'add', ok: true });
+    const c2still = await c2bCard();
+    await ev(`(window.showToast = window.__c2bSt, true)`);
+    if (c2oth.length === 1 && c2oth[0].id === OTHER && c2still && c2still.menu && c2still.menu.key === STR)
+      ok(`${V}: a block aimed at another player leaves a stranger's invite card in place`);
+    else fail(`${V}: other block ${JSON.stringify({ c2oth, c2still })}`);
+
     // ---- C3. IGNORE HIDES THIS INVITE, NOT INVITES, AND SENDS NOTHING. A
     //      different squad's invite still arrives; the ignored squad's does not.
     await invite();
@@ -5330,6 +5407,22 @@ if (want('v3')) try {
         && p6empty.sent.length === 0 && p6empty.line && p6empty.line.t === 'Type a callsign first.' && p6empty.line.bad && p6kept === 'Ridge')
       ok(`${V}: Find by callsign sends {type:'squad', op:'invite', callsign} and no \`to\`; "Invite sent to Bunker Nine." empties the field; a miss reads "No player with that callsign."; already is a note; Enter sends once and a held key nothing; an empty field sends nothing; typing survives a trip to another tab`);
     else fail(`${V}: find by callsign ${JSON.stringify({ p6kept, p6repeat, p6f, busy: p6busy.sheet && p6busy.sheet.invite, p6ok: { line: p6ok.line, val: p6ok.page.sheet && p6ok.page.sheet.find }, p6miss: { line: p6miss.line }, p6enter, p6already, p6empty })}`);
+
+    // ---- P6b. A STRANGER'S ONE ANSWER (round 2, 2026-10-08): an invite by
+    //      callsign to a player who is not a friend is answered
+    //      delivered:'sent', whatever happened, and the line under the field
+    //      promises only what is true: no notification, seen if they are
+    //      playing now. With no name to give, it says so without one.
+    await typeFind('Rook Vale'); await clearTx(); await tap('#bay [data-sq="find"]'); await sleep(40);
+    await reply({ op: 'invite', ok: true, delivered: 'sent', callsign: 'Rook Vale' });
+    const p6sent = await findLine();
+    await typeFind('Rook Vale'); await clearTx(); await tap('#bay [data-sq="find"]'); await sleep(40);
+    await reply({ op: 'invite', ok: true, delivered: 'sent', callsign: null });
+    const p6anon = await findLine();
+    if (p6sent && p6sent.t === "Invite sent to Rook Vale. They'll see it if they're in the game right now." && !p6sent.bad
+        && p6anon && p6anon.t === "Invite sent. They'll see it if they're in the game right now." && !p6anon.bad)
+      ok(`${V}: a stranger's invite reads "Invite sent to Rook Vale. They'll see it if they're in the game right now.", and the same without a name: no notification promised, nothing about who is online`);
+    else fail(`${V}: stranger sent note ${JSON.stringify({ p6sent, p6anon })}`);
 
     // ---- P7. WHEN FIND BY CALLSIGN CANNOT INVITE: a full squad (the field and
     //      Invite dead, and why said), a guest (the door to an account), and

@@ -96,7 +96,11 @@ function mkstore(over = {}) {
   };
   return Object.assign(st, over);
 }
-const mk = (over) => { const store = mkstore(over); return { store, social: createSocial({ store, terms: TERMS, send, now }) }; };
+// THE NAME INDEX (round 2): an index that has loaded and holds no key, so a
+// typed name is judged by the rules alone, as these sections expect. (nu)
+// drives a held key, an index that has not loaded, and no index at all.
+const freeNames = () => { const keys = new Set(); return { keys, state: (k) => (keys.has(k) ? 'taken' : 'free'), add: (k) => keys.add(k), remove: (k) => keys.delete(k) }; };
+const mk = (over) => { const store = mkstore(over); return { store, social: createSocial({ store, terms: TERMS, send, now, names: freeNames() }) }; };
 
 // ---- (a) the frame types this layer owns ------------------------------------
 {
@@ -594,6 +598,95 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
   try { await broken.handle(bw, { type: 'callsign', op: 'check', name: 'Tank Ace', id: 5 }); } catch (e) { threw = e; }
   if (!threw && same(last(bw), { type: 'callsign', error: 'unavailable', id: 5 })) ok('(nc) a check on a mis-wired layer answers unavailable, not a crash');
   else fail('(nc) mis-wired check: ' + (threw ? threw.message : JSON.stringify(last(bw))));
+}
+
+// ---- (nu) NAMES, ROUND 2 (2026-10-08) ---------------------------------------
+// Three rules the round-2 review found missing. (1) A name a guest checks may
+// not be an account's chosen callsign: the check answers 'taken' from the
+// in-memory index (server/name-index.js), with no store call, and refuses
+// 'unavailable' while the index knows nothing (and with no index wired at
+// all). (2) The signed-in Set meets the guest's rules: the engine's isProfane
+// and the game's own names are refused not_allowed BEFORE any store call,
+// where validateCallsign alone used to let them be stored. (3) The index
+// follows the Set and the roll: a key set is taken at once, the key it
+// replaced and a key rolled away are free again.
+{
+  const { readFileSync } = await import('node:fs');
+  const { createNameIndex } = await import('../server/name-index.js');
+  const coreSrc = readFileSync(new URL('../public/game-core.js', import.meta.url), 'utf8');
+  const badWord = [...((coreSrc.match(/const BAD_SUB = \[([\s\S]*?)\];/) || [])[1] || '').matchAll(/'([a-z]+)'/g)].map((m) => m[1]);
+  // A slur the engine's list refuses and this suite's two-term list passes, in
+  // the shape a player types ('<Term> Tank'): the Set used to store it.
+  const PROFANE = badWord.map((t) => `${t[0].toUpperCase()}${t.slice(1)} Tank`)
+    .find((n) => [...n].length <= 16 && isProfane(n) && !TERMS.some((t) => n.toLowerCase().replace(/[^a-z]/g, '').includes(t)));
+  if (!PROFANE) fail('(nu) no BAD_SUB term could be read out of public/game-core.js -- the Set\'s isProfane case proves nothing');
+  // 1. THE CHECK, against a held key, an index that has not loaded, and none.
+  clock = BASE;
+  const names = createNameIndex({ load: async (after) => (after === null ? ['viper'] : []) });
+  await names.refresh();
+  const st1 = mkstore();
+  const S1 = createSocial({ store: st1, terms: TERMS, send, now, names });
+  const g1 = mkws(null);
+  await S1.handle(g1, { type: 'callsign', op: 'check', name: '  VIPER ', id: 'h' });
+  const held = last(g1);
+  await S1.handle(g1, { type: 'callsign', op: 'check', name: 'CPU Hard', id: 'b' });
+  const bot = last(g1);
+  const g2 = mkws(null);
+  await S1.handle(g2, { type: 'callsign', op: 'check', name: 'Tank Ace', id: 'f' });
+  const free = last(g2);
+  const unloaded = createSocial({ store: mkstore(), terms: TERMS, send, now, names: createNameIndex({ load: async () => [] }) });
+  const none = createSocial({ store: mkstore(), terms: TERMS, send, now });
+  const g3 = mkws(null), g4 = mkws(null);
+  await unloaded.handle(g3, { type: 'callsign', op: 'check', name: 'Tank Ace', id: 'u' });
+  await none.handle(g4, { type: 'callsign', op: 'check', name: 'Tank Ace', id: 'n' });
+  if (same(held, { type: 'callsign', op: 'check', error: 'taken', id: 'h' }) && same(bot, { type: 'callsign', op: 'check', error: 'not_allowed', id: 'b' })
+      && same(free, { type: 'callsign', op: 'check', ok: true, name: 'Tank Ace', id: 'f' }) && st1.calls.length === 0
+      && same(last(g3), { type: 'callsign', op: 'check', error: 'unavailable', id: 'u' }) && same(last(g4), { type: 'callsign', op: 'check', error: 'unavailable', id: 'n' }))
+    ok("(nu) a guest's check of an account's chosen callsign is 'taken', a computer's name is not_allowed, both from memory with no store call; an index that has not loaded and no index at all answer 'unavailable'");
+  else fail('(nu) check: ' + JSON.stringify({ held, bot, free, calls: st1.calls, u: last(g3), n: last(g4) }));
+  // 2. THE SIGNED-IN SET MEETS THE SAME RULES, before the store.
+  const st2 = mkstore();
+  const N2 = freeNames();
+  const S2 = createSocial({ store: st2, terms: TERMS, send, now, names: N2 });
+  const refused = [];
+  for (const [name, id] of [[PROFANE, 'p'], ['CPU Hard', 'c'], ['Warlord 7', 'w']]) {
+    clock = BASE;
+    const w = mkws('u-set-' + id);
+    await S2.handle(w, { type: 'callsign', name, id });
+    if (!(same(last(w), { type: 'callsign', error: 'not_allowed', id }) && w.chosenName === null)) refused.push({ name: name === PROFANE ? 'the BAD_SUB fixture' : name, reply: last(w) });
+  }
+  if (PROFANE && !refused.length && st2.calls.length === 0 && N2.keys.size === 0)
+    ok("(nu) a signed-in Set of an isProfane name the blocklist passes, and of a computer's name, is refused not_allowed before the store, exactly as a guest's check is");
+  else fail('(nu) signed-in Set rules: ' + JSON.stringify({ refused, calls: st2.calls, keys: [...N2.keys] }));
+  // 3. THE INDEX FOLLOWS THE WRITES: set, change, roll.
+  clock = BASE;
+  const st3 = mkstore();
+  const N3 = createNameIndex({ load: async () => [] });
+  await N3.refresh();
+  const S3 = createSocial({ store: st3, terms: TERMS, send, now, names: N3 });
+  const owner = mkws('u-owner'), guest = mkws(null);
+  const check = async (name) => { clock += 61000; await S3.handle(guest, { type: 'callsign', op: 'check', name }); return last(guest).ok ? 'ok' : last(guest).error; };
+  await S3.handle(owner, { type: 'callsign', name: 'Wren Hollow' });
+  const afterSet = [N3.state('wren hollow'), await check('Wren Hollow')];
+  clock += DAY + 1;
+  await S3.handle(owner, { type: 'callsign', name: 'Kestrel Bay' });
+  const afterChange = [N3.state('wren hollow'), N3.state('kestrel bay'), await check('Wren Hollow'), await check('Kestrel Bay')];
+  await S3.handle(owner, { type: 'callsign', rolled: true });
+  const afterRoll = [N3.state('kestrel bay'), await check('Kestrel Bay')];
+  if (same(afterSet, ['taken', 'taken']) && same(afterChange, ['free', 'taken', 'ok', 'taken']) && same(afterRoll, ['free', 'ok']))
+    ok("(nu) a Set takes its key in the index at once, a change frees the key it replaced, and an old build's roll frees the key it gave up: a guest's check follows each");
+  else fail('(nu) index follows writes: ' + JSON.stringify({ afterSet, afterChange, afterRoll }));
+  // 4. A REFUSED SET TOUCHES NOTHING: 'taken' by the store leaves the index as it was.
+  clock = BASE;
+  const st4 = mkstore();
+  st4.keys.set('wren hollow', 'someone-else');
+  const N4 = freeNames();
+  const S4 = createSocial({ store: st4, terms: TERMS, send, now, names: N4 });
+  const w4 = mkws('u-loser');
+  await S4.handle(w4, { type: 'callsign', name: 'Wren Hollow', id: 't' });
+  if (same(last(w4), { type: 'callsign', error: 'taken', id: 't' }) && N4.keys.size === 0)
+    ok("(nu) a Set the store refuses 'taken' changes nothing in the index: only a write that landed moves it");
+  else fail('(nu) refused set: ' + JSON.stringify({ reply: last(w4), keys: [...N4.keys] }));
 }
 
 // ---- (j) a store that cannot serve the read model answers rather than hangs --
@@ -2306,6 +2399,42 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     const drift = st.reports.filter((row) => reportCallsign(row.callsign) !== row.callsign);
     if (!drift.length) ok('(t6j) every stored name is already in the form server/store.js would store — one source of truth, not two');
     else fail('(t6j) the handler and the store disagree about the stored name: ' + JSON.stringify(drift));
+  }
+
+  // ---- (t6j2) A REPORT AGAINST A SEAT RECORDS THE NAME THE SEAT SHOWED -------
+  // (round 2, 2026-10-08). Any player may present a name they typed, and no
+  // profile row proves one, so a report against a guest's typed name recorded
+  // '(no name)'. A report by seat HANDLE now records the name the engine's door
+  // let onto that seat (the injected seatName, server.js's resolveSeatName),
+  // re-tested for SHAPE only so the log line stays safe; a report by id has no
+  // seat and records seenName, as before. The seat's name is read before the
+  // first store call, so a seat that leaves while the report is out still has
+  // its name recorded.
+  {
+    const st = memStore(T6_ROWS);
+    const SEATS = new Map([['h-tamp', [TAMPERED, 'Tank Ace']], ['h-bad', [NAMELESS, 'Tank "Ace"']], ['h-b', [B, 'Bunker Nine']], ['h-none', [ROLLED, null]]]);
+    const S = createSocial({
+      store: st, terms: [], send: (ws, frame) => ws.rx.push(frame), now: () => CLOCK,
+      resolveHandle: (ws, h) => (SEATS.get(h) || [null])[0],
+      seatName: (ws, h) => { st.calls.push('seatName'); const v = SEATS.get(h); const n = v ? v[1] : null; SEATS.delete(h); return n; },
+    });
+    const wa = mkws(A);
+    S.onAuth(wa);
+    st.calls.length = 0;
+    const l1 = await withLog(() => S.handle(wa, { type: 'report', handle: 'h-tamp', id: 1 }));
+    const order = st.calls.slice();
+    const l2 = await withLog(() => S.handle(wa, { type: 'report', handle: 'h-bad', id: 2 }));
+    CLOCK += 2 * 86400000;
+    const l3 = await withLog(() => S.handle(wa, { type: 'report', id: TAMPERED, idx: 3 }));
+    const l4 = await withLog(() => S.handle(wa, { type: 'report', handle: 'h-b', id: 4 }));
+    const l5 = await withLog(() => S.handle(wa, { type: 'report', handle: 'h-none', id: 5 }));
+    const rows = st.reports.map((r) => r.callsign);
+    if (same(rows, ['Tank Ace', NO_CALLSIGN, NO_CALLSIGN, 'Bunker Nine', 'Iron Ridge'])
+        && l1[0] === `[report] ${TAMPERED} "Tank Ace" by ${A}` && l2[0] === `[report] ${NAMELESS} "${NO_CALLSIGN}" by ${A}`
+        && l3[0] === `[report] ${TAMPERED} "${NO_CALLSIGN}" by ${A}` && l4[0] === `[report] ${B} "Bunker Nine" by ${A}` && l5[0] === `[report] ${ROLLED} "Iron Ridge" by ${A}`
+        && order.indexOf('seatName') === 0 && order.indexOf('profileById') > 0)
+      ok("(t6j2) a report by seat handle records the typed name the seat showed ('Tank Ace', not '(no name)'); a seat name of the wrong shape, a report by id and a seat with no name fall back to what seenName proves; the seat is read before the first store call");
+    else fail('(t6j2) seat-name reports: ' + JSON.stringify({ rows, l1, l2, l3, l4, l5, order }));
   }
 
   // ---- (t6k) A BLOCK IS NOT A ONE-WAY DOOR ---------------------------------

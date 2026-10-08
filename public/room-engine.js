@@ -208,6 +208,10 @@ const sanitizeSkin = (s, seat) => (SKINS.includes(s) ? s : SEAT_SKIN[seat % SEAT
 // never read a file or name one (it is served to every browser as it stands).
 // server.js installs server/display-name.js's playerName: the callsign rules,
 // the shipped blocklist and isProfane, answering the NORMALISED name or null.
+// Since round 2 (2026-10-08) it also refuses a name that passes for one the
+// game shows ('CPU 2', 'Warlord 7') and a name that is some account's chosen
+// callsign, which the host answers from memory (server/name-index.js), so this
+// door stays synchronous. While the host cannot tell, it refuses.
 // The default is null and the offline page never installs one, so offline the
 // door stays shut exactly as it always has: nobody else is in an offline match
 // to be shown a name, and the page hands its own player's name in as `allowed`
@@ -2451,11 +2455,29 @@ export function abandonRoom(code, own = []) {
 // It returns the account OPAQUELY — the engine never interprets it — and null
 // for every miss: no seat, no account on the seat, no room, not a member.
 export function resolveSeatHandle(ws, handle) {
+  return seatAccount(seatByHandle(ws, handle));
+}
+// THE SEAT ITSELF, under every rule above, for the two readers below. null
+// (never undefined) for every miss, so seatAccount reads it as it always has.
+function seatByHandle(ws, handle) {
   if (typeof handle !== 'string' || !handle) return null;
   const room = ws && ws.roomCode ? rooms.get(ws.roomCode) : null;
   if (!room) return null;
   if (!room.players.some((p) => p && p.ws === ws)) return null;
-  return seatAccount(room.players.find((p) => p && p.handle === handle));
+  return room.players.find((p) => p && p.handle === handle) || null;
+}
+// THE NAME THAT SEAT SHOWED, under the same rules, for a report against it
+// (round 2, 2026-10-08). server.js injects it into the social layer as
+// `seatName`. A name typed by a guest is proved by nothing but this door: it
+// passed sanitizeName when it was presented, and the seat still holds it. So a
+// report against a seat records the name the reporter saw, not the '(no name)'
+// sentinel a profile row would give. Only a seat a report could be filed
+// against answers (one with an account, which is one with a handle), and the
+// answer is the name as the seat holds it. The social layer re-tests its shape
+// before a log line sees it.
+export function resolveSeatName(ws, handle) {
+  const p = seatByHandle(ws, handle);
+  return p && seatAccount(p) && typeof p.name === 'string' ? p.name : null;
 }
 
 // For test/golf_order.mjs only: the golf turn rule and the winner rule, pure

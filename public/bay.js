@@ -1166,17 +1166,39 @@ function sqInvOf(sn) {
 // AN INVITER WITH NO NAME THE SERVER CAN VOUCH FOR IS "A player", not "A
 // friend": since the invite by callsign (owner, 2026-10-07) an invite can come
 // from anyone who knows this player's callsign. server.js's push says the same.
+// AN INVITE FROM A PLAYER WHO IS NOT A FRIEND CARRIES THE PLAYER MENU (round
+// 2, 2026-10-08): Report and Block, as every other place a player is shown
+// does, aimed by the account id the server put on that invite alone
+// (`from.id`, kept by app.js only in the shape of an id). Without it, the only
+// way to block a stranger who kept inviting was to join their squad and use
+// a seat's menu. A friend's invite carries no id and no menu: the friends list
+// has one for them. A Block from this card also hides the card (pmClick).
 function sqInvRow(sn) {
   const inv = sqInvOf(sn);
   if (!inv) return '<div class="sqiw" role="status"></div>';
   const f = inv.from || {}, joining = sq.busy === 'join';
+  const who = named(f) ? f.callsign : 'A player';
   return '<div class="sqiw" role="status"><div class="sqi">'
-    + '<p class="sqit">' + (named(f) ? esc(f.callsign) : 'A player') + ' invites you to their squad &middot; '
+    + '<p class="sqit">' + esc(who) + ' invites you to their squad &middot; '
     +   esc(inv.size) + ' / ' + esc(inv.max) + '</p>'
     + '<div class="sqib"><button class="sbtn on" data-sq="join:' + esc(inv.code) + '"' + (wsReady() && !sq.busy ? '' : ' disabled') + '>'
     +   (joining ? 'Joining' : 'Join') + '</button>'
-    + '<button class="sbtn" data-sq="ignore:' + esc(inv.code) + '"' + (joining ? ' disabled' : '') + '>Ignore</button></div>'
+    + '<button class="sbtn" data-sq="ignore:' + esc(inv.code) + '"' + (joining ? ' disabled' : '') + '>Ignore</button>'
+    + (typeof f.id === 'string' && f.id ? menuBtn(f.id, 'id', who, false, !named(f)) : '') + '</div>'
     + sqAErr(sq.ierr) + '</div></div>';
+}
+// A BLOCK FROM THE INVITE CARD TAKES THE CARD AWAY (round 2, 2026-10-08). The
+// blocked player's squad could not be joined now anyway: the server refuses a
+// join beside a member either player has blocked (D-BLOCK 3), and drops any
+// later invite from that squad (D-BLOCK 4). So the card goes, the way Ignore
+// takes it, rather than offering a Join that cannot work. It is matched by the
+// account the block was aimed at, so a block made anywhere else never touches
+// an invite from somebody else.
+function sqInvBlocked(t) {
+  const inv = window.CC_SQUAD_INVITE;
+  if (!t || t.kind !== 'id' || !inv || !inv.from || inv.from.id !== t.key) return;
+  sq.ignored = inv.code; sq.ierr = '';
+  sqPaint();
 }
 // JOIN, from the invite row. The code is the SLOT's, never the attribute's
 // alone, and the current callsign and paint ride the frame as they do on the
@@ -1613,7 +1635,12 @@ function sqFriendRows(sn, box) {
 // invite by callsign, the name the server found them by. A player with no
 // name the server can vouch for is never called "No callsign" here: `anon` is
 // who they are instead ("That friend", "That player").
+// AND A FOURTH, FOR A PLAYER WHO IS NOT A FRIEND (round 2, 2026-10-08): the
+// server answers 'sent' whether or not they are in the game, sends no
+// notification, and says nothing about whether anyone was there, so this
+// line promises only what is true: they see it if they are playing now.
 function sqSentNote(who, delivered, anon) {
+  if (delivered === 'sent') return (who ? 'Invite sent to ' + who + '.' : 'Invite sent.') + " They'll see it if they're in the game right now.";
   if (delivered === 'push') return (who ? 'Invite sent to ' + who + '.' : 'Invite sent.') + " They'll get a notification.";
   if (delivered === 'none') return (who || anon || 'That friend') + " is offline and can't be notified. Share your squad code instead.";
   return who ? 'Invite sent to ' + who + '.' : 'Invite sent.';
@@ -2802,7 +2829,7 @@ function pmClick(e) {
       // friend below already did this; this path did not.
       pmClose();
       if (fn('showToast')) showToast(rep ? 'Reported. Thank you.' : 'Blocked.');
-      if (!rep) gbRefresh();
+      if (!rep) { gbRefresh(); sqInvBlocked(mine); }
     });
     pmPaint(); return;
   }

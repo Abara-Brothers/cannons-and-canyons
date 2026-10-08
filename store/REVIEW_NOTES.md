@@ -91,8 +91,10 @@ for 24 hours.
 their own callsign instead of keeping the one rolled for them. It is 3 to 16 characters — Unicode
 letters, digits and spaces — changeable once a day, and rejected if a folded form
 of it (diacritics stripped, look-alikes mapped — 0/o, 1/i, 3/e, 4/a, 5/s, 7/t, @/a, $/s, |/i —
-and everything but a letter removed) contains any term in the server's blocklist file. A signed-in
-player's callsign is also unique across the game; a guest's is kept on their own device. The check
+and everything but a letter removed) contains any term in the server's blocklist file, or if it
+passes for one of the game's own names (a computer player's, such as "CPU 2"). A signed-in
+player's callsign is also unique across the game; a guest's is kept on their own device, and may
+not be a callsign a signed-in player holds. The check
 runs on the server, before a signed-in player's name is stored and again at the door of every
 match for every player's name, so a name that fails is never shown to anyone, including the
 player's opponents. Players add
@@ -121,26 +123,31 @@ the same ambiguity-free alphabet as a game code, and the one code field in the S
 kind of code and opens whichever it turns out to be. **A player who has not signed in can join a squad
 or a game by its code or link, but cannot start a squad, invite anyone or be invited.**
 
-An invite goes only to someone the inviter is already friends with, and it is never delivered to a
-player who has blocked, or been blocked by, anyone in the squad. If the friend has the game open, the
-invite appears there; if not, and they have turned notifications on, it arrives as a notification
-reading `<callsign> invites you to their squad (n of 4).` It carries the squad's link and no personal
-data beyond the inviter's callsign, which is already public inside the game, and it has its own
-notification key, so it does not replace an unread turn alert. Squads live only in the game server's
+An invite goes to a friend, or to a signed-in player whose exact callsign the inviter types, and it
+is never delivered to a player who has blocked, or been blocked by, anyone in the squad. If a friend
+has the game open, the invite appears there; if not, and they have turned notifications on, it
+arrives as a notification reading `<callsign> invites you to their squad (n of 4).` It carries the
+squad's link and no personal data beyond the inviter's callsign, which is already public inside the
+game, and it has its own notification key, so it does not replace an unread turn alert. An invite
+from a player who is NOT a friend is never sent as a notification: it appears only if the player has
+the game open at that moment, the inviter is told the same thing whether or not anyone saw it (so it
+reveals nothing about who is online), and the invite carries the same Report name and Block menu as
+every other player card. Squads live only in the game server's
 memory: there is no squad table, nothing about a squad itself is written to the database (a match a
 squad plays is recorded like any other online match), and every squad ends when the server restarts,
 which the app says plainly rather than leaving a stale group on screen. Friends are unaffected by that
 and are stored, as before, only as links between accounts.
 
-Every squad member shown by a callsign, and every row on the Squad box's Friends tab, carries the same
+Every signed-in squad member, and every row on the Squad box's Friends tab, carries the same
 menu as every other player card, with **Report name** and **Block**, and the leader can remove any
-member. A member who has not signed in has no callsign and is listed as "No callsign", so no text of
-theirs is shown. Blocking someone you share a squad with removes one of you from it immediately: if you
+member. A member who has not signed in is listed by the name the game shows them by in a match, held
+to the same server checks, or as "No callsign" when there is none. Blocking someone you share a squad with removes one of you from it immediately: if you
 lead the squad they are removed as if kicked, otherwise you leave it. Neither player is told that a
 block caused it, and the blocked account cannot rejoin by code, be invited back, or sign in to a squad
 seat beside you. Squad members are shown by callsign only: another player's app receives each
-signed-in member's random account identifier, which the menu needs in order to report or block them,
-and never an email address or any Google profile detail.
+signed-in member's random account identifier, which the menu needs in order to report or block them
+(an invite from a player who is not a friend carries the inviter's, for the same menu), and never an
+email address or any Google profile detail.
 
 **Where do name reports actually go?** We would rather state this plainly than imply a mailbox
 we do not have. The game has no email provider, so nothing is emailed. A report is written as a

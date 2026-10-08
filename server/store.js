@@ -171,6 +171,29 @@ export function createStore({ sbAdmin } = {}) {
     return one(await sbAdmin('GET', `/profiles?callsign_key=eq.${enc(k)}&select=${PROFILE_COLS}&limit=1`));
   }
 
+  // EVERY CHOSEN CALLSIGN'S KEY, ONE PAGE AT A TIME, for server/name-index.js
+  // (round 2, 2026-10-08): the in-memory answer to "does an account hold this
+  // key?" that a typed name is checked against. Keyset paging in key order:
+  // `after` is the last key of the page before (null for the first), and the
+  // next page starts strictly past it. The order and the comparison are both
+  // the database's own collation, so the two agree whatever the keys contain.
+  //
+  // THE ROWS COME BACK ONE FOR ONE, an entry per row and '' where a row held
+  // no string, so the index sees how many rows the page really had. It stops
+  // at an EMPTY page, never at a short one: PostgREST may cap a page below
+  // `limit`, and reading a short page as the last one would truncate the index.
+  // Only callsign_key is selected. No name, no id, nothing a player wrote.
+  async function chosenCallsignKeys(after, limit) {
+    const n = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 1000) : 1000;
+    const from = typeof after === 'string' && after ? `callsign_key=gt.${enc(after)}` : 'callsign_key=not.is.null';
+    const rows = await sbAdmin('GET', `/profiles?select=callsign_key&${from}&order=callsign_key.asc&limit=${n}`);
+    // A BODY THAT IS NOT A LIST IS NOT A PAGE. Read as an empty one it would
+    // end the index's read early and leave every later key out of it, which
+    // fails OPEN on each of them; thrown, the index keeps what it had.
+    if (!Array.isArray(rows)) throw new Error('sb GET profiles: not a list');
+    return rows.map((r) => (r && typeof r.callsign_key === 'string' ? r.callsign_key : ''));
+  }
+
   // CALLSIGN_KEY IS SELECTED BESIDE THE NAME, AND THAT IS THE WHOLE POINT OF THIS
   // METHOD'S SHAPE. profiles.callsign is PATCHed by the account itself on every
   // cloud save (profiles_update_own); callsign_key beside it has update revoked
@@ -455,7 +478,7 @@ export function createStore({ sbAdmin } = {}) {
 
   return {
     ensureFriendCode, profileById, profileByFriendCode, profileByCallsignKey, profilesByIds,
-    setChosenCallsign, clearCallsignKey,
+    chosenCallsignKeys, setChosenCallsign, clearCallsignKey,
     friendIdsOf, addFriendship, removeFriendship,
     requestsOf, addRequest, deleteRequest,
     blockIdsOf, addBlock, removeBlock,

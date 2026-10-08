@@ -322,6 +322,21 @@ const BLOCK_KEY_RE = /^[0-9a-f]{32}$/;
 // wires no transport, and every suite, gets an honest 'none', never a 'push'
 // that went nowhere. Task 7 replaces this default from server.js.
 //
+// names — the in-memory index of chosen callsign keys (server/name-index.js,
+// round 2): state(key) -> 'free' | 'taken' | 'unknown', and add(key) and
+// remove(key), which the Set and the roll call when their write lands. A
+// typed name a guest checks, and the name a guest's squad seat shows, may not
+// be one an account holds (display-name.js typedName). THE DEFAULT KNOWS
+// NOTHING: every key is 'unknown', so a host that wires no index refuses every
+// typed name ('unavailable') and shows no guest's typed name, never one that
+// might be someone else's.
+//
+// seatName(ws, handle) -> the name a lobby seat showed, or null — the engine's
+// resolveSeatName, injected beside resolveHandle and for its reason: a report
+// against a seat records the name the reporter SAW, which for a typed name no
+// profile row can prove (display-name.js seatName). The default resolves
+// nothing, and a report then records what seenName proves, as before.
+//
 // THIS LIST ACCUMULATES (plan X2). A later task adds its option after these;
 // it never restates the line.
 export function createSocial({
@@ -332,6 +347,8 @@ export function createSocial({
   seatSquad = () => ({ ok: false, error: 'unavailable' }),
   schedule = (fn, ms) => { const t = setTimeout(fn, ms); if (typeof t.unref === 'function') t.unref(); return () => clearTimeout(t); },
   pushInvite = async () => false,
+  names = { state: () => 'unknown', add() {}, remove() {} },
+  seatName = () => null,
 }) {
 
   // userId -> that account's live sockets. "Online" is "the set is non-empty".
@@ -576,6 +593,11 @@ export function createSocial({
       // client can tell the difference.
       if (ws.chosenName) {
         await store.clearCallsignKey(ws.userId);
+        // The key is free again, so the index frees it: a guest may now type
+        // the name this account gave up. ws.chosenName is the normalised name
+        // the key was derived from (server.js's auth sink proves exactly that),
+        // so its lower case IS the key.
+        keyRemoved(ws.chosenName.toLowerCase());
         // EVERY SOCKET OF THE ACCOUNT, not just the one that asked.
         // clearCallsignKey frees the key for the ACCOUNT, but ws.chosenName is
         // the per-socket copy and it is the single door through which a string
@@ -606,7 +628,15 @@ export function createSocial({
     // only moderation control in the product off silently. This project's
     // uncaughtException handler ENDS THE PROCESS and every live match with it,
     // so that call has to sit inside handle()'s try, and it does.
-    const v = validateCallsign(msg.name, terms);
+    //
+    // checkPlayerName, NOT validateCallsign ALONE (round 2, 2026-10-08): the
+    // same guidelines a guest's name meets, the engine's isProfane and the
+    // game's own names included. validateCallsign alone let 'Pedo Tank' be
+    // stored for a signed-in account while a guest typing it was refused.
+    // checkPlayerName runs validateCallsign first, so the TypeError above still
+    // comes from here. Uniqueness is NOT asked of the index: the write below is
+    // the authority on that.
+    const v = checkPlayerName(msg.name);
     if (!v.ok) return reply(ws, msg, { type: 'callsign', error: v.error });
 
     const profile = await store.profileById(ws.userId);
@@ -625,12 +655,20 @@ export function createSocial({
     // THE WRITE IS THE AUTHORITY on uniqueness, not a read before it: two
     // sockets can both read "free" and then both write. The unique index on
     // callsign_key decides, and the loser is told 'taken'.
+    // The key this account holds now, read off the profile BEFORE the write
+    // replaces it, so the index can free it once the write lands.
+    const prevKey = profile && typeof profile.callsign_key === 'string' ? profile.callsign_key : '';
     const res = await store.setChosenCallsign(ws.userId, v.name, v.key);
     if (!res || res.ok !== true) {
       // A closed set of codes. Anything the store invents stays inside the
       // server rather than reaching a client that has no string for it.
       return reply(ws, msg, { type: 'callsign', error: res && res.error === 'taken' ? 'taken' : 'unavailable' });
     }
+    // THE INDEX FOLLOWS THE WRITE (server/name-index.js): the new key is taken
+    // from this moment, so no guest can type it into a lobby, and the key the
+    // account held before is free again.
+    if (prevKey && prevKey !== v.key) keyRemoved(prevKey);
+    keyAdded(v.key);
     // From here this socket may present this name in a lobby: server.js passes
     // ws.chosenName to sanitizeName, which is the ONLY way a string that is not
     // a rolled pair reaches another player's screen.
@@ -652,9 +690,9 @@ export function createSocial({
   // the guidelines". A guest has no account a chosen callsign could be stored
   // on (requireLinked, above, and BINDING resolution 2), so their name is kept
   // on their own device — and this op is how the device learns, BEFORE it keeps
-  // one, whether the guidelines allow it. It STORES NOTHING and reads nothing:
-  // the answer is the same pure test the room engine applies at the door
-  // (server.js installs checkPlayerName's twin there), so a name this says yes
+  // one, whether the guidelines allow it. It STORES NOTHING and reads nothing
+  // from the store: the answer is the same test the room engine applies at the
+  // door (typedName here, its twin playerName there), so a name this says yes
   // to is the name a lobby shows, and one it refuses would have been replaced
   // there anyway. The check here is what lets the player be TOLD.
   //
@@ -663,11 +701,21 @@ export function createSocial({
   // set spends, so the op cannot be used to probe the blocklist faster than a
   // player can type.
   //
-  // NOT UNIQUE, AND NO 'taken'. Saying whether a signed-in player already holds
-  // a name would make this a pre-auth oracle over every chosen callsign, from a
-  // socket with no account behind it — the same reason the code frame answers
-  // a throttled ask exactly as it answers a miss. Uniqueness lives where it
-  // always has: on callsign_key, for a linked account's search and friends.
+  // NOT UNIQUE, BUT NEVER ANOTHER PLAYER'S CHOSEN CALLSIGN (round 2,
+  // 2026-10-08). Two guests may type the same name. Neither may type a name an
+  // account holds as its chosen callsign: the engine's door refuses it
+  // (display-name.js typedName), so this answers 'taken', the word the Set
+  // already uses, and the editor says "Someone has that callsign." It reads
+  // the in-memory index (server/name-index.js), so it still makes no store call.
+  // While the index has not loaded it answers 'unavailable', because the door
+  // would refuse the name too.
+  //
+  // THE ORACLE THIS OPENS, AND WHY IT IS ACCEPTED. It now says, to a socket with
+  // no account behind it, whether a chosen callsign exists. That is not new
+  // knowledge. The door itself answers the same question (join a lobby under the
+  // name and see what the seat shows), every lobby shows chosen callsigns to
+  // strangers, and any linked account can find one by exact callsign. The rate
+  // stays the 3-a-minute bucket a Set spends.
   //
   // THE ONCE-A-DAY RULE FOR A GUEST IS THE DEVICE'S (the controller's stated
   // default). There is nothing here to count a guest by that a reinstall does
@@ -675,7 +723,7 @@ export function createSocial({
   // guest's name to the rules is the engine's check at the door, not this.
   function checkName(ws, msg) {
     if (!rateOk(ws, 'callsign', LIMITS.callsign)) return reply(ws, msg, { type: 'callsign', op: 'check', error: 'slow_down' });
-    const v = checkPlayerName(msg.name);
+    const v = typedName(msg.name);
     if (!v.ok) return reply(ws, msg, { type: 'callsign', op: 'check', error: v.error });
     reply(ws, msg, { type: 'callsign', op: 'check', ok: true, name: v.name });
   }
@@ -899,7 +947,15 @@ export function createSocial({
   // twin (playerName) as the room engine's name check, built from the same
   // file's list — so a name this layer says may be kept is a name a lobby will
   // show.
-  const { provenName, rolledName, displayName, seenName, checkPlayerName } = createNameProofs({ terms });
+  //
+  // keyState is the injected index (`names`, above), asked through a guard so a
+  // malformed one counts as knowing nothing: 'unknown' refuses a typed name.
+  const keyState = (key) => (names && typeof names.state === 'function' ? names.state(key) : 'unknown');
+  const { provenName, rolledName, displayName, seenName, checkPlayerName, typedName, guestName, seatName: seatShown } = createNameProofs({ terms, keyState });
+  // The index's two hooks, called when a callsign_key write lands. A host with
+  // no index (or a malformed one) has nothing to keep current.
+  const keyAdded = (key) => { if (key && names && typeof names.add === 'function') names.add(key); };
+  const keyRemoved = (key) => { if (key && names && typeof names.remove === 'function') names.remove(key); };
 
   // ---- squads (design 4.3) -------------------------------------------------
   // THE STATE MACHINE IS server/squads.js AND IT KNOWS NOTHING ABOUT SOCKETS.
@@ -1147,7 +1203,9 @@ export function createSocial({
   const squadMemberOf = (ws, msg) => ({
     userId: squadGuest(ws) ? null : wireId(ws.userId),
     guest: squadGuest(ws),
-    // Kept for the seating path, NEVER SHOWN: see squadSnapshot.
+    // Kept for the seating path, which hands it to the engine's door. A guest
+    // row's seat SHOWS what that door would (guestName, see squadSnapshot);
+    // a signed-in member's shows the proved profile name and never this.
     name: typeof msg.name === 'string' ? msg.name : '',
     skin: skinOf(msg),
     ws,
@@ -1301,6 +1359,19 @@ export function createSocial({
   // failed read answers every name null — displayName's own answer for a name
   // it cannot vouch for — and keeps every row, the plan's rule for a null
   // name. The next snapshot that can read names shows them.
+  //
+  // A GUEST ROW SHOWS THE GUEST'S NAME (round 2, 2026-10-08), not 'No
+  // callsign': the name its create or join frame carried, held to exactly what
+  // the engine's door would show for it in a lobby (display-name.js guestName:
+  // a rolled pair, or a typed name that passes the guidelines and is no
+  // account's chosen callsign). Read when the frame is built, so a key taken
+  // since the guest joined takes the name off at the next snapshot.
+  // NOT FOR A GUEST ROW WHOSE SOCKET HAS SIGNED IN. That row is the sign-in
+  // door's (D-BLOCK-3 F and H): it stays a NAMELESS guest row until the door
+  // admits it, and nothing about the account it became may reach a member who
+  // might have blocked it. Its guest-time name is withheld as well, so the
+  // door's row reads exactly as it always has.
+  const guestRowName = (m) => (squadGuest(m.ws) ? guestName(m.name) : null);
   async function squadSnapshot(sq) {
     const ids = sq.members.filter((m) => m.userId).map((m) => m.userId);
     let names = new Map();
@@ -1314,7 +1385,7 @@ export function createSocial({
       members: sq.members.map((m) => ({
         id: m.userId,
         rid: rowRid(m),
-        callsign: m.userId ? displayName(names.get(m.userId)) : null,
+        callsign: m.userId ? displayName(names.get(m.userId)) : guestRowName(m),
         guest: m.guest,
         online: m.userId ? isOnline(m.userId) : !!(m.ws && m.ws.readyState === 1),
         ready: m.ready,
@@ -2495,6 +2566,9 @@ export function createSocial({
   // socket, and the injected transport has a device to hand it to. 'none':
   // neither — the invite is valid and nothing reached them. The owner wants
   // the inviter told whether the invite went out (D-BLOCK-2 E, revised).
+  // 'sent' is the fourth, and only an invite by callsign to a player who is
+  // NOT a friend gets it: one answer whatever happened, because only friends
+  // may learn whether a player is online (squadInviteByName, below).
   //
   // THE FRIEND BUCKET, FIRST, on top of the squad one handleSquad has already
   // charged. An invite is aimed at a friend, costs the round trips a
@@ -2610,21 +2684,35 @@ export function createSocial({
   // (squadInvite, first, as search spends it), the squad asked before the
   // reads and after them, the identity checked after every await, the
   // invitee's blocks with the recent-blocks log added from a seq taken before
-  // the first read, the invite dropped silently on a block between the
-  // invitee and any member, and live sockets or the push seam under the 30 s
-  // push cooldown (deliverInvite, one copy for both paths).
+  // the first read, and the invite dropped silently on a block between the
+  // invitee and any member.
+  //
+  // EXCEPT HOW IT IS DELIVERED, WHEN THE PLAYER IS NOT A FRIEND (round 2,
+  // 2026-10-08). Every consent and disclosure text says a push carries "squad
+  // invites from friends" (privacy.html, the Nudges row, the pushOk toast, the
+  // store listing), and privacy.html says only friends can see whether a player
+  // is online. A stranger's invite therefore NEVER reaches the push seam, not
+  // even its dry run, and its answer is ONE answer: `delivered: 'sent'`, the
+  // same whether the player is online or not, has a device to notify or not,
+  // or the invite was dropped. It reaches the player in-app only, on the
+  // sockets they hold at that moment (inviteStranger, below). An invite by
+  // callsign that finds a FRIEND is a friend's invite and is delivered as one
+  // (deliverInvite): the push, the cooldown and 'online' | 'push' | 'none'.
+  // Telling the two apart costs the friend read, made in the first leg for
+  // every invite by callsign, so a miss, a block, a friend and a stranger all
+  // cost the same four first-leg reads.
   //
   // EVERY MISS IS ONE ANSWER, 'no_such_user', AFTER ONE LEG. A callsign that
   // names nobody, the caller's own, a player blocked either way and a guest
-  // all answer it after the SAME three reads, made together: the lookup, the
-  // caller's blocks and the caller's own row. So a block costs exactly what a
-  // miss costs, and the frame is no way to learn who has blocked you
-  // (friendSearch's rule, D-BLOCK). A guest is found by no lookup: a guest has
-  // no callsign_key, because setting one is behind requireLinked, so the key
-  // is the line that refuses one here, as the friend read is on the other
-  // path. A callsign of the wrong shape is a miss before the store, as in
-  // search. A found player's own blocks are read only once they are found, in
-  // a second leg, so what a delivered and a dropped invite cost is the same.
+  // all answer it after the SAME four reads, made together: the lookup, the
+  // caller's blocks, the caller's own row and the caller's friends. So a block
+  // costs exactly what a miss costs, and the frame is no way to learn who has
+  // blocked you (friendSearch's rule, D-BLOCK). A guest is found by no lookup:
+  // a guest has no callsign_key, because setting one is behind requireLinked,
+  // so the key is the line that refuses one here, as the friend read is on the
+  // other path. A callsign of the wrong shape is a miss before the store, as
+  // in search. A found player's own blocks are read only once they are found,
+  // in a second leg, so what a delivered and a dropped invite cost is the same.
   //
   // The answer carries `callsign`, the invitee's PROVED name (displayName,
   // null when there is none), for the inviter's "Invite sent to <name>." It
@@ -2636,7 +2724,7 @@ export function createSocial({
     if (!key) return no('no_such_user');
     const me = wireId(ws.userId);
     const from = blockSeq;
-    const [them, blocks, self] = await Promise.all([store.profileByCallsignKey(key), store.blockIdsOf(me), store.profileById(me)]);
+    const [them, blocks, self, friendIds] = await Promise.all([store.profileByCallsignKey(key), store.blockIdsOf(me), store.profileById(me), store.friendIdsOf(me)]);
     if (wireId(ws.userId) !== me) return;
     const to = them ? wireId(them.id) : '';
     if (!to || to === me || blockedEither(blocks, to)) return no('no_such_user');
@@ -2646,25 +2734,32 @@ export function createSocial({
     const after = inviteVet(ws, to, true, 'no_such_user');
     if (after.error) return no(after.error);
     if (after.sq !== before.sq) return no('no_squad');
-    return deliverInvite(ws, msg, after.sq, to, self, theirs, { callsign: displayName(them) });
+    const extra = { callsign: displayName(them) };
+    if (Array.isArray(friendIds) && friendIds.includes(to)) return deliverInvite(ws, msg, after.sq, to, self, theirs, extra);
+    return inviteStranger(ws, msg, after.sq, to, self, theirs, extra);
   }
 
-  // THE DELIVERY, ONE COPY FOR BOTH PATHS: the frame to every live socket, or
-  // the push seam, and the inviter's answer (`extra` is what a path adds to
-  // it). `theirs` is the invitee's blocks with the log added, falsy when they
-  // could not be read.
+  // THE INVITED FRAME AND THE DROP, one copy for every path. `theirs` is the
+  // invitee's blocks with the log added, falsy when they could not be read.
+  // D-BLOCK 4: A BLOCK BETWEEN THE INVITEE AND ANY MEMBER DROPS THE INVITE,
+  // SILENTLY, and a read that failed drops it too.
+  const invitedFrame = (sq, self) => ({ type: 'squad', op: 'invited', code: sq.code, from: { callsign: displayName(self) }, size: sq.members.length, max: SQUAD_MAX });
+  const inviteDropped = (sq, theirs) => !theirs || anyRowOf(sq, new Set([...theirs.blocked, ...theirs.blockedBy, ...theirs.doubt]));
+
+  // THE DELIVERY TO A FRIEND, for both paths: the frame to every live socket,
+  // or the push seam, and the inviter's answer (`extra` is what a path adds to
+  // it).
   async function deliverInvite(ws, msg, sq, to, self, theirs, extra) {
     const live = socketsOf(to);
-    const frame = { type: 'squad', op: 'invited', code: sq.code, from: { callsign: displayName(self) }, size: sq.members.length, max: SQUAD_MAX };
-    // D-BLOCK 4: A BLOCK BETWEEN THE INVITEE AND ANY MEMBER DROPS THE INVITE,
-    // SILENTLY. Nothing reaches the invitee, and the inviter is answered what
-    // this invite would have been answered, at the same point: 'online' for
-    // a live socket, and otherwise whatever the push seam says in its DRY-RUN
-    // form — the same read, no send (D-BLOCK-2 E, as the owner revised it).
-    // So the inviter is told "sent" for an invite that went nowhere: the
-    // accepted price of never telling anyone about a block between two OTHER
-    // players.
-    const dropped = !theirs || anyRowOf(sq, new Set([...theirs.blocked, ...theirs.blockedBy, ...theirs.doubt]));
+    const frame = invitedFrame(sq, self);
+    // A DROPPED INVITE: nothing reaches the invitee, and the inviter is
+    // answered what this invite would have been answered, at the same point:
+    // 'online' for a live socket, and otherwise whatever the push seam says in
+    // its DRY-RUN form — the same read, no send (D-BLOCK-2 E, as the owner
+    // revised it). So the inviter is told "sent" for an invite that went
+    // nowhere: the accepted price of never telling anyone about a block between
+    // two OTHER players.
+    const dropped = inviteDropped(sq, theirs);
     if (live.length) {
       if (!dropped) for (const w of live) safeSend(w, frame);
       return squadReply(ws, msg, 'invite', { ok: true, delivered: 'online', ...extra });
@@ -2676,6 +2771,27 @@ export function createSocial({
     const real = !dropped && inviteCooldown.take(to);
     const pushed = await askPushSeam(to, { code: frame.code, from: frame.from.callsign, size: frame.size, max: frame.max }, !real);
     squadReply(ws, msg, 'invite', { ok: true, delivered: pushed ? 'push' : 'none', ...extra });
+  }
+
+  // THE DELIVERY TO A PLAYER WHO IS NOT A FRIEND (round 2, 2026-10-08): in-app
+  // only, to the sockets they hold now, and one answer whatever happened. No
+  // push and no dry run, so nothing about the player's devices is read, and
+  // nothing in the answer or its timing says whether anyone was there.
+  //
+  // THE FRAME NAMES THE INVITER'S ACCOUNT (`from.id`), and only this frame
+  // does: the card a stranger's invite draws carries the player menu, Report
+  // and Block, like every other place a player is shown, and both are aimed by
+  // that id. It is the inviter's own id, sent to the one player they chose to
+  // invite, who would read it off the squad's roster the moment they joined
+  // (squadSnapshot). A friend's invite carries none: that card needs no menu,
+  // because the friends list beside it has one.
+  function inviteStranger(ws, msg, sq, to, self, theirs, extra) {
+    if (!inviteDropped(sq, theirs)) {
+      const frame = invitedFrame(sq, self);
+      frame.from.id = wireId(ws.userId);
+      for (const w of socketsOf(to)) safeSend(w, frame);
+    }
+    squadReply(ws, msg, 'invite', { ok: true, delivered: 'sent', ...extra });
   }
 
   // THE PUSH SEAM, ASKED ONCE FOR EVERY OFFLINE INVITE, dropped or not (see
@@ -3541,6 +3657,10 @@ export function createSocial({
     // isUuid ahead of it refuses every honest lobby report, and the self check
     // ahead of it lets a player report their own seat's handle.
     const id = targetId(ws, msg);
+    // AND THE NAME THAT SEAT SHOWED, read in the same tick as the handle
+    // resolved, before any await can let the seat leave the room. See `seen`
+    // below for why a seat's name outranks the profile's.
+    const shown = msg.handle === undefined ? null : seatShown(seatName(ws, msg.handle));
     if (!isUuid(id)) return reply(ws, msg, { type: 'report', error: 'no_such_user' });
 
     if (id === wireId(ws.userId)) return reply(ws, msg, { type: 'report', error: 'self' });
@@ -3588,7 +3708,19 @@ export function createSocial({
     // THE SAME STRING — addReport applies it again on the way out and it is
     // idempotent. A log the moderation queue cannot be reconciled against
     // is worth less than no log.
-    const seen = reportCallsign(seenName(who));
+    //
+    // A REPORT AGAINST A LOBBY SEAT RECORDS THE SEAT'S NAME FIRST (round 2,
+    // 2026-10-08). Since any player may present a name they typed, the name a
+    // reporter saw on a seat is often one no profile row can prove, and
+    // seenName recorded the '(no name)' sentinel for it: the evidence lost on
+    // exactly the reports a typed name invites. The seat's name is proof of its
+    // own kind. The room engine's door passed it at the moment it was
+    // presented, and the seat, found by the handle in the reporter's own room,
+    // still holds it. display-name.js seatName re-tests only its SHAPE, which
+    // keeps this log line safe, and never the blocklist (seenName's reason).
+    // A report by id (a friends list, a squad seat, an invite card) has no
+    // seat, and records what seenName proves, as before.
+    const seen = reportCallsign(shown ?? seenName(who));
     await store.addReport(ws.userId, id, seen);
     console.log(`[report] ${id} "${seen}" by ${ws.userId}`);
     reply(ws, msg, { type: 'report', ok: true });

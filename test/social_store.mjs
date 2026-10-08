@@ -516,6 +516,43 @@ function mkSb(routes = []) {
   else fail('(m) sbAdmin message: ' + JSON.stringify(throws));
 }
 
+// ---- (o) chosenCallsignKeys: every chosen key, a page at a time (round 2) ---
+// server/name-index.js reads every chosen callsign's key through this, so a
+// typed name can be checked against them in memory. Keyset paging in key
+// order: the first page is every non-null key, each later one starts strictly
+// past the last key of the page before (`gt.`, encoded). Only callsign_key is
+// selected. The rows come back ONE FOR ONE, '' where a row held no string, so
+// the index sees how many rows a page really had; and the limit is clamped to
+// 1..1000 so no caller can ask PostgREST for an unbounded page.
+{
+  const h = mkSb([[/^GET \/profiles\?select=callsign_key&/, [{ callsign_key: 'anvil six' }, { callsign_key: null }, {}, { callsign_key: 'zoé kite' }]]]);
+  const first = await h.store.chosenCallsignKeys(null, 2);
+  const next = await h.store.chosenCallsignKeys('zoé kite', 1000);
+  await h.store.chosenCallsignKeys(undefined, 5000);
+  await h.store.chosenCallsignKeys('', 0);
+  const paths = h.calls.map((c) => c.method + ' ' + c.path);
+  if (same(first, ['anvil six', '', '', 'zoé kite']) && same(next, first)
+      && same(paths, [
+        'GET /profiles?select=callsign_key&callsign_key=not.is.null&order=callsign_key.asc&limit=2',
+        `GET /profiles?select=callsign_key&callsign_key=gt.${encodeURIComponent('zoé kite')}&order=callsign_key.asc&limit=1000`,
+        'GET /profiles?select=callsign_key&callsign_key=not.is.null&order=callsign_key.asc&limit=1000',
+        'GET /profiles?select=callsign_key&callsign_key=not.is.null&order=callsign_key.asc&limit=1000',
+      ]))
+    ok('(o) chosenCallsignKeys: select=callsign_key only, every non-null key first and then strictly past the last key (encoded), in key order, at most 1000 a page, the rows one for one');
+  else fail('(o) chosenCallsignKeys: ' + JSON.stringify({ first, next, paths }));
+  const boom = new Error('sb GET 503');
+  const hb = mkSb([[/./, boom]]);
+  let threw = null;
+  try { await hb.store.chosenCallsignKeys(null, 10); } catch (e) { threw = e; }
+  // A BODY THAT IS NOT A LIST must fail the read too: taken as an empty page
+  // it would end the index's read early and leave every later key out.
+  const hn = mkSb([[/./, null]]);
+  let junk = null;
+  try { await hn.store.chosenCallsignKeys(null, 10); } catch (e) { junk = e; }
+  if (threw === boom && junk && /not a list/.test(junk.message)) ok('(o) a failing read propagates, and so does a body that is not a list: neither can pass for the last page');
+  else fail('(o) failure and junk: ' + JSON.stringify({ threw: String(threw), junk: String(junk) }));
+}
+
 // ---- (l) the standing guard: nothing raw ever lands in a query value ---------
 {
   // THE CHARACTERS THAT MATTER ARE NOT THE ONES THAT LOOK ALARMING. This check used
@@ -541,7 +578,11 @@ function mkSb(routes = []) {
   const CONST_SHAPE = {                     // built from constants in store.js…
     select: /^[a-z_]+(?:,[a-z_]+)*$/,       // …but an injected & lands inside them
     on_conflict: /^[a-z_]+(?:,[a-z_]+)*$/,  //    just as easily, so they are held to
-    limit: /^1$/,                           //    the exact shapes this store writes
+    // CHANGED (round 2): chosenCallsignKeys pages by up to 1000, so a limit is
+    // a whole number 1..1000 rather than the 1 every other read writes; and
+    // it orders, by one column, ascending or descending.
+    limit: /^(?:[1-9]\d{0,2}|1000)$/,        //    the exact shapes this store writes
+    order: /^[a-z_]+\.(?:asc|desc)$/,
   };
   // Every parameter name the store writes. An unknown one means a new method (add it
   // here, deliberately) or a raw & that split a value into a parameter of its own.
@@ -574,7 +615,9 @@ function mkSb(routes = []) {
         }
         continue;
       }
-      const m = /^([a-z]+)\.([\s\S]*)$/.exec(rest);
+      // `not.` NEGATES the operator after it (PostgREST: "prefix it with not"),
+      // so it is read past to the operator it negates: not.is.null is is.null.
+      const m = /^([a-z]+)\.([\s\S]*)$/.exec(rest.replace(/^not\./, ''));
       if (!m) { value(rest); continue; }
       if (m[1] === 'in') {
         if (!/^\([\s\S]*\)$/.test(m[2])) { flag(`malformed in(): "${m[2]}"`); continue; }

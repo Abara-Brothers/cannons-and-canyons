@@ -29,11 +29,12 @@
 // entire claim is that the server vouched for it.
 //
 // Pure and synchronous, all of it: the blocklist terms are injected (server.js
-// reads them from disk once, at boot), and nothing here touches the database, a
-// socket or the clock. test/display_name.mjs drives it in process against the
-// REAL server/blocklist.txt — a suite with its own term list would not notice
-// the shipped list and the rule drifting apart.
-import { validateCallsign, normaliseCallsign } from './callsign.js';
+// reads them from disk once, at boot), and so is `keyState`, the in-memory
+// answer to "does an account hold this callsign key?" (server/name-index.js).
+// Nothing here touches the database, a socket or the clock. test/display_name.mjs
+// drives it in process against the REAL server/blocklist.txt — a suite with its
+// own term list would not notice the shipped list and the rule drifting apart.
+import { validateCallsign, normaliseCallsign, foldForBlocklist } from './callsign.js';
 // THE TWO PURE CALLSIGN TESTS, from the module that owns the curated lists.
 // Imported, never copied: isGeneratedCallsign is the standard the engine already
 // applies to every name any client presents (room-engine.js's sanitizeName), and
@@ -45,11 +46,57 @@ import { validateCallsign, normaliseCallsign } from './callsign.js';
 // simulation, and test/social.mjs still never loads room-engine.js.
 import { isGeneratedCallsign, isProfane } from '../public/game-core.js';
 
+// ---- the game's own names (round 2, 2026-10-08) ----------------------------
+// A NAME A PLAYER CHOOSES MAY NOT PASS FOR ONE THE GAME SHOWS. The room engine
+// names its computer seats 'CPU 1' to 'CPU 3' in a free-for-all and 'CPU · Easy'
+// (Medium, Hard) in a duel (room-engine.js cpuSeat), the boss 'WARLORD-7' and the
+// alien seats 'XENO-SCOUT', 'XENO-REAVER' and 'XENO-HARROW' (HORDE). Where a seat
+// has no name, the client writes 'Opponent', 'A player', 'Player 2', 'You',
+// 'Host', 'Guest' or 'No callsign' (app.js and bay.js), and Match setup calls
+// the computer opponent 'Computer' (bay.js). A player named 'CPU 2' or
+// 'Warlord 7' could pass for a computer seat in a lobby and on a result card,
+// which impersonates the game rather than another player. The callsign shape
+// refuses the hyphen and the middle dot, so 'WARLORD-7' and 'CPU · Hard' cannot
+// be typed as spelled. 'WARLORD 7' and 'CPU Hard' can, and this rule catches them.
+//
+// TWO READINGS OF THE NAME, AND EITHER ONE REFUSES IT. The plain reading keeps
+// letters and digits and drops the spaces, so 'C P U 2' reads 'cpu2' and
+// 'Player 3' reads 'player3'. The blocklist's own fold (foldForBlocklist) reads
+// look-alikes as the letters they imitate, so 'W4RL0RD', 'Xen0 Scout' and
+// 'C0MPUTER' are caught as well. A computer seat's name is caught by its START
+// ('cpu', 'xeno') or, for the boss, ANYWHERE in the name, because 'Iron
+// Warlord' imitates it as much as 'Warlord' does. A word the game writes in
+// place of a name must be the WHOLE name: 'Host' is the game's word, and
+// 'Hostile Mesa' is not. None of the 1,454 rolled pairs is caught
+// (test/display_name.mjs sweeps them all).
+//
+// It applies to every name a player CHOOSES, through checkPlayerName below: the
+// signed-in Set, the guest's check, and the room engine's door. It does not
+// apply to a name chosen before this rule existed, which still proves itself by
+// its key (provenName). Renaming a player who did nothing wrong is not this
+// rule's job.
+const SYSTEM_WORD = /^(?:you|opponent|aplayer|player\d*|host|guest|nocallsign|noname|computer)$/;
+const BOT_NAME = (s) => s.startsWith('cpu') || s.startsWith('xeno') || s.includes('warlord');
+const GAME_NAME = (s) => SYSTEM_WORD.test(s) || BOT_NAME(s);
+export function systemName(raw) {
+  const name = normaliseCallsign(raw);
+  const plain = name.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  return GAME_NAME(plain) || GAME_NAME(foldForBlocklist(name));
+}
+
 // `terms` is the shipped blocklist, injected rather than read here: presentable()
 // below is the only part of this module that needs it, and injecting it keeps
 // every function in the file pure. Its one caller, server/social.js, passes the
 // list server.js loads once, at boot — one file, one rule, one term list.
-export function createNameProofs({ terms }) {
+//
+// `keyState(key)` answers 'free', 'taken' or 'unknown' for a callsign key: is
+// it some account's CHOSEN callsign? server.js and server/social.js pass the
+// in-memory index (server/name-index.js), and nothing else may answer it,
+// because a store read per name would put an await inside the room engine's
+// synchronous join. THE DEFAULT IS 'unknown', and 'unknown' refuses: a caller
+// that forgets to pass it shows no typed name at all. It never shows one that
+// might be another player's.
+export function createNameProofs({ terms, keyState = () => 'unknown' }) {
   // ---- names that came out of the database -----------------------------------
   // WHO CAN WRITE THIS COLUMN? profiles.callsign is PATCHed by the account
   // itself on every cloud save (profiles_update_own; public/cloud.js save()).
@@ -177,35 +224,102 @@ export function createNameProofs({ terms }) {
   // applies isProfane to every name it shows, and a name this check passed must
   // not then be quietly renamed at the door.
   //
-  // It answers WHY as well as whether, so the one function serves both callers:
-  // social.js's check op hands the code to the player ('length', 'chars',
-  // 'not_allowed'), and playerName below is the yes-or-no the room engine needs.
+  // It answers WHY as well as whether, so the one function serves every caller:
+  // social.js's check op and its Set hand the code to the player ('length',
+  // 'chars', 'not_allowed'), and playerName below is the yes-or-no the room
+  // engine needs. `key` rides on a pass, the one callsign_key spelling
+  // validateCallsign derives, so a caller never derives a second one.
+  //
+  // THE SIGNED-IN SET IS HELD TO IT TOO (round 2, 2026-10-08). The Set used
+  // to run validateCallsign alone, so a name the engine's isProfane refuses
+  // ('Pedo Tank' passes the shipped list) was stored for a signed-in account
+  // and shown in friends lists, squad seats and invites, while a guest typing
+  // the same name was refused. One function now serves both, so the two
+  // paths cannot drift apart again. The game's own names (systemName, above)
+  // are refused by it as well, with the same 'not_allowed'.
   //
   // It stands BESIDE the two proofs, never among them. A name it passes is a
-  // string the server finds acceptable, not one tied to an account — it is not
-  // unique, and two players may type the same one. displayName and seenName
-  // above are untouched: a panel still names a row only by its key or by a
-  // curated pair, so a typed name can never be worn in a friends list, and a
-  // chosen callsign stays the only name a search can find.
+  // string the server finds acceptable, not one tied to an account. displayName
+  // and seenName above are untouched: a panel still names a row only by its key
+  // or by a curated pair, so a typed name can never be worn in a friends list,
+  // and a chosen callsign stays the only name a search can find.
   const checkPlayerName = (raw) => {
     const v = validateCallsign(raw, terms);
     if (!v.ok) return { ok: false, error: v.error };
-    if (isProfane(v.name)) return { ok: false, error: 'not_allowed' };
-    return { ok: true, name: v.name };
+    if (isProfane(v.name) || systemName(v.name)) return { ok: false, error: 'not_allowed' };
+    return { ok: true, name: v.name, key: v.key };
+  };
+
+  // A NAME SHOWN WITH NO KEY BEHIND IT MAY NOT BE SOMEBODY'S CHOSEN CALLSIGN
+  // (round 2, 2026-10-08). A typed name is not unique, and two guests may type
+  // the same one. But a chosen callsign IS unique (callsign_key), and a guest who
+  // types 'Viper' when an account holds 'Viper' would wear that player's name in
+  // every lobby they joined, with a report against them pointing at the wrong
+  // person. So a typed name that normalises onto an account's key is refused
+  // 'taken', the word the Set already uses for the same collision.
+  //
+  // keyState is the in-memory index, asked with the key checkPlayerName derived
+  // (the callsign_key normalisation, exactly). 'unknown' means the index has not
+  // loaded or has no store behind it, and it REFUSES with 'unavailable': a store
+  // fault shows the player's default name, never one that might be another
+  // player's. A keyState that throws counts as 'unknown'.
+  //
+  // THE SET DOES NOT ASK THIS. Its uniqueness is the unique index's, at the write
+  // (social.js callsign), and a read before that write would only race it.
+  const typedName = (raw) => {
+    const v = checkPlayerName(raw);
+    if (!v.ok) return v;
+    let s = 'unknown';
+    try { s = keyState(v.key); } catch { s = 'unknown'; }
+    if (s === 'free') return v;
+    return { ok: false, error: s === 'taken' ? 'taken' : 'unavailable' };
   };
   // What the room engine is given (server.js, setNameCheck): the normalised
-  // name when the guidelines pass it, null when they do not. The engine shows
-  // THIS string, never the client's copy, so a near-miss that normalises equal
-  // cannot carry a different sequence of characters to another player.
+  // name when the guidelines pass it and no account holds it, null otherwise.
+  // The engine shows THIS string, never the client's copy, so a near-miss that
+  // normalises equal cannot carry a different sequence of characters to
+  // another player.
   const playerName = (raw) => {
-    const v = checkPlayerName(raw);
+    const v = typedName(raw);
+    return v.ok ? v.name : null;
+  };
+
+  // WHAT A SQUAD SEAT SHOWS FOR A GUEST (round 2, 2026-10-08). A guest has no
+  // account a name could be proved by, so their seat read 'No callsign',
+  // although the same guest's name appears in every lobby. The seat now shows
+  // what the lobby door would show for the name the guest's frame carried: a
+  // rolled pair (the engine's second door), or a typed name that passes
+  // playerName (its third). Anything else is null, the client's 'No callsign'.
+  // A rolled pair takes presentable's pass, as displayName gives it.
+  const guestName = (raw) => {
+    const r = rolledName(raw);
+    return r !== null ? presentable(r) : playerName(raw);
+  };
+
+  // THE NAME A LOBBY SEAT SHOWED, FOR A REPORT AGAINST THAT SEAT (round 2,
+  // 2026-10-08). seenName proves only a chosen key or a rolled pair, so a report
+  // against a guest's typed name recorded the '(no name)' sentinel, although
+  // privacy.html promises "the callsign exactly as you saw it". The proof for a
+  // typed name is the room engine itself: every seat name passed sanitizeName
+  // at the moment it was presented, and the seat still holds it. social.js reads
+  // it through the seat handle, in the reporter's own room.
+  //
+  // So this is a SHAPE test and nothing more: the callsign rules with an empty
+  // term list (validateCallsign(raw, [])), which keeps the log line safe by
+  // construction (letters, digits, marks and single spaces; no newline and no
+  // quote). It does not run the blocklist, for seenName's reason: a name
+  // blocklisted after it was shown is the case a report exists for.
+  const seatName = (raw) => {
+    if (typeof raw !== 'string') return null;
+    const v = validateCallsign(raw, []);
     return v.ok ? v.name : null;
   };
 
   // presentable is NOT returned. It is the blocklist pass INSIDE displayName,
   // and a caller able to reach it on its own could show a name with no proof
   // behind it at all — which is the bug this module exists to remove.
-  // checkPlayerName and playerName are not that: they return a name only when
-  // the rules pass the string itself, and no caller uses them to name a row.
-  return { provenName, rolledName, displayName, seenName, checkPlayerName, playerName };
+  // checkPlayerName, typedName, playerName and guestName are not that: they
+  // return a name only when the rules pass the string itself, and none of them
+  // names a profile row.
+  return { provenName, rolledName, displayName, seenName, checkPlayerName, typedName, playerName, guestName, seatName };
 }

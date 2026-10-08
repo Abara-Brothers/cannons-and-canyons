@@ -971,7 +971,9 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
       ok(`${V}: a guest's Save sends exactly {type:'callsign', op:'check', name, id}, the name as typed but for the ends`);
     else fail(`${V}: guest check frame ${JSON.stringify(t)}`);
     // 23c. every refusal is said, and NOTHING is kept: not the name, not the day.
-    const GCASES = [['length', RULE], ['chars', RULE], ['not_allowed', 'That callsign is not allowed.'],
+    // CHANGED (round 2): 'taken' joins them -- a guest's check now refuses a
+    // name an account holds as its chosen callsign, in the Set's own words.
+    const GCASES = [['length', RULE], ['chars', RULE], ['not_allowed', 'That callsign is not allowed.'], ['taken', 'Someone has that callsign.'],
       ['slow_down', 'Too many tries. Wait a moment.'], ['unavailable', 'Callsigns are not available right now. Try again later.'],
       ['a_code_from_a_newer_server', 'That callsign could not be set.']];
     let gbad = 0;
@@ -1073,6 +1075,29 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
     await ev(`(() => { const q = window.__tx.filter((f) => f.type === 'friends'); if (q.length) handle({ type: 'friends', error: 'unavailable', id: q[q.length - 1].id }); return true; })()`);
     if (!signedIn.field && !signedIn.kbd) ok(`${V}: a sign-in while a guest's field is open closes it`);
     else fail(`${V}: guest field survived a sign-in ${JSON.stringify(signedIn)}`);
+    // 23j. A GUEST'S DAY DOES NOT HOLD AN ACCOUNT'S SAVE (round 2: the tests
+    //      group found nameWait()'s signed-in guard untested). The guest kept
+    //      a name today (cc_name_at stamped) and then signed in, the same
+    //      day. The account's day is the SERVER's (callsign_set_at), so the
+    //      device's stamp must not hold the account's Save: the field opens
+    //      with the rules under it and Save ready, and Save sends the Set.
+    await ev(`(() => { localStorage.setItem('cc_name_at', String(Date.now() - 3600000)); handle(${SNAP({ callsign: 'Anvil Six' })}); return true; })()`);
+    await sleep(60);
+    const r23j = await rowInfo();
+    const w23j = await ev('nameWait()');
+    await clearTx();
+    await openEditor();
+    const e23j = await editor();
+    const s23j = await ev(`(() => { const b = document.querySelector('#bay [data-cs="save"]'); return b ? b.disabled : null; })()`);
+    await save('Kestrel Bay');
+    const f23j = (await calls('callsign')).pop();
+    if (f23j) await reply('callsign', { error: 'unavailable' });
+    await closeCallsign();
+    if (w23j === 0 && r23j && r23j.desc === 'Anvil Six' && r23j.dis.join('|') === 'false'
+        && e23j && e23j.rule === RULE && !e23j.bad && s23j === false
+        && f23j && f23j.type === 'callsign' && f23j.name === 'Kestrel Bay' && f23j.op === undefined)
+      ok(`${V}: a guest's day spent on this device does not hold a signed-in account's Save: nameWait() is 0, the field shows the rules, Save is ready and sends the Set`);
+    else fail(`${V}: signed-in after a guest's day ${JSON.stringify({ w23j, r23j, e23j, s23j, f23j })}`);
   }
   // The device's own name and its day are this run's; the next viewport and
   // Task 8 start from a device that has not spent one.

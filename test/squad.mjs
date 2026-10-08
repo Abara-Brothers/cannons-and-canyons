@@ -889,10 +889,14 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
     && JSON.stringify(norid(rows[2])) === JSON.stringify({ id: null, callsign: null, guest: true, online: true, ready: false, dropped: false }))
     ok('(h1) a proved name is shown, an unprovable one keeps its row as null, and a guest row is null and flagged');
   else fail('(h1) rows: ' + JSON.stringify(rows));
-  // THE NAME THE GUEST SENT NEVER LEAVES THE SERVER. It arrived off the wire
-  // on a socket with no account behind it and nothing to prove it against.
+  // THE NAME THE GUEST SENT LEAVES THE SERVER ONLY THROUGH THE DOOR'S RULES.
+  // CHANGED (round 2, 2026-10-08): this read "never leaves the server". A
+  // guest's seat now shows the name a lobby would (see (gn)), held to the
+  // guidelines and to the name index. THIS world wires no index, the default
+  // a host gets when it forgets one, and that default knows no key, so a typed
+  // name is shown to nobody: closed, not open.
   if (!JSON.stringify(wa.rx).includes('FOLLOW ME OK') && !JSON.stringify(wd.rx).includes('FOLLOW ME OK') && !JSON.stringify(g.rx).includes('FOLLOW ME OK'))
-    ok('(h1) the name a guest sent reaches no member, the guest included');
+    ok('(h1) with no name index wired, the typed name a guest sent reaches no member, the guest included');
   else fail('(h1) a guest smuggled free text onto a screen: ' + JSON.stringify(sqlast(wa, 'state')));
   // ONE profilesByIds FOR THE WHOLE FAN-OUT, holding the SIGNED-IN ids only.
   const many = st.calls.filter((c) => c[0] === 'profilesByIds');
@@ -9530,7 +9534,10 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   // the squad code or link; blocked players cannot be found or invited. A
   // squad invite frame that carries `callsign` finds its invitee by friend
   // search's exact-callsign lookup and needs no friend; every other rule is
-  // the friend invite's. Every miss -- nobody by that name, your own name, a
+  // the friend invite's, except delivery to a player who is NOT a friend
+  // (round 2): in-app only, never a push, and one answer, 'sent', whatever
+  // happened ((inv-cs i)); a friend found by name is a friend's invite
+  // ((inv-cs j)). Every miss -- nobody by that name, your own name, a
   // block either way, a guest -- is ONE answer, no_such_user, after the SAME
   // store reads, so the frame says nothing about who has blocked whom.
   const byName6 = (callsign, id) => ({ type: 'squad', op: 'invite', callsign, id });
@@ -9546,21 +9553,26 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   };
 
   // ---- (inv-cs a) a stranger who is online gets the invite, found by name ---
+  // CHANGED (round 2, 2026-10-08): a player who is not a friend is answered
+  // delivered:'sent' (was 'online'), the one answer a stranger's invite gets
+  // whether anyone was there or not; the frame they are sent names the
+  // inviter's account (`from.id`, for the card's Report and Block); and the
+  // first leg reads the inviter's friends too (five reads, was four).
   {
     const { st, S, wa, code } = await csWorld6();
     const wb1 = up6(S, B), wb2 = up6(S, B);
     clear6(wb1, wb2); st.calls.length = 0;
     await S.handle(wa, byName6('  bunker   NINE ', 'n1'));
     const r = ans6(wa, 'n1'), inv = invited6(wb1);
-    if (same6(r, { type: 'squad', op: 'invite', ok: true, delivered: 'online', callsign: 'Bunker Nine', id: 'n1' }))
-      ok('(inv-cs a) an invite by callsign reaches a player who is NOT a friend: delivered:online, and the answer names them by their proved name');
+    if (same6(r, { type: 'squad', op: 'invite', ok: true, delivered: 'sent', callsign: 'Bunker Nine', id: 'n1' }))
+      ok('(inv-cs a) an invite by callsign reaches a player who is NOT a friend: delivered:sent, and the answer names them by their proved name');
     else fail('(inv-cs a) by-callsign reply: ' + JSON.stringify(r));
-    if (inv.length === 1 && same6(inv[0], { type: 'squad', op: 'invited', code, from: { callsign: 'Anvil Six' }, size: 1, max: 4 }) && invited6(wb2).length === 1)
-      ok('(inv-cs a) the invited frame is the friend invite\'s, exactly, down every socket the player holds');
+    if (inv.length === 1 && same6(inv[0], { type: 'squad', op: 'invited', code, from: { callsign: 'Anvil Six', id: A }, size: 1, max: 4 }) && same6(invited6(wb2), inv))
+      ok('(inv-cs a) the invited frame is the friend invite\'s plus the inviter\'s account id, down every socket the player holds');
     else fail('(inv-cs a) invited frame: ' + JSON.stringify([wb1.rx, wb2.rx]));
-    if (same6(st.calls.slice().sort(), ['blockIdsOf', 'blockIdsOf', 'profileByCallsignKey', 'profileById']) && st.friends.size === 0 && PUSHES.length === 0)
-      ok('(inv-cs a) the lookup, both players\' blocks and the inviter\'s own row: four reads, no friendship made, and nobody online is pushed');
-    else fail('(inv-cs a) reads ' + JSON.stringify(st.calls) + ' friends ' + st.friends.size + ' pushes ' + JSON.stringify(PUSHES));
+    if (same6(st.calls.slice().sort(), ['blockIdsOf', 'blockIdsOf', 'friendIdsOf', 'profileByCallsignKey', 'profileById']) && st.friends.size === 0 && PUSHES.length === 0 && DRY6.length === 0)
+      ok('(inv-cs a) the lookup, both players\' blocks, the inviter\'s own row and friends: five reads, no friendship made, and the push seam is never asked');
+    else fail('(inv-cs a) reads ' + JSON.stringify(st.calls) + ' friends ' + st.friends.size + ' pushes ' + JSON.stringify([PUSHES, DRY6]));
     // The same name typed the way friend search takes it finds the same player.
     clear6(wa);
     await S.handle(wa, { type: 'friend', op: 'search', q: '  bunker   NINE ', id: 's1' });
@@ -9570,7 +9582,12 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     else fail('(inv-cs a) search: ' + JSON.stringify(s));
   }
 
-  // ---- (inv-cs b) a stranger who is offline: the push seam, and its cooldown -
+  // ---- (inv-cs b) a stranger who is offline: NO PUSH, and the same answer ---
+  // CHANGED (round 2, 2026-10-08): this pinned a real push to an offline
+  // stranger and the cooldown's dry run after it. Every consent text says a
+  // push carries squad invites FROM FRIENDS, so a stranger's invite never
+  // reaches the push seam in either form, and the inviter is answered 'sent'
+  // exactly as for a stranger who is online.
   {
     const prevCool = process.env.SQUAD_INVITE_COOLDOWN_MS;
     delete process.env.SQUAD_INVITE_COOLDOWN_MS;
@@ -9587,13 +9604,12 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     await S.handle(wa, byName6('Bunker Nine', 'p2'));
     const two = { a: ans6(wa, 'p2'), pushes: PUSHES.length, dry: DRY6.length };
     CLOCK6 = t0;
-    if (same6(one.a, { type: 'squad', op: 'invite', ok: true, delivered: 'push', callsign: 'Bunker Nine', id: 'p1' }) && one.pushes === 1 && one.dry === 0
-        && PUSHES[0][0] === B && same6(PUSHES[0][1], { code, from: 'Anvil Six', size: 1, max: 4 }))
-      ok('(inv-cs b) an offline stranger is sent the invite by push, with the friend invite\'s payload');
-    else fail('(inv-cs b) push: ' + JSON.stringify({ one, PUSHES }));
-    if (same6(two.a, { type: 'squad', op: 'invite', ok: true, delivered: 'push', callsign: 'Bunker Nine', id: 'p2' }) && two.pushes === 1 && two.dry === 1)
-      ok('(inv-cs b) and a second invite inside 30 s takes the dry run, answered alike: the push cooldown holds for a by-callsign invite too');
-    else fail('(inv-cs b) cooldown: ' + JSON.stringify(two));
+    if (same6(one.a, { type: 'squad', op: 'invite', ok: true, delivered: 'sent', callsign: 'Bunker Nine', id: 'p1' }) && one.pushes === 0 && one.dry === 0 && !!code)
+      ok('(inv-cs b) an offline stranger with a device to notify is sent NO push and no dry run, and the inviter is answered delivered:sent');
+    else fail('(inv-cs b) push: ' + JSON.stringify({ one, PUSHES, DRY6 }));
+    if (same6(two.a, { type: 'squad', op: 'invite', ok: true, delivered: 'sent', callsign: 'Bunker Nine', id: 'p2' }) && two.pushes === 0 && two.dry === 0)
+      ok('(inv-cs b) and a second invite inside 30 s is the same: nothing reaches the seam however often a stranger asks');
+    else fail('(inv-cs b) second: ' + JSON.stringify(two));
   }
 
   // ---- (inv-cs c) EVERY MISS IS ONE ANSWER, AFTER THE SAME READS ------------
@@ -9627,9 +9643,12 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     }
     if (!bad.length) ok('(inv-cs c) nobody by that name, your own name, a block either way, a guest and a nameless account all answer no_such_user and reach nobody');
     else fail('(inv-cs c) misses: ' + JSON.stringify(bad));
+    // CHANGED (round 2): four reads, the inviter's friends added to the leg
+    // so a friend and a stranger can be told apart; still the same four for
+    // every miss.
     const sorted = reads.map((r) => r.slice().sort());
-    if (sorted.every((r) => same6(r, ['blockIdsOf', 'profileByCallsignKey', 'profileById'])))
-      ok('(inv-cs c) and every one of them costs exactly the same three reads -- a block is a miss to the store as well as on the wire');
+    if (sorted.every((r) => same6(r, ['blockIdsOf', 'friendIdsOf', 'profileByCallsignKey', 'profileById'])))
+      ok('(inv-cs c) and every one of them costs exactly the same four reads -- a block is a miss to the store as well as on the wire');
     else fail('(inv-cs c) reads per miss: ' + JSON.stringify(reads));
     // ONE LEG: the three reads are asked together, so a miss and a block take
     // the same number of round trips. A held lookup holds all three.
@@ -9645,8 +9664,8 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
       legs.push({ inside, asked: st.calls.slice().sort(), answered: !!ans6(wa, 'l') });
       g.release(); await pending;
     }
-    if (legs.every((l) => l.inside && !l.answered && same6(l.asked, ['blockIdsOf', 'profileByCallsignKey', 'profileById'])))
-      ok('(inv-cs c) a miss and a block ask their three reads in one leg: with the lookup held, all three are out and nothing is answered');
+    if (legs.every((l) => l.inside && !l.answered && same6(l.asked, ['blockIdsOf', 'friendIdsOf', 'profileByCallsignKey', 'profileById'])))
+      ok('(inv-cs c) a miss and a block ask their four reads in one leg: with the lookup held, all four are out and nothing is answered');
     else fail('(inv-cs c) legs: ' + JSON.stringify(legs));
     const shape = [];
     for (const name of ['', 'ab', 'x'.repeat(40), '   ']) {
@@ -9671,7 +9690,7 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     await S.handle(wa, { type: 'squad', op: 'invite', to: B, callsign: 'Crater Two', id: 'f3' });
     if (same6(ans6(wa, 'f1'), { type: 'squad', op: 'invite', error: 'not_friend', id: 'f1' })
         && same6(ans6(wa, 'f2'), { type: 'squad', op: 'invite', error: 'no_such_user', id: 'f2' })
-        && same6(ans6(wa, 'f3'), { type: 'squad', op: 'invite', ok: true, delivered: 'online', callsign: 'Crater Two', id: 'f3' })
+        && same6(ans6(wa, 'f3'), { type: 'squad', op: 'invite', ok: true, delivered: 'sent', callsign: 'Crater Two', id: 'f3' })
         && !invited6(wb).length && invited6(wc).length === 1)
       ok('(inv-cs d) only an invite BY CALLSIGN skips the friend check: a `to` invite to a stranger is still not_friend, and `to` beside a callsign is ignored');
     else fail('(inv-cs d) friend path: ' + JSON.stringify({ a: wa.rx, b: wb.rx, c: invited6(wc) }));
@@ -9693,10 +9712,11 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
       await S.handle(wa, byName6('Bunker Nine', 'd'));
       runs.push({ kind, a: wa.rx, b: invited6(wb).length, c: wc.rx.length, reads: st.calls.slice().sort() });
     }
-    const want = [{ type: 'squad', op: 'invite', ok: true, delivered: 'online', callsign: 'Bunker Nine', id: 'd' }];
+    // CHANGED (round 2): 'sent', the stranger's one answer, and five reads.
+    const want = [{ type: 'squad', op: 'invite', ok: true, delivered: 'sent', callsign: 'Bunker Nine', id: 'd' }];
     if (same6(runs[0].a, want) && same6(runs[1].a, want) && runs[0].b === 1 && runs[1].b === 0 && runs[1].c === 0
-        && runs[0].reads.length === 4 && same6(runs[0].reads, runs[1].reads))
-      ok('(inv-cs e) a block between the invitee and another member drops the invite silently: the same answer and the same four reads as a delivered one');
+        && runs[0].reads.length === 5 && same6(runs[0].reads, runs[1].reads))
+      ok('(inv-cs e) a block between the invitee and another member drops the invite silently: the same answer and the same five reads as a delivered one');
     else fail('(inv-cs e) dropped by callsign: ' + JSON.stringify(runs));
   }
 
@@ -9714,7 +9734,7 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     const inside = await within6(h.inside);
     if (inside) await S.handle(wc, { type: 'block', op: 'add', id: B }); else h.restore();
     h.release(); await pending;
-    if (inside && st.blocks.has(C + '>' + B) && same6(ans6(wa, 'g'), { type: 'squad', op: 'invite', ok: true, delivered: 'online', callsign: 'Bunker Nine', id: 'g' }) && !invited6(wb).length)
+    if (inside && st.blocks.has(C + '>' + B) && same6(ans6(wa, 'g'), { type: 'squad', op: 'invite', ok: true, delivered: 'sent', callsign: 'Bunker Nine', id: 'g' }) && !invited6(wb).length)
       ok('(inv-cs f) a block landing while the invitee\'s read is out is added from the log: nothing reaches the player just blocked');
     else fail('(inv-cs f) block during the read: ' + JSON.stringify({ inside, a: ans6(wa, 'g'), b: invited6(wb) }));
   }
@@ -9774,7 +9794,7 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     const spent = same6(ans6(wa, 'r1'), { type: 'squad', op: 'invite', error: 'slow_down', id: 'r1' }) && st.calls.length === 0 && !invited6(wb).length;
     CLOCK6 += 60000;
     await S.handle(wa, byName6('Bunker Nine', 'r2'));
-    const back = (ans6(wa, 'r2') || {}).delivered === 'online';
+    const back = (ans6(wa, 'r2') || {}).delivered === 'sent';
     // And it is the SAME bucket as search: ten searches leave no invite.
     const w2 = await csWorld6();
     for (let i = 0; i < 10; i++) await w2.S.handle(w2.wa, { type: 'friend', op: 'search', q: 'Granite Owl' });
@@ -9784,6 +9804,145 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     if (spent && back && shared)
       ok('(inv-cs h) ten invites by callsign a minute, from the friend bucket search spends: the eleventh is slow_down with no read, and a minute refills it');
     else fail('(inv-cs h) rate: ' + JSON.stringify({ spent, back, shared, a: wa.rx, a2: w2.wa.rx }));
+  }
+
+  // ---- (inv-cs i) A STRANGER'S INVITE HAS ONE ANSWER (round 2, 2026-10-08) -
+  // The reply to an invite to a player who is not a friend must not say
+  // whether they are online, whether they have a device to notify, or whether
+  // a block dropped the invite: privacy.html says only friends can see whether
+  // a player is online. Five worlds, one reply, byte for byte; none of them
+  // asks the push seam; and a seam that would never answer holds none of them
+  // up, because a stranger's invite never waits on it.
+  {
+    const run = async (kind) => {
+      const st = t6store(ROWS6);
+      const S = mkSocial6(st, { pushInvite: async (to, payload, opts) => { (opts && opts.dryRun === true ? DRY6 : PUSHES).push([to, payload]); return kind === 'offline-nudges'; } });
+      const wa = up6(S, A);
+      const code = await create6(S, wa);
+      const wc = up6(S, C);
+      await join6(S, wc, code, 'Crater Two');
+      if (kind.startsWith('dropped')) await st.addBlock(C, B);
+      const wb = kind === 'online' || kind === 'dropped-online' ? up6(S, B) : null;
+      clear6(wa); PUSHES.length = 0; DRY6.length = 0;
+      await S.handle(wa, byName6('Bunker Nine', 'x'));
+      return { kind, a: wa.rx.filter((f) => f.type === 'squad' && f.op === 'invite'), got: wb ? invited6(wb).length : 0, seam: PUSHES.length + DRY6.length };
+    };
+    const runs = [];
+    for (const kind of ['online', 'offline-nudges', 'offline-none', 'dropped-online', 'dropped-offline']) runs.push(await run(kind));
+    const want = [{ type: 'squad', op: 'invite', ok: true, delivered: 'sent', callsign: 'Bunker Nine', id: 'x' }];
+    if (runs.every((r) => same6(r.a, want) && r.seam === 0) && runs[0].got === 1 && runs[3].got === 0)
+      ok("(inv-cs i) online, offline with nudges, offline without, and dropped online or offline all answer the inviter the same delivered:'sent', and none of them asks the push seam");
+    else fail('(inv-cs i) one answer: ' + JSON.stringify(runs));
+    // A SEAM THAT NEVER SETTLES: the stranger's answer does not wait on it,
+    // where a friend's offline invite would wait out INVITE_PUSH_MS.
+    const st = t6store(ROWS6);
+    let asked = 0;
+    const S = mkSocial6(st, { pushInvite: () => { asked++; return new Promise(() => {}); } });
+    const wa = up6(S, A);
+    await create6(S, wa);
+    clear6(wa);
+    const pending = S.handle(wa, byName6('Bunker Nine', 'y'));
+    const done = await within6(pending);
+    if (done && asked === 0 && same6(ans6(wa, 'y'), { type: 'squad', op: 'invite', ok: true, delivered: 'sent', callsign: 'Bunker Nine', id: 'y' }))
+      ok("(inv-cs i) and with a push seam that never answers, the stranger's invite is answered at once: it never waits on a device read");
+    else fail('(inv-cs i) seam wait: ' + JSON.stringify({ done, asked, a: wa.rx }));
+  }
+
+  // ---- (inv-cs j) A FRIEND FOUND BY CALLSIGN IS INVITED AS A FRIEND --------
+  // The invite by callsign is the only path that may find a stranger, but a
+  // name can find a friend too, and a friend's invite keeps everything it had:
+  // the push to an offline friend (their consent covers it), the cooldown, and
+  // 'online' | 'push' | 'none'. The frame carries no account id: the friend's
+  // card needs no menu of its own.
+  {
+    const runs = {};
+    for (const kind of ['online', 'push', 'none']) {
+      const st = t6store(ROWS6);
+      await st.addFriendship(A, B);
+      const S = mkSocial6(st, { pushInvite: async (to, payload, opts) => { (opts && opts.dryRun === true ? DRY6 : PUSHES).push([to, payload]); return kind === 'push'; } });
+      const wa = up6(S, A);
+      const code = await create6(S, wa);
+      const wb = kind === 'online' ? up6(S, B) : null;
+      clear6(wa); PUSHES.length = 0; DRY6.length = 0;
+      await S.handle(wa, byName6('bunker nine', 'f'));
+      runs[kind] = { a: ans6(wa, 'f'), frame: wb ? invited6(wb) : null, pushes: PUSHES.map((p) => p.slice()), dry: DRY6.length, code };
+    }
+    const reply = (d) => ({ type: 'squad', op: 'invite', ok: true, delivered: d, callsign: 'Bunker Nine', id: 'f' });
+    if (same6(runs.online.a, reply('online')) && same6(runs.online.frame, [{ type: 'squad', op: 'invited', code: runs.online.code, from: { callsign: 'Anvil Six' }, size: 1, max: 4 }])
+        && same6(runs.push.a, reply('push')) && runs.push.pushes.length === 1 && runs.push.pushes[0][0] === B && same6(runs.push.pushes[0][1], { code: runs.push.code, from: 'Anvil Six', size: 1, max: 4 })
+        && same6(runs.none.a, reply('none')) && runs.none.pushes.length === 1 && runs.none.dry === 0)
+      ok("(inv-cs j) a FRIEND found by callsign is invited as a friend: 'online' with the friend frame (no account id), 'push' with a real push to an offline friend, 'none' when no device took it");
+    else fail('(inv-cs j) friend by callsign: ' + JSON.stringify(runs));
+  }
+
+  // ---- (gn) A GUEST'S SQUAD SEAT SHOWS THE GUEST'S NAME (round 2) ----------
+  // A guest's seat read 'No callsign' although the same guest is named in
+  // every lobby. With the name index wired (as server.js wires it), a guest
+  // row carries what the engine's door would show for the name its join
+  // carried: a rolled pair, or a typed name the guidelines pass and no account
+  // holds, normalised. A held name, a computer's name and a typed name while
+  // the index knows nothing are null. A key taken after the guest joined comes
+  // off at the next snapshot. And a guest row whose socket has SIGNED IN stays
+  // nameless while the sign-in door reads (D-BLOCK-3 F), then shows the
+  // account's proved name.
+  {
+    const { createNameIndex } = await import('../server/name-index.js');
+    const index = createNameIndex({ load: async (after) => (after === null ? ['viper'] : []) });
+    await index.refresh();
+    const st = t6store(ROWS6);
+    const S = mkSocial6(st, { names: index });
+    const wa = up6(S, A);
+    const code = await create6(S, wa);
+    const g1 = t6ws(null), g2 = t6ws(null), g3 = t6ws(GU, true);
+    await join6(S, g1, code, 'Iron Ridge');
+    await join6(S, g2, code, '  Tank   Ace ');
+    await join6(S, g3, code, 'VIPER');
+    const seen = (last6(wa, 'squad', 'state') || { members: [] }).members.map((m) => [m.callsign, m.guest]);
+    const own = last6(g2, 'squad', 'state') || { members: [] };
+    if (same6(seen, [['Anvil Six', false], ['Iron Ridge', true], ['Tank Ace', true], [null, true]])
+        && own.you === 2 && own.members[2] && own.members[2].callsign === 'Tank Ace')
+      ok("(gn) a guest row shows a rolled pair and a typed name, normalised, to every member and to the guest's own seat; a name an account holds is null");
+    else fail('(gn) guest names: ' + JSON.stringify({ seen, own: own.members && own.members[own.you] }));
+    // A key taken after the guest joined: the next snapshot drops the name.
+    index.add('tank ace');
+    clear6(wa);
+    await S.handle(wa, { type: 'squad', op: 'resume', id: 'r1' });
+    const after = (ans6(wa, 'r1') || { members: [] }).members.map((m) => m.callsign);
+    if (same6(after, ['Anvil Six', 'Iron Ridge', null, null]))
+      ok('(gn) a typed name an account takes after the guest joined is gone from the next snapshot');
+    else fail('(gn) after the key was taken: ' + JSON.stringify(after));
+    // A computer's name, and an index that has not loaded.
+    const st2 = t6store(ROWS6);
+    const S2 = mkSocial6(st2, { names: createNameIndex({ load: async () => [] }) });
+    const wa2 = up6(S2, A);
+    const code2 = await create6(S2, wa2);
+    await join6(S2, t6ws(null), code2, 'CPU 2');
+    await join6(S2, t6ws(null), code2, 'Tank Ace');
+    await join6(S2, t6ws(null), code2, 'Iron Ridge');
+    const unloaded = (last6(wa2, 'squad', 'state') || { members: [] }).members.map((m) => m.callsign);
+    if (same6(unloaded, ['Anvil Six', null, null, 'Iron Ridge']))
+      ok("(gn) a computer's name is null, and while the index knows nothing a typed name is null too (a rolled pair needs no index)");
+    else fail('(gn) system and unloaded: ' + JSON.stringify(unloaded));
+    // THE SIGN-IN DOOR'S ROW STAYS NAMELESS, typed guest name and all.
+    const st3 = t6store(ROWS6);
+    const S3 = mkSocial6(st3, { names: index });
+    const wa3 = up6(S3, A);
+    const code3 = await create6(S3, wa3);
+    const wn = t6ws(null);
+    await join6(S3, wn, code3, 'Kestrel Bay');
+    const before = ((last6(wa3, 'squad', 'state') || { members: [] }).members[1] || {}).callsign;
+    const h = stale6(st3, 'blockIdsOf');
+    hello6(S3, wn, B);
+    const inside = await within6(h.inside);
+    let during = null;
+    if (inside) { clear6(wa3); await S3.handle(wa3, { type: 'squad', op: 'resume', id: 'r2' }); during = (ans6(wa3, 'r2') || { members: [] }).members[1] || null; }
+    else h.restore();
+    h.release();
+    await settle6();
+    const done = ((last6(wa3, 'squad', 'state') || { members: [] }).members[1] || {});
+    if (before === 'Kestrel Bay' && inside && during && during.guest === true && during.callsign === null && done.id === B && done.callsign === 'Bunker Nine')
+      ok("(gn) a guest row whose socket signs in shows no name at all while the door reads, not even the guest's own, and the account's proved name once admitted");
+    else fail('(gn) the door\'s row: ' + JSON.stringify({ before, inside, during, done }));
   }
 
   // ---- (err) THE SQUAD REFUSALS ARE A CLOSED, NAMED SET (E9) ---------------

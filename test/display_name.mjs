@@ -25,7 +25,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { loadBlocklist, normaliseCallsign, validateCallsign } from '../server/callsign.js';
 import { CALL_ADJ, CALL_NOUN, NAME_MAX, isGeneratedCallsign } from '../public/game-core.js';
-import { createNameProofs } from '../server/display-name.js';
+import { createNameProofs, systemName } from '../server/display-name.js';
+import { createNameIndex } from '../server/name-index.js';
 
 const out = { errors: [] };
 const ok = (m) => console.log('  ok — ' + m);
@@ -40,7 +41,10 @@ const line = (t) => terms.indexOf(t) + 1;
 const NBSP = String.fromCodePoint(0x00A0);          // whitespace to trim() and to \s
 const ACUTE = String.fromCodePoint(0x0301);         // COMBINING ACUTE ACCENT
 
-const proofs = createNameProofs({ terms });
+// keyState 'free' for every key: sections 1 to 7 are about the rules a name
+// meets on its own. Section 9 drives the uniqueness half, with every answer
+// the index can give.
+const proofs = createNameProofs({ terms, keyState: () => 'free' });
 
 // ---- 1. the module's shape is the contract ---------------------------------
 // Four functions, all pure and synchronous. `presentable` is deliberately NOT
@@ -263,8 +267,10 @@ const proofs = createNameProofs({ terms });
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   if (typeof checkPlayerName === 'function' && typeof playerName === 'function') {
     // A good name, normalised the one way validateCallsign does it.
-    if (same(checkPlayerName('  Tank   Ace' + NBSP), { ok: true, name: 'Tank Ace' }) && playerName('  Tank   Ace' + NBSP) === 'Tank Ace')
-      ok('(7) a good name passes, trimmed and collapsed to the one normalised form, and that form is what playerName returns');
+    // CHANGED (round 2, 2026-10-08): a pass also carries `key`, validateCallsign's
+    // own callsign_key spelling, which the Set stores and the index is asked by.
+    if (same(checkPlayerName('  Tank   Ace' + NBSP), { ok: true, name: 'Tank Ace', key: 'tank ace' }) && playerName('  Tank   Ace' + NBSP) === 'Tank Ace')
+      ok('(7) a good name passes, trimmed and collapsed to the one normalised form with its key, and that form is what playerName returns');
     else fail(`(7) good name: ${JSON.stringify(checkPlayerName('  Tank   Ace' + NBSP))} / ${JSON.stringify(playerName('  Tank   Ace' + NBSP))}`);
     // Every refusal says why, and playerName says null for every one.
     const CASES = [['ab', 'length'], ['x'.repeat(17), 'length'], ['Tank<b>', 'chars'], ['', 'length'], [null, 'length']];
@@ -313,6 +319,203 @@ const proofs = createNameProofs({ terms });
       ok('(7) a typed name that passes the guidelines still proves no profile row: displayName and seenName answer null without a key');
     else fail('(7) a typed name was accepted as a row name');
   }
+}
+
+// ---- 8. THE GAME'S OWN NAMES (round 2, 2026-10-08) -------------------------
+// A name a player chooses may not pass for one the game shows: the computer
+// seats, the boss, the alien seats, and the words the client writes where a
+// seat has no name. The bot names are READ OUT OF public/room-engine.js, so a
+// renamed boss or a new alien seat is checked the day it ships; each is typed
+// the way a player could type it (the callsign shape refuses '-' and the
+// middle dot), and again with look-alikes.
+{
+  const { checkPlayerName, playerName } = proofs;
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const eng = readFileSync(fileURLToPath(new URL('../public/room-engine.js', import.meta.url)), 'utf8');
+  const boss = (eng.match(/boss: true, difficulty: 'boss', name: '([^']+)'/) || [])[1];
+  const horde = [...(((eng.match(/names: \[([^\]]*)\]/) || [])[1]) || '').matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  const cpuTemplates = eng.includes("mode === 'ffa' ? `CPU ${seat}` : `CPU · ${label}`");
+  if (boss && horde.length === 3 && cpuTemplates) ok(`(8) the engine's computer names were read from public/room-engine.js: the boss, ${horde.length} alien seats and the two CPU templates`);
+  else fail('(8) could not read the computer names out of public/room-engine.js: ' + JSON.stringify({ boss, horde, cpuTemplates }));
+  const typeable = (n) => n.replace(/[-·]/g, ' ').replace(/\s+/g, ' ').trim();
+  const BOT = [boss, ...horde].filter(Boolean).map(typeable)
+    .concat(['CPU 1', 'CPU 2', 'CPU 3', 'CPU Easy', 'CPU Medium', 'CPU Hard', 'CPU'])
+    .concat(['W4RL0RD 7', 'Iron Warlord', 'C P U 2', 'cpu hard', 'Xen0 Scout', 'XENO']);
+  const SYSTEM = ['You', 'Opponent', 'A player', 'Player', 'Player 2', 'Player 1', 'Host', 'Guest', 'No callsign', 'No name', 'Computer', 'C0MPUTER'];
+  const bad = [...BOT, ...SYSTEM].filter((n) => !(same(checkPlayerName(n), { ok: false, error: 'not_allowed' }) && playerName(n) === null));
+  if (!bad.length) ok(`(8) ${BOT.length} computer names and ${SYSTEM.length} of the client's stand-in words are refused not_allowed, typed plainly or in look-alikes`);
+  else fail('(8) names that pass for the game\'s own were allowed: ' + JSON.stringify(bad.map((n) => [n, checkPlayerName(n)])));
+  // ONLY THE GAME'S NAMES: a word that merely starts like one is a name.
+  const FINE = ['Hostile Mesa', 'Guest One', 'Player One', 'Youngblood', 'Cupcake', 'Tank Ace', 'Warden Six', 'Computer Ace'];
+  const lost = FINE.filter((n) => playerName(n) !== n);
+  if (!lost.length) ok(`(8) ${FINE.length} names that only resemble them still pass: ${FINE.join(', ')}`);
+  else fail('(8) ordinary names refused as the game\'s own: ' + JSON.stringify(lost));
+  if (typeof systemName === 'function' && systemName('Warlord 7') === true && systemName('Tank Ace') === false)
+    ok('(8) systemName is exported from server/display-name.js for its callers and this suite');
+  else fail('(8) systemName is not exported, or answers wrongly');
+}
+
+// ---- 9. NOBODY'S CHOSEN CALLSIGN (round 2, 2026-10-08) -----------------------
+// A typed name shown with no key behind it may not equal an account's chosen
+// callsign after the callsign_key normalisation. keyState is the in-memory
+// index's answer; 'unknown' (not loaded, no store) refuses, and so does a
+// keyState that throws, and so does the DEFAULT, which a caller that forgets to
+// pass one gets. The rules come first: a name they refuse never asks the index.
+{
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const asked = [];
+  const TAKEN = new Set(['viper', 'zoé kite']);
+  const P = createNameProofs({ terms, keyState: (k) => { asked.push(k); return TAKEN.has(k) ? 'taken' : 'free'; } });
+  const r1 = P.typedName('  VIPER ');
+  const r2 = P.typedName('Zo' + 'e' + ACUTE + ' Kite');           // decomposed: the key is the NFC one
+  const r3 = P.typedName('Tank Ace');
+  const keys = asked.slice();
+  asked.length = 0;
+  const r4 = P.typedName('ab');
+  const r5 = P.typedName('Warlord 7');
+  const ruleFirst = asked.length === 0 && same(r4, { ok: false, error: 'length' }) && same(r5, { ok: false, error: 'not_allowed' });
+  if (same(r1, { ok: false, error: 'taken' }) && same(r2, { ok: false, error: 'taken' }) && P.playerName('Viper') === null
+      && same(r3, { ok: true, name: 'Tank Ace', key: 'tank ace' }) && P.playerName('Tank Ace') === 'Tank Ace'
+      && same(keys, ['viper', 'zoé kite', 'tank ace']) && ruleFirst)
+    ok("(9) a typed name that normalises onto an account's key is refused 'taken' and playerName answers null; the index is asked by the callsign_key spelling (case, spaces and NFC folded) and never for a name the rules refuse");
+  else fail('(9) uniqueness: ' + JSON.stringify({ r1, r2, r3, keys, r4, r5, asked }));
+  const U = createNameProofs({ terms, keyState: () => 'unknown' });
+  const T = createNameProofs({ terms, keyState: () => { throw new Error('index down'); } });
+  const D = createNameProofs({ terms });
+  const W = createNameProofs({ terms, keyState: () => 'maybe' });
+  const closed = [U, T, D, W].map((x) => [x.typedName('Tank Ace'), x.playerName('Tank Ace')]);
+  if (closed.every(([v, n]) => same(v, { ok: false, error: 'unavailable' }) && n === null))
+    ok("(9) an index that has not loaded, one that throws, one that answers nonsense and no index at all all refuse 'unavailable': the default name is shown, never one that might be someone else's");
+  else fail('(9) fail closed: ' + JSON.stringify(closed));
+  // THE SET'S RULES DO NOT ASK THE INDEX: its uniqueness is the unique index's,
+  // at the write. checkPlayerName answers the same with every keyState.
+  asked.length = 0;
+  const c1 = P.checkPlayerName('Viper'), c2 = U.checkPlayerName('Viper');
+  if (same(c1, { ok: true, name: 'Viper', key: 'viper' }) && same(c2, c1) && asked.length === 0)
+    ok('(9) checkPlayerName (the Set\'s rules) never asks the index: a held name passes the rules and the write decides');
+  else fail('(9) checkPlayerName asked the index: ' + JSON.stringify({ c1, c2, asked }));
+}
+
+// ---- 10. THE GUEST'S SEAT AND THE REPORTED SEAT (round 2, 2026-10-08) --------
+// guestName is what a squad seat shows for a guest row: what the engine's
+// door would show in a lobby. seatName is the shape-only proof a report puts
+// on the name a lobby seat showed: no blocklist pass (the evidence must
+// survive a term added later), and nothing that could forge a log line.
+{
+  const P = createNameProofs({ terms, keyState: (k) => (k === 'viper' ? 'taken' : 'free') });
+  const U = createNameProofs({ terms, keyState: () => 'unknown' });
+  const term = terms.find((t) => t.length >= 3 && t.length <= 10);
+  const termName = term ? `${term[0].toUpperCase()}${term.slice(1)} Ridge` : null;
+  const g = {
+    rolled: P.guestName('Iron Ridge'), rolledSpaced: P.guestName('  Iron   Ridge '), rolledUnknown: U.guestName('Iron Ridge'),
+    typed: P.guestName('  Tank   Ace '), taken: P.guestName('Viper'), unknown: U.guestName('Tank Ace'),
+    system: P.guestName('CPU 2'), short: P.guestName('G'), none: P.guestName(undefined), term: termName ? P.guestName(termName) : null,
+  };
+  if (g.rolled === 'Iron Ridge' && g.rolledSpaced === 'Iron Ridge' && g.rolledUnknown === 'Iron Ridge' && g.typed === 'Tank Ace'
+      && g.taken === null && g.unknown === null && g.system === null && g.short === null && g.none === null && g.term === null && termName)
+    ok("(10) guestName shows a rolled pair (as the door's second door does, index or no index) and a typed name the guidelines pass and no account holds, normalised; a held, unknown, system, short, missing or blocklisted name is null");
+  else fail('(10) guestName: ' + JSON.stringify({ ...g, term: g.term === null ? null : 'a name' }));
+  const s = {
+    typed: P.seatName('Tank Ace'), held: P.seatName('Viper'), bossSeat: P.seatName('WARLORD-7'),
+    nl: P.seatName('Tank\nAce'), quote: P.seatName('Tank "Ace"'), num: P.seatName(42), nul: P.seatName(null),
+    term: termName ? P.seatName(termName) : null,
+  };
+  if (s.typed === 'Tank Ace' && s.held === 'Viper' && s.bossSeat === null && s.nl === 'Tank Ace' && s.quote === null && s.num === null && s.nul === null && s.term === termName)
+    ok('(10) seatName keeps any name of the callsign shape, a held or blocklisted one included (the evidence stays); a newline can only come out as a space, and a quote, a hyphen and anything not a string are refused');
+  else fail('(10) seatName: ' + JSON.stringify({ ...s, term: s.term === termName ? 'kept' : 'lost' }));
+}
+
+// ---- 11. THE NAME INDEX (server/name-index.js) ------------------------------
+// The in-memory answer keyState gives. Driven with a fake loader: pages in key
+// order, the read stopping at an EMPTY page (never a short one, which a row
+// cap below the page size would make), 'unknown' until the first read lands,
+// the last good set kept when a refresh fails, and a write that lands while a
+// read is out replayed onto what the read returns.
+{
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const pager = (keys, cap = Infinity) => {
+    const calls = [];
+    const fn = async (after, limit) => {
+      calls.push([after, limit]);
+      const from = after === null ? 0 : keys.indexOf(after) + 1;
+      return keys.slice(from, from + Math.min(limit, cap));
+    };
+    return { fn, calls };
+  };
+  const a = pager(['alpha', 'bravo', 'charlie', 'delta', 'echo']);
+  const I = createNameIndex({ load: a.fn, page: 2 });
+  const before = [I.state('alpha'), I.ready];
+  const r = await I.refresh();
+  const after = ['alpha', 'echo', 'foxtrot'].map((k) => I.state(k));
+  if (same(before, ['unknown', false]) && r === true && I.ready && same(after, ['taken', 'taken', 'free']) && I.size === 5
+      && same(a.calls, [[null, 2], ['bravo', 2], ['delta', 2], ['echo', 2]]))
+    ok('(11) unknown until the first read lands; then every key read in pages from the last key of the page before, to an EMPTY page');
+  else fail('(11) load: ' + JSON.stringify({ before, r, after, size: I.size, calls: a.calls }));
+  // A ROW CAP BELOW THE PAGE SIZE: every page comes back short, and the read
+  // must go on to the empty page rather than stop at the first short one.
+  const c = pager(['alpha', 'bravo', 'charlie', 'delta', 'echo'], 2);
+  const C = createNameIndex({ load: c.fn, page: 1000 });
+  await C.refresh();
+  if (C.size === 5 && C.state('echo') === 'taken') ok('(11) a store that caps a page below the size asked for still gives every key: a short page is not the last one');
+  else fail('(11) capped pages: ' + JSON.stringify({ size: C.size, calls: c.calls }));
+  // A FAILED FIRST READ stays unknown and is reported, whether the read throws
+  // or answers something that is not a list.
+  const errs = [];
+  let mode = 'throw';
+  const F = createNameIndex({ load: async () => { if (mode === 'throw') throw new Error('store down'); return 'nope'; }, onError: (e) => errs.push(e.message) });
+  const f1 = await F.refresh();
+  mode = 'junk';
+  const f2 = await F.refresh();
+  if (f1 === false && f2 === false && F.state('viper') === 'unknown' && !F.ready && errs.length === 2 && errs[0] === 'store down' && /not a list/.test(errs[1]))
+    ok('(11) a read that throws or answers something that is not a list is reported and changes nothing: unknown before the first good read');
+  else fail('(11) failures: ' + JSON.stringify({ f1, f2, state: F.state('viper'), errs }));
+  // The last good set survives a failed refresh.
+  const G = createNameIndex({ load: pager(['viper']).fn });
+  await G.refresh();
+  const gGood = G.state('viper');
+  const G2load = { n: 0 };
+  const H = createNameIndex({ load: async (after) => { G2load.n++; if (G2load.n > 2) throw new Error('later'); return after === null ? ['viper'] : []; } });
+  await H.refresh();
+  const h1 = H.state('viper');
+  const h2ok = await H.refresh();
+  const h2 = H.state('viper');
+  if (gGood === 'taken' && h1 === 'taken' && h2ok === false && h2 === 'taken' && H.ready)
+    ok('(11) a refresh that fails keeps the last good set: still exact for every write this process made');
+  else fail('(11) last good set: ' + JSON.stringify({ gGood, h1, h2ok, h2, ready: H.ready }));
+  // A PAGE THAT DOES NOT ADVANCE is an error, never a loop; and the page cap.
+  const why = [];
+  let stuckCalls = 0;
+  const stuck = createNameIndex({ load: async () => { stuckCalls++; return ['same']; }, onError: (e) => why.push(e.message) });
+  const big = createNameIndex({ load: async (after) => [String((Number(after) || 0) + 1)], maxPages: 5, onError: (e) => why.push(e.message) });
+  const stuckOk = await stuck.refresh(), bigOk = await big.refresh();
+  if (stuckOk === false && !stuck.ready && stuckCalls === 2 && bigOk === false && !big.ready
+      && /did not advance/.test(why[0] || '') && /MAX_PAGES/.test(why[1] || ''))
+    ok('(11) a page that does not move past the last key fails on the second page, and a read longer than MAX_PAGES fails too: neither loops or grows');
+  else fail('(11) bounds: ' + JSON.stringify({ stuckOk, stuckCalls, bigOk, why }));
+  // A WRITE THAT LANDS WHILE A READ IS OUT is replayed onto the read: the read
+  // saw 'alpha' and not 'xray', but alpha was given up and xray taken meanwhile.
+  let release;
+  const gate = new Promise((res) => { release = res; });
+  const R = createNameIndex({ load: async (after) => { if (after === null) { await gate; return ['alpha', 'bravo']; } return []; } });
+  const p1 = R.refresh(), p2 = R.refresh();
+  R.add('xray'); R.remove('alpha');
+  const mid = R.state('xray');
+  release(); await p1;
+  if (p1 === p2 && mid === 'unknown' && R.state('xray') === 'taken' && R.state('alpha') === 'free' && R.state('bravo') === 'taken')
+    ok('(11) one read at a time, and a key taken or freed while it was out is replayed onto it: the read cannot undo a write');
+  else fail('(11) replay: ' + JSON.stringify({ same: p1 === p2, mid, x: R.state('xray'), a: R.state('alpha'), b: R.state('bravo') }));
+  // After the read, add and remove act at once.
+  R.add('yankee'); R.remove('bravo');
+  if (R.state('yankee') === 'taken' && R.state('bravo') === 'free') ok('(11) after a read, add and remove take effect at once');
+  else fail('(11) add/remove: ' + JSON.stringify([R.state('yankee'), R.state('bravo')]));
+  // start() reads at once; stop() leaves no timer behind (unref'd or not).
+  let starts = 0;
+  const S = createNameIndex({ load: async () => { starts++; return []; }, refreshMs: 60000, retryMs: 60000 });
+  S.start(); S.start();
+  await new Promise((res) => setTimeout(res, 20));
+  S.stop();
+  if (starts === 1 && S.ready) ok('(11) start() reads once at once (a second start is a no-op), and stop() ends it');
+  else fail('(11) start: ' + JSON.stringify({ starts, ready: S.ready }));
 }
 
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall display-name checks passed');

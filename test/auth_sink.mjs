@@ -101,8 +101,12 @@ const ROWS = {
 const GUEST_ID = '44444444-4444-4444-8444-444444444444';
 // An account section 10 deletes. Only its sockets may change when it goes.
 const DOOMED_ID = '55555555-5555-4555-8555-555555555555';
-const TOKENS = { 'tok-honest': HONEST_ID, 'tok-tampered': TAMPER_ID, 'tok-slow': SLOW_ID, 'tok-slower': HONEST_ID, 'tok-guest': GUEST_ID, 'tok-doomed': DOOMED_ID, 'tok-odd': ODD_ID };
-const ANON = new Set(['tok-guest']);
+// A SECOND ANONYMOUS ACCOUNT, with a profile row but no name (case 11): the
+// target of a report against a guest's typed name, which only the seat proves.
+const NAMELESS_ID = '77777777-7777-4777-8777-777777777777';
+ROWS[NAMELESS_ID] = { id: NAMELESS_ID, callsign: null, friend_code: 'ABC238', callsign_key: null, callsign_set_at: null };
+const TOKENS = { 'tok-honest': HONEST_ID, 'tok-tampered': TAMPER_ID, 'tok-slow': SLOW_ID, 'tok-slower': HONEST_ID, 'tok-guest': GUEST_ID, 'tok-doomed': DOOMED_ID, 'tok-odd': ODD_ID, 'tok-anon2': NAMELESS_ID };
+const ANON = new Set(['tok-guest', 'tok-anon2']);
 // How long the mock GoTrue sits on each delayed token before answering. Long
 // enough that a sign-out, or a second hello, is comfortably ahead of it — and
 // two different delays, so an OLDER verification can settle while a NEWER one
@@ -113,6 +117,7 @@ const DELAY = { 'tok-slow': SLOW_MS, 'tok-slower': SLOWER_MS };
 // ---- Mock Supabase -----------------------------------------------------------
 const MOCK_PORT = 9931, GAME_PORT = 3106;
 const profileHits = [];
+const indexReads = [];
 const reportPosts = [], blockPosts = [];
 // The blocks this mock is actually holding, as `blocker>blocked`. POST adds,
 // DELETE removes and the two GETs read it, so case 8 can block, list and unblock
@@ -173,6 +178,25 @@ mock = http.createServer((req, res) => {
       blockRows.delete(a + '>' + b);
       res.writeHead(204); return res.end();
     }
+    // A SERVER POINTED AT /broken (case 11) gets a 500 for everything: its
+    // name index can never load, which is the fail-closed world.
+    if (u.pathname.startsWith('/broken/')) { res.writeHead(500); return res.end('{}'); }
+    // THE NAME INDEX'S READ (round 2, server/name-index.js through
+    // store.chosenCallsignKeys): every chosen key, in key order, a page past
+    // `gt.` the last. Recorded so case 11 can see the shape on the wire.
+    if (u.pathname === '/rest/v1/profiles' && req.method === 'GET' && u.searchParams.get('select') === 'callsign_key') {
+      indexReads.push(u.search);
+      const after = (u.searchParams.get('callsign_key') || '').replace(/^gt\./, '');
+      const keys = [...new Set(Object.values(ROWS).map((r) => r.callsign_key).filter(Boolean))].sort();
+      const from = /^gt\./.test(u.searchParams.get('callsign_key') || '') ? keys.filter((k) => k > after) : keys;
+      return json(200, from.slice(0, Number(u.searchParams.get('limit')) || 1000).map((k) => ({ callsign_key: k })));
+    }
+    // A Set's write (case 11): return=representation, one row, nothing stored.
+    if (u.pathname === '/rest/v1/profiles' && req.method === 'PATCH') {
+      const id = (u.searchParams.get('id') || '').replace(/^eq\./, '');
+      let b = {}; try { b = JSON.parse(body); } catch {}
+      return json(200, [{ ...(ROWS[id] || { id }), ...b }]);
+    }
     if (u.pathname === '/rest/v1/profiles' && req.method === 'GET') {
       const q = u.searchParams.get('id') || '';
       // profileById asks id=eq.<uuid>; profilesByIds asks id=in.(<uuid>,…). The
@@ -203,6 +227,25 @@ const open = () => new Promise((resolve, reject) => {
   ws.on('error', reject);
 });
 const send = (ws, m) => ws.send(JSON.stringify(m));
+// Case 11 also talks to a second server, on a port of its own.
+const openAt = (port) => new Promise((resolve, reject) => {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+  ws._rx = [];
+  ws.on('message', (raw) => { try { ws._rx.push(JSON.parse(raw)); } catch {} });
+  ws.on('open', () => resolve(ws));
+  ws.on('error', reject);
+});
+const freePort = () => new Promise((resolve) => { const s = http.createServer(); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); }); });
+const waitId = (ws, id, ms = 8000) => new Promise((resolve) => {
+  const t0 = Date.now();
+  const tick = () => {
+    const m = ws._rx.find((x) => x.id === id);
+    if (m) return resolve(m);
+    if (Date.now() - t0 > ms) return resolve(null);
+    setTimeout(tick, 20);
+  };
+  tick();
+});
 const wait = (ws, type, ms = 8000) => new Promise((resolve) => {
   const t0 = Date.now();
   const tick = () => {
@@ -687,6 +730,96 @@ async function presentedName(token, typed) {
     if (still && !still.error) ok('(10) a socket of another account is untouched by the delete');
     else fail('(10) the bystander after the delete: ' + JSON.stringify(still));
     for (const w of [d1, d2, h]) { try { w.close(); } catch {} }
+  }
+
+  // ---- 11. THE NAME INDEX, END TO END (round 2, 2026-10-08) -----------------
+  // server.js builds the name index from the store, asks it at the room
+  // engine's door, and hands it to the social layer with the engine's seat
+  // name. Only a real server can show that wiring: in process the halves can
+  // be joined by hand and pass while server.js joins nothing. A guest's typed
+  // name that is an account's chosen callsign never reaches a seat, nor a
+  // computer's name; a good one does; the guest's check says 'taken' for a held
+  // name and follows a Set made on this server; a report against a guest's
+  // seat records the typed name it showed; and a server whose index can never
+  // load shows no typed name at all.
+  {
+    const presentedAt = async (port, typed, token) => {
+      const ws = await openAt(port);
+      if (token) { send(ws, { type: 'hello', token }); send(ws, { type: 'friends', id: 1 }); await wait(ws, token === 'tok-guest' ? 'social' : 'friends'); }
+      send(ws, { type: 'create', name: typed, skin: 'olive', mode: 'duel' });
+      const lobby = await wait(ws, 'lobby');
+      try { send(ws, { type: 'leave' }); } catch {}
+      try { ws.close(); } catch {}
+      return lobby && lobby.players && lobby.players[0] ? lobby.players[0].name : null;
+    };
+    const check = async (ws, name, id) => { send(ws, { type: 'callsign', op: 'check', name, id }); await sleep(50); return ws._rx.find((m) => m.type === 'callsign' && m.id === id) || (await waitId(ws, id)); };
+    const reads = indexReads.slice();
+    if (reads[0] === '?select=callsign_key&callsign_key=not.is.null&order=callsign_key.asc&limit=1000' && reads.some((r) => /callsign_key=gt\./.test(r)))
+      ok('(11) the server read the name index at boot: every non-null key in key order, then past the last key, to an empty page');
+    else fail('(11) index reads: ' + JSON.stringify(reads));
+    const held = await presentedAt(GAME_PORT, 'marguerite VALE');
+    const good = await presentedAt(GAME_PORT, '  Tank   Ace ');
+    const bot = await presentedAt(GAME_PORT, 'CPU 2');
+    if (isGeneratedCallsign(held) && held !== HONEST && good === 'Tank Ace' && isGeneratedCallsign(bot))
+      ok(`(11) at the door a guest typing an account's chosen callsign gets the default (${JSON.stringify(held)}), so does a computer's name, and a good typed name is shown normalised`);
+    else fail('(11) door: ' + JSON.stringify({ held, good, bot }));
+    const g = await openAt(GAME_PORT);
+    const c1 = await check(g, 'Wren Delacroix', 'c1');
+    const c2 = await check(g, 'Tank Ace', 'c2');
+    // A Set made on this server takes its key at once.
+    const hs = await openAt(GAME_PORT);
+    send(hs, { type: 'hello', token: 'tok-honest' }); send(hs, { type: 'friends', id: 2 }); await wait(hs, 'friends');
+    send(hs, { type: 'callsign', name: 'Kestrel Bay', id: 'set' });
+    const set = await waitId(hs, 'set');
+    // Three checks on one socket: exactly the callsign bucket's three a minute.
+    const c3 = await check(g, 'kestrel bay', 'c3');
+    const kb = await presentedAt(GAME_PORT, 'Kestrel Bay');
+    const word = (m) => (m ? (m.ok ? 'ok' : m.error) : 'none');
+    if (word(c1) === 'taken' && word(c2) === 'ok' && set && set.ok === true && word(c3) === 'taken' && isGeneratedCallsign(kb))
+      ok("(11) a guest's check answers 'taken' for a held name and ok for a free one, and a Set on this server is taken at once: the check and the door both refuse it");
+    else fail('(11) check and Set: ' + JSON.stringify({ c1, c2, set, c3, kb }));
+    // A report against a guest's seat records the typed name it showed.
+    const before = reportPosts.length;
+    const guest = await openAt(GAME_PORT);
+    send(guest, { type: 'hello', token: 'tok-anon2' }); send(guest, { type: 'friends', id: 3 }); await wait(guest, 'social');
+    hs._rx.length = 0;
+    send(hs, { type: 'create', name: HONEST, skin: 'olive', mode: 'ffa', max: 4 });
+    const made = await wait(hs, 'created');
+    hs._rx.length = 0;
+    send(guest, { type: 'join', code: made && made.code, name: 'Tank Ace', skin: 'gold' });
+    const lobby = await wait(hs, 'lobby');
+    const seat = lobby && lobby.players && lobby.players[1];
+    send(hs, { type: 'report', handle: seat && seat.handle, id: 'rep' });
+    const rep = await waitId(hs, 'rep');
+    const row = reportPosts.slice(before).find((r) => r && r.reported === NAMELESS_ID);
+    if (seat && seat.name === 'Tank Ace' && rep && rep.ok === true && row && row.callsign === 'Tank Ace')
+      ok("(11) a report against a guest's seat by handle records the typed name the seat showed, 'Tank Ace', not '(no name)'");
+    else fail('(11) seat report: ' + JSON.stringify({ seat, rep, rows: reportPosts.slice(before) }));
+    for (const w of [g, hs, guest]) { try { send(w, { type: 'leave' }); } catch {} try { w.close(); } catch {} }
+    // FAIL CLOSED: a second server whose every store read fails.
+    const port2 = await freePort();
+    const child2 = spawn(process.execPath, ['server.js'], {
+      cwd: ROOT,
+      env: { ...process.env, PORT: String(port2), SUPABASE_URL: `http://127.0.0.1:${MOCK_PORT}/broken`, SUPABASE_PUBLISHABLE_KEY: 'pk_test', SUPABASE_SECRET_KEY: 'sk_test' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let log2 = '';
+    child2.stdout.on('data', (d) => { log2 += d.toString(); });
+    child2.stderr.on('data', (d) => { log2 += d.toString(); });
+    try {
+      for (let i = 0; i < 100 && !/running at/.test(log2); i++) await sleep(100);
+      for (let i = 0; i < 50 && !/\[names\] index read failed/.test(log2); i++) await sleep(100);
+      const closed = await presentedAt(port2, 'Tank Ace');
+      const rolled = await presentedAt(port2, 'Iron Ridge');
+      const g2 = await openAt(port2);
+      const c4 = await check(g2, 'Tank Ace', 'c4');
+      try { g2.close(); } catch {}
+      if (/\[names\] index read failed/.test(log2) && isGeneratedCallsign(closed) && closed !== 'Tank Ace' && rolled === 'Iron Ridge' && word(c4) === 'unavailable')
+        ok(`(11) a server whose name index cannot load says so on stderr and shows no typed name (the default ${JSON.stringify(closed)} instead) while a rolled pair still shows; the check answers unavailable`);
+      else fail('(11) fail closed: ' + JSON.stringify({ closed, rolled, c4, said: /\[names\]/.test(log2) }));
+    } finally {
+      try { child2.kill('SIGKILL'); } catch {}
+    }
   }
 
   // ---- 7. nothing crashed the host ------------------------------------------

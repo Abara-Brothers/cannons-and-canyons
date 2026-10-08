@@ -398,16 +398,32 @@ async function noFreeTextNames() {
 
   // g. THE DOOR IS THE HOST'S CHECK, and only a string from it opens it.
   //    Installed here exactly as server.js installs it, then taken away again.
+  //    CHANGED (round 2, 2026-10-08): server.js now passes `keyState`, the
+  //    name index's answer to "is this some account's chosen callsign?". This
+  //    suite's server has no Supabase, where server.js answers 'free' for
+  //    every key, so the check is installed with that answer. With no
+  //    keyState at all the default is 'unknown', and the door refuses every
+  //    typed name rather than guess (the second half below). A computer's
+  //    name ('CPU 2') is replaced either way.
   try {
-    setNameCheck(createNameProofs({ terms }).playerName);
+    setNameCheck(createNameProofs({ terms, keyState: () => 'free' }).playerName);
     const w1 = mkLocal(null);
     handleClientMessage(w1, { type: 'create', name: '  Tank   Ace ', skin: 'olive', mode: 'duel' });
     const w2 = mkLocal(null);
     handleClientMessage(w2, { type: 'create', name: 'Iron!', skin: 'olive', mode: 'duel' });
-    if (nameIn(w1) === 'Tank Ace' && nameIn(w2) !== 'Iron!' && isGeneratedCallsign(nameIn(w2)))
-      step('with server.js\'s check installed in process, a good typed name is shown normalised and a bad one is replaced');
-    else fail(`installed check: ${JSON.stringify([nameIn(w1), nameIn(w2)])}`);
-    leave(w1, w2);
+    const w2b = mkLocal(null);
+    handleClientMessage(w2b, { type: 'create', name: 'CPU 2', skin: 'olive', mode: 'duel' });
+    if (nameIn(w1) === 'Tank Ace' && nameIn(w2) !== 'Iron!' && isGeneratedCallsign(nameIn(w2)) && isGeneratedCallsign(nameIn(w2b)))
+      step('with server.js\'s check installed in process, a good typed name is shown normalised, and a bad one and a computer\'s name are replaced');
+    else fail(`installed check: ${JSON.stringify([nameIn(w1), nameIn(w2), nameIn(w2b)])}`);
+    leave(w1, w2, w2b);
+    setNameCheck(createNameProofs({ terms }).playerName);
+    const w1b = mkLocal(null);
+    handleClientMessage(w1b, { type: 'create', name: 'Tank Ace', skin: 'olive', mode: 'duel' });
+    if (nameIn(w1b) !== 'Tank Ace' && isGeneratedCallsign(nameIn(w1b)))
+      step('with no name index to ask (keyState left out), the check refuses even a good typed name: the default name is shown');
+    else fail(`unknown keyState opened the door: ${JSON.stringify(nameIn(w1b))}`);
+    leave(w1b);
     // A check that says yes to a name isProfane refuses is overruled at the
     // door: this file's own lists stand behind every door.
     setNameCheck((raw) => String(raw));
