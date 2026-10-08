@@ -2023,7 +2023,8 @@ export function createSocial({
   // THE THIRD GRACE WINDOW IN THIS BUILD, AND IT IS NEITHER OF THE OTHER TWO.
   // public/room-engine.js holds a per-SEAT forfeit timer (RESUME_GRACE_MS,
   // 120 s, or ASYNC_GRACE_MS, 24 h, for an async duel) and a whole-ROOM hold
-  // (EMPTY_ROOM_GRACE_MS, 30 min). This one is about a MEMBERSHIP: a player
+  // (EMPTY_ROOM_GRACE_MS, 30 min, or SOLO_HOLD_MS, 24 h, for a match with no
+  // other human in it). This one is about a MEMBERSHIP: a player
   // who drops mid-match keeps their seat under the engine's window and their
   // squad row under this one, and the two expire independently, on purpose.
   // Nothing here touches a room.

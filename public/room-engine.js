@@ -77,7 +77,8 @@ export function setFaultSink(fn) { faultSink = typeof fn === 'function' ? fn : (
 // Hitting MAX_ROOMS refuses every new match with a player-visible message and,
 // until 2026-08-18, recorded NOTHING server-side — the stated residual of
 // RISK-014. `rooms` on /health was the only external signal, and it over-counts
-// live play (empty rooms are held 30 minutes, async duels 24 hours), so the one
+// live play (empty rooms are held 30 minutes, async duels and a lone player's
+// match against the computer 24 hours), so the one
 // number available was also the wrong one. Announce it instead; the host routes
 // it to the same error_reports table as any other server fault.
 let capacitySink = () => {};
@@ -150,13 +151,26 @@ const RESUME_GRACE_MS = Number(env.RESUME_GRACE_MS) || 120000;
 // Async games: a private duel holds a disconnected seat for a DAY — take your
 // turn whenever, your opponent's push nudge brings them back.
 const ASYNC_GRACE_MS = Number(env.ASYNC_GRACE_MS) || 24 * 60 * 60 * 1000;
-// How long a room with NO connected human survives before it is reclaimed.
-// This is what lets a solo player (vs CPU, boss, aliens, golf) swap apps or
-// let the phone sleep and come back to the exact same battle — these rooms
-// used to be torn down the INSTANT the socket closed, so the resume grace
-// never applied to them at all. Room state is a few KB of memory; holding it
-// half an hour costs nothing and nobody else is waiting on it.
+// How long a room with NO connected human survives before it is reclaimed,
+// when more than one human plays in it. This is what let a solo player (vs
+// CPU, boss, aliens, golf) swap apps or let the phone sleep and come back to
+// the exact same battle — these rooms used to be torn down the INSTANT the
+// socket closed, so the resume grace never applied to them at all. Since
+// 2026-10-07 a room with ONE human waits a day instead (SOLO_HOLD_MS below),
+// so this half hour now governs only a room two or more humans played in,
+// once all of them have gone.
 const EMPTY_ROOM_GRACE_MS = Number(env.EMPTY_ROOM_GRACE_MS) || 30 * 60 * 1000;
+// A MATCH NOBODY ELSE IS PLAYING WAITS A DAY FOR ITS PLAYER (owner, 2026-10-07:
+// "the server keeps any match with no other HUMAN players for 24 hours in every
+// mode; reopen -> back on your turn"). Duel or free-for-all against the
+// computer, a Boss or Alien raid alone, a round of golf alone. The half hour
+// above lost an FFA against bots to an hour away: the phone came back to
+// "Reconnecting…", the room was gone, and the player was put on the menu. A
+// player who is the only human has kept nobody waiting, so there is no one to
+// protect by ending it sooner. Holding this many rooms for a day is bounded
+// twice over: one held match per player, and MAX_HELD_ROOMS server-wide (both
+// at holdSolo, below MAX_ROOMS). Overridable so a suite can shorten it.
+const SOLO_HOLD_MS = Number(env.SOLO_HOLD_MS) || 24 * 60 * 60 * 1000;
 
 // Cosmetic tank paints (client renders them; validate ids here).
 const SKINS = ['olive', 'desert', 'jungle', 'midnight', 'arctic', 'gold'];
@@ -615,6 +629,21 @@ function releasePriorRoom(ws) {
     ws.seat = null;
     return;
   }
+  // A MATCH NO OTHER HUMAN PLAYS IN is simply ended, for the reason below.
+  // handleClose would first hold it for a day (holdSolo), and the hold's bounds
+  // act at once: at MAX_HELD_ROOMS it would end the match another player has
+  // been away from longest, for a room about to be reclaimed two lines later.
+  // The one other thing handleClose did on this path still happens: a socket
+  // that queued for a quick match and then started something else leaves the
+  // queue, so the next quick match is never paired with a player who is
+  // already in a new battle (which would end that battle for them).
+  if (prev.state === 'playing' && soloHuman(prev) === prev.players[seat]) {
+    if (waiting === ws) waiting = null;
+    teardown(prev);
+    ws.roomCode = null;
+    ws.seat = null;
+    return;
+  }
   handleClose(ws);
   // handleClose arms the 30-minute empty-room grace, because it models a player
   // who DISCONNECTED and may come back. This socket did not disconnect — it
@@ -648,9 +677,70 @@ function releasePriorRoom(ws) {
 // been cautious in the meantime. For scale: production has never exceeded a
 // handful of concurrent rooms.
 const MAX_ROOMS = Number(env.MAX_ROOMS) || 250;
+// HOW MANY MATCHES MAY WAIT A DAY FOR A PLAYER WHO WENT AWAY (SOLO_HOLD_MS),
+// server-wide. Two fifths of MAX_ROOMS: 100 at the default.
+//
+// The bound that matters is CAPACITY, not memory. A held match sits in the same
+// `rooms` Map that MAX_ROOMS caps, so without this a day of players simply
+// closing the app — each match now kept 24 hours where it used to be kept 30
+// minutes — could fill all 250 places, and then every new match on the server
+// is refused for the rest of the day. At 100, at least 150 places always stay
+// for live play. Memory is inside the budget MAX_ROOMS was sized for already:
+// held matches are a subset of those 250, and an idle one costs no more than the
+// ~1.4 MiB a live one was measured at (100 x 1.4 = 140 MiB of the ~350 MiB that
+// budget allows). And it is far above real demand: production has never held
+// more than a handful of rooms at once, and this is 100 players' matches, one
+// each as far as the server can tell players apart (releaseHeld, holdSolo).
+// Past the cap the OLDEST held match goes first: it is the one whose player has
+// been away longest, the least likely to come back. Overridable, like
+// MAX_ROOMS.
+const MAX_HELD_ROOMS = Number(env.MAX_HELD_ROOMS) || Math.max(1, Math.floor(MAX_ROOMS * 2 / 5));
+
+// The one human seat of a room no other human plays in, or null. Bots are not
+// players here: a duel or free-for-all against the computer, a Boss or Alien
+// raid alone and a round of golf alone all have exactly one.
+function soloHuman(room) {
+  let only = null;
+  for (const p of room.players) {
+    if (!p || p.bot) continue;
+    if (only) return null;            // a second human: the room keeps the multiplayer rules
+    only = p;
+  }
+  return only;
+}
+
+// ONE HELD MATCH PER PLAYER, AT CREATE (the second half is in holdSolo). A new
+// match by the same player ends the one the server is holding for them, so a
+// player cannot leave a trail of day-long rooms behind them. The player is
+// known two ways, either is enough:
+//   * THE RESUME TOKEN their device kept for that match (`held`). app.js sends
+//     it with a create or a vs-Computer start, because 'start' is about to
+//     overwrite the device's record and nothing could ever resume the old match
+//     again. Only the server and that device have ever seen the token.
+//   * THE ACCOUNT the host proved for this socket (ws.userId), which handleClose
+//     carried onto the held seat. It is never anything a client sends.
+// Only a match that is actually HELD is ended (heldSince: its one human gone,
+// nobody else in it). A match still being played, or a room other humans
+// share, is never touched here, whatever token is presented: holdSolo is the
+// only writer of heldSince and a resume, the only way back into a seat, clears
+// it.
+function releaseHeld(ws, held) {
+  const token = typeof held === 'string' && held ? held : null;
+  const acct = (ws && ws.userId) || null;
+  if (!token && !acct) return;
+  for (const r of [...rooms.values()]) {
+    if (!r.heldSince) continue;
+    const p = soloHuman(r);
+    if (!p) continue;                 // holdSolo marks only a one-human room; never trust that blindly
+    if ((token && p.token === token) || (acct && seatAccount(p) === acct)) teardown(r);
+  }
+}
 
 function createRoom(hostWs, name, skin, opts = {}) {
   releasePriorRoom(hostWs);
+  // Before the capacity check, so the place the old match held is free for the
+  // new one.
+  releaseHeld(hostWs, opts.held);
   if (rooms.size >= MAX_ROOMS) {
     // Rate-limited by the host, not here: at the cap this fires on EVERY
     // attempt, and a refusal storm must not become its own outage.
@@ -1818,8 +1908,9 @@ function handleMove(room, seat, dir) {
 
 // ---- Disconnect / resume -----------------------------------------------------
 // Accidental disconnects (tab closed, network blip) keep the seat reserved for
-// RESUME_GRACE_MS; the player can resume with their token. Explicit 'leave'
-// tears the room down immediately.
+// RESUME_GRACE_MS; the player can resume with their token. A player with no
+// other human in the match keeps it for SOLO_HOLD_MS (holdSolo). Explicit
+// 'leave' tears the room down immediately.
 function teardown(room, notify) {
   clearTimeout(room.clock);
   clearTimeout(room.botTimer);
@@ -1887,11 +1978,52 @@ function handleClose(ws) {
   // a phone sleep must never cost the match. Any resume cancels the hold. An
   // async duel keeps its full day: both players being offline between turns
   // is that mode's NORMAL state, and the push nudge is what brings them back.
+  // A match with no other human waits a day too (holdSolo).
   if (!room.players.some(p => p && !p.bot && p.connected)) {
     clearTimeout(room.emptyTimer);
+    if (!otherHumans) return holdSolo(room, player);
     room.emptyTimer = safeTimeout(() => teardown(room),
       room.asyncOk ? ASYNC_GRACE_MS : EMPTY_ROOM_GRACE_MS);
   }
+}
+
+// THE MATCH WAITS FOR ITS ONE PLAYER, for SOLO_HOLD_MS (a day). The forfeit
+// scuttle above was already skipped for such a room; this is the rest of
+// "nothing happens while you are away":
+//   * NO CPU MOVES. scheduleBot already refuses to start a CPU's turn with
+//     nobody watching, but a CPU that was part-way through one when the player
+//     left still had its think, walk or aim-and-fire timer armed, and finished
+//     the turn on its own — a shot the player never saw, which could end the
+//     match. Those timers stop here. A resume calls scheduleBot, which starts
+//     that CPU's turn again from where its tank now stands, as it always has.
+//     A shot already fired still lands and hands the turn on, as it would have.
+//   * THE ROOM IS KEPT for SOLO_HOLD_MS, then reclaimed if nobody came back.
+// `heldSince` marks the room as held, for the two bounds below and for
+// releaseHeld. handleResume clears it.
+//
+// TWO BOUNDS, both applied the moment a room becomes held:
+//   * ONE HELD MATCH PER PLAYER. The same account already holding another
+//     match loses that one: releaseHeld covers a NEW match, this covers two
+//     matches that were both live and then both left (a phone and a tablet).
+//     A guest's two devices are not known to be one player; each guest device
+//     is held to one by its resume token at create instead.
+//   * MAX_HELD_ROOMS server-wide, the matches held longest going first. This
+//     room is the newest, so it is never the one evicted.
+// An evicted room has no socket to tell. Its player hears on their next
+// resume, which is refused: app.js says "That match ended while you were away."
+function holdSolo(room, player) {
+  clearTimeout(room.botTimer); clearInterval(room.botWalker);
+  room.heldSince = Date.now();
+  room.emptyTimer = safeTimeout(() => teardown(room), SOLO_HOLD_MS);
+  const acct = seatAccount(player);
+  const others = [];
+  for (const r of [...rooms.values()]) {
+    if (r === room || !r.heldSince) continue;
+    if (acct && seatAccount(soloHuman(r)) === acct) teardown(r);
+    else others.push(r);
+  }
+  others.sort((a, b) => a.heldSince - b.heldSince);
+  while (others.length && others.length + 1 > MAX_HELD_ROOMS) teardown(others.shift());
 }
 
 function handleResume(ws, msg) {
@@ -1910,6 +2042,7 @@ function handleResume(ws, msg) {
   const stale = player.ws;
   clearTimeout(player.dropTimer);
   clearTimeout(room.emptyTimer);       // somebody's home again — cancel the hold
+  room.heldSince = 0;                  // and it no longer counts against MAX_HELD_ROOMS
   player.ws = ws; player.connected = true;
   // A reconnecting socket that already said hello brings its identity along;
   // one that has not yet keeps the identity carried over at disconnect.
@@ -1962,7 +2095,7 @@ export function handleClientMessage(ws, msg) {
 
   switch (msg.type) {
     case 'create': {
-      const r = createRoom(ws, msg.name, msg.skin, { mode: msg.mode, max: msg.max });
+      const r = createRoom(ws, msg.name, msg.skin, { mode: msg.mode, max: msg.max, held: msg.held });
       if (!r) { send(ws, { type: 'joinError', reason: 'The server is at capacity. Try again shortly.' }); break; }
       r.players[0].loadout = sanitizeLoadoutFor(r.mode, msg.loadout);
       if (r.mode === 'golf') r.tees = sanitizeTees(msg.tees);
@@ -2042,7 +2175,7 @@ export function handleClientMessage(ws, msg) {
       // createRoom ignores opts.max for every non-ffa mode and clamps ffa to
       // 2..4, so the seat loop below runs once for a duel.
       const mode = msg.mode === 'ffa' ? 'ffa' : 'duel';
-      const r = createRoom(ws, msg.name, msg.skin, { mode, max: msg.max });
+      const r = createRoom(ws, msg.name, msg.skin, { mode, max: msg.max, held: msg.held });
       if (!r) { send(ws, { type: 'joinError', reason: 'The server is at capacity. Try again shortly.' }); break; }
       r.players[0].loadout = sanitizeLoadout(msg.loadout);
       r.vsBot = true;                       // scheduleBot refuses to move a bot without it

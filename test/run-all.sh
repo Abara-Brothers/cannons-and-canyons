@@ -181,6 +181,13 @@ run ffa_bots_pace node test/ffa_bots_pace.mjs
 # The exact offline entry points: boss/aliens/golf create+startMatch with one
 # commander, a one-seat ffa create refused, the ffa 'ai' frame starting at once.
 run solo_engine node test/solo_engine.mjs
+# A match with no other human waits a day for its player (owner, 2026-10-07),
+# on the REAL engine with a FAKE CLOCK, so a day is 24 real hours: every mode
+# kept 23 hours with nothing moving and resumed on the player's turn, gone at
+# 24 hours and 1 ms, no CPU finishing a turn while nobody watches, one held
+# match per player, the server-wide cap, and a room with another human on
+# today's rules. Headless: no server, no Chrome.
+run solo_hold node test/solo_hold.mjs
 # Artillery Golf for four, in-process: seat cap (a one-seat room tees off on
 # create), the honour rule (farthest ball plays next), forfeits inside a
 # four-player round, the winner rule, and real four-, three- and two-player
@@ -365,6 +372,14 @@ else
   # frame that was merely attempted. Every CDP call carries a deadline. Skips
   # without Chrome.
   run deeplink node test/deeplink.mjs
+  # Coming back to a match against the computer, in a real page (owner,
+  # 2026-10-07): a free-for-all closed past the old empty-room hold resumes
+  # onto the player's turn; past the day, after a deploy, or with session
+  # storage refused, the menu says "That match ended while you were away."; a
+  # new start lets go of the held match by its token; and the notice is
+  # legible inside the safe area at four phone sizes. Self-hosted on its own
+  # free ports (it restarts its own server once). Skips without Chrome.
+  run solo_resume node test/solo_resume.mjs
   # SECOND client-side suite, and the only one that looks at LAYOUT. Drives the
   # real bundle in headless Chrome at 14 exact viewports and diffs the measured
   # geometry against test/fixtures/layout-baseline.json. It is a change

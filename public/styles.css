@@ -2846,6 +2846,34 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
 #pmenu .pmg:hover{border-color:#54c8ff;color:#fff;background:rgba(84,200,255,.12)}
 #pmenu .pmg.on{border-color:#ff8b8b;color:#fff;background:rgba(255,139,139,.16)}
 #pmenu .pmg[disabled]{opacity:.45;cursor:default}
+
+/* ---- the notice: a match that ended while the player was away ------------
+   (owner, 2026-10-07; bay.js mgOpen). An #app-level layer over the whole page,
+   like the player menu above and in its stacking context. z 85: over the player
+   menu (80) whichever of the two was created first, and over the policy panel
+   (#docp, 75), under the toast (90). It is never up behind the launch's doors
+   (intro.js, 89): bay.js draws it only once they have gone (mgRaise). One
+   sentence at headline size and OK. OK is the bay's orange, as Launch is, and
+   at least 44px tall, Apple's minimum touch target, at every phone size. The
+   card is centred and narrower than any phone's safe width, so neither the
+   Dynamic Island nor the home indicator ever reaches it. */
+#mgone{position:fixed;inset:0;z-index:85;display:grid;place-items:center;padding:calc(12 * var(--u));
+  background:rgba(3,5,10,.66);backdrop-filter:blur(6px);
+  font-family:Barlow,system-ui,sans-serif;color:#eaf0ff;-webkit-font-smoothing:antialiased}
+#mgone[hidden]{display:none}
+#mgone *{margin:0;padding:0;box-sizing:border-box}
+#mgone .mgw{width:calc(380 * var(--u));max-width:100%;max-height:100%;overflow-y:auto;border-radius:calc(8 * var(--u));
+  border:1px solid rgba(140,168,214,.3);background:rgba(13,17,27,.97);text-align:center;
+  padding:calc(22 * var(--u)) calc(22 * var(--u)) calc(18 * var(--u));box-shadow:0 calc(18 * var(--u)) calc(46 * var(--u)) rgba(0,0,0,.6)}
+#mgone .mgh{font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:calc(22 * var(--u));line-height:1.2;
+  letter-spacing:.02em;color:#eef3ff}
+#mgone .mgr{display:flex;justify-content:center;margin-top:calc(18 * var(--u))}
+#mgone .mgo{min-width:calc(140 * var(--u));height:max(44px, calc(44 * var(--u)));padding:0 calc(26 * var(--u));border:0;
+  border-radius:calc(5 * var(--u));cursor:pointer;background:linear-gradient(180deg,#ffa055,#ee6a1f);color:#2a1102;
+  font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:calc(18 * var(--u));letter-spacing:.1em;text-transform:uppercase;
+  box-shadow:0 calc(12 * var(--u)) calc(26 * var(--u)) calc(-12 * var(--u)) rgba(255,122,46,.8)}
+#mgone .mgo:hover{filter:brightness(1.08)}
+#mgone .mgo:focus-visible{outline:2px solid #eef3ff;outline-offset:2px}
 /* The in-match card's name is now a row: the text truncates, the menu does not. */
 .pname{display:flex;align-items:center;gap:6px}
 .pnm{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

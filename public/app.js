@@ -798,7 +798,8 @@ const pointers = new Map();
 let pinchStart = null;
 
 // ---------------------------------------------------------------------------
-// Resume support — an accidental disconnect keeps your seat for 2 minutes.
+// Resume support — an accidental disconnect keeps your seat for 2 minutes, and
+// a match with no other human in it waits a day (room-engine.js holdSolo).
 // ---------------------------------------------------------------------------
 function saveResume(code, token) {
   // A LOCAL match must never touch this record. Its room lives in this page's
@@ -819,6 +820,46 @@ function clearResume() {
   // holding for them — an async duel holds it for a full day.
   if (S.local) return;
   try { localStorage.removeItem('cc_resume'); } catch {}
+}
+// A NEW MATCH LETS GO OF THE ONE THE SERVER IS HOLDING (2026-10-07). The server
+// keeps a match with no other human in it for a day after its player goes, and
+// keeps one such match per player (room-engine.js holdSolo and releaseHeld).
+// This device's record names the match it holds for us, and a create or a
+// vs-Computer start is about to replace that record on 'start', after which
+// nothing could ever resume the old match. So the frame carries the record's
+// token as `held`, the server ends that match at once, and the record goes now,
+// because it names a match that is ending. Not during a match (the record is
+// that match's own), not offline (the local engine holds nothing for anybody),
+// and only these two frames: a join or a quick match takes a seat in somebody
+// else's room. A copy, so the caller's frame object is never changed:
+// pendingIntent is compared by identity.
+function withHeld(m) {
+  if (S.local || S.playing || !m || (m.type !== 'create' && m.type !== 'ai')) return m;
+  const r = loadResume();
+  if (!r || typeof r.token !== 'string' || !r.token) return m;
+  clearResume();
+  return { ...m, held: r.token };
+}
+// A MATCH THAT ENDED WHILE THE PLAYER WAS AWAY IS SAID SO ON THE MENU (owner,
+// 2026-10-07: "a clear 'that match ended while you were away' message instead
+// of a silent kick"). A resume the server refused means the room is gone: a
+// server update or restart, the day it was held for has passed, or it was ended
+// to make room (room-engine.js MAX_HELD_ROOMS). bay.js owns the notice and reads
+// CC_MATCH_GONE when it loads, so a notice raised before the bay exists (boot)
+// is not lost; the event is for one raised after.
+const MATCH_GONE = 'That match ended while you were away.';
+window.CC_MATCH_GONE = false;
+function matchGone() {
+  window.CC_MATCH_GONE = true;
+  document.dispatchEvent(new Event('cc:matchgone'));
+}
+// A refusal that lands MID-MATCH goes home the way every exit from a match
+// does, on a fresh page, so the notice has to cross that reload: a session
+// flag, read once by boot. sessionStorage, not localStorage: it belongs to this
+// reload and must never greet a launch days later.
+const MATCH_GONE_KEY = 'cc_match_gone';
+function carryMatchGone() {
+  try { sessionStorage.setItem(MATCH_GONE_KEY, '1'); return true; } catch { return false; }
 }
 
 // ---------------------------------------------------------------------------
@@ -1571,7 +1612,7 @@ function connect() {
   ws.onerror = () => {};
   ws.onmessage = (e) => { let m; try { m = JSON.parse(e.data); } catch { return; } S.msgCount = (S.msgCount || 0) + 1; handle(m); };
 }
-function sendMsg(m) { if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify(m)); }
+function sendMsg(m) { if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify(withHeld(m))); }
 
 // ---------------------------------------------------------------------------
 // Social: friends, blocks, reports and CHOSEN callsigns
@@ -2890,11 +2931,17 @@ function handle(m) {
       clearResume();
       // The room is gone (ended, or reclaimed after a very long absence).
       // Leaving the player staring at a frozen battlefield with dead buttons
-      // was the worst outcome of all — say so and go home cleanly.
+      // was the worst outcome of all — go home cleanly, and SAY SO ON THE MENU
+      // (matchGone): a toast that flashed for a second and a half over
+      // "Reconnecting…" before the page reloaded read as being thrown out.
       if (S.playing) {
-        showToast('That battle has ended.');
-        setTimeout(() => location.reload(), 1600);
+        // Home is a fresh page, as every exit from a match is; the notice
+        // crosses the reload in a session flag (carryMatchGone). Without
+        // session storage it cannot, so the old toast says it instead.
+        if (carryMatchGone()) location.reload();
+        else { showToast(MATCH_GONE); setTimeout(() => location.reload(), 1600); }
       } else {
+        matchGone();
         // The seat a notification tap waited on is gone, so the tap goes now,
         // once, with the record already cleared (pendingPushTap).
         replayPushTap();
@@ -8833,6 +8880,12 @@ function boot() {
   // the device's to keep, and a sign-out gives that device its one default.
   if (hadName && !ownName() && rolledPair(savedName())) { try { localStorage.setItem(OWN_NAME_KEY, savedName()); } catch {} }
   $('muteBtn').innerHTML = Audio.muted ? UI_IC.speakerOff : UI_IC.speakerOn;
+  // A MATCH THAT ENDED WHILE THE PLAYER WAS AWAY, found by a resume refused
+  // mid-match just before this page was reloaded ('resumeError' above). Read
+  // once and removed, so a later reload in this tab says nothing.
+  try {
+    if (sessionStorage.getItem(MATCH_GONE_KEY)) { sessionStorage.removeItem(MATCH_GONE_KEY); matchGone(); }
+  } catch { /* no session storage: carryMatchGone could not have set it */ }
   buildSkinRow();
   // ONE PARSER, and the legacy field is prefilled for a ROOM link only: that
   // field is #codeInput, it feeds $('joinBtn').onclick, and a squad code put
@@ -8852,8 +8905,9 @@ function boot() {
   // deepLink() has already chosen between ?room= and ?squad=; a held seat beats
   // both. One principle decides all three -- THE MOST PERISHABLE CLAIM WINS:
   //   1. cc_resume: a seat a server is holding RIGHT NOW, for RESUME_GRACE_MS
-  //      (120 s; ASYNC_GRACE_MS, 24 h, for an async duel). Miss it and the
-  //      player forfeits a match in progress.
+  //      (120 s; ASYNC_GRACE_MS, 24 h, for an async duel; SOLO_HOLD_MS, 24 h,
+  //      for a match with no other human). Miss it and the player forfeits a
+  //      match in progress.
   //   2. ?room=: a room is joinable only while its state is `waiting`, and the
   //      lobby is filling as the link is being read.
   //   3. ?squad=: a squad persists until its last member leaves or the server

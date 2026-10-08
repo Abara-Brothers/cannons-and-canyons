@@ -46,6 +46,7 @@ const G = {
   get TANK_R()        { return typeof TANK_R        !== 'undefined' ? TANK_R        : undefined; },
   get REOPEN()        { return typeof REOPEN        !== 'undefined' ? REOPEN        : undefined; },
   get BOOT_CLAIM()    { return typeof BOOT_CLAIM    !== 'undefined' ? BOOT_CLAIM    : undefined; },
+  get MATCH_GONE()    { return typeof MATCH_GONE    !== 'undefined' ? MATCH_GONE    : undefined; },
 };
 const fn = (name) => (typeof window[name] === 'function' ? window[name] : null);   // function declarations live on window
 const has = (name) => G[name] !== undefined || !!fn(name);
@@ -4310,6 +4311,80 @@ document.addEventListener('keydown', (e) => {
 // router, so leaving a lobby, finishing a match and going back to the bay all
 // pass through here — and a seat handle is dead the moment its room is.
 if (fn('showScreen')) { const orig = showScreen; showScreen = function () { pmClose(); return orig.apply(this, arguments); }; }
+
+/* ---- a match that ended while the player was away ------------------------ */
+// THE NOTICE (owner, 2026-10-07: "a clear 'that match ended while you were
+// away' message instead of a silent kick"). app.js raises it when the server
+// refuses a resume because the room is gone (matchGone), and this draws it on
+// the menu: one sentence and OK, over the whole page, until the player has
+// seen it. A sheet, not a toast: a toast is up for under two seconds, and this
+// lands while the menu is still settling from a launch or a reload, which is
+// exactly when a player is not reading a pill at the top of the screen.
+//
+// AN #app-LEVEL LAYER, like the player menu (pmHost) and for its reason: it
+// must sit over whatever is on stage, in the toast's stacking context. A match
+// starting under it (a notification tap that waited on the refused resume, and
+// went once it was refused) takes it down: the battlefield is the newer news.
+// OK, Escape and a tap outside the card all close it, and it never comes back
+// by itself: it opens only on app.js's event, or once as this file loads.
+// Closing hands the keyboard back to wherever it was, as the player menu does.
+//
+// NEVER OVER THE LAUNCH'S DOORS. On a launch with a held seat the quick doors
+// (intro.js) stay shut until the resume is answered, and a refusal lets them
+// open onto home. A sheet drawn while they are still shut would sit on the
+// launch picture, a sentence on a closed door, before the menu it belongs to
+// is even there. So a notice raised while the doors are up waits (mgWait) and
+// is drawn when intro.js says they have gone (cc:doorsgone), over the menu
+// they opened onto.
+let mgEl = null, mgFrom = null, mgWait = false;
+function mgRaise() {
+  if (window.CC_DOORS_UP) { mgWait = true; return; }
+  mgOpen();
+}
+function mgOpen() {
+  if (!mgEl || mgEl.hidden) mgFrom = (document.activeElement && document.activeElement !== document.body) ? document.activeElement : null;
+  if (!mgEl) {
+    mgEl = document.createElement('div');
+    mgEl.id = 'mgone';
+    mgEl.setAttribute('role', 'alertdialog');
+    mgEl.setAttribute('aria-modal', 'true');
+    mgEl.setAttribute('aria-labelledby', 'mgoneH');
+    mgEl.addEventListener('click', (e) => {
+      if ((e.target.closest && e.target.closest('[data-mg]')) || !(e.target.closest && e.target.closest('.mgw'))) mgClose();
+    });
+    ($('app') || document.body).appendChild(mgEl);
+  }
+  // The words are app.js's (MATCH_GONE), the one copy of them.
+  mgEl.innerHTML = '<div class="mgw"><p class="mgh" id="mgoneH">' + esc(G.MATCH_GONE || '') + '</p>'
+    + '<div class="mgr"><button class="mgo" data-mg="ok">OK</button></div></div>';
+  mgEl.hidden = false;
+  // The keyboard goes to OK, so Enter or Space puts it away.
+  const b = mgEl.querySelector('.mgo');
+  if (b) b.focus();
+}
+// A notice still waiting for the doors is dropped too: what took it down (a
+// match starting) is newer than it.
+function mgClose() {
+  mgWait = false;
+  if (!mgEl || mgEl.hidden) return;
+  mgEl.hidden = true; mgEl.innerHTML = '';
+  const back = mgFrom; mgFrom = null;
+  if (back && back.isConnected && typeof back.focus === 'function') back.focus();
+}
+document.addEventListener('cc:matchgone', mgRaise);
+document.addEventListener('cc:doorsgone', () => { if (mgWait) mgOpen(); });
+// ESCAPE PUTS AWAY THIS NOTICE AND NOTHING ELSE. It is the top layer, so the
+// key is taken in the capture phase, before the player menu's, the invite
+// sheet's, the policy panel's and app.js's own Escape handlers see it: one
+// press, one layer, the rule the player menu's Escape keeps (above). It acts
+// only while the notice is up, so every other Escape in the app is untouched.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !mgEl || mgEl.hidden) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  mgClose();
+}, true);
+if (fn('showScreen')) { const orig = showScreen; showScreen = function (name) { if (name === 'game') mgClose(); return orig.apply(this, arguments); }; }
 // The landscape keyboard, for the Friends screen's two fields. The lift is
 // measured against the box the field sits in, so the error line under it stays
 // visible; leaving the field, or the screen, puts the frame back down.
@@ -4449,4 +4524,8 @@ if (has('showScreen')) {
   showScreen('home');
   if (reopen && reopen.scr !== 'home') { stack.push(...reopen.path); render(reopen.scr); }
 }
+// A notice app.js raised before this file had loaded: boot's, for a match whose
+// resume was refused just before a reload, or a refusal that landed while this
+// file was still on its way.
+if (window.CC_MATCH_GONE) mgRaise();
 })();

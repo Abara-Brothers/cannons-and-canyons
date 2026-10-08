@@ -1209,6 +1209,10 @@
       } else removeOverlay();
     } catch (e) { try { removeOverlay(); } catch (x) {} }
     releaseLaunch();
+    // THE DOORS ARE GONE, for what waited not to be drawn over them: bay.js's
+    // notice of a match that ended while the player was away (mgRaise), raised
+    // when a held seat's resume is refused while the quick doors wait for it.
+    try { window.CC_DOORS_UP = false; document.dispatchEvent(new Event('cc:doorsgone')); } catch (e) {}
   }
 
   // ---------------------------------------------------------------------------
@@ -1397,6 +1401,9 @@
   // plugin never answers), on the web at the first visible frame.
   const boot = guard(function () {
     status.state = 'running';
+    // Published for bay.js, which holds a notice back while the doors are up
+    // (end() puts this back and says so).
+    window.CC_DOORS_UP = true;
     hadInert = !!bay.inert;
     bay.inert = true;
     app.appendChild(cv);

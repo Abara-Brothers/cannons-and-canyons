@@ -25,7 +25,10 @@
 // but the sealed doors -- the launch image's own frame 0 -- opening in about
 // half a second onto the last view or the match (faded under reduced motion);
 // after ten minutes the intro again; and the native launch hold let go once on
-// every path.
+// every path. A held seat the server no longer has opens onto home, and only
+// once the doors have gone does home say "That match ended while you were
+// away."; a match against the computer comes back from past the old empty-room
+// hold (owner, 2026-10-07, item 21).
 //
 // Self-hosted (its own server and Chrome on free ports, never 3000). Skips
 // cleanly (exit 3) without Chrome, like every other client-side suite.
@@ -77,7 +80,12 @@ function check(name, ok, detail) {
 
 // ---- server and browser -----------------------------------------------------
 const appPort = await freePort();
-srv = spawn('node', ['server.js'], { cwd: ROOT, env: { ...process.env, PORT: String(appPort) }, stdio: ['ignore', 'pipe', 'pipe'] });
+// EMPTY_ROOM_GRACE_MS is cut to a second so that V9's held seat is brought
+// back from past the hold that used to end a match against the computer (half
+// an hour, by default): only the day a match with no other human now waits
+// (room-engine.js SOLO_HOLD_MS) can bring it back, as the owner asked.
+const OLD_HOLD_MS = 1000;
+srv = spawn('node', ['server.js'], { cwd: ROOT, env: { ...process.env, PORT: String(appPort), EMPTY_ROOM_GRACE_MS: String(OLD_HOLD_MS) }, stdio: ['ignore', 'pipe', 'pipe'] });
 let up = false;
 for (let i = 0; i < 80; i++) { try { await get(`http://127.0.0.1:${appPort}/health`); up = true; break; } catch {} await sleep(150); }
 if (!up) { console.error('FAIL  server never came up'); process.exit(1); }
@@ -210,15 +218,21 @@ const INSTR = `(() => {
     for (let k = 0; k < 12; k++) { const a = k / 12 * 6.283, p = px(cv, (g[0] + (932 * .085 + Math.cos(a) * 40) * g[2]) * d, (g[1] + (430 * .12 + Math.sin(a) * 40) * g[2]) * d); ring.push(p[0] + p[1] + p[2]); }
     const row = { t: Math.round(I.t), open: I.open || 0, shift: I.shift || 0, seam: g[0] + 466 * g[2], u: g[2], opacity: +getComputedStyle(cv).opacity,
       mid: px(cv, cv.width / 2, cv.height / 2)[3], left: px(cv, cv.width * .04, cv.height / 2)[3], right: px(cv, cv.width * .96, cv.height / 2)[3],
-      ring: ring.join(','), scr: bay.dataset.scr || '', game: document.getElementById('game').classList.contains('active') };
+      ring: ring.join(','), scr: bay.dataset.scr || '', game: document.getElementById('game').classList.contains('active'), mg: mgUp() };
     if (row.open > 0 && !S.quickOpen) {
       const anims = bay.getAnimations ? bay.getAnimations({ subtree: true }).filter((a) => { const it = a.effect && a.effect.getComputedTiming && a.effect.getComputedTiming(); return it && isFinite(it.iterations) && a.playState === 'running'; }).length : 0;
       S.quickOpen = { t: row.t, scr: row.scr, game: row.game, anims, resume: localStorage.getItem('cc_resume') !== null };
     }
     if (S.quick.length < 400) S.quick.push(row);
   }
+  // THE NOTICE OF A MATCH THAT ENDED WHILE THE PLAYER WAS AWAY (bay.js
+  // #mgone): whether it is up, on every quick-door frame above, and the first
+  // frame it is up at all, with whether the doors were still there then.
+  function mgUp() { const m = document.getElementById('mgone'); return !!(m && !m.hidden && getComputedStyle(m).display !== 'none'); }
+  S.mgFirst = null;
   function loop() {
     const I = window.__ccIntro, cv = document.getElementById('intro');
+    if (!S.mgFirst && mgUp()) S.mgFirst = { state: I ? I.state : null, cv: !!cv, open: I ? I.open || 0 : 0 };
     if (I && I.state === 'running' && cv && I.mode === 'quick') quickFrame(I, cv);
     if (I && I.state === 'running' && cv && I.mode === 'full') {
       if (I.tp < 2100) { const r = alphaRange(cv); S.a1Checks++; if (r[0] < 255) S.a1Fails.push([Math.round(I.tp), r[0]]); }
@@ -602,9 +616,24 @@ async function quickCase(label, opts, url, want) {
 }
 await quickCase('A5 a room link with a saved name: the quick doors, never the intro', {}, BASE + '?room=ABCD', { dest: 'home' });
 await quickCase('A5 a squad link with a saved name: the quick doors, never the intro', {}, BASE + '?squad=ABCD', { dest: 'home' });
+// THE HELD SEAT THAT IS GONE IS SAID SO (owner, 2026-10-07: "if the room is
+// gone (e.g. a deploy), a clear 'that match ended while you were away' message
+// instead of a silent kick"). This case pinned the silent landing until then:
+// the doors opened onto home and nothing said why. They still wait for the
+// refusal and open onto home, and once they have gone, never while they are
+// shut, home says what happened.
 await quickCase('A5 a held seat the server no longer has: the doors wait for its answer, then open onto home', { extra: [HELD, SLOW_ANSWER] }, BASE, { dest: 'home', prompt: false,
-  also: async (p, R) => check(`A5 that held seat was answered (${RESUME_SLOW} ms late) and cleared before the doors opened, at ${R.st && Math.round(R.st.openAt)} ms`,
-    !!R.st && R.st.openAt >= RESUME_SLOW && R.T.quickOpen && R.T.quickOpen.resume === false && !(await p.ev("localStorage.getItem('cc_resume')")), JSON.stringify(R.T.quickOpen)) });
+  also: async (p, R) => {
+    check(`A5 that held seat was answered (${RESUME_SLOW} ms late) and cleared before the doors opened, at ${R.st && Math.round(R.st.openAt)} ms`,
+      !!R.st && R.st.openAt >= RESUME_SLOW && R.T.quickOpen && R.T.quickOpen.resume === false && !(await p.ev("localStorage.getItem('cc_resume')")), JSON.stringify(R.T.quickOpen));
+    const rows = R.T.quick || [], first = R.T.mgFirst;
+    const mg = await p.ev(`(() => { const m = document.getElementById('mgone'); const up = !!(m && !m.hidden);
+      return { up, text: up ? m.querySelector('.mgh').textContent : null, focus: up && document.activeElement === m.querySelector('.mgo') }; })()`);
+    check('A5 and home then says "That match ended while you were away.", with OK to put it away: the refusal is never a silent kick',
+      mg.up && mg.text === 'That match ended while you were away.' && mg.focus, JSON.stringify(mg));
+    check(`A5 that notice is never drawn over the doors: up on none of their ${rows.length} frames, and first up once they had gone`,
+      rows.length > 20 && rows.every((r) => !r.mg) && !!first && first.state === 'ended' && !first.cv, JSON.stringify({ mgFrames: rows.filter((r) => r.mg).length, first }));
+  } });
 await quickCase('A6 the OS reduced-motion setting: no intro, the doors fade', { media: [{ name: 'prefers-reduced-motion', value: 'reduce' }] }, BASE, { dest: 'home', fade: true });
 await quickCase('A6 the in-game Reduce motion toggle: no intro, the doors fade', { extra: ["try { localStorage.setItem('cc_motion', '1'); } catch (e) {}"] }, BASE, { dest: 'home', fade: true });
 await offCase('test switch: window.__ccNoIntro skips it', { noIntro: true });
@@ -712,7 +741,10 @@ await quickCase('V9 a reopen within ten minutes under reduced motion', { media: 
   await a.ev("(Bay.go('setup'), ccMode = 'duel', document.getElementById('createBtn').onclick(), true)");
   let playing = false;
   for (let i = 0; i < 150 && !playing; i++) { playing = await a.ev("!!(S.playing && localStorage.getItem('cc_resume'))"); if (!playing) await sleep(100); }
+  // Away for longer than the old hold (OLD_HOLD_MS, standing in for its half
+  // hour): the match is still there only because nobody else plays in it.
   await a.go('about:blank'); await sleep(200); await a.close();
+  await sleep(OLD_HOLD_MS + 800);
   const b = await openPage({ ...IP17, context: X, extra: [LAUNCH, SLOW_ANSWER] });
   await b.go();
   const rec = await b.ev("JSON.parse(localStorage.getItem('cc_last_view') || 'null')");
@@ -721,6 +753,8 @@ await quickCase('V9 a reopen within ten minutes under reduced motion', { media: 
   doorsOk('V9 reopened on a held seat', R, { dest: 'game', prompt: false });
   check(`V9 the doors waited for the resume, answered ${RESUME_SLOW} ms late (they opened at ${R.st && Math.round(R.st.openAt)} ms), and the match under them is the one that was held, back in play`,
     !!R.st && R.st.openAt >= RESUME_SLOW && await b.ev("!!(S.playing && S.code && localStorage.getItem('cc_resume'))"), JSON.stringify(R.st));
+  check(`V9 that match was brought back from more than ${OLD_HOLD_MS + 800} ms away, past the old hold of ${OLD_HOLD_MS} ms, and nothing says it ended`,
+    !R.T.mgFirst && !(await b.ev("!!document.getElementById('mgone') && !document.getElementById('mgone').hidden")), JSON.stringify(R.T.mgFirst));
   await b.close();
   try { await send('Target.disposeBrowserContext', { browserContextId: X }); } catch {}
 }
