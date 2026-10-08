@@ -1631,5 +1631,46 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   else ok('offlineKind still derives cpu/solo/online from the two offline predicates alone — the squad fit is a separate answer on the same card');
 }
 
+// ---- 22. THE GAME'S OWN PAGES OPEN INSIDE IT --------------------------------
+// The Privacy policy row clicked <a href="privacy.html" target="_blank">, and
+// in the iOS app it did nothing at all (owner, 2026-10-07): the app is one
+// WKWebView, Capacitor hands a new window's URL to the system, and nothing on a
+// phone opens capacitor://localhost/privacy.html. Without the new window it
+// would be worse -- the page would replace the game in the WebView, with no
+// way back. Every browser opens it, so no browser test can see either. Two
+// rules hold the fix:
+//   a. nothing in the game's own page links to one of its bundled pages: no
+//      href to a relative .html and no window.open of one, in index.html or
+//      any script it loads. bay.js docOpen reads those pages into the in-game
+//      panel instead (test/privacy_panel.mjs);
+//   b. every page docOpen reads is in sw.js's SHELL under the very URL it
+//      fetches, the bare name, or the panel cannot open it offline on the web.
+// COMMENTS ARE STRIPPED for (a), which is a negative read: bay.js's own comment
+// quotes the old link. Block comments and whole-line // comments only, so a
+// trailing // can never hide the code in front of it.
+{
+  const strip = (src, html) => (html ? src.replace(/<!--[\s\S]*?-->/g, ' ')
+    : src.replace(/\/\*[\s\S]*?\*\//g, ' ').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n'));
+  const LINK = /href\s*=\s*\\?["'](?![a-z][a-z0-9+.-]*:|#|\/\/)[^"'\\\s]*\.html(?:[?#][^"'\\]*)?\\?["']/gi;
+  const OPEN = /window\.open\s*\(\s*["'`](?![a-z][a-z0-9+.-]*:)[^"'`]*\.html/gi;
+  const bad = [];
+  for (const rel of ['public/index.html', 'public/app.js', 'public/bay.js', 'public/intro.js', 'public/cloud.js', 'public/errors.js', 'public/config.js']) {
+    const src = strip(read(rel), rel.endsWith('.html'));
+    for (const re of [LINK, OPEN]) for (const m of src.matchAll(re)) bad.push(`${rel}: ${m[0]}`);
+  }
+  const bay = read('public/bay.js'), sw = read('public/sw.js');
+  const docs = ((bay.match(/const DOCS = new Map\(\[([\s\S]*?)\]\);/) || [])[1] || '').match(/\['[^']+\.html'/g) || [];
+  const names = docs.map((d) => d.slice(2, -1));
+  const shell = ((sw.match(/const SHELL = \[([\s\S]*?)\]/) || [])[1] || '').match(/'([^']+)'/g) || [];
+  const shellNames = shell.map((s) => s.slice(1, -1));
+  const show = (bay.match(/function docShow\(name, id\) \{[\s\S]*?\n\}/) || [''])[0];
+  if (!names.includes('privacy.html') || !names.includes('delete-account.html')) bad.push(`bay.js DOCS no longer names both pages: ${JSON.stringify(names)}`);
+  for (const n of names) if (!shellNames.includes(n)) bad.push(`sw.js SHELL does not hold ${n} under its bare name, the URL the panel fetches`);
+  if (!/\bfetch\(name\)/.test(show)) bad.push('bay.js docShow no longer fetches the bare page name, which is the URL sw.js precaches');
+  if (!/row\('Privacy policy', [^\n]*'data-doc="privacy\.html"'\)/.test(bay)) bad.push('the Bay controls Privacy policy row no longer opens the in-game panel (data-doc="privacy.html")');
+  if (bad.length) fail(`a page of the game's own would leave the game, or not open offline:\n      ${bad.join('\n      ')}`);
+  else ok(`no link or window.open in the game's own page points at a bundled page, and docOpen's ${names.length} pages (${names.join(', ')}) are precached under the URL it fetches`);
+}
+
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nALL GOOD');
 process.exit(out.errors.length ? 1 : 0);

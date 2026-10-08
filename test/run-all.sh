@@ -310,6 +310,13 @@ else
   # FOURTH client-side suite: the account chip, the Account row, the modal
   # lines and the home-only type size, in a real page. Skips without Chrome.
   run account_ui node test/account_ui.mjs
+  # The privacy policy opens inside the game (owner, 2026-10-07): Bay controls'
+  # row reads the bundled page into a full-screen panel, legible inside the
+  # safe area at four phone sizes; Close, Escape and Back close it without a
+  # reload; its links never navigate the game's page; and with the server gone
+  # the service worker still opens it. Self-hosted on its own free ports; its
+  # Chrome resolves no host but this machine. Skips without Chrome.
+  run privacy_panel node test/privacy_panel.mjs
   # FIFTH client-side suite: Artillery Golf's off-screen flag marker and its
   # tap-to-pan, on a local solo round. Skips without Chrome.
   run golf_marker node test/golf_marker.mjs

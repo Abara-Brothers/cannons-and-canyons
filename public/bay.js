@@ -2182,11 +2182,12 @@ SCREENS.settings = function () {
     + '<div style="font-size:' + u(10.5) + ';color:#7f8fb5;margin-top:' + u(4) + ';font-weight:500">Cannons &amp; Canyons &mdash; landscape only, best with a friend.</div></div>');
   const withWhom = linked.length ? ' with ' + linked.map((a) => PROVIDER_NAME[a.provider] || esc(a.provider)).join(' and ') : '';
   return chrome('Bay controls', accState === 'in' ? 'Signed in' + withWhom + ' &mdash; progress syncs across devices' : 'Guest &mdash; progress is stored on this device', 'Abara Brothers',
-    // Privacy policy rides at the foot of the TOGGLES column: it is a link out,
-    // it reads like a footer, and this column had 88u spare where the other had
-    // none. See the Friends row above for why the room had to come from here.
+    // Privacy policy rides at the foot of the TOGGLES column: it reads like a
+    // footer, and this column had 88u spare where the other had none. See the
+    // Friends row above for why the room had to come from here. It opens the
+    // policy inside the game (docOpen), never a browser.
     '<div class="set" style="height:' + u(300) + '"><div style="flex:1">' + T
-    +   row('Privacy policy', 'Opens in your browser', '&rarr;', 'data-old="privacyLink"')
+    +   row('Privacy policy', 'What the game stores, and why', 'Open', 'data-doc="privacy.html"')
     + '</div><div style="flex:1">' + right + '</div></div>', '');
 };
 
@@ -2819,6 +2820,219 @@ function pmClick(e) {
     pmPaint();
   }
 }
+
+/* ---- the privacy policy, inside the game ---------------------------------- */
+// THE POLICY OPENS INSIDE THE GAME (owner, 2026-10-07: the Privacy policy row
+// "does not work"; his answer: inside the app, a readable panel with Close,
+// working offline). The row used to click index.html's
+// <a href="privacy.html" target="_blank">. A browser opens that in a new tab,
+// but the iOS app is one WKWebView, and Capacitor answers a request for a new
+// window by handing its URL to the system (WebViewDelegationHandler,
+// createWebViewWith -> UIApplication.open). Nothing on a phone opens
+// capacitor://localhost/privacy.html, so the tap did nothing at all. In the
+// Android shell the same link replaced the game with the page.
+//
+// So the page is READ, not navigated to: fetched from the app's own files --
+// bundled in the native app, precached by sw.js on the web, so it opens with no
+// network on either -- and its <main> is drawn into a full-screen panel in the
+// game's own type. Not an iframe: server.js sends frame-ancestors 'none' with
+// every response, privacy.html's included, so the web would refuse to frame it.
+//
+// AN #app-LEVEL LAYER, like the player menu and for its reasons (pmHost): it
+// shares the toast's stacking context, so a toast still shows over it, and it
+// turns with #app under the portrait lock.
+const DOCS = new Map([['privacy.html', 'Privacy policy'], ['delete-account.html', 'Delete your account']]);
+let doc = null;           // the page on show: { name, id }, id a heading to start at or ''
+let docEl = null;         // the panel
+let docFrom = null;       // the control that opened it, to hand the keyboard back to
+let docUnder = null;      // what the panel made inert, to wake again on close
+let docSeq = 0;           // which read is current, so a slow one never lands on a later page
+let docEntry = false;     // the panel holds a history entry of its own (docPush)
+let docBacking = false;   // a history.back() of our own is on its way
+const docText = new Map(); // a page read once is drawn from here after: no network at all
+function docHost() {
+  if (!docEl) {
+    docEl = document.createElement('div');
+    docEl.id = 'docp';
+    docEl.hidden = true;
+    docEl.setAttribute('role', 'dialog');
+    docEl.setAttribute('aria-modal', 'true');
+    docEl.setAttribute('aria-labelledby', 'docpT');
+    docEl.innerHTML = '<div class="dph"><span class="dpt" id="docpT"></span><span class="grow"></span>'
+      + '<button type="button" class="dpx" data-dp="close">' + IC.cross + '<span>Close</span></button></div>'
+      + '<div class="dps" id="docpS" tabindex="0"><div class="dpc" id="docpC"></div></div>';
+    ($('app') || document.body).appendChild(docEl);
+    docEl.addEventListener('click', docClick);
+  }
+  return docEl;
+}
+function docOpen(name, id) {
+  if (!DOCS.has(name)) return;
+  const el = docHost();
+  if (el.hidden) {
+    docFrom = (document.activeElement && document.activeElement !== document.body) ? document.activeElement : null;
+    // The page under the panel takes no tap and no focus while it is up, so a
+    // keyboard's Tab cannot wander into Bay controls behind a full-screen page.
+    const bay = $('bay');
+    docUnder = bay && !bay.inert ? bay : null;
+    if (docUnder) docUnder.inert = true;
+    docPush();
+    el.hidden = false;
+  }
+  docShow(name, id);
+}
+// One page into the panel, from memory when it has been read before. The
+// keyboard goes to the page itself, so the arrow keys and Space scroll it.
+function docShow(name, id) {
+  doc = { name, id: id || '' };
+  const seq = ++docSeq, s = $('docpS'), c = $('docpC');
+  $('docpT').textContent = DOCS.get(name);
+  s.focus({ preventScroll: true });
+  if (docText.has(name) && docDraw(docText.get(name))) return;
+  c.innerHTML = '<p class="dpw">Opening</p>';
+  s.scrollTop = 0;
+  fetch(name)
+    .then((r) => (r.ok ? r.text() : Promise.reject(new Error('HTTP ' + r.status))))
+    .then((t) => { if (seq !== docSeq) return; if (docDraw(t)) docText.set(name, t); else docFail(); })
+    .catch(() => { if (seq === docSeq) docFail(); });
+}
+function docDraw(text) {
+  const main = docPage(text);
+  if (!main) return false;
+  const s = $('docpS');
+  $('docpC').replaceChildren(...main.childNodes);
+  s.scrollTop = 0;
+  if (doc.id) docJump(doc.id);
+  return true;
+}
+// Only where the page could not be read at all: on the web, before the service
+// worker has stored it, with no network. Said plainly, with the way out.
+function docFail() {
+  $('docpC').innerHTML = '<p class="dpw">This page could not be opened. Check your connection, then try again.</p>'
+    + '<button type="button" class="dpx dpr" data-dp="retry">Try again</button>';
+}
+// THE PAGE IS A DOCUMENT, NOT CODE. Only its <main> is taken -- its head and its
+// stylesheet stay behind -- and nothing in it that could run, load or restyle
+// the game survives the copy. It is cleaned where it was parsed, BEFORE it is
+// brought into the game's document: a parsed document has no window, so
+// nothing in it can load or run while it is being cleaned. A response with no
+// <main> is not one of these pages at all. Its ids are prefixed, so #keep
+// cannot collide with the game's own.
+function docPage(text) {
+  let main = null;
+  try { main = new DOMParser().parseFromString(String(text), 'text/html').querySelector('main'); } catch {}
+  if (!main) return null;
+  main.querySelectorAll('script,style,link,meta,base,iframe,object,embed,form').forEach((n) => n.remove());
+  for (const n of main.querySelectorAll('*')) {
+    for (const a of [...n.attributes]) if (/^on/i.test(a.name) || a.name === 'style') n.removeAttribute(a.name);
+    if (n.id) n.id = 'doc-' + n.id;
+  }
+  docLinks(main);
+  return document.importNode(main, true);
+}
+// ITS LINKS NEVER TAKE THE GAME'S PAGE AWAY. Each is sorted once, here:
+//   * #keep, #rights: the panel scrolls to that heading;
+//   * the other bundled page (delete-account.html, and its link back): it opens
+//     in this panel, offline like the first;
+//   * the game's own front door (delete-account.html's "Open the game"): the
+//     player is in the game already, so it closes the panel;
+//   * https and mailto: a NEW window -- a tab on the web, and in the app the
+//     phone's own browser or mail app, because a new window's URL is exactly
+//     what Capacitor hands to the system (above). The support page needs the
+//     network anyway, and the browser is where a player expects it;
+//   * anything else loses its href and reads as plain text.
+// A link that stays a link keeps its href, so it is still a link to a keyboard
+// and a screen reader; docClick stops the default for the first three.
+function docLinks(root) {
+  const home = window.CC_NATIVE_HOST || 'tanks.abarabrothers.com';
+  for (const a of root.querySelectorAll('a[href]')) {
+    const href = a.getAttribute('href').trim();
+    if (/^[a-z][a-z0-9+.-]*:/i.test(href)) {
+      let url = null;
+      try { url = new URL(href); } catch {}
+      const front = !!url && url.protocol === 'https:' && (url.host === home || url.host === location.host)
+        && (url.pathname === '/' || url.pathname === '/index.html') && !url.search && !url.hash;
+      if (front) a.dataset.dpl = 'home';
+      else if (url && /^(https|http|mailto):$/.test(url.protocol)) { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
+      else a.removeAttribute('href');
+      continue;
+    }
+    const cut = href.indexOf('#');
+    const page = (cut < 0 ? href : href.slice(0, cut)).replace(/^\.\//, ''), id = cut < 0 ? '' : href.slice(cut + 1);
+    if (!page && id) { a.setAttribute('href', '#doc-' + id); a.dataset.dpl = 'jump'; a.dataset.dpid = 'doc-' + id; }
+    else if (DOCS.has(page)) { a.dataset.dpl = 'page'; a.dataset.dpname = page; a.dataset.dpid = id ? 'doc-' + id : ''; }
+    else a.removeAttribute('href');
+  }
+}
+function docClick(e) {
+  const t = e.target.closest ? e.target.closest('[data-dp],[data-dpl]') : null;
+  if (!t) return;
+  if (t.dataset.dpl) e.preventDefault();
+  const a = t.dataset.dp || t.dataset.dpl;
+  if (a === 'close' || a === 'home') docClose();
+  else if (a === 'retry') { if (doc) docShow(doc.name, doc.id); }
+  else if (a === 'jump') docJump(t.dataset.dpid);
+  else if (a === 'page') docShow(t.dataset.dpname, t.dataset.dpid);
+}
+// THE HEADING'S OWN OFFSET, never getBoundingClientRect: under the portrait
+// lock #app is turned a quarter, and a screen-space top is then the panel's
+// side. Nor scrollIntoView, which scrolls every ancestor that can scroll.
+function docJump(id) {
+  const s = $('docpS'), c = $('docpC');
+  const el = [...c.querySelectorAll('[id]')].find((n) => n.id === id);
+  if (!el) return;
+  let y = c.offsetTop;
+  for (let n = el; n && n !== c; n = n.offsetParent) y += n.offsetTop;
+  s.scrollTop = Math.max(0, y - (parseFloat(getComputedStyle(el).fontSize) || 0));
+}
+function docClose(popped) {
+  if (!docEl || docEl.hidden) return;
+  docSeq++; doc = null;
+  docEl.hidden = true;
+  $('docpC').replaceChildren();
+  if (docUnder) { docUnder.inert = false; docUnder = null; }
+  docPop(popped);
+  const back = docFrom; docFrom = null;
+  if (back && back.isConnected && typeof back.focus === 'function') back.focus();
+}
+// BACK CLOSES IT. While the panel is up it holds one history entry of its own,
+// so the browser's Back on the web, and the Android back button (the App
+// plugin goes back in the WebView's history while this app registers no
+// listener of its own), close the panel instead of leaving the game. Closing
+// it any other way gives the entry back. That must never step out of the game:
+//   * the entry is pushed by this document, so going back from it lands on
+//     this same document, and the panel goes back only while it still holds
+//     that entry -- a Back off it has already closed the panel;
+//   * one back() at a time, and no new entry until it has landed (docBacking).
+//     A back() goes to the entry before the one it was sent from, decided as
+//     it is sent. Reopened before it lands, a panel that pushed at once would
+//     be stepped over: open on the game's own first entry, sure it holds one
+//     of its own, and its next Close would go back out of the game. So the
+//     reopened panel takes its entry when that back() lands, and that landing's
+//     popstate is spent on nothing else.
+function docPush() {
+  if (docEntry || docBacking || typeof history.pushState !== 'function') return;
+  try { history.pushState(null, ''); docEntry = true; } catch { docEntry = false; }
+}
+function docPop(popped) {
+  if (!docEntry) return;
+  docEntry = false;
+  if (!popped) { docBacking = true; history.back(); }
+}
+window.addEventListener('popstate', () => {
+  if (docBacking) { docBacking = false; if (docEl && !docEl.hidden) docPush(); return; }
+  if (docEntry) docClose(true);
+});
+// ESCAPE CLOSES IT, from anywhere in the panel.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !docEl || docEl.hidden) return;
+  e.preventDefault();
+  docClose();
+});
+// AND IT NEVER OUTLIVES THE MENU IT WAS OPENED FROM: a lobby or a match that
+// starts under it (a squad's leader starting, a notification tap) takes it
+// down, the way showScreen takes the player menu down.
+if (fn('showScreen')) { const orig = showScreen; showScreen = function () { docClose(); return orig.apply(this, arguments); }; }
 
 /* ---- the three columns --------------------------------------------------- */
 function frFind(on) {
@@ -3822,7 +4036,7 @@ function sqLockWhy(k, v) {
 }
 document.addEventListener('click', (e) => {
   const host = $('bay'); if (!host || !host.classList.contains('active')) return;
-  const t = e.target.closest('[data-go],[data-back],[data-set],[data-toggle],[data-launch],[data-rdy],[data-pick],[data-old],[data-skin],[data-solo],[data-cs],[data-fr],[data-sq]');
+  const t = e.target.closest('[data-go],[data-back],[data-set],[data-toggle],[data-launch],[data-rdy],[data-pick],[data-old],[data-skin],[data-solo],[data-cs],[data-fr],[data-sq],[data-doc]');
   if (!t || !host.contains(t)) return;
   if (has('Audio')) Audio.ensure();
   // The lobby's Back IS Cancel. Leaving any other way strands a queued create
@@ -3836,6 +4050,7 @@ document.addEventListener('click', (e) => {
   if (t.dataset.pick) { togglePick(t.dataset.pick); render(current); return; }
   if ('solo' in t.dataset) { if (fn('playSolo')) playSolo(); return; }
   if (t.dataset.old) { const b = $(t.dataset.old); if (!b) return; if (typeof b.onclick === 'function') b.onclick(); else b.click(); return; }
+  if (t.dataset.doc) { docOpen(t.dataset.doc); return; }   // a page of our own, read inside the game
   if (t.dataset.skin) {
     const id = t.dataset.skin, ok = fn('skinUnlocked') ? skinUnlocked(id) : false;
     if (!ok) { const sk = G.SKINS && SKINS[id]; if (fn('showToast')) showToast('LOCKED — ' + ((sk && sk.how) || 'earn it in the field') + ' to unlock this paint.'); return; }

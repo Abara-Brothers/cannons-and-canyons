@@ -2851,6 +2851,66 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
 .pnm{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pscore .pmb{width:18px;height:18px;border-radius:4px}
 .pscore .pmb svg{width:11px;height:11px}
+/* ---- the privacy policy, inside the game (bay.js docOpen) -----------------
+   An #app-level layer like the player menu, for its stacking reason, at z 75:
+   over the bay and the battlefield, under the player menu (80) and the toast
+   (90). Opaque and full-screen, because it is a page to read, not a sheet over
+   the menu. Its insets are the bay's own (--sa-*), so the title, Close and every
+   line of the page stay clear of the Dynamic Island and the home indicator, and
+   its type is in design units like the rest of the bay: the page's words are
+   17u and its smallest 16u, well above the bay's 12u floor, because here the
+   words are the whole point. Close is at least 44px tall at every size, Apple's
+   minimum touch target. The page's own stylesheet never arrives (bay.js
+   docPage), so these rules are all of its look. */
+#docp{position:fixed;inset:0;z-index:75;display:flex;flex-direction:column;background:#0b1020;
+  font-family:Barlow,system-ui,sans-serif;color:#dbe4f7;-webkit-font-smoothing:antialiased}
+#docp[hidden]{display:none}
+#docp *{margin:0;padding:0;box-sizing:border-box}
+#docp button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+#docp .grow{flex:1}
+#docp .dph{flex:none;display:flex;align-items:center;gap:calc(12 * var(--u));height:calc(var(--sa-t) + max(54px, calc(60 * var(--u))));
+  padding:var(--sa-t) calc(var(--sa-r) + 20 * var(--u)) 0 calc(var(--sa-l) + 20 * var(--u));
+  border-bottom:1px solid rgba(140,168,214,.22);background:#0d111b}
+#docp .dpt{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:Rajdhani,system-ui,sans-serif;font-weight:700;
+  font-size:calc(21 * var(--u));line-height:1.1;letter-spacing:.06em;text-transform:uppercase;color:#eef3ff}
+#docp .dpx{flex:none;display:inline-flex;align-items:center;gap:calc(8 * var(--u));height:max(44px, calc(44 * var(--u)));
+  padding:0 calc(18 * var(--u));border:1px solid rgba(140,168,214,.42);border-radius:calc(6 * var(--u));background:rgba(84,200,255,.08);
+  font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:calc(17 * var(--u));letter-spacing:.08em;text-transform:uppercase;
+  color:#eef3ff;transition:.15s}
+#docp .dpx svg{width:calc(14 * var(--u));height:calc(14 * var(--u));display:block;flex:none}
+#docp .dpx:hover{border-color:#54c8ff;color:#fff;background:rgba(84,200,255,.16)}
+#docp .dpx:focus-visible{outline:2px solid #54c8ff;outline-offset:2px}
+/* The page scrolls on its own, and a fling at either end stays in it. */
+#docp .dps{flex:1;min-height:0;position:relative;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;
+  -webkit-overflow-scrolling:touch;outline:none;padding:0 calc(var(--sa-r) + 24 * var(--u)) 0 calc(var(--sa-l) + 24 * var(--u));
+  scrollbar-width:thin;scrollbar-color:rgba(140,168,214,.4) transparent}
+/* A reading column, and the words can be selected: someone may want to copy the
+   support address. overflow-wrap:anywhere lets a long address break inside a
+   table cell instead of widening the table past the screen. */
+#docp .dpc{position:relative;max-width:calc(720 * var(--u));margin:0 auto;padding:calc(20 * var(--u)) 0 calc(var(--sa-b) + 32 * var(--u));
+  font-size:calc(17 * var(--u));line-height:1.6;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}
+#docp .dpc h1{font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:calc(28 * var(--u));line-height:1.15;letter-spacing:.02em;color:#eef3ff}
+#docp .dpc h2{margin-top:calc(30 * var(--u));font-family:Rajdhani,system-ui,sans-serif;font-weight:700;font-size:calc(21 * var(--u));line-height:1.2;
+  letter-spacing:.05em;text-transform:uppercase;color:#eef3ff}
+#docp .dpc p,#docp .dpc ul,#docp .dpc ol,#docp .dpc table,#docp .dpc .card{margin-top:calc(12 * var(--u))}
+#docp .dpc ul,#docp .dpc ol{padding-left:calc(24 * var(--u))}
+#docp .dpc li{margin-top:calc(6 * var(--u))}
+#docp .dpc b,#docp .dpc strong{font-weight:700;color:#eef3ff}
+#docp .dpc .muted{font-size:calc(16 * var(--u));color:#b3c0de}
+#docp .dpc a{color:#54c8ff;text-decoration:underline;text-underline-offset:.15em}
+#docp .dpc a:not([href]){color:inherit;text-decoration:none}
+#docp .dpc table{width:100%;border-collapse:collapse;font-size:calc(16 * var(--u));line-height:1.45}
+#docp .dpc th,#docp .dpc td{text-align:left;vertical-align:top;padding:calc(7 * var(--u)) calc(14 * var(--u)) calc(7 * var(--u)) 0;
+  border-bottom:1px solid rgba(140,168,214,.2)}
+#docp .dpc th{font-weight:600;color:#b3c0de}
+#docp .dpc code{font-family:"JetBrains Mono",monospace;font-size:.88em;color:#eef3ff}
+#docp .dpc .card{padding:calc(14 * var(--u)) calc(18 * var(--u));border:1px solid rgba(140,168,214,.24);border-radius:calc(8 * var(--u));
+  background:rgba(84,200,255,.05)}
+#docp .dpc .card > :first-child{margin-top:0}
+#docp .dpc .btn{display:inline-flex;align-items:center;min-height:max(44px, calc(44 * var(--u)));margin-top:calc(10 * var(--u));
+  padding:0 calc(20 * var(--u));border-radius:999px;background:#54c8ff;color:#06101f;font-weight:700;text-decoration:none}
+#docp .dpw{color:#b3c0de}
+#docp .dpr{margin-top:calc(14 * var(--u))}
 
   /* -------------------------------------------------------------- entrance -- */
   #bay.enter .boards .board{animation:brise .5s cubic-bezier(.2,.8,.3,1) both}
