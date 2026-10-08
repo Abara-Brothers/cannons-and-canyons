@@ -254,6 +254,24 @@ const TANK_CY         = Math.round(1.14 * TANK_R);   // 315 — turret pivot hei
 // grows with the tank. public/app.js's putt pace line starts from the same
 // number (house rules section 4).
 const PUTT_AHEAD      = Math.round(1.46 * TANK_R);   // 403 — was 350 at the 240 design size
+// THE TEE NEVER PASSES THE CUP. When the cup is nearer than PUTT_AHEAD in the
+// putt's direction, the ball is struck on the cup itself. The cup catches a
+// ball within 190 of it, so a tee more than 190 past the cup starts the ball
+// outside the hole, rolling away from it. At the 240 design the tee was 350,
+// so it overshot the cup by less than 160 from any lie outside the catch,
+// and the ball always started inside it. At 403 a lie 191 to 212 from the cup
+// put the tee 191 to 212 past it, and no putt could hole it (update 8 round 2
+// review). The cup and its catch stay as they are, because they are the
+// course and the scoring, not the tank. Every other putt ends as it did. From
+// a lie 213 to 402 from the cup, the 403 tee already started the ball inside
+// the catch, where it dropped at once, because the putter's top speed (power
+// 100 x 52 x 0.20 = 1,040) is under the cup's 2,200 drop-in speed; struck on
+// the cup, it drops the same. A lie at or beyond the tee is struck 403 ahead,
+// as before. public/app.js's puttTeeX draws the pace line from the same point.
+function puttTeeX(tankX, pdir, cup) {
+  const toCup = cup ? (cup.x - tankX) * pdir : -1;
+  return toCup >= 0 && toCup < PUTT_AHEAD ? cup.x : tankX + pdir * PUTT_AHEAD;
+}
 
 // Silhouette half-width at height `up` above the ground point (world units,
 // UNSCALED — callers divide by tank.scale first). -1 = outside vertically.
@@ -1170,7 +1188,7 @@ export function simulateShot(state, shot) {
         // 90° flips the launch vx negative and the putt rolls backwards —
         // without this a ball past the cup could never come back.
         const pdir = Math.sign(vx) || dir;
-        iox = tank.x + pdir * PUTT_AHEAD;
+        iox = puttTeeX(tank.x, pdir, state.cup);
         ioy = surfaceAt(state.terrain, iox) - 4;
         ivx = speed * pdir; ivy = 0;
       }

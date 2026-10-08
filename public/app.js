@@ -440,17 +440,26 @@ const TALL_CAP = 2.0;
 // either side of the end of the screen is out of bounds"). With the camera held
 // inside the map, a short hole's two ends sat exactly on the screen's own edges
 // with nothing beyond them to show. So in golf the camera may look
-// GOLF_OB_PX screen pixels past each end, and the zoom-out floor makes room for
-// both, which is where drawGolfBounds() paints the out-of-bounds strip.
-// Screen pixels, not world units, so the strip and its label are the same size
-// at every zoom. The cost: where the zoom-out floor frames a short hole whole,
-// the two strips take 80 px of the width, so the course reads about 9% smaller
-// there on an 874-wide canvas and 12% on a 667-wide one. A long hole opens
-// framed by its terrain band, well above the floor, so it opens as before.
+// GOLF_OB_PX screen pixels past each end, which is where drawGolfBounds()
+// paints the out-of-bounds strip. Screen pixels, not world units, so the strip
+// and its label are the same size at every zoom.
+//
+// THE GOLF FLOOR FOLLOWS THE PLAYER'S ZOOM. A hole opens at START_ZOOM, and
+// from there in, the floor is the whole-course fit every mode uses, so a short
+// hole opens at exactly the zoom it had before update 8 round 2 and its tanks
+// read the full 15% bigger the owner asked for. A fixed floor with room for
+// both strips (80 px of the width) framed that opening about 9% smaller at 874
+// wide and 12% at 667, which cancelled most of the bigger tank (round 2
+// review). At that opening the course fills the width, so cameraTarget() shows
+// the end nearer the ball with its strip whole and keeps the far end off the
+// screen. Pinching out below START_ZOOM lowers the floor smoothly to the
+// two-strip fit, where the whole course sits between both strips.
 const GOLF_OB_PX = 40;
 function minMapZoom() {
-  const w = S.mode === 'golf' ? Math.max(2, view.cssW - 2 * GOLF_OB_PX) : view.cssW;
-  return Math.max(w / WW(), view.cssH / (WH() * TALL_CAP));
+  const fit = Math.max(view.cssW / WW(), view.cssH / (WH() * TALL_CAP));
+  if (S.mode !== 'golf') return fit;
+  const strips = Math.max(Math.max(2, view.cssW - 2 * GOLF_OB_PX) / WW(), view.cssH / (WH() * TALL_CAP));
+  return Math.max(strips, fit * Math.min(1, S.userZoom / START_ZOOM));
 }
 const clampUserZoom = (z) => Math.max(0.25, Math.min(6, Number.isFinite(z) ? z : 1));
 // A fresh match opens WIDER than the fit-all baseline (userZoom 1) — you read
@@ -547,8 +556,16 @@ function cameraTarget() {
   const cw = view.cssW / tz, ch = view.cssH / tz;
   // Golf may frame its out-of-bounds strip past each end (see GOLF_OB_PX);
   // every other mode stops at the map's edges, exactly as before (ob = 0).
+  // When the whole course is on screen but both strips are not (a short
+  // hole's opening zoom), the camera takes the end nearer the ball, or nearer
+  // where the player has panned, with its strip whole. Following the ball
+  // there instead put both ends at the screen's own edges for a ball near the
+  // middle, with a sliver of strip or none: the picture the owner asked to be
+  // rid of.
   const ob = S.mode === 'golf' ? GOLF_OB_PX / tz : 0;
-  tx = cw >= WW() + 2 * ob ? WW() / 2 : Math.min(WW() + ob - cw / 2, Math.max(cw / 2 - ob, tx));
+  if (cw >= WW() + 2 * ob) tx = WW() / 2;
+  else if (ob && WW() * tz <= view.cssW + 0.5) tx = tx <= WW() / 2 ? cw / 2 - ob : WW() + ob - cw / 2;
+  else tx = Math.min(WW() + ob - cw / 2, Math.max(cw / 2 - ob, tx));
   ty = ch >= WH() ? WH() - ch / 2 : Math.min(WH() - ch / 2, Math.max(ch / 2, ty));
   return { tz: finite(tz, 0.05), tx: finite(tx, WW() / 2), ty: finite(ty, WH() * 0.72) };
 }
@@ -6698,6 +6715,16 @@ const BARREL_LEN     = Math.round(1.71 * TANK_R);   // 472 — pivot -> muzzle t
 const BARREL_PIVOT_X = Math.round(0.47 * TANK_R);   // 130 — pivot forward of the hull centre
 const TANK_CY        = Math.round(1.14 * TANK_R);   // 315 — pivot height above the ground point
 const PUTT_AHEAD     = Math.round(1.46 * TANK_R);   // 403 — the putt's tee ahead of the tank
+// game-core's puttTeeX, mirrored: the tee never passes the cup. When the cup
+// is nearer than PUTT_AHEAD in the putt's direction the ball is struck on the
+// cup, so the pace line starts there too (test/tank_size.mjs section 5). With
+// no golf state yet the line starts PUTT_AHEAD out, as it always did, rather
+// than throwing inside drawAim and losing the line.
+function puttTeeX(tankX, pdir) {
+  const cup = S.golf && S.golf.cup;
+  const toCup = cup ? (cup.x - tankX) * pdir : -1;
+  return toCup >= 0 && toCup < PUTT_AHEAD ? cup.x : tankX + pdir * PUTT_AHEAD;
+}
 
 function tankScreen(i) {
   const t = S.tanks[i];
@@ -8153,9 +8180,10 @@ function drawAim() {
       const v = aim.power * 52 * (selW.speedMul || 1);
       const roll = (v * v) / (2 * 0.05 * 900);
       const pdir = dir * (Math.cos(rad) < 0 ? -1 : 1);   // aim past 90° = putt backwards
+      const tee = puttTeeX(t.x, pdir);                   // game-core's putt tee, never past the cup
       for (let i = 1; i <= 22; i++) {
         const f = (i / 22) * 0.6;
-        const pxg = t.x + pdir * (PUTT_AHEAD + roll * f);   // from game-core's putt tee
+        const pxg = tee + pdir * roll * f;
         if (pxg < 0 || pxg > WW()) break;
         const gx = wx2s(pxg), gy = wy2s(surfaceAt(pxg) - 10);
         const k = 3.2 - f * 1.8;

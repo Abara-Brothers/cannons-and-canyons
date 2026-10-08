@@ -127,6 +127,48 @@ if (endX < 15000) fail(`cannon 45/60 landed at x=${endX}, expected ~15700 (latch
   if (p0[0] !== ME + 403 || p0[1] !== FLAT_Y - 4) fail(`the putt is struck at ${JSON.stringify(p0)}, not at the tee 403 ahead of the tank, ${JSON.stringify([ME + 403, FLAT_Y - 4])}`);
   if (!(403 > TANK_HW)) fail('the putt tee is under the hull');
 }
+// ...but the tee never passes the cup, so every lie can be holed with the
+// Putter (update 8 round 2 review). The tee grew to 403 and the cup's catch
+// stayed 190, so a lie 191 to 212 from the cup was teed 191 to 212 PAST it,
+// outside the catch and rolling away: no putt could hole it, where on the 240
+// design (tee 350) every lie the tee overshot was teed inside the catch. On a
+// flat green as long as a real course, the cup as room-engine's golfShot
+// hands it to the engine (catch 190, drop-in speed 2,200): from every whole
+// lie 191 to 593 (the tee plus the catch) on either side of the cup, a putt
+// toward it holes at every power. A lie nearer than the tee is struck on the cup itself, never past
+// it; a lie at or beyond the tee is struck 403 ahead, as before; and a putt
+// away from the cup is struck 403 behind the tank, as before.
+{
+  const W = 48001, CUP = 20000;
+  const green = () => new Array(W).fill(FLAT_Y);
+  const cup = { x: CUP, r: 190, capV: 2200 };
+  const putt = (lie, angle, power) => simulateShot({ terrain: green(), tanks: [{ x: lie, y: FLAT_Y }], cup: { ...cup } },
+    { by: 0, weapon: 'putter', angle, power, dir: 1 });
+  const missed = [], tees = [], away = [];
+  for (const side of [-1, 1]) {                     // -1: the lie is left of the cup
+    for (let d = 191; d <= 593; d++) {
+      const lie = CUP + side * d;
+      const toward = side < 0 ? 30 : 150;           // aim past 90 putts backwards (dir 1 faces right)
+      for (const power of [1, 10, 40, 100]) {
+        const r = putt(lie, toward, power);
+        const rest = r.golf && r.golf.rest;
+        if (!rest || Math.abs(rest[0] - CUP) > cup.r) missed.push({ d, side, power, rest });
+        if (power === 40) {
+          const wantTee = d < 403 ? CUP : lie - side * 403;
+          const p0 = r.projectiles[0].path[0][0];
+          if (Math.abs(p0 - wantTee) > 0.05) tees.push({ d, side, p0, wantTee });
+        }
+      }
+      if (d % 37 === 0) {
+        const p0 = putt(lie, side < 0 ? 150 : 30, 40).projectiles[0].path[0][0];
+        if (Math.abs(p0 - (lie + side * 403)) > 0.05) away.push({ d, side, p0 });
+      }
+    }
+  }
+  if (missed.length) fail(`${missed.length} putts toward the cup from a lie 191 to 593 away did not hole, e.g. ${JSON.stringify(missed.slice(0, 4))}`);
+  if (tees.length) fail(`the putt tee passed the cup or moved off 403 ahead: ${JSON.stringify(tees.slice(0, 4))}`);
+  if (away.length) fail(`a putt away from the cup was not struck 403 behind the tank: ${JSON.stringify(away.slice(0, 4))}`);
+}
 
 // 5 — Teleport moves the FIRER onto the landing point, MAY cross the enemy,
 //     never deforms terrain, and never moves the other tank.

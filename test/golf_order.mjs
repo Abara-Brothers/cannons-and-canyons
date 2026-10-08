@@ -240,6 +240,37 @@ await playHole(3, '(h) three golfers');
   leave(ws);
 }
 
+// ---- (p) a lie just outside the cup is holed with the Putter, through the engine --
+// The tank grew 15% and its putt tee with it (403), but the cup's catch is
+// still 190, so a ball resting 191 to 212 from the cup was teed past the cup
+// and no putt could hole it (update 8 round 2 review). The tee now never
+// passes the cup. Here the whole server path plays it: a one-seat round, the
+// ball set on the real hole's flat green at each of those distances on either
+// side of the cup, a real 'fire' with the Putter toward the cup, and the
+// round's own ruling, 'holed', on the shot frame. test/hitbox.mjs sweeps
+// every lie and power in the engine alone.
+{
+  const core = await import('../public/game-core.js');
+  const rows = [];
+  for (const d of [191, 200, 212, 213, 260, 402, 450]) for (const side of [-1, 1]) {
+    const ws = mkws(); golfCreate(ws, 1);
+    const room = roomOf(ws);
+    if (!room || !room.golf || room.state !== 'playing') { rows.push({ d, side, why: 'no round' }); leave(ws); continue; }
+    const cupX = room.golf.cup.x, x = cupX + side * d;
+    room.tanks[0].x = x; room.tanks[0].y = core.surfaceAt(room.terrain, x);
+    const before = frames(ws, 'shot').length;
+    // Every golf seat faces right (room.facing 1): an aim past 90 putts left.
+    handleClientMessage(ws, { type: 'fire', weapon: 'putter', angle: side < 0 ? 30 : 150, power: 25 });
+    await until(() => frames(ws, 'shot').length > before, 2000);
+    const shot = frames(ws, 'shot')[before];
+    rows.push({ d, side, note: shot && shot.golf && shot.golf.note, done: shot && shot.golf && shot.golf.done[0], p0: shot && shot.projectiles[0].path[0][0] - cupX });
+    leave(ws);
+  }
+  const bad = rows.filter((r) => r.note !== 'holed' || r.done !== true || (r.d < 403 && Math.abs(r.p0) > 0.05));
+  if (!bad.length) ok(`(p) through the engine, a putt toward the cup holes from ${[...new Set(rows.map((r) => r.d))].join(', ')} on both sides, struck on the cup from inside the 403 tee`);
+  else fail('(p) putts near the cup: ' + JSON.stringify(bad));
+}
+
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall golf_order checks passed');
 if (escaped) { console.error('escaped exception: ' + escaped.message); process.exit(1); }
 process.exit(out.errors.length ? 1 : 0);

@@ -14,13 +14,18 @@
 //      past the drawn line, and no other ever reaches it;
 //   4. the camera: zoomed out, a short hole shows both strips whole; at battle
 //      zoom either strip can be framed whole and never more; no other mode
-//      looks past the map;
+//      looks past the map; at the opening zoom a short hole is framed at the
+//      whole-course fit it had before update 8 round 2, so the 15% bigger
+//      tank shows, with the end nearer the ball on screen and its strip whole
+//      and the far end off the screen, wherever the ball lies; one zoom-out
+//      step from there brings in both strips;
 //   5. the banner: a real out-of-bounds stroke raises it in the note's own
 //      words and colour, instead of the floater; a real in-bounds stroke never
 //      does; another player's ball and a picked-up ball are said so, names
 //      as text; a new snapshot clears it;
 //   6. legibility at 667x375, 812x375, 874x402 with the iPhone 17 safe areas
-//      and 932x430: the labels and the banner whole on screen, clear of the
+//      and 932x430: the labels (zoomed out, and the near end's at a short
+//      hole's opening zoom) and the banner whole on screen, clear of the
 //      buttons and the dock, at legible sizes and contrast.
 // Headless Chrome over CDP; skips without Chrome.
 //
@@ -177,7 +182,11 @@ const ENG = { lo: [-0.05, 0.05], hi: [eng.L - 0.05, eng.L + 0.05] };
 // ---- 2. the drawn boundary at six zooms ----------------------------------------
 const draw = await ev(`(() => {
   const keep = { z: cam.zoom, cx: cam.cx, cy: cam.cy };
-  const zooms = { floor: minMapZoom(), fit: fullZoom(), aim: aimZoom(), z05: 0.05, battle: 0.14, close: 0.32 };
+  // The golf floor follows the player's zoom: at the opening zoom it is the
+  // whole-course fit, the 'fit' row. 'floor' is the two-strip floor, the
+  // floor pinched all the way out.
+  const floor = (() => { const k = S.userZoom; S.userZoom = 0.25; try { return minMapZoom(); } finally { S.userZoom = k; } })();
+  const zooms = { floor, fit: fullZoom(), aim: aimZoom(), z05: 0.05, battle: 0.14, close: 0.32 };
   const out = { OB: GOLF_OB_PX, rows: [] };
   for (const [zn, z] of Object.entries(zooms)) for (const end of [-1, 1]) {
     const at = end < 0 ? GOLF_OB_PX : view.cssW - GOLF_OB_PX;
@@ -341,6 +350,69 @@ const camChk = await ev(`(() => {
     ok('4: any other mode keeps its old camera: the same floor, and never a pixel past either end of the map');
   else fail('4: outside golf: ' + JSON.stringify({ floor: c.duelFloor, want: c.duelWant, L: c.duelL, R: c.duelR, wide: c.duelWide }));
 }
+// THE OPENING ZOOM (update 8 round 2 review). A hole opens at START_ZOOM, and
+// a two-strip floor there framed a short hole about 9% smaller at 874 wide,
+// which cancelled most of the 15% bigger tank. Now the floor follows the
+// player's zoom: from the opening in it is the whole-course fit, as before
+// round 2, and below it the floor eases down to the two-strip fit. With the
+// whole course across the screen there is room for one strip, so the camera
+// shows the end nearer the ball with its strip whole and keeps the other end
+// off the screen. Following the ball there instead left a ball near the
+// middle with both ends at the screen's edges and a sliver of strip or none.
+// A short hole is made here whatever this round's hole is, by giving golf's
+// aimZoom() a terrain band tall enough to frame the whole course (S.minY,
+// read by nothing else), and the ball is set at 41 lies from one end to the
+// other. Everything is put back in the same evaluate, before any frame.
+const opening = await ev(`(() => {
+  const me = S.tanks[S.you], L = S.terrain.length - 1;
+  const keep = { uz: S.userZoom, px: S.panX, py: S.panY, z: cam.zoom, cx: cam.cx, cy: cam.cy, minY: S.minY, x: me.x, y: me.y };
+  const out = { ladder: [], rows: [], pan: {}, cssW: view.cssW, ob: GOLF_OB_PX, start: START_ZOOM };
+  try {
+    S.minY = WH() - 2 * view.cssH / fullZoom(); S.panX = 0; S.panY = 0;
+    out.fit = Math.max(view.cssW / WW(), view.cssH / (WH() * TALL_CAP));
+    out.strips = Math.max((view.cssW - 2 * GOLF_OB_PX) / WW(), view.cssH / (WH() * TALL_CAP));
+    out.aim = aimZoom(); out.fz = fullZoom();
+    for (const uz of [START_ZOOM, 1, START_ZOOM / 1.35, 0.25, 0.61, 0.6, 0.59, 0.58, 0.57]) { S.userZoom = uz; out.ladder.push({ uz, tz: cameraTarget().tz }); }
+    S.userZoom = START_ZOOM;
+    for (let k = 0; k <= 40; k++) {
+      me.x = 250 + (L - 500) * k / 40; me.y = surfaceAt(me.x);
+      snapCamera();
+      const r = __rec(drawGolfBounds);
+      const lines = [...new Set(r.strokes.filter((st) => st.dash.length && /255, 255, 255/.test(st.style)).map((st) => st.path[0][1]))].filter((x) => x >= 0 && x <= view.cssW);
+      const labels = r.texts.filter((t) => t.t === 'OUT OF BOUNDS').map((t) => t.c[0]).filter((x) => x + 12 > 0 && x - 12 < view.cssW);
+      out.rows.push({ x: me.x, half: me.x <= L / 2 ? -1 : 1, z: cam.zoom, l: wx2s(0), r: wx2s(L), lines, labels });
+    }
+    me.x = keep.x; me.y = keep.y;
+    S.panX = WW(); snapCamera(); out.pan.R = { l: wx2s(0), r: wx2s(L) };
+    S.panX = -WW(); snapCamera(); out.pan.L = { l: wx2s(0), r: wx2s(L) };
+  } finally {
+    S.minY = keep.minY; S.userZoom = keep.uz; S.panX = keep.px; S.panY = keep.py; me.x = keep.x; me.y = keep.y;
+    cam.zoom = keep.z; cam.cx = keep.cx; cam.cy = keep.cy;
+  }
+  return out;
+})()`);
+{
+  const o = opening, W = o.cssW, B = o.ob;
+  const at = (uz) => o.ladder.find((q) => q.uz === uz).tz;
+  const mid = o.ladder.filter((q) => q.uz < o.start && q.uz > o.start / 1.35).map((q) => q.tz);
+  const fall = mid.every((z, i) => z <= (i ? mid[i - 1] : at(o.start)) && z >= o.strips);
+  if (near(o.fz, o.aim, 1e-15) && near(at(o.start), o.fit, 1e-12) && near(at(1), o.fit, 1e-12) && near(at(o.start / 1.35), o.strips, 1e-12) && near(at(0.25), o.strips, 1e-12)
+      && fall && mid.some((z) => z < o.fit && z > o.strips))
+    ok(`4: a short hole opens at the whole-course fit (zoom ${o.fit.toFixed(5)}), as before round 2, not at the two-strip floor (${o.strips.toFixed(5)}); one zoom-out step reaches that floor, and a pinch between eases down to it (${mid.map((z) => z.toFixed(5)).join(', ')})`);
+  else fail('4: the opening zoom ladder: ' + JSON.stringify(o.ladder) + ' ' + JSON.stringify({ fit: o.fit, strips: o.strips, aim: o.aim, fz: o.fz }));
+  const bad = o.rows.filter((q) => {
+    const nearEnd = q.half < 0 ? q.l : q.r, farEnd = q.half < 0 ? q.r : q.l;
+    const whole = q.half < 0 ? near(nearEnd, B, 0.01) : near(nearEnd, W - B, 0.01);
+    const farOff = q.half < 0 ? farEnd >= W + B - 0.01 : farEnd <= -B + 0.01;
+    const label = q.labels.length === 1 && (q.half < 0 ? q.labels[0] - 12 >= 0 && q.labels[0] < nearEnd : q.labels[0] + 12 <= W && q.labels[0] > nearEnd);
+    return !(near(q.z, o.fit, 1e-12) && whole && farOff && q.lines.length === 1 && near(q.lines[0], nearEnd, 1e-6) && label);
+  });
+  if (!bad.length) ok(`4: at the opening zoom, from all ${o.rows.length} lies end to end, the end nearer the ball is on screen with its strip whole (its line ${B}px in) and its label, and the far end is off the screen`);
+  else fail(`4: at the opening zoom, ${bad.length} of ${o.rows.length} lies: ` + JSON.stringify(bad.slice(0, 3)));
+  if (near(o.pan.R.r, W - B, 0.01) && o.pan.R.l <= -B + 0.01 && near(o.pan.L.l, B, 0.01) && o.pan.L.r >= W + B - 0.01)
+    ok('4: at the opening zoom, panning brings in the other end with its strip whole');
+  else fail('4: panning at the opening zoom: ' + JSON.stringify(o.pan));
+}
 
 // ---- 5. the banner --------------------------------------------------------------
 // Every time the banner is raised: what it says, which floaters are up, and
@@ -452,14 +524,22 @@ for (const [w, h, sa] of [[667, 375, ''], [812, 375, ''], [874, 402, SA], [932, 
     const keep = { uz: S.userZoom, px: S.panX };
     S.userZoom = 0.25; S.panX = 0; snapCamera();
     const r = __rec(drawGolfBounds);
+    // ...and at a short hole's opening zoom (section 4), where one end is on
+    // screen: aimZoom() given a band tall enough to frame the whole course.
+    const keepMinY = S.minY;
+    let r1;
+    try { S.minY = WH() - 2 * view.cssH / fullZoom(); S.userZoom = START_ZOOM; snapCamera(); r1 = __rec(drawGolfBounds); }
+    finally { S.minY = keepMinY; }
     S.userZoom = keep.uz; S.panX = keep.px;
     const cv = canvas.getBoundingClientRect();
-    const boxes = r.texts.filter((t) => t.t === 'OUT OF BOUNDS').map((t) => { const half = 7.5; return { x0: cv.left + t.c[0] - half, x1: cv.left + t.c[0] + half, y0: cv.top + t.c[1] - t.w / 2, y1: cv.top + t.c[1] + t.w / 2, font: t.font }; });
+    const box = (t) => { const half = 7.5; return { x0: cv.left + t.c[0] - half, x1: cv.left + t.c[0] + half, y0: cv.top + t.c[1] - t.w / 2, y1: cv.top + t.c[1] + t.w / 2, font: t.font }; };
+    const boxes = r.texts.filter((t) => t.t === 'OUT OF BOUNDS').map(box);
+    const openBoxes = r1.texts.filter((t) => t.t === 'OUT OF BOUNDS').map(box).filter((b) => b.x1 > cv.left && b.x0 < cv.right);
     const lines = r.strokes.filter((s) => s.dash.length).map((s) => cv.left + s.path[0][1]);
     const btns = ['camBtn', 'golfCardBtn', 'metaBtn'].map((id) => { const b = $(id).getBoundingClientRect(); return { id, x0: b.left, x1: b.right, y0: b.top, y1: b.bottom, shown: b.width > 0 && getComputedStyle($(id)).display !== 'none' }; });
     const el = $('obBanner');
     showOBBanner('OUT OF BOUNDS +1', S.you, false);
-    return { cv: { x0: cv.left, x1: cv.right, y0: cv.top, y1: cv.bottom }, boxes, lines, btns };
+    return { cv: { x0: cv.left, x1: cv.right, y0: cv.top, y1: cv.bottom }, boxes, openBoxes, lines, btns };
   })()`);
   await sleep(450);
   const b = await ev(`(() => {
@@ -473,7 +553,8 @@ for (const [w, h, sa] of [[667, 375, ''], [812, 375, ''], [874, 402, SA], [932, 
   })()`);
   const bad = [];
   if (g.boxes.length !== 2) bad.push('labels drawn: ' + g.boxes.length);
-  for (const x of g.boxes) {
+  if (g.openBoxes.length !== 1) bad.push('labels on screen at the opening zoom: ' + g.openBoxes.length);
+  for (const x of [...g.boxes, ...g.openBoxes]) {
     if (x.x0 < g.cv.x0 || x.x1 > g.cv.x1 || x.y0 < g.cv.y0 || x.y1 > g.cv.y1) bad.push('a label runs off the canvas: ' + JSON.stringify(x));
     if (sizeOf(x.font) < 13) bad.push('label font ' + x.font);
     for (const bt of g.btns) if (bt.shown && x.x0 < bt.x1 && x.x1 > bt.x0 && x.y0 < bt.y1 && x.y1 > bt.y0) bad.push(`a label sits under #${bt.id}`);
@@ -488,7 +569,7 @@ for (const [w, h, sa] of [[667, 375, ''], [812, 375, ''], [874, 402, SA], [932, 
   if (ch < 4.5 || cs2 < 4.5) bad.push('banner contrast ' + JSON.stringify({ ch, cs2 }));
   if (Number(b.opacity) !== 1) bad.push('banner not fully shown: opacity ' + b.opacity);
   if (bad.length) fail(`6: ${name}: ` + bad.join('; '));
-  else ok(`6: ${name}: both labels whole on the canvas, clear of the buttons, 13px; the banner whole on the stage, above the dock, ${b.head.fs}px over ${b.sub.fs}px, contrast ${ch.toFixed(1)} and ${cs2.toFixed(1)}`);
+  else ok(`6: ${name}: both labels whole on the canvas zoomed out, and the near end's at the opening zoom, clear of the buttons, 13px; the banner whole on the stage, above the dock, ${b.head.fs}px over ${b.sub.fs}px, contrast ${ch.toFixed(1)} and ${cs2.toFixed(1)}`);
 }
 } catch (e) {
   fail('golf_bounds suite stopped: ' + (e && e.message));
