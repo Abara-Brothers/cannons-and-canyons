@@ -2089,7 +2089,14 @@ function handleResume(ws, msg) {
   ws.roomCode = room.code; ws.seat = seat;
   if (stale && stale !== ws) { try { stale.terminate(); } catch { /* already gone */ } }
   send(ws, { type: 'restore', ...snapshot(room, seat) });
-  broadcast(room, { type: 'oppConn', seat, connected: true });
+  // TO EVERY SEAT BUT THIS ONE (round 2 fix, 2026-10-08). player.ws is the
+  // new socket already, so a plain broadcast told the player who came back
+  // that they had reconnected, as "<their own name> reconnected" beside the
+  // restore's own "Reconnected". The frame is news only to the others.
+  for (let i = 0; i < room.players.length; i++) {
+    const p = room.players[i];
+    if (i !== seat && p && p.ws) send(p.ws, { type: 'oppConn', seat, connected: true });
+  }
   scheduleBot(room);   // if it was the CPU's turn, resume its thinking
 }
 

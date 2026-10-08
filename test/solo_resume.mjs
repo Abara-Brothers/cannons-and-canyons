@@ -134,7 +134,7 @@ const NEW_DOC = `(() => {
       if (m) window.__tx.push(m);
       real(d);
     };
-    s.addEventListener('message', (e) => { try { const m = JSON.parse(e.data); window.__rx.push({ t: m.type, by: m.by, turn: m.turn }); } catch (x) {} });
+    s.addEventListener('message', (e) => { try { const m = JSON.parse(e.data); window.__rx.push({ t: m.type, by: m.by, turn: m.turn, seat: m.seat }); } catch (x) {} });
     return s;
   };
   Tap.prototype = Real.prototype;
@@ -262,6 +262,21 @@ try {
   {
     const n = await notice();
     if (!n.up) ok('A: and no notice, because nothing ended'); else fail('A: a notice over a resumed match: ' + JSON.stringify(n));
+  }
+  // NOBODY TELLS THE PLAYER THAT THEY RECONNECTED (round 2 fix). The server
+  // sends oppConn about a seat to every seat but that one, and the page says
+  // nothing for a frame about its own seat; one about another seat is still
+  // said, as before. The page's own toasts are caught at showToast.
+  {
+    await sleep(600);
+    const mine = await ev('window.__rx.filter((f) => f.t === \'oppConn\' && f.seat === S.you).length');
+    const said = await ev(`(() => { const out = []; const was = window.showToast; window.showToast = (t) => { out.push(String(t)); };
+      try { handle({ type: 'oppConn', seat: S.you, connected: true }); handle({ type: 'oppConn', seat: S.you, connected: false });
+        const own = out.length; const other = S.you === 0 ? 1 : 0; handle({ type: 'oppConn', seat: other, connected: true });
+        return { own, other: out.slice(own), name: S.names[other] }; } finally { window.showToast = was; } })()`);
+    if (mine === 0 && said.own === 0 && said.other.length === 1 && said.other[0] === `${said.name} reconnected`)
+      ok('A: the resume sent the page no oppConn about its own seat, and the page says nothing for one; a frame about another seat still says "<name> reconnected"');
+    else fail(`A: oppConn about the player: received ${mine}, said ${JSON.stringify(said)}`);
   }
   // It plays on: the player's shot, each CPU's, and the turn comes home.
   const me = await ev('S.you');

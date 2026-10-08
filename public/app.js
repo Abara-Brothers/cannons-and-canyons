@@ -2988,6 +2988,12 @@ function handle(m) {
       }
       break;
     case 'oppConn': {
+      // NEVER ABOUT THIS PLAYER (round 2 fix, 2026-10-08). The frame says
+      // another seat dropped or came back. A server from before the fix also
+      // sent it to the seat that had just resumed, which then read "<its own
+      // name> reconnected" beside the restore's own "Reconnected"; a frame
+      // about this player's own seat is news to nobody here.
+      if (m.seat === S.you) break;
       const who = S.names[m.seat] || 'Opponent';
       showToast(m.connected ? `${who} reconnected` : `${who} lost connection — holding their seat…`);
       break;

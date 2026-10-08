@@ -421,6 +421,39 @@ for (const phase of ['think', 'drive', 'aim']) {
   leave(E, ws);
 }
 
+// ---- 8. A resume is news to the OTHER seats only (round 2 fix) ----------------
+// handleResume broadcast oppConn {connected:true} to every seat, the resuming
+// one included, and the client toasts "<name> reconnected" for any seat: a
+// player back at a held match against the computer was told that THEY had
+// reconnected. The frame now goes to every seat but the one it is about.
+{
+  const { ws, room, start } = solo(E, 'ffa');
+  gone(E, ws);
+  advance(31 * 60 * 1000);                 // past the old half-hour hold
+  const back = resume(E, start);
+  const self = back._rx.filter((m) => m.type === 'oppConn' && m.seat === start.you);
+  if (last(back, 'restore') && self.length === 0) ok('(8) a player back at a held match against the computer is not told that they reconnected');
+  else fail(`(8) the resuming seat was sent ${JSON.stringify(self)} (restore ${!!last(back, 'restore')})`);
+  leave(E, back);
+  // Two humans: the other seat is still told; the seat that came back is not.
+  const a = mkws(), b = mkws();
+  E.handleClientMessage(a, { type: 'create', mode: 'ffa', max: 2, name: 'A', skin: 'olive', loadout: LOADOUT });
+  const pair = E.rooms.get(a.roomCode);
+  E.handleClientMessage(b, { type: 'join', code: pair.code, name: 'B', skin: 'desert', loadout: LOADOUT });
+  advance(1000);
+  const aStart = last(a, 'start');
+  gone(E, a);
+  advance(5000);
+  b._rx.length = 0;
+  const aBack = resume(E, aStart);
+  const toB = b._rx.filter((m) => m.type === 'oppConn');
+  const toA = aBack._rx.filter((m) => m.type === 'oppConn' && m.seat === aStart.you);
+  if (last(aBack, 'restore') && toB.length === 1 && toB[0].seat === aStart.you && toB[0].connected === true && toA.length === 0)
+    ok('(8) with another human, that human is told the seat reconnected, and the seat that came back is not');
+  else fail(`(8) two humans: to B ${JSON.stringify(toB)}, to A ${JSON.stringify(toA)}`);
+  leave(E, aBack); leave(E, b);
+}
+
 // ---- 9. A raid finished alone is held like a match alone (round 2 fix) --------
 // The hold used to count SEATS: a partner who left, or dropped and was
 // forfeited, kept a human seat at hp 0, so the player still raiding got the
