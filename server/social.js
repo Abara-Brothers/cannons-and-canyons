@@ -746,11 +746,27 @@ export function createSocial({
   // default). There is nothing here to count a guest by that a reinstall does
   // not reset, and a modified client could skip the op entirely: what holds a
   // guest's name to the rules is the engine's check at the door, not this.
-  function checkName(ws, msg) {
+  //
+  // AND IT MOVES THE GUEST'S SQUAD ROW (round 2 fix, 2026-10-08). A yes here
+  // is the name the guest keeps (app.js sendGuestName keeps the reply's name
+  // the moment it arrives), but a guest's squad row held the name its create
+  // or join frame carried, so the row, on every member's screen and the
+  // guest's own, and the seat the squad's start hands the engine, kept the old
+  // name until the guest left and joined again. So on a yes, the row this
+  // socket holds, when it is a guest row and the socket is still a guest's,
+  // takes the server's normalised name, and the squad is pushed. A refusal
+  // changes nothing. A failed push costs only the cosmetic update, which the
+  // next push carries.
+  async function checkName(ws, msg) {
     if (!rateOk(ws, 'callsign', LIMITS.callsign)) return reply(ws, msg, { type: 'callsign', op: 'check', error: 'slow_down' });
     const v = typedName(msg.name);
     if (!v.ok) return reply(ws, msg, { type: 'callsign', op: 'check', error: v.error });
     reply(ws, msg, { type: 'callsign', op: 'check', ok: true, name: v.name });
+    const key = squadGuest(ws) ? squads.keyOfSocket(ws) : null;
+    const own = key == null ? null : squads.memberOf(key);
+    if (!own || !own.member.guest || own.member.ws !== ws || own.member.name === v.name) return;
+    own.member.name = v.name;
+    await pushSquad(own.squad, null, null).catch(() => {});
   }
 
   // ---- ONE SOCIAL FRAME AT A TIME, PER SOCKET -------------------------------
@@ -795,7 +811,7 @@ export function createSocial({
           // The name check comes BEFORE the gate: it is the one callsign op
           // a guest is entitled to (see checkName). Everything else on this
           // type — set, and an old build's roll — still needs a linked account.
-          if (msg.op === 'check') { checkName(ws, msg); return; }
+          if (msg.op === 'check') { await checkName(ws, msg); return; }
           if (!requireLinked(ws, msg)) return;
           // AWAIT, not `return callsign(...)`. Returning the promise from
           // inside a try hands the rejection to the CALLER: the catch below

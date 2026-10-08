@@ -10031,6 +10031,46 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     else fail('(gr) block by rid: ' + JSON.stringify({ b1: ans6(wa2, 'b1'), blocks: [...st.blocks], after, ended: last6(gb, 'squad', 'ended') }));
   }
 
+  // ---- (gx) A GUEST'S RENAME REACHES THEIR SQUAD ROW AND SEAT (round 2 fix) -
+  // A guest renames with the check op; its yes is the name the guest keeps.
+  // The guest's squad row, on every member's screen and their own, and the
+  // name the squad's start seats them under, follow it, as the server
+  // normalised it. A refused rename changes nothing.
+  {
+    const { createNameIndex } = await import('../server/name-index.js');
+    const index = createNameIndex({ load: async () => [] });
+    await index.refresh();
+    const GA = uid6(23);
+    const seated = [];
+    const st = t6store([...ROWS6, { id: GA, callsign: 'Ghost C', friend_code: 'GCC234', callsign_key: null, callsign_set_at: null }]);
+    const S = mkSocial6(st, { names: index, seatSquad: (seats) => { seated.push(seats.map((x) => x.name)); return { ok: true, code: 'RMGX' }; } });
+    const wa = up6(S, A);
+    const code = await create6(S, wa);
+    await S.handle(wa, { type: 'squad', op: 'mode', mode: 'ffa' });
+    const g = t6ws(GA, true);
+    await join6(S, g, code, 'Salty Buzzard');
+    const before = ((last6(wa, 'squad', 'state') || { members: [] }).members[1] || {}).callsign;
+    clear6(wa, g);
+    await S.handle(g, { type: 'callsign', op: 'check', name: '  Night   Owl ', id: 'n1' });
+    await settle6();
+    const ans = ans6(g, 'n1');
+    const theirs = ((last6(wa, 'squad', 'state') || { members: [] }).members[1] || {}).callsign;
+    const ownF = last6(g, 'squad', 'state') || { members: [] };
+    const own = (ownF.members[ownF.you] || {}).callsign;
+    // A refused rename touches nothing.
+    clear6(wa);
+    await S.handle(g, { type: 'callsign', op: 'check', name: 'CPU 2', id: 'n2' });
+    await settle6();
+    const quiet = got6(wa, 'squad', 'state').length;
+    await S.handle(g, { type: 'squad', op: 'ready', ready: true, loadout: RACK5 });
+    await S.handle(wa, { type: 'squad', op: 'ready', ready: true, loadout: RACK5 });
+    await S.handle(wa, { type: 'squad', op: 'start', loadout: RACK5, id: 's1' });
+    if (before === 'Salty Buzzard' && ans && ans.ok === true && ans.name === 'Night Owl' && theirs === 'Night Owl' && own === 'Night Owl'
+        && same6(ans6(g, 'n2'), { type: 'callsign', op: 'check', error: 'not_allowed', id: 'n2' }) && quiet === 0
+        && seated.length === 1 && seated[0].length === 2 && seated[0][1] === 'Night Owl')
+      ok("(gx) a guest's rename reaches their squad row on every screen and their own, normalised, and the squad starts with them seated under it; a refused rename changes nothing");
+    else fail('(gx) rename: ' + JSON.stringify({ before, ans, theirs, own, n2: ans6(g, 'n2'), quiet, seated }));
+  }
 
   // ---- (err) THE SQUAD REFUSALS ARE A CLOSED, NAMED SET (E9) ---------------
   // Every error a squad reply can carry, by op, is one list the client maps
