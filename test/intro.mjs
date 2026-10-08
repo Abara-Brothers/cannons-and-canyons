@@ -28,7 +28,11 @@
 // every path. A held seat the server no longer has opens onto home, and only
 // once the doors have gone does home say "That match ended while you were
 // away."; a match against the computer comes back from past the old empty-room
-// hold (owner, 2026-10-07, item 21).
+// hold (owner, 2026-10-07, item 21). The round 2 review adds: the last view is
+// kept the moment it changes and its time while the page is on screen, so a
+// kill with no word (the iOS app switcher) still reopens onto it; no toast is
+// drawn on the quick doors and none is lost; and a native sign-in return gets
+// the quick doors.
 //
 // Self-hosted (its own server and Chrome on free ports, never 3000). Skips
 // cleanly (exit 3) without Chrome, like every other client-side suite.
@@ -48,7 +52,11 @@ if (!existsSync(CHROME)) {
   process.exit(3);
 }
 
-const CDP_MS = 20000, RUN_MS = 300000;
+// RUN_MS only catches a CDP peer that stopped answering. The round 2 review's
+// checks (a 16.5 s wait for the last view's beat among them) took a whole run
+// from about 170 s to about 200 s on an idle machine, so the ceiling went from
+// 300 s to 420 s, which leaves a busy machine at least the room it had.
+const CDP_MS = 20000, RUN_MS = 420000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const freePort = () => new Promise((resolve, reject) => {
   const s = net.createServer(); s.on('error', reject);
@@ -208,8 +216,9 @@ const INSTR = `(() => {
   // they stand, the canvas's own opacity, what is under them, and three
   // canvas readings -- the middle of the screen and a point well inside each
   // door -- plus a ring of points round the top-left beacon, which must turn
-  // while the doors hold. At the first frame they open: what they open onto,
-  // and whether anything in the bay is still animating its entrance.
+  // while the doors hold, and how many toasts are up (round 2 review: none
+  // may be drawn on the doors). At the first frame they open: what they open
+  // onto, and whether anything in the bay is still animating its entrance.
   S.quick = [];
   function px(cv, x, y) { const q = cv.getContext('2d'); return q.getImageData(Math.max(0, Math.min(cv.width - 1, Math.round(x))), Math.max(0, Math.min(cv.height - 1, Math.round(y))), 1, 1).data; }
   function quickFrame(I, cv) {
@@ -218,7 +227,8 @@ const INSTR = `(() => {
     for (let k = 0; k < 12; k++) { const a = k / 12 * 6.283, p = px(cv, (g[0] + (932 * .085 + Math.cos(a) * 40) * g[2]) * d, (g[1] + (430 * .12 + Math.sin(a) * 40) * g[2]) * d); ring.push(p[0] + p[1] + p[2]); }
     const row = { t: Math.round(I.t), open: I.open || 0, shift: I.shift || 0, seam: g[0] + 466 * g[2], u: g[2], opacity: +getComputedStyle(cv).opacity,
       mid: px(cv, cv.width / 2, cv.height / 2)[3], left: px(cv, cv.width * .04, cv.height / 2)[3], right: px(cv, cv.width * .96, cv.height / 2)[3],
-      ring: ring.join(','), scr: bay.dataset.scr || '', game: document.getElementById('game').classList.contains('active'), mg: mgUp() };
+      ring: ring.join(','), scr: bay.dataset.scr || '', game: document.getElementById('game').classList.contains('active'), mg: mgUp(),
+      toast: document.querySelectorAll('.toast-item').length };
     if (row.open > 0 && !S.quickOpen) {
       const anims = bay.getAnimations ? bay.getAnimations({ subtree: true }).filter((a) => { const it = a.effect && a.effect.getComputedTiming && a.effect.getComputedTiming(); return it && isFinite(it.iterations) && a.playState === 'running'; }).length : 0;
       S.quickOpen = { t: row.t, scr: row.scr, game: row.game, anims, resume: localStorage.getItem('cc_resume') !== null };
@@ -258,9 +268,12 @@ const NAME = "try { localStorage.setItem('pt_name', 'TESTPILOT'); } catch (e) {}
 // It is handed to intro.js ALONE (the caller's stack names it): a page that
 // sees window.Capacitor takes itself for the native shell, and config.js
 // would aim its socket at the production host.
-const LAUNCH = `(() => {
+// LAUNCH_NATIVE is the same stub that also tells intro.js, and only intro.js,
+// that it runs in the native shell (isNativePlatform), for its sign-in return
+// (round 2 review); the rest of the page still sees no Capacitor at all.
+const launchStub = (native) => `(() => {
   const L = window.__launch = { hides: 0, at: [] };
-  const stub = { Plugins: { CCLaunch: { hide() {
+  const stub = { ${native ? 'isNativePlatform: () => true, ' : ''}Plugins: { CCLaunch: { hide() {
     L.hides++;
     const cv = document.getElementById('intro');
     let a = -1;
@@ -270,6 +283,7 @@ const LAUNCH = `(() => {
   } } } };
   Object.defineProperty(window, 'Capacitor', { configurable: true, get() { return /\\/intro\\.js/.test(new Error().stack || '') ? stub : undefined; } });
 })();`;
+const LAUNCH = launchStub(false), LAUNCH_NATIVE = launchStub(true);
 // The last view a page left behind (app.js cc_last_view), planted before any
 // page script runs: ageMs ago (negative: from the future), with these fields.
 const LAST = (ageMs, rec) => `try { localStorage.setItem('cc_last_view', JSON.stringify(Object.assign({ t: Date.now() - (${ageMs}) }, ${JSON.stringify(rec)}))); } catch (e) {}`;
@@ -300,6 +314,24 @@ const SLOW_ANSWER = `(() => {
   Slow.CONNECTING = 0; Slow.OPEN = 1; Slow.CLOSING = 2; Slow.CLOSED = 3;
   window.WebSocket = Slow;
 })();`;
+// EVERY TOAST, ASKED FOR AND PUT UP (round 2 review: none may be drawn on the
+// quick doors, and none may be lost). window.__toasts.asked is every
+// showToast() call from the moment app.js has run, with whether the doors
+// were up then; .shown is every toast that reached the screen, with whether
+// the intro's canvas was still there.
+const TOASTS = `(() => {
+  const T = window.__toasts = { asked: [], shown: [] };
+  document.addEventListener('DOMContentLoaded', () => {
+    const real = window.showToast;
+    if (typeof real === 'function') window.showToast = function (text) { T.asked.push({ text, up: window.CC_DOORS_UP === true }); return real.apply(this, arguments); };
+  });
+  new MutationObserver((recs) => {
+    for (const r of recs) for (const n of r.addedNodes) if (n.nodeType === 1 && n.classList.contains('toast-item')) T.shown.push({ text: n.textContent, cv: !!document.getElementById('intro') });
+  }).observe(document, { childList: true, subtree: true });
+})();`;
+// A NATIVE SIGN-IN RETURN (round 2 review): cloud.js's flag that this app
+// started a sign-in, which in the native shell lives in localStorage.
+const PENDING = "try { localStorage.setItem('cc_oauth_pending', '1'); } catch (e) {}";
 
 // context: open the page in an existing browser context, so it shares that
 // context's localStorage with an earlier page (a reopened app) while getting
@@ -606,7 +638,7 @@ async function offCase(label, opts, url = BASE) {
   await p.close();
 }
 async function quickCase(label, opts, url, want) {
-  const p = await openPage({ w: 844, h: 390, dpr: 3, ...opts, extra: [...(opts.extra || []), LAUNCH] });
+  const p = await openPage({ w: 844, h: 390, dpr: 3, ...opts, extra: [...(opts.extra || []), opts.native ? LAUNCH_NATIVE : LAUNCH] });
   await p.go(url);
   const R = await quickRun(p);
   doorsOk(label, R, want);
@@ -645,6 +677,24 @@ await offCase('test switch: window.__ccNoIntro skips it', { noIntro: true });
   check('A5/R8 a nameless invite launch (boot routes nowhere) still plays it', st && st?.state === 'running', JSON.stringify(st));
   await p.close();
 }
+// ---- V9: a native sign-in return ---------------------------------------------
+// intro.js decide()'s last way to the quick doors, which nothing ran until the
+// round 2 review. In the native shell, a launch that finds cloud.js's sign-in
+// flag (cc_oauth_pending, kept in localStorage there) is a sign-in coming back
+// to the app, which is somewhere to go: the quick doors, never the intro, which
+// would play for six seconds over the return, or a cut from the launch image
+// straight to the menu (item 23). Both halves are needed, so each alone is
+// shown playing the intro: the shell with no sign-in pending, and the flag on
+// the web, where cloud.js keeps its own flag in sessionStorage and never reads
+// this one.
+await quickCase('V9 a native sign-in return: the quick doors, never the intro', { native: true, extra: [PENDING] }, BASE, { dest: 'home' });
+for (const [label, opts] of [['V9 the native shell with no sign-in pending: the full intro', { native: true }], ['V9 a sign-in flag on the web: the full intro', { extra: [PENDING] }]]) {
+  const p = await openPage({ w: 844, h: 390, dpr: 3, ...opts, extra: [...(opts.extra || []), opts.native ? LAUNCH_NATIVE : LAUNCH] });
+  await p.go();
+  const st = await p.until((x) => x.state === 'running' && x.tp >= 300, 6000);
+  check(label, !!st && st.mode === 'full' && st.state === 'running', JSON.stringify(st));
+  await p.close();
+}
 
 // ---- V9: A QUICK REOPEN -------------------------------------------------------
 // The owner (2026-10-07): "skip it, the doors open fast but when the doors
@@ -662,13 +712,18 @@ await offCase('test switch: window.__ccNoIntro skips it', { noIntro: true });
   const a = await openPage({ w: 844, h: 390, dpr: 3, noIntro: true, context: X });
   await a.go(); await bayReady(a);
   await a.ev(`(document.querySelector('#bay [data-set="mode=golf"]').click(), Bay.go('setup'), Bay.go('armoury'), true)`);
-  const left = await a.ev(`({ scr: ${SCR}, mode: ccMode, rec: localStorage.getItem('cc_last_view') })`);
+  const left = await a.ev(`({ scr: ${SCR}, mode: ccMode, rec: JSON.parse(localStorage.getItem('cc_last_view') || 'null') })`);
+  // Round 2 review: the record is current while the page is still open, not
+  // only once it is put away (it was null here until then).
+  check('V9 the last view is kept as the player moves, before the page is put away: the screen, the way back to it and the armed mode',
+    left.scr === 'armoury' && left.mode === 'golf' && !!left.rec && left.rec.scr === 'armoury' && JSON.stringify(left.rec.path) === '["home","setup"]' && left.rec.mode === 'golf' && Math.abs(Date.now() - left.rec.t) < 15000,
+    JSON.stringify(left));
   await a.go('about:blank'); await sleep(200); await a.close();
   const b = await openPage({ w: 844, h: 390, dpr: 3, context: X, extra: [LAUNCH] });
   await b.go();
   const rec = await b.ev("JSON.parse(localStorage.getItem('cc_last_view') || 'null')");
   check('V9 putting the page away keeps the last view: the screen, the way back to it and the armed mode',
-    left.scr === 'armoury' && left.mode === 'golf' && left.rec === null && !!rec && rec.scr === 'armoury' && JSON.stringify(rec.path) === '["home","setup"]' && rec.mode === 'golf' && Math.abs(Date.now() - rec.t) < 15000,
+    !!rec && rec.scr === 'armoury' && JSON.stringify(rec.path) === '["home","setup"]' && rec.mode === 'golf' && Math.abs(Date.now() - rec.t) < 15000,
     JSON.stringify({ left, rec }));
   const R = await quickRun(b);
   doorsOk('V9 reopened within ten minutes', R, { dest: 'armoury' });
@@ -685,21 +740,186 @@ await offCase('test switch: window.__ccNoIntro skips it', { noIntro: true });
   // last thing a page hears before the app may be killed, which it hears
   // only as becoming hidden. Chrome also turns a page hidden as it unloads,
   // so the real close above cannot tell the two apart: each is fired here
-  // alone.
+  // alone. Since the round 2 review the view is also kept the moment it
+  // changes (below), so the record is taken away before each event: only that
+  // event can have put it back. Coming back to the foreground is use again,
+  // and keeps the time at once.
   const p = await openPage({ w: 844, h: 390, dpr: 3, noIntro: true });
   await p.go(); await bayReady(p);
-  const before = await p.ev("localStorage.getItem('cc_last_view')");
-  const onHide = await p.ev("(Bay.go('paint'), window.dispatchEvent(new Event('pagehide')), JSON.parse(localStorage.getItem('cc_last_view') || 'null'))");
-  check('V9 pagehide on its own keeps the last view', before === null && !!onHide && onHide.scr === 'paint' && Math.abs(Date.now() - onHide.t) < 5000, JSON.stringify({ before, onHide }));
+  const before = await p.ev("JSON.parse(localStorage.getItem('cc_last_view') || 'null')");
+  const onHide = await p.ev("(Bay.go('paint'), localStorage.removeItem('cc_last_view'), window.dispatchEvent(new Event('pagehide')), JSON.parse(localStorage.getItem('cc_last_view') || 'null'))");
+  check('V9 pagehide on its own keeps the last view', !!before && before.scr === 'home' && !!onHide && onHide.scr === 'paint' && Math.abs(Date.now() - onHide.t) < 5000, JSON.stringify({ before, onHide }));
   const rec = await p.ev(`(() => {
     Bay.go('career');
+    localStorage.removeItem('cc_last_view');
     Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
     document.dispatchEvent(new Event('visibilitychange'));
     return JSON.parse(localStorage.getItem('cc_last_view') || 'null');
   })()`);
   check('V9 the app going to the background keeps the last view too', !!rec && rec.scr === 'career' && JSON.stringify(rec.path) === '["home","paint"]' && Math.abs(Date.now() - rec.t) < 5000, JSON.stringify(rec));
+  const back = await p.ev(`(() => {
+    localStorage.setItem('cc_last_view', JSON.stringify({ t: Date.now() - 3600000, scr: 'career', path: ['home', 'paint'], mode: ccMode }));
+    delete document.hidden; delete document.visibilityState;
+    document.dispatchEvent(new Event('visibilitychange'));
+    const w = JSON.parse(localStorage.getItem('cc_last_view') || 'null');
+    return { hidden: document.hidden, scr: w && w.scr, age: w ? Date.now() - w.t : null };
+  })()`);
+  check('V9 coming back to the foreground after an hour is use again: the time is kept at once, so a kill straight after is still a quick reopen',
+    back.hidden === false && back.scr === 'career' && back.age >= 0 && back.age < 5000, JSON.stringify(back));
   await p.close();
+}
+{
+  // KEPT AS THE PLAYER MOVES (round 2 review). A swipe from the iOS app
+  // switcher can kill the app with no pagehide and without its page turning
+  // hidden first, so the view is kept the moment it changes: the first screen,
+  // every screen and every step Back, and a mode armed, each with its time.
+  // All of it in one evaluation, so the beat (below) cannot have written any
+  // of it. A redraw of the same view keeps nothing, or every social and squad
+  // push would be a write: 25 pushes redraw home (each rewrites #bay's
+  // data-scr, counted) and none of them writes the record.
+  const p = await openPage({ w: 844, h: 390, dpr: 3, noIntro: true });
+  await p.go(); await bayReady(p);
+  const steps = await p.ev(`(() => {
+    const r = () => { const v = JSON.parse(localStorage.getItem('cc_last_view') || 'null'); return v && [v.scr, v.path.join('>'), v.mode, Math.abs(Date.now() - v.t) < 5000]; };
+    const out = [r()];
+    Bay.go('career'); out.push(r());
+    Bay.go('paint'); out.push(r());
+    Bay.back(); out.push(r());
+    Bay.back(); out.push(r());
+    document.querySelector('#bay [data-set="mode=golf"]').click(); out.push(r());
+    return out;
+  })()`);
+  check('V9 every change of view is kept the moment it happens, with no page put away: the first screen, each screen, each step Back and a mode armed',
+    JSON.stringify(steps) === JSON.stringify([['home', '', 'duel', true], ['career', 'home', 'duel', true], ['paint', 'home>career', 'duel', true], ['career', 'home', 'duel', true], ['home', '', 'duel', true], ['home', '', 'golf', true]]),
+    JSON.stringify(steps));
+  const quiet = await p.ev(`(() => {
+    const set = Storage.prototype.setItem, bay = document.getElementById('bay'); let writes = 0;
+    const ob = new MutationObserver(() => {}); ob.observe(bay, { attributes: true, attributeFilter: ['data-scr'] });
+    Storage.prototype.setItem = function (k) { if (k === 'cc_last_view') writes++; return set.apply(this, arguments); };
+    try { for (let i = 0; i < 25; i++) document.dispatchEvent(new Event('cc:social')); }
+    finally { Storage.prototype.setItem = set; }
+    const redraws = ob.takeRecords().length; ob.disconnect();
+    return { writes, redraws, scr: bay.dataset.scr };
+  })()`);
+  check(`V9 a redraw of the same view keeps nothing: ${quiet.redraws} redraws of home, ${quiet.writes} writes`, quiet.scr === 'home' && quiet.redraws >= 25 && quiet.writes === 0, JSON.stringify(quiet));
+  // TOASTS UNDER THE QUICK DOORS (round 2 review), at app.js's end of the
+  // contract with intro.js: while CC_DOORS is 'quick' and CC_DOORS_UP is
+  // true every toast is held, and cc:doorsgone shows them all, in order; one
+  // raised after that shows at once. The real doors are below (a held seat).
+  const held = await p.ev(`(() => {
+    const mine = ['First', 'Second', 'Third', 'Later'];
+    const items = () => [...document.querySelectorAll('.toast-item')].map((t) => t.textContent).filter((t) => mine.includes(t));
+    const was = [window.CC_DOORS, window.CC_DOORS_UP];
+    window.CC_DOORS = 'quick'; window.CC_DOORS_UP = true;
+    showToast('First'); showToast('Second'); showToast('Third');
+    const during = items();
+    window.CC_DOORS_UP = false; document.dispatchEvent(new Event('cc:doorsgone'));
+    const after = items();
+    showToast('Later');
+    const later = items();
+    window.CC_DOORS = was[0]; window.CC_DOORS_UP = was[1];
+    return { during, after, later };
+  })()`);
+  check('V9 a toast raised while the quick doors are up is held, every one is shown in order the moment they have gone, and one raised after shows at once',
+    held.during.length === 0 && JSON.stringify(held.after) === '["First","Second","Third"]' && JSON.stringify(held.later) === '["First","Second","Third","Later"]', JSON.stringify(held));
+  await p.close();
+}
+{
+  // A MATCH'S START AND ITS END are changes of view too (round 2 review),
+  // kept with the moment they happened even though the view kept is the same
+  // home it was, as it is all through a match. The page reads as hidden (no
+  // event is sent), which holds the beat off, so nothing else can have
+  // written the time.
+  const p = await openPage({ w: 844, h: 390, dpr: 3, noIntro: true });
+  await p.go(); await bayReady(p);
+  const AGED = 9 * 60 * 1000;
+  const SET_BACK = `(() => { const v = JSON.parse(localStorage.getItem('cc_last_view') || 'null') || { scr: 'none', path: [], mode: ccMode }; v.t = Date.now() - ${AGED}; localStorage.setItem('cc_last_view', JSON.stringify(v)); return v.scr; })()`;
+  const READ = "(() => { const v = JSON.parse(localStorage.getItem('cc_last_view') || 'null'); return v ? { scr: v.scr, path: v.path, age: Date.now() - v.t } : null; })()";
+  await p.ev("(Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }), true)");
+  const was = await p.ev(SET_BACK);
+  await p.ev("(document.getElementById('createBtn').onclick(), true)");
+  let playing = false;
+  for (let i = 0; i < 150 && !playing; i++) { playing = await p.ev('S.playing === true'); if (!playing) await sleep(50); }
+  const atStart = await p.ev(READ);
+  check('V9 a match starting from home keeps the view at once, with the moment it started: home, though the view did not change',
+    was === 'home' && playing && !!atStart && atStart.scr === 'home' && atStart.path.length === 0 && atStart.age >= 0 && atStart.age < 3000, JSON.stringify({ was, playing, atStart }));
+  const ends = await p.ev(`(() => {
+    ${SET_BACK}; onGameOver({ winner: S.you, hp: S.hp.slice() }); const over = ${READ};
+    ${SET_BACK}; handle({ type: 'opponentLeft' }); const left = ${READ};
+    return { over, left, overlay: !document.getElementById('overlay').classList.contains('hidden') };
+  })()`);
+  check('V9 a match ending keeps the view at once, with the moment it ended: the result on screen', ends.overlay && !!ends.over && ends.over.scr === 'home' && ends.over.age >= 0 && ends.over.age < 3000, JSON.stringify(ends));
+  check('V9 and so does the opponent leaving', !!ends.left && ends.left.scr === 'home' && ends.left.age >= 0 && ends.left.age < 3000, JSON.stringify(ends));
+  await p.close();
+}
+{
+  // KILLED WITH NO WORD (round 2 review): the swipe from the iOS app
+  // switcher. CDP's Page.crash ends the page the same way, with no pagehide
+  // and no visibilitychange (the page's own listeners below would have marked
+  // either). A put-away a moment before left a record naming another screen,
+  // so a reopen that found only that would open onto the wrong one, and with
+  // no record at all it would play the full intro. The page reads as hidden
+  // (no event is sent), which holds the beat off: only the changes of view
+  // can have kept the screen the player was on.
+  const { browserContextId: X } = await send('Target.createBrowserContext', { disposeOnDetach: true });
+  const MARK = `addEventListener('pagehide', () => { try { localStorage.setItem('cc_test_unload', 'pagehide'); } catch (e) {} });
+    document.addEventListener('visibilitychange', () => { try { localStorage.setItem('cc_test_unload', 'visibilitychange'); } catch (e) {} });`;
+  const a = await openPage({ w: 844, h: 390, dpr: 3, noIntro: true, context: X, extra: [MARK] });
+  await a.go(); await bayReady(a);
+  const stale = await a.ev(`(() => {
+    Bay.go('paint'); window.dispatchEvent(new Event('pagehide'));
+    const v = JSON.parse(localStorage.getItem('cc_last_view') || 'null');
+    localStorage.removeItem('cc_test_unload');
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+    Bay.back(); Bay.go('setup'); Bay.go('armoury');
+    return v && v.scr;
+  })()`);
+  await sleep(300);
+  await Promise.race([a.s('Page.crash').catch(() => {}), sleep(1500)]);
+  await sleep(300); await a.close();
+  const b = await openPage({ w: 844, h: 390, dpr: 3, context: X, extra: [LAUNCH] });
+  await b.go();
+  const unload = await b.ev("localStorage.getItem('cc_test_unload')");
+  const R = await quickRun(b);
+  check('V9 the app was killed with no word: no pagehide and no visibilitychange reached it, and the last put-away had kept another screen',
+    unload === null && stale === 'paint', JSON.stringify({ unload, stale }));
+  doorsOk('V9 reopened after a kill with no word', R, { dest: 'armoury' });
+  const way = await b.ev(`(() => { const out = []; Bay.back(); out.push(${SCR}); Bay.back(); out.push(${SCR}); return out; })()`);
+  check('V9 that reopen opens onto the screen the player was on, with Back the way they came', JSON.stringify(way) === '["setup","home"]', JSON.stringify(way));
+  await b.close();
+  try { await send('Target.disposeBrowserContext', { browserContextId: X }); } catch {}
+}
+{
+  // THE TIME IS KEPT WHILE THE PAGE IS ON SCREEN (round 2 review). A player
+  // can stay on one screen for longer than the ten minutes and be killed
+  // there with no word, so a beat keeps the time every LAST_USE_MS while the
+  // page is on screen; while it is hidden nobody is using it, and the beat
+  // keeps nothing. Two pages in two contexts, so neither writes over the
+  // other's record: one on screen, one reading as hidden. Each sits on one
+  // screen with its record set back 9 min 55 s, nothing else changed, and both
+  // are read a beat later. The page on screen is also counted: one beat is
+  // one write, never a stream of them.
+  const vis = await openPage({ w: 844, h: 390, dpr: 3, noIntro: true });
+  const hid = await openPage({ w: 844, h: 390, dpr: 3, noIntro: true });
+  await vis.go(); await hid.go(); await bayReady(vis); await bayReady(hid);
+  const BEAT = await vis.ev("typeof LAST_USE_MS === 'number' ? LAST_USE_MS : 0");
+  await hid.ev("(Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }), true)");
+  const SET_BACK = `(() => {
+    Bay.go('career');
+    const v = JSON.parse(localStorage.getItem('cc_last_view') || 'null') || { scr: 'none', path: [], mode: ccMode }; v.t = Date.now() - 595000; localStorage.setItem('cc_last_view', JSON.stringify(v));
+    window.__lvWrites = 0; const set = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (k) { if (k === 'cc_last_view') window.__lvWrites++; return set.apply(this, arguments); };
+    return true;
+  })()`;
+  await vis.ev(SET_BACK); await hid.ev(SET_BACK);
+  await sleep((BEAT || 15000) + 1500);
+  const AGE = "(() => { const v = JSON.parse(localStorage.getItem('cc_last_view') || 'null'); return v ? { scr: v.scr, age: Date.now() - v.t, writes: window.__lvWrites } : null; })()";
+  const [on, off] = [await vis.ev(AGE), await hid.ev(AGE)];
+  check(`V9 while the page is on screen a beat keeps the last use every ${BEAT / 1000} s: set back 9 min 55 s on one screen, it was ${on && Math.round(on.age / 1000)} s old a beat later, in ${on && on.writes} write(s)`,
+    BEAT > 0 && BEAT <= 15000 && !!on && on.scr === 'career' && on.age >= 0 && on.age <= BEAT + 1500 && on.writes >= 1 && on.writes <= 2, JSON.stringify(on));
+  check('V9 and while the page is hidden the beat keeps nothing', !!off && off.scr === 'career' && off.age >= 595000 && off.writes === 0, JSON.stringify(off));
+  await vis.close(); await hid.close();
 }
 await quickCase('V9 a reopen 9 min 50 s after last use', { extra: [LAST(590000, { scr: 'settings', path: ['home'], mode: 'boss' })] }, BASE, { dest: 'settings',
   also: async (p) => check('V9 that reopen has Boss Fight armed again, as it was left', (await p.ev('ccMode')) === 'boss') });
@@ -708,6 +928,12 @@ for (const [label, age] of [['V9 10 min 10 s after last use: the full intro agai
   await p.go();
   const st = await p.until((x) => x.state === 'running' && x.tp >= 300, 6000);
   check(label, !!st && st.mode === 'full' && st.state === 'running', JSON.stringify(st));
+  if (age > 0) {
+    // Only the quick doors hold toasts (round 2 review): over the full intro a
+    // boot message still shows at once, as intro.js's z-order intends.
+    const shown = await p.ev("(showToast('A boot message'), { cv: !!document.getElementById('intro'), running: window.__ccIntro.state === 'running', items: [...document.querySelectorAll('.toast-item')].map((t) => t.textContent) })");
+    check('V9 over the full intro a toast still shows at once', shown.cv && shown.running && shown.items.includes('A boot message'), JSON.stringify(shown));
+  }
   await p.close();
 }
 await quickCase('V9 a last view naming a screen that cannot come back (a lobby)', { extra: [LAST(60000, { scr: 'lobby', path: ['home'], mode: 'duel' })] }, BASE, { dest: 'home' });
@@ -745,7 +971,7 @@ await quickCase('V9 a reopen within ten minutes under reduced motion', { media: 
   // hour): the match is still there only because nobody else plays in it.
   await a.go('about:blank'); await sleep(200); await a.close();
   await sleep(OLD_HOLD_MS + 800);
-  const b = await openPage({ ...IP17, context: X, extra: [LAUNCH, SLOW_ANSWER] });
+  const b = await openPage({ ...IP17, context: X, extra: [LAUNCH, SLOW_ANSWER, TOASTS] });
   await b.go();
   const rec = await b.ev("JSON.parse(localStorage.getItem('cc_last_view') || 'null')");
   const R = await quickRun(b);
@@ -755,6 +981,17 @@ await quickCase('V9 a reopen within ten minutes under reduced motion', { media: 
     !!R.st && R.st.openAt >= RESUME_SLOW && await b.ev("!!(S.playing && S.code && localStorage.getItem('cc_resume'))"), JSON.stringify(R.st));
   check(`V9 that match was brought back from more than ${OLD_HOLD_MS + 800} ms away, past the old hold of ${OLD_HOLD_MS} ms, and nothing says it ended`,
     !R.T.mgFirst && !(await b.ev("!!document.getElementById('mgone') && !document.getElementById('mgone').hidden")), JSON.stringify(R.T.mgFirst));
+  // THE DOORS STAY CLEAN (round 2 review): the resume's toasts used to be
+  // drawn on the sealed doors before they parted. Now no toast is up on any
+  // frame of the doors, and every toast asked for while they were up is shown
+  // once they have gone, in the order it was asked for, none lost.
+  await sleep(100);
+  const T9 = await b.ev('JSON.parse(JSON.stringify(window.__toasts))');
+  const rows9 = R.T.quick || [], heldAsk = T9.asked.filter((x) => x.up).map((x) => x.text);
+  check(`V9 no toast is drawn on the doors: none up on any of their ${rows9.length} frames, and none put up while the intro's canvas was there`,
+    rows9.length > 20 && rows9.every((r) => r.toast === 0) && T9.shown.every((x) => !x.cv), JSON.stringify({ up: rows9.filter((r) => r.toast > 0).length, shown: T9.shown }));
+  check(`V9 every toast asked for while the doors were up is shown once they have gone, in order (${heldAsk.join(' / ')})`,
+    heldAsk.includes('Reconnected — battle on!') && JSON.stringify(T9.shown.slice(0, heldAsk.length).map((x) => x.text)) === JSON.stringify(heldAsk), JSON.stringify(T9));
   await b.close();
   try { await send('Target.disposeBrowserContext', { browserContextId: X }); } catch {}
 }

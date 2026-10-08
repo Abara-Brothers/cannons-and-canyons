@@ -195,8 +195,10 @@
 
   // ---------------------------------------------------------------------------
   // THE OVERLAY. A canvas over the whole of #app, under #toast (z 90) so a boot
-  // message still shows. Sized from its own client box, which is the logical
-  // box even under the portrait rotation shim.
+  // message still shows over the full intro; under the quick doors app.js
+  // holds its toasts until they have gone (showToast), so none lands on the
+  // launch image. Sized from its own client box, which is the logical box even
+  // under the portrait rotation shim.
   const cv = document.createElement('canvas');
   cv.id = 'intro';
   cv.setAttribute('role', 'img');
@@ -1211,7 +1213,8 @@
     releaseLaunch();
     // THE DOORS ARE GONE, for what waited not to be drawn over them: bay.js's
     // notice of a match that ended while the player was away (mgRaise), raised
-    // when a held seat's resume is refused while the quick doors wait for it.
+    // when a held seat's resume is refused while the quick doors wait for it,
+    // and app.js's toasts held while the quick doors were up (showToast).
     try { window.CC_DOORS_UP = false; document.dispatchEvent(new Event('cc:doorsgone')); } catch (e) {}
   }
 
@@ -1401,7 +1404,8 @@
   // plugin never answers), on the web at the first visible frame.
   const boot = guard(function () {
     status.state = 'running';
-    // Published for bay.js, which holds a notice back while the doors are up
+    // Published for bay.js, which holds a notice back while the doors are up,
+    // and for app.js, which holds its toasts while the quick doors are up
     // (end() puts this back and says so).
     window.CC_DOORS_UP = true;
     hadInert = !!bay.inert;

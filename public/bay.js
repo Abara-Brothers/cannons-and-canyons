@@ -4099,6 +4099,12 @@ function render(name) {
   // introduction none of them announced. sqNeed() is idempotent and waits for
   // the socket's hello.
   if (entering && (current === 'home' || current === 'squad')) sqNeed();
+  // THE LAST VIEW FOLLOWS THE SCREEN (round 2 review). app.js keeps what
+  // where() says the moment it changes -- a screen, a step Back, a mode armed
+  // -- so a quick reopen finds it however the app was closed: a swipe from
+  // the iOS app switcher can kill it without a word. A redraw of the same
+  // view writes nothing (noteLastView).
+  if (fn('noteLastView')) noteLastView();
 }
 
 function go(name) {
@@ -4233,15 +4239,16 @@ function landSquad() {
 
 // A QUICK REOPEN PUTS THE SCREEN BACK (owner, 2026-10-07: "when the doors open
 // they open into whatever the player was viewing last"). app.js keeps what
-// where() says whenever the page is put away, and publishes it as REOPEN when
-// that was under ten minutes ago; intro.js then opens its quick doors instead
-// of the full intro, and boot (the end of this file) draws the screen they
-// open onto. Only these screens come back: each is drawn from what the page
-// rebuilds on its own, storage and the socket's answers, which every one of
-// them already waits for, and none of them holds a room, a sheet or a field
-// in progress. Anything else is home, a room's lobby among them: its room did
-// not survive the close. The record is storage, so every field of it is
-// checked here, as anything read from storage is.
+// where() says, current from the moment it changes (render() above) to the
+// moment the page is put away, and publishes it as REOPEN when the app was
+// last in use under ten minutes ago; intro.js then opens its quick doors
+// instead of the full intro, and boot (the end of this file) draws the screen
+// they open onto. Only these screens come back: each is drawn from what the
+// page rebuilds on its own, storage and the socket's answers, which every one
+// of them already waits for, and none of them holds a room, a sheet or a
+// field in progress. Anything else is home, a room's lobby among them: its
+// room did not survive the close. The record is storage, so every field of it
+// is checked here, as anything read from storage is.
 const REOPEN_OK = ['home', 'setup', 'squad', 'career', 'settings', 'friends', 'paint', 'armoury', 'modes'];
 const REOPEN_PATH = 8;                  // the screens Back returns through, at most
 function where() {

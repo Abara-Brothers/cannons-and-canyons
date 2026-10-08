@@ -3074,7 +3074,7 @@ function handle(m) {
       // match, which this lobby's death says nothing about. Only a mid-match
       // victim's record describes THIS room; clear exactly that one.
       if (S.playing) clearResume();
-      if (S.playing || S.code) { S.playing = false; showOverlay('Opponent left', null, 'draw', true); }
+      if (S.playing || S.code) { S.playing = false; showOverlay('Opponent left', null, 'draw', true); noteLastView(true); }
       break;
     // SOCIAL (design 4.2). One arm for every social type: socialReply() owns the
     // id matching and the snapshot, so nothing social reaches the engine's state
@@ -3462,6 +3462,9 @@ function showScreen(name) {
   // body.in-game drives one pure-CSS behaviour: the rotate prompt is only ever
   // eligible on the game screen — the menu is fine in portrait.
   document.body.classList.toggle('in-game', name === 'game');
+  // Every switch between the bay and a match, a match's start among them, is
+  // a change of view, kept at once and with its time (noteLastView).
+  noteLastView(true);
 }
 function showLobby(mode) {
   const searching = mode === 'search';
@@ -5811,7 +5814,24 @@ function toastHost() {
   if (el.parentNode !== want) want.appendChild(el);
   return el;
 }
+// TOASTS WAIT FOR THE QUICK DOORS (round 2 review). #toast (z 90) is over
+// intro.js's canvas (z 89) on purpose, so a boot message still shows over the
+// full intro. The quick doors are different: they are the launch image, shut
+// for half a second to three while a reopened screen or a held seat's match
+// is drawn under them, and a resume's "Reconnected — battle on!" landed on
+// them before they parted. So while they are up every toast is held, in
+// order, and all of them are shown the moment intro.js says the doors have
+// gone (cc:doorsgone), on whatever screen they opened onto. intro.js ends the
+// doors on every path, a fault and its 30 s watchdog included, so a held
+// toast cannot wait for ever.
+let toastsHeld = null;
+function showHeldToasts() { const q = toastsHeld || []; toastsHeld = null; q.forEach(showToast); }
 function showToast(text) {
+  if (window.CC_DOORS === 'quick' && window.CC_DOORS_UP === true) {
+    if (!toastsHeld) { toastsHeld = []; document.addEventListener('cc:doorsgone', showHeldToasts, { once: true }); }
+    toastsHeld.push(text);
+    return;
+  }
   const host = toastHost();
   if (!host) return;
   const t = document.createElement('div');
@@ -5825,6 +5845,9 @@ function showToast(text) {
 // ---------------------------------------------------------------------------
 function onGameOver(m) {
   S.playing = false;
+  // The end of a match is a change of view too, kept at once and with its
+  // time (noteLastView); handle()'s 'opponentLeft' does the same.
+  noteLastView(true);
   clearKillcam();
   try { trackGameOver(m); } catch {}
   if (m.hp) S.hp = m.hp.slice();
@@ -8902,22 +8925,38 @@ function drawFloaters() {
 let BOOT_CLAIM = null;
 // THE LAST VIEW, FOR A QUICK REOPEN (owner, 2026-10-07: "the doors open fast
 // but when the doors open they open into whatever the player was viewing
-// last"). Whenever the page is put away -- the app sent to the background,
-// which is the last thing iOS tells a page before it may kill it, or the tab
-// closed -- the time and what the bay was showing are kept in cc_last_view:
-// the screen, the screens Back returns through and the armed mode
-// (Bay.where()). A match is not kept here: cc_resume already holds it, and
-// boot's resume takes the player back to it. REOPEN is that view when the app
-// was last in use under REOPEN_MS ago, read ONCE at boot beside BOOT_CLAIM and
-// for the same readers: intro.js opens its quick doors instead of playing the
-// full intro, and bay.js puts the screen back under them. A record from the
-// future (a clock set back) is not recent, or it would stay recent until the
-// clock caught up with it.
-const LAST_VIEW_KEY = 'cc_last_view', REOPEN_MS = 10 * 60 * 1000;
+// last"). cc_last_view keeps when the app was last in use and what the bay
+// was showing: the screen, the screens Back returns through and the armed
+// mode (Bay.where()). A match is not kept here: cc_resume already holds it,
+// and boot's resume takes the player back to it. REOPEN is that view when the
+// app was last in use under REOPEN_MS ago, read ONCE at boot beside BOOT_CLAIM
+// and for the same readers: intro.js opens its quick doors instead of playing
+// the full intro, and bay.js puts the screen back under them. A record from
+// the future (a clock set back) is not recent, or it would stay recent until
+// the clock caught up with it.
+// THE RECORD IS KEPT CURRENT, NOT ONLY WRITTEN ON THE WAY OUT (round 2
+// review). A swipe from the iOS app switcher can kill the app without a
+// pagehide and without the page being hidden first, so a record written only
+// when the page was put away was missing (the full intro played) or older
+// than the screen the player left (the doors opened onto that one). So the
+// view is written the moment it changes: every bay screen, every step Back
+// and every mode armed (bay.js render()), and every switch between the bay
+// and a match, a match's start and its end included. Its time is kept by a
+// beat every LAST_USE_MS while the page is on screen, so it is never more
+// than that behind the last use; the beat writes nothing while the page is
+// hidden, because a page nobody can see is not in use. Putting the page away
+// and bringing it back still write it at once. A redraw of the same view
+// writes nothing: bay.js redraws a screen on every social and squad push, and
+// that would be a write per push.
+const LAST_VIEW_KEY = 'cc_last_view', REOPEN_MS = 10 * 60 * 1000, LAST_USE_MS = 15 * 1000;
 let REOPEN = null;
-function noteLastView() {
+let lastViewKept = '';                 // the view last written here, less its time
+function noteLastView(always) {
   const v = window.Bay && typeof window.Bay.where === 'function' ? window.Bay.where() : null;
-  try { localStorage.setItem(LAST_VIEW_KEY, JSON.stringify({ t: Date.now(), scr: v ? v.scr : 'home', path: v ? v.path : [], mode: ccMode })); } catch {}
+  const view = { scr: v ? v.scr : 'home', path: v ? v.path : [], mode: ccMode };
+  const key = JSON.stringify(view);
+  if (always !== true && key === lastViewKept) return;
+  try { localStorage.setItem(LAST_VIEW_KEY, JSON.stringify({ t: Date.now(), ...view })); lastViewKept = key; } catch {}
 }
 function lastView() {
   let v = null;
@@ -8925,8 +8964,9 @@ function lastView() {
   const age = v && typeof v.t === 'number' ? Date.now() - v.t : NaN;
   return age >= 0 && age < REOPEN_MS ? v : null;
 }
-window.addEventListener('pagehide', noteLastView);
-document.addEventListener('visibilitychange', () => { if (document.hidden) noteLastView(); });
+window.addEventListener('pagehide', () => noteLastView(true));
+document.addEventListener('visibilitychange', () => noteLastView(true));
+setInterval(() => { if (!document.hidden) noteLastView(true); }, LAST_USE_MS);
 function boot() {
   // Capture this BEFORE seeding — the deep-link auto-join must still require a
   // name the player actually owns, not one we just handed them a millisecond ago.
