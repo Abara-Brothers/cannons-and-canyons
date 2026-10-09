@@ -149,12 +149,15 @@
   the invite reaches you only while you are in the game, never as a notification, and the answer
   they get never says whether you are online.</p>
   <p><b>Report a callsign.</b> Where another player is shown — your friends list, a search
-  result, a signed-in player in your squad, a squad invite from someone who is not your friend, a
+  result, a player in your squad, a squad invite from someone who is not your friend, a
   seat in a lobby, a card in a match — there is a menu with <b>Report name</b>.
   Reporting records the reported account, your account, and the callsign exactly as you saw it, so
   we can act on it. Nothing is emailed anywhere: the report is written to our database for us to
   read, and the same three details are also printed to our game server's log, which our hosting
-  provider keeps under its ordinary log retention. We read new reports as part of our routine checks
+  provider keeps under its ordinary log retention. A guest who has not saved any progress yet has
+  no account for a report to name, so reporting their squad seat records your account, the name
+  the seat showed and which squad and seat it was, in our game server's log only. We read new
+  reports as part of our routine checks
   and aim to act within 7 days. You can also write to
   <a href="mailto:support@abarabrothers.com">support@abarabrothers.com</a>.</p>
   <p><b>Block a player.</b> The same menu has <b>Block</b>. A blocked player cannot find you in a
@@ -162,7 +165,10 @@
   to a squad, cannot see whether you are online, and disappears from your friends panel — it works
   in both directions. It does
   not keep the two of you out of the same battle, and the game says so when you block rather than
-  letting you assume otherwise. The Friends screen lists everyone you have blocked, with Unblock.</p>
+  letting you assume otherwise. The Friends screen lists everyone you have blocked, with Unblock.
+  A guest who has no account yet cannot be blocked, because a block is kept against an account:
+  their squad seat's menu says so instead of offering Block, and the squad's leader can still
+  remove them from the squad.</p>
   <p><b>You do not need to sign in to report or block.</b> Using friends needs a signed-in
   account; reporting and blocking do not — the automatic account the game gives
   you when you start playing is enough — because the player who most needs to report a name is

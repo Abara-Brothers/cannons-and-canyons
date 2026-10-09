@@ -145,10 +145,14 @@ squad plays is recorded like any other online match), and every squad ends when 
 which the app says plainly rather than leaving a stale group on screen. Friends are unaffected by that
 and are stored, as before, only as links between accounts.
 
-Every signed-in squad member, and every row on the Squad box's Friends tab, carries the same
-menu as every other player card, with **Report name** and **Block**, and the leader can remove any
-member. A member who has not signed in is listed by the name the game shows them by in a match, held
-to the same server checks, or as "No callsign" when there is none. Blocking someone you share a squad with removes one of you from it immediately: if you
+Every squad member another player is shown by name, and every row on the Squad box's Friends tab,
+carries the same menu as every other player card, with **Report name** and **Block**, and the leader
+can remove any member. A member who has not signed in is listed by the name the game shows them by in
+a match, held to the same server checks, or as "No callsign" when there is none; a player's own seat
+always shows their own name. A guest who has not saved any progress yet has no account at all, so
+their seat's menu has **Report name** only and says why there is no Block; a report on that seat is
+recorded in the game server's log (see below). Once their first save creates their automatic account,
+the app tells the server at once, and their seat gains Block on every screen. Blocking someone you share a squad with removes one of you from it immediately: if you
 lead the squad they are removed as if kicked, otherwise you leave it. Neither player is told that a
 block caused it, and the blocked account cannot rejoin by code, be invited back, or sign in to a squad
 seat beside you. Squad members are shown by callsign only: another player's app receives each
@@ -159,7 +163,9 @@ email address or any Google or Apple sign-in detail.
 **Where do name reports actually go?** We would rather state this plainly than imply a mailbox
 we do not have. The game has no email provider, so nothing is emailed. A report is written as a
 row in our Supabase database — reporter, reported account, the callsign as seen, timestamp — and
-printed to the game server's log. The owner reads new rows in the Supabase dashboard as part of
+printed to the game server's log. A report on the squad seat of a guest who has no account yet has
+no account to name, so it is printed to the game server's log only, as the squad, the seat, the name
+the seat showed and the reporter's account. The owner reads new rows in the Supabase dashboard as part of
 the same routine that checks the server, and acts within 7 days by clearing the offending
 callsign, adding the term to the blocklist, or both. The two accounts' identifiers never leave
 that table and that log.

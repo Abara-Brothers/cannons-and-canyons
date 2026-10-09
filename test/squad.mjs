@@ -886,8 +886,11 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
   if (rows && rows.length === 3 && rows.every((r) => RID32.test(r.rid))
     && JSON.stringify(norid(rows[0])) === JSON.stringify({ id: SQA, callsign: 'Anvil Six', guest: false, online: true, ready: false, dropped: false })
     && JSON.stringify(norid(rows[1])) === JSON.stringify({ id: SQD, callsign: null, guest: false, online: true, ready: false, dropped: false })
-    && JSON.stringify(norid(rows[2])) === JSON.stringify({ id: null, callsign: null, guest: true, online: true, ready: false, dropped: false }))
-    ok('(h1) a proved name is shown, an unprovable one keeps its row as null, and a guest row is null and flagged');
+    // CHANGED (final audit, 2026-10-09): a guest row with no account behind
+    // it carries `noacct: true`, the flag that keeps Block off its menu. Its
+    // name is still null here: this world wires no name index (see below).
+    && JSON.stringify(norid(rows[2])) === JSON.stringify({ id: null, callsign: null, guest: true, online: true, ready: false, dropped: false, noacct: true }))
+    ok('(h1) a proved name is shown, an unprovable one keeps its row as null, and a guest row is null and flagged, with noacct for a guest with no account');
   else fail('(h1) rows: ' + JSON.stringify(rows));
   // THE NAME THE GUEST SENT LEAVES THE SERVER ONLY THROUGH THE DOOR'S RULES.
   // CHANGED (round 2, 2026-10-08): this read "never leaves the server". A
@@ -9894,9 +9897,9 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     const S = mkSocial6(st, { names: index });
     const wa = up6(S, A);
     const code = await create6(S, wa);
-    // CHANGED (round 2 fix): the guests are on ANONYMOUS accounts, as a guest
-    // who has saved anything is. A guest with no account at all has no report
-    // path, so its row shows no name; (gr) pins that.
+    // The guests are on ANONYMOUS accounts, as a guest who has saved anything
+    // is. A guest with no account at all is named as well since the final
+    // audit (2026-10-09); (gr) pins that.
     const g1 = t6ws(uid6(31), true), g2 = t6ws(uid6(32), true), g3 = t6ws(GU, true);
     await join6(S, g1, code, 'Iron Ridge');
     await join6(S, g2, code, '  Tank   Ace ');
@@ -9932,7 +9935,8 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     const S3 = mkSocial6(st3, { names: index });
     const wa3 = up6(S3, A);
     const code3 = await create6(S3, wa3);
-    // An ANONYMOUS guest (round 2 fix): a guest with no account shows no name.
+    // An ANONYMOUS guest, as before the final audit; the door's row is the
+    // same for a guest with no account (see (gr)).
     const wn = t6ws(uid6(36), true);
     await join6(S3, wn, code3, 'Kestrel Bay');
     const before = ((last6(wa3, 'squad', 'state') || { members: [] }).members[1] || {}).callsign;
@@ -9955,10 +9959,14 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
   // its `id` is null by the frame's own rule. Now a report and a block may
   // name a guest row by its row handle (`rid`, never an account id), resolved
   // in the caller's own squad to the anonymous account the guest's socket is
-  // signed in as, and the report records the name the row showed. A guest
-  // with no account at all has nothing a report or a block could be filed
-  // against, so its row shows no name. A dropped guest row keeps both its name
-  // and its report path through the drop window.
+  // signed in as, and the report records the name the row showed. A dropped
+  // guest row keeps both its name and its report path through the drop window.
+  // CHANGED (final audit, 2026-10-09): this pinned "a guest with no account
+  // at all shows none, on every screen and its own". Such a guest is named
+  // now, on every screen and their own, and their row alone carries
+  // `noacct: true`; a report on it is recorded by the row, in the server's
+  // log (no name_reports row: there is no account to key one to), and a block
+  // on it finds nobody. (gq) below pins the rest.
   {
     const { createNameIndex } = await import('../server/name-index.js');
     const index = createNameIndex({ load: async () => [] });
@@ -9981,27 +9989,29 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     const rows = snap.members.map((m) => [m.callsign, m.guest]);
     const ownN = last6(gn, 'squad', 'state') || { members: [] };
     const noIds = !UUID6.test(JSON.stringify(snap.members.slice(2))) && snap.members.slice(2).every((m) => m.id === null);
-    if (same6(rows, [['Anvil Six', false], ['Crater Two', false], ['Tank Ace', true], [null, true]])
-        && ownN.members[ownN.you] && ownN.members[ownN.you].callsign === null && noIds)
-      ok('(gr) a guest row on an anonymous account shows its name; a guest with no account at all shows none, on every screen and its own; no guest row carries an account id');
-    else fail('(gr) rows: ' + JSON.stringify({ rows, own: ownN.members && ownN.members[ownN.you], noIds }));
+    const flags = snap.members.map((m) => m.noacct === true);
+    if (same6(rows, [['Anvil Six', false], ['Crater Two', false], ['Tank Ace', true], ['Wren Hollow', true]])
+        && ownN.members[ownN.you] && ownN.members[ownN.you].callsign === 'Wren Hollow' && noIds
+        && same6(flags, [false, false, false, true]) && same6(ownN.members.map((m) => m.noacct === true), flags))
+      ok('(gr) a guest row shows its name, on an anonymous account and with no account at all, on every screen and its own; only the row with no account carries noacct; no guest row carries an account id');
+    else fail('(gr) rows: ' + JSON.stringify({ rows, own: ownN.members && ownN.members[ownN.you], noIds, flags }));
     const ridA = snap.members[2] && snap.members[2].rid, ridN = snap.members[3] && snap.members[3].rid, ridC = snap.members[1] && snap.members[1].rid;
     // REPORT BY ROW HANDLE: the anonymous account, and the name the row showed.
     clear6(wc);
     await S.handle(wc, { type: 'report', rid: ridA, id: 'p1' });
     const p1 = ans6(wc, 'p1');
-    // The guest with no account, a signed-in member's row, and a handle from
-    // another squad are nobody: no_such_user, and nothing is filed.
-    await S.handle(wc, { type: 'report', rid: ridN, id: 'p2' });
+    // A signed-in member's row by handle and a handle from another squad are
+    // nobody: no_such_user, and nothing is filed. CHANGED (final audit): the
+    // guest with no account is no longer among them; (gq) reports it.
     await S.handle(wc, { type: 'report', rid: ridC, id: 'p3' });
     const wx = up6(S, E);
     const code2 = await create6(S, wx);
     await S.handle(wx, { type: 'report', rid: ridA, id: 'p4' });
     await S.handle(ga, { type: 'report', rid: ridA, id: 'p5' });
-    const misses = [ans6(wc, 'p2'), ans6(wc, 'p3'), ans6(wx, 'p4'), ans6(ga, 'p5')].map((f) => f && f.error);
-    if (same6(p1, { type: 'report', ok: true, id: 'p1' }) && same6(reports, [[C, GA, 'Tank Ace']]) && code2
-        && same6(misses, ['no_such_user', 'no_such_user', 'no_such_user', 'self']))
-      ok("(gr) a member reports a guest row by its handle: the guest's anonymous account and the name the row showed are filed; a guest with no account, a member's row by handle, a handle from another squad and the guest's own row are refused");
+    const misses = [ans6(wc, 'p3'), ans6(wx, 'p4'), ans6(ga, 'p5')].map((f) => f && f.error);
+    if (same6(p1, { type: 'report', ok: true, id: 'p1' }) && same6(reports, [[C, GA, 'Tank Ace']]) && code2 && ridN
+        && same6(misses, ['no_such_user', 'no_such_user', 'self']))
+      ok("(gr) a member reports a guest row by its handle: the guest's anonymous account and the name the row showed are filed; a member's row by handle, a handle from another squad and the guest's own row are refused");
     else fail('(gr) report by rid: ' + JSON.stringify({ p1, reports, misses }));
     // A DROPPED guest row keeps its name and its report path.
     ga.readyState = 3;
@@ -10029,6 +10039,124 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
         && same6(last6(gb, 'squad', 'ended'), { type: 'squad', op: 'ended', reason: 'kicked' }))
       ok("(gr) a block by a guest row's handle lands on the guest's anonymous account and parts them from the leader's squad, as a block of any member does");
     else fail('(gr) block by rid: ' + JSON.stringify({ b1: ans6(wa2, 'b1'), blocks: [...st.blocks], after, ended: last6(gb, 'squad', 'ended') }));
+  }
+
+  // ---- (gq) A GUEST WITH NO ACCOUNT IS NAMED, REPORTED BY ITS ROW, NEVER BLOCKED (final audit, 2026-10-09)
+  // A guest who joined by code before their first save has no account at all,
+  // and their row read 'No callsign' everywhere, their own seat included. It
+  // shows their name now (see (gr)), so it must have a report path. There is
+  // no account for a name_reports row to name, so a report by the row's handle
+  // is recorded in the server's log as the name the row showed and the row
+  // (its squad's code and seat, never its handle), once per reporter per row
+  // per day; a nameless row has nothing to report.
+  // A block by that handle finds nobody, and the leader can still remove the
+  // row. When the guest's first save mints an anonymous account and the
+  // client says hello again, the sign-in door lets the account in and every
+  // member's frame is pushed: the flag is gone, and a block now lands on the
+  // account. And the sign-in door's row stays nameless after it drops.
+  {
+    const { createNameIndex } = await import('../server/name-index.js');
+    const index = createNameIndex({ load: async () => [] });
+    await index.refresh();
+    const GN = uid6(51);
+    // The account the first save mints, with the profile row that same save
+    // writes (public/cloud.js save): a block reads it before it lands.
+    const st = t6store([...ROWS6, { id: GN, callsign: 'Ghost N', friend_code: 'GNN234', callsign_key: null, callsign_set_at: null }]);
+    const reports = [];
+    st.reportedSince = async () => false;
+    st.addReport = async (by, who, name) => { reports.push([by, who, name]); };
+    const logs = [];
+    const realLog = console.log;
+    console.log = (...a) => { const l = a.join(' '); if (l.startsWith('[report]')) logs.push(l); else realLog(...a); };
+    const clock0 = CLOCK6;
+    try {
+      const S = mkSocial6(st, { names: index });
+      const wa = up6(S, A), wc = up6(S, C);
+      const code = await create6(S, wa);
+      await join6(S, wc, code, 'Crater Two');
+      const gn = t6ws(null), gz = t6ws(null);
+      await join6(S, gn, code, 'Wren Hollow');
+      await join6(S, gz, code, 'CPU 2');                 // a name the guidelines refuse
+      const snap = last6(wc, 'squad', 'state') || { members: [] };
+      const ridN = (snap.members[2] || {}).rid, ridZ = (snap.members[3] || {}).rid;
+      const shape = snap.members.map((m) => [m.callsign, m.noacct === true]);
+      // REPORT BY THE ROW: logged, not filed; once a day per reporter.
+      clear6(wc, wa);
+      await S.handle(wc, { type: 'report', rid: ridN, id: 'q1' });
+      await S.handle(wc, { type: 'report', rid: ridN, id: 'q2' });
+      await S.handle(wa, { type: 'report', rid: ridN, id: 'q3' });
+      await S.handle(wc, { type: 'report', rid: ridZ, id: 'q4' });   // nameless: nothing to report
+      CLOCK6 += 86400000 + 1;
+      await S.handle(wc, { type: 'report', rid: ridN, id: 'q5' });
+      CLOCK6 = clock0;
+      const answers = ['q1', 'q2', 'q3', 'q5'].map((q) => { const f = ans6(q === 'q3' ? wa : wc, q); return f && (f.ok === true ? 'ok' : f.error); });
+      const lineN = `[report] guest in squad ${code} seat 3 "Wren Hollow" by `;
+      if (same6(shape, [['Anvil Six', false], ['Crater Two', false], ['Wren Hollow', true], [null, true]])
+          && same6(answers, ['ok', 'already', 'ok', 'ok']) && same6(ans6(wc, 'q4'), { type: 'report', error: 'no_such_user', id: 'q4' })
+          && same6(logs, [lineN + C, lineN + A, lineN + C]) && !logs.some((l) => l.includes(ridN)) && reports.length === 0 && !UUID6.test(JSON.stringify(wc.rx)))
+        ok("(gq) a guest with no account is reported by the row's handle: the server's log takes the squad, the seat and the name it showed, never the handle, once per reporter per row per day; no name_reports row is written, and a nameless row has nothing to report");
+      else fail('(gq) report: ' + JSON.stringify({ shape, answers, q4: ans6(wc, 'q4'), logs, reports }));
+      // BLOCK BY THE ROW FINDS NOBODY; THE LEADER STILL REMOVES IT.
+      clear6(wa, wc);
+      await S.handle(wc, { type: 'block', op: 'add', rid: ridN, id: 'b1' });
+      const blocked = ans6(wc, 'b1'), stillIn = (last6(wa, 'squad', 'state') || { members: (snap.members) }).members.length;
+      await S.handle(wa, { type: 'squad', op: 'kick', rid: ridZ, id: 'k1' });
+      await settle6();
+      const after = (last6(wa, 'squad', 'state') || { members: [] }).members.map((m) => m.callsign);
+      if (same6(blocked, { type: 'block', op: 'add', error: 'no_such_user', id: 'b1' }) && st.blocks.size === 0 && stillIn === 4
+          && same6(after, ['Anvil Six', 'Crater Two', 'Wren Hollow']) && same6(last6(gz, 'squad', 'ended'), { type: 'squad', op: 'ended', reason: 'kicked' }))
+        ok('(gq) a block by the handle of a guest row with no account finds nobody and writes nothing, and the leader still removes such a row');
+      else fail('(gq) block and kick: ' + JSON.stringify({ blocked, blocks: [...st.blocks], stillIn, after, ended: last6(gz, 'squad', 'ended') }));
+      // THE FIRST SAVE'S HELLO: an anonymous account, let in, and pushed.
+      clear6(wa, wc, gn);
+      hello6(S, gn, GN, true);
+      await settle6();
+      const rowFor = (w) => { const f = last6(w, 'squad', 'state'); return f ? f.members.find((m) => m.rid === ridN) || null : null; };
+      const seenA = rowFor(wa), seenC = rowFor(wc), own = rowFor(gn);
+      const pushed = [wa, wc, gn].every((w) => got6(w, 'squad', 'state').length >= 1);
+      clear6(wa, wc);
+      await S.handle(wc, { type: 'block', op: 'add', rid: ridN, id: 'b2' });
+      await settle6();
+      const roster = (last6(wa, 'squad', 'state') || { members: [] }).members.map((m) => m.callsign);
+      if (pushed && [seenA, seenC, own].every((r) => r && r.callsign === 'Wren Hollow' && !('noacct' in r) && r.id === null)
+          && same6(ans6(wc, 'b2'), { type: 'block', op: 'add', ok: true, id: 'b2' }) && st.blocks.has(C + '>' + GN)
+          && same6(roster, ['Anvil Six', 'Wren Hollow']) && same6(last6(wc, 'squad', 'ended'), { type: 'squad', op: 'ended', reason: 'left' })
+          && !JSON.stringify([wa.rx, gn.rx]).includes(GN))
+        ok("(gq) a guest's first-save hello lets the new anonymous account in and pushes every member's frame: the row keeps its name, loses noacct, and a block by its handle lands on the account and parts the pair, with no account id on any frame");
+      else fail('(gq) after the hello: ' + JSON.stringify({ pushed, seenA, seenC, own, b2: ans6(wc, 'b2'), blocks: [...st.blocks], roster, ended: last6(wc, 'squad', 'ended') }));
+      // THE SIGN-IN DOOR'S ROW STAYS NAMELESS THROUGH A DROP. A guest with no
+      // account signs in as a LINKED account whose block read fails, so the
+      // door keeps the row a nameless guest row (D-BLOCK-3 H); its socket
+      // then closes. The dropped row is still nameless, and carries no
+      // noacct: it stands for an account.
+      const S2 = mkSocial6(st, { names: index });
+      const wa2 = up6(S2, A);
+      const code2 = await create6(S2, wa2);
+      const gl = t6ws(null);
+      await join6(S2, gl, code2, 'Kestrel Bay');
+      const named0 = ((last6(wa2, 'squad', 'state') || { members: [] }).members[1] || {}).callsign;
+      st.boom.add('blockIdsOf');
+      hello6(S2, gl, B);
+      await settle6();
+      st.boom.delete('blockIdsOf');
+      clear6(wa2);
+      await S2.handle(wa2, { type: 'squad', op: 'resume', id: 'r1' });
+      const atDoor = (ans6(wa2, 'r1') || { members: [] }).members[1] || {};
+      // Nothing may name the door's row: a report by its handle finds nobody.
+      const logsBefore = logs.length;
+      await S2.handle(wa2, { type: 'report', rid: atDoor.rid, id: 'q6' });
+      gl.readyState = 3; S2.onClose(gl);
+      await settle6();
+      const dropped = (last6(wa2, 'squad', 'state') || { members: [] }).members[1] || {};
+      if (named0 === 'Kestrel Bay' && atDoor.callsign === null && !('noacct' in atDoor) && atDoor.guest === true
+          && same6(ans6(wa2, 'q6'), { type: 'report', error: 'no_such_user', id: 'q6' }) && logs.length === logsBefore
+          && dropped.dropped === true && dropped.callsign === null && !('noacct' in dropped) && !JSON.stringify(wa2.rx).includes('Bunker Nine'))
+        ok("(gq) the sign-in door's row is nameless, carries no noacct and cannot be reported by its handle while its read has failed, and stays nameless after its socket drops");
+      else fail('(gq) door row: ' + JSON.stringify({ named0, atDoor, q6: ans6(wa2, 'q6'), logs: logs.slice(logsBefore), dropped }));
+    } finally {
+      console.log = realLog;
+      CLOCK6 = clock0;
+    }
   }
 
   // ---- (gd) A DROPPED GUEST ROW BLOCKED BY ITS HANDLE IS PARTED AT ONCE (round 2 fix)

@@ -1709,7 +1709,13 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
     [/We check every name a player sets on our server against a list of banned terms before another player can see it,/, 'Friends: every set name is checked on the server'],
     [/Friends, and the players in a squad with you, can see whether you are online; nobody else can\./, 'Friends: who can see whether you are online'],
     [/If you set a callsign while signed in, anyone signed in who knows it can invite you to their squad; if they are not your friend, the invite reaches you only while you are in the game, never as a notification, and the answer they get never says whether you are online\./, 'Friends: the invite by callsign, in-app only from a stranger'],
-    [/your friends list, a search result, a signed-in player in your squad, a squad invite from someone who is not your friend, a seat in a lobby, a card in a match — there is a menu with Report name/, 'Report a callsign: every place the menu is'],
+    // CHANGED 2026-10-09: "a signed-in player in your squad" became "a player in
+    // your squad", since every named squad seat has the menu, a guest's
+    // included (server/social.js guestNoAcct); the next two pin what a report
+    // and a block do on the seat of a guest with no account.
+    [/your friends list, a search result, a player in your squad, a squad invite from someone who is not your friend, a seat in a lobby, a card in a match — there is a menu with Report name/, 'Report a callsign: every place the menu is'],
+    [/A guest who has not saved any progress yet has no account for a report to name, so reporting their squad seat records your account, the name the seat showed and which squad and seat it was, in our game server's log only\./, 'Report a callsign: a guest with no account is reported in the log'],
+    [/A guest who has no account yet cannot be blocked, because a block is kept against an account: their squad seat's menu says so instead of offering Block, and the squad's leader can still remove them from the squad\./, 'Block a player: a guest with no account has no Block'],
     [/cannot send you a friend request, cannot invite you to a squad, cannot see whether you are online/, 'Block a player: a block stops a squad invite'],
     [/Using friends needs a signed-in account; reporting and blocking do not/, 'sign-in: only friends need it, not a callsign'],
     [/your callsign \(and, if you play as a guest, when you last changed it, so a name changes at most once a day\)/, 'On your device: a guest\'s name-change time'],
@@ -1727,6 +1733,7 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
     [/Friends can see whether you are online; nobody else can/, 'presence for friends only'],
     [/if they are a friend\s*[—,]\s*whether you are online/, 'presence for friends only'],
     [/resume token[^.]*stays? on your device/, 'the resume token never leaving the device'],
+    [/a signed-in player in your squad/, 'the squad menu for signed-in players only'],
   ];
   const missing = MUST.filter(([re]) => !re.test(text)).map(([, why]) => `missing — ${why}`);
   const stale = STALE.filter(([re]) => re.test(text)).map(([re, why]) => `stale — ${why}: "${(text.match(re) || [''])[0]}"`);

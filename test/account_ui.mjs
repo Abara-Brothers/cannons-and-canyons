@@ -165,6 +165,56 @@ for (const [w, h] of [[667, 375], [932, 430]]) {
   const clips = await ev(`(() => [...document.querySelectorAll('#bay .top *, #bay .boards .blab *, #bay .pnl *, #bay .lbar .ltg, #bay .lbar .rk')].filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.className))()`);
   if (clips.length === 0) ok(`${V}: no horizontal clipping in the header, board labels, stations or launch tags`); else fail(`${V}: clipped ${JSON.stringify(clips)}`);
 }
+// ---- the first save's hello (final audit, 2026-10-09) ----------------------
+// A guest's account is minted by their first cloud save (Cloud.save ->
+// ensureSession). The socket said hello when it opened, with no account to
+// name, and nothing introduced the new one, so until the app reconnected the
+// server knew the player as nobody: their Report and Block answered sign_in,
+// and their squad row offered nobody a Block. cloudQueue now sends a fresh
+// hello when a save leaves an account where there was none, a save that fails
+// after minting one included, and at no other time. Cloud is stubbed in the
+// page and every outside host is blocked, so nothing leaves the machine; the
+// debounce is run at once by handing cloudQueue a zero-delay setTimeout for
+// that one call.
+{
+  await send('Network.enable');
+  await send('Network.setBlockedURLs', { urls: ['*supabase.co*', '*googleapis*', '*abarabrothers.com*'] });
+  await send('Emulation.setDeviceMetricsOverride', { width: 932, height: 430, deviceScaleFactor: 2, mobile: false });
+  await send('Page.navigate', { url: `http://127.0.0.1:${appPort}/` });
+  let ready = false;
+  for (let i = 0; i < 80; i++) { if (await ev('typeof cloudQueue === "function" && S.connected === true && !!S.ws && S.ws.readyState === 1').catch(() => false)) { ready = true; break; } await sleep(200); }
+  if (!ready) fail('first-save hello: the page never became ready');
+  else {
+    await ev(`(() => {
+      window.__hellos = [];
+      const w = S.ws, real = w.send;
+      w.send = function (d) { try { const m = JSON.parse(d); if (m && m.type === 'hello') window.__hellos.push(m.token); } catch {} return real.call(this, d); };
+      window.__uid = null; window.__nextUid = '00000000-0000-4000-8000-0000000000f1'; window.__saveOk = true;
+      Cloud.enabled = () => true;
+      Cloud.userId = () => window.__uid;
+      Cloud.token = async () => (window.__uid ? 'tok-' + window.__uid.slice(-2) : null);
+      Cloud.save = async () => { if (!window.__uid) window.__uid = window.__nextUid; return window.__saveOk; };
+      PROF.shots = Math.max(1, PROF.shots || 0);
+      return true;
+    })()`);
+    const runSave = async () => {
+      await ev(`(() => { const st = window.setTimeout; window.setTimeout = (f, ms, ...a) => st(f, 0, ...a); try { cloudQueue(); } finally { window.setTimeout = st; } return true; })()`);
+      await sleep(400);
+      return ev('window.__hellos.slice()');
+    };
+    const minted = await runSave();          // no account, and the save mints one: one hello
+    const again = await runSave();           // an account already: nothing more
+    await ev(`(window.__hellos.length = 0, window.__uid = null, window.__nextUid = '00000000-0000-4000-8000-0000000000f2', window.__saveOk = false, true)`);
+    const failed = await runSave();          // minted, then the upsert failed: still one hello
+    await ev(`(window.__hellos.length = 0, window.__uid = null, window.__nextUid = null, window.__saveOk = false, true)`);
+    const none = await runSave();            // nothing minted (offline): no hello
+    const J = JSON.stringify;
+    if (J(minted) === J(['tok-f1']) && J(again) === J(['tok-f1']) && J(failed) === J(['tok-f2']) && J(none) === J([]))
+      ok("first-save hello: a save that mints the guest's account says hello once with the new account's token, a later save does not, a save that minted one and then failed still does, and a save that minted nothing does not");
+    else fail('first-save hello: ' + J({ minted, again, failed, none }));
+  }
+}
+
 // ---- the stranded OAuth return, in a real browser --------------------------
 // The server answers /auth/callback with a 302 to "/" (see server.js). What only
 // a browser can prove: the fragment (the provider's reply) is carried over to

@@ -1101,8 +1101,21 @@ function cloudQueue() {
   cloudDirty = true;
   clearTimeout(cloudTimer);
   cloudTimer = setTimeout(async () => {
+    const had = Cloud.userId();
     const ok = await Cloud.save(savedName() || null, progressionSnapshot());
     if (ok) cloudDirty = false;
+    // THE FIRST SAVE MINTS THE GUEST'S ACCOUNT (Cloud.save -> ensureSession),
+    // and the server is told (final audit, 2026-10-09). This socket said hello
+    // when it opened, with no account to name, and nothing introduced the new
+    // one, so until the app reconnected the server knew this player as nobody:
+    // their Report and Block were refused as sign_in, and their squad row
+    // offered nobody a Block. A fresh hello is how every other new identity
+    // reaches the socket (a sign-in, the native Apple sheet, the OAuth
+    // return). Asked whether or not the save itself landed: the account
+    // exists once ensureSession has made it, whatever became of the upsert.
+    // Caught: errors.js reports an unhandled rejection as a crash, and a hello
+    // that could not go out is retried by the next connect, as ever.
+    if (!had && Cloud.userId()) socialReHello().catch(() => {});
   }, 4000);
 }
 window.addEventListener('online', () => { if (cloudDirty) cloudQueue(); });

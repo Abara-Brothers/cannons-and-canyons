@@ -1431,24 +1431,43 @@ export function createSocial({
   // might have blocked it. Its guest-time name is withheld as well, so the
   // door's row reads exactly as it always has.
   //
-  // AND ONLY FOR A GUEST ROW THAT CAN BE REPORTED (round 2 fix, 2026-10-08).
-  // Every shown player can be reported and blocked, and a guest row's `id` is
-  // null by the frame's own rule, so a guest row is named for both by its row
-  // handle (`rid`, see rowTarget below), which resolves to the ANONYMOUS
-  // account the guest's socket is signed in as. A guest with no account at
-  // all has nothing a report row or a block could be filed against (the
-  // engine gives such a lobby seat no handle for the same reason), so its row
-  // shows no name: no player text without a report path. guestRowAccount is
-  // that account, read off the row's socket, or, for a row inside its drop
-  // window, off the socket it dropped from (droppedAcct, written as the row
-  // drops), so a dropped row keeps its name and its report path together.
+  // A GUEST ROW IS NAMED FOR REPORT AND BLOCK BY ITS ROW HANDLE (round 2
+  // fix, 2026-10-08). A guest row's `id` is null by the frame's own rule, so a
+  // report or a block names it by `rid` (see rowTarget below), which resolves
+  // to the ANONYMOUS account the guest's socket is signed in as.
+  // guestRowAccount is that account, read off the row's socket, or, for a row
+  // inside its drop window, off the socket it dropped from (droppedAcct,
+  // written as the row drops), so a dropped row keeps its report path.
+  //
+  // A GUEST WITH NO ACCOUNT AT ALL IS NAMED TOO (final audit, 2026-10-09). It
+  // used to show no name, on the rule "no player text without a report path",
+  // so a new player who joined by code before their first save read
+  // 'No callsign' on every screen, their own seat included, and 'a guest' on
+  // the Ready line, while the match a moment later showed their name to the
+  // same players. The rule still holds, by a different path: Report on such a
+  // row records the name the row showed and the row itself (handleReport), and
+  // only Block, which needs an account to write against, is not offered.
+  // `noacct` tells the menu which rows those are. It is a flag and never an
+  // id: like the engine's seat handle (room-engine.js seatHandle), it says
+  // only whether a row has SOME account, which is not stable, not comparable
+  // across squads and not tied to anything, and it is what keeps a Block
+  // button off a row it could never work on.
+  //
+  // THE SIGN-IN DOOR'S ROW IS STILL NAMELESS. doorRow is a guest row whose
+  // socket is a LINKED account the door has not admitted yet, or a dropped
+  // row whose socket was one when it dropped (droppedLinked): its guest-time
+  // name stays withheld, as the paragraph above says, and it carries no
+  // `noacct`, because it does stand for an account.
   const droppedAcct = new WeakMap();
+  const droppedLinked = new WeakSet();
   const guestRowAccount = (m) => {
     if (!m || !m.guest) return '';
     if (m.ws) return squadGuest(m.ws) && m.ws.userId ? wireId(m.ws.userId) : '';
     return droppedAcct.get(m) || '';
   };
-  const guestRowName = (m) => (guestRowAccount(m) ? guestName(m.name) : null);
+  const doorRow = (m) => !!(m && m.guest && (m.ws ? !squadGuest(m.ws) : droppedLinked.has(m)));
+  const guestRowName = (m) => (m && m.guest && !doorRow(m) ? guestName(m.name) : null);
+  const guestNoAcct = (m) => !!(m && m.guest && !doorRow(m) && !guestRowAccount(m));
   async function squadSnapshot(sq) {
     const ids = sq.members.filter((m) => m.userId).map((m) => m.userId);
     let names = new Map();
@@ -1467,6 +1486,8 @@ export function createSocial({
         online: m.userId ? isOnline(m.userId) : !!(m.ws && m.ws.readyState === 1),
         ready: m.ready,
         dropped: m.dropAt !== null,
+        // Only on a guest row with no account behind it; see guestNoAcct.
+        ...(guestNoAcct(m) ? { noacct: true } : {}),
       })),
       fits: fitsFor(sq.members.length),
     };
@@ -2276,10 +2297,14 @@ export function createSocial({
       // row loses its socket here, and guestRowAccount reads this instead,
       // so the row keeps its name and its report path until the window ends.
       // A socket with no account clears any account an earlier socket left.
+      // AND WHETHER IT WAS THE SIGN-IN DOOR'S ROW (final audit, 2026-10-09):
+      // a socket signed in as a LINKED account leaves droppedLinked set, so
+      // the dropped row stays as nameless as it was while its socket stood.
       const held = squads.memberOf(key);
       if (held && held.member.guest) {
         const acct = squadGuest(ws) && ws.userId ? wireId(ws.userId) : '';
         if (acct) droppedAcct.set(held.member, acct); else droppedAcct.delete(held.member);
+        if (!squadGuest(ws)) droppedLinked.add(held.member); else droppedLinked.delete(held.member);
       }
       const sq = squads.markDropped(key, at);
       if (!sq) return;
@@ -2489,6 +2514,13 @@ export function createSocial({
         doorFailed.delete(row);
         ws.squadAs = id;
         claimOnSignIn(ws, row.key);
+        // AN ANONYMOUS ACCOUNT LET IN KEEPS ITS GUEST ROW (claimOnSignIn adopts
+        // a row for a linked account only), and the row now has an account
+        // behind it, so every member's frame is pushed again (final audit,
+        // 2026-10-09): a row that went out with `noacct` gains Block on every
+        // screen now, not at the squad's next change. This is the door a
+        // guest's first save opens, through the client's fresh hello.
+        if (squadGuest(ws)) pushSquad(found.squad, null, null).catch(() => {});
         return;
       }
       const was = row.ws;
@@ -3134,18 +3166,23 @@ export function createSocial({
   const targetId = (ws, msg) => wireId(msg.handle !== undefined ? resolveHandle(ws, msg.handle)
     : msg.rid !== undefined ? (rowTarget(ws, msg.rid) || {}).id : msg.id);
 
-  // THE GUEST ROW A `rid` NAMES, in the caller's own squad, as { id, shown }:
-  // the anonymous account behind it and the name the row shows now, or null.
-  // Only a GUEST row: a member's row already carries its account id, which
-  // the friends-panel route takes, and a guest row whose socket has signed in
-  // is the sign-in door's (guestRowAccount answers nothing for it).
+  // THE GUEST ROW A `rid` NAMES, in the caller's own squad, as
+  // { id, shown, row, code, seat }: the anonymous account behind it, the name
+  // the row shows now, the row, its squad's code and its seat number (from 1,
+  // as the squad page numbers seats); or null. Only a GUEST row: a
+  // member's row already carries its account id, which the friends-panel route
+  // takes, and a guest row whose socket has signed in is the sign-in door's
+  // (doorRow), which nothing may name. A guest with no account at all answers
+  // id '' (final audit, 2026-10-09): targetId turns that into nobody, so a
+  // block finds no one, and handleReport records the row instead
+  // (reportGuestRow).
   function rowTarget(ws, rid) {
     if (typeof rid !== 'string' || !rid) return null;
     const own = squadOf(ws);
     if (!own) return null;
-    const m = own.squad.members.find((x) => rowRid(x) === rid);
-    const id = m && m.guest ? guestRowAccount(m) : '';
-    return id ? { id, shown: guestRowName(m) } : null;
+    const i = own.squad.members.findIndex((x) => rowRid(x) === rid), m = i < 0 ? null : own.squad.members[i];
+    if (!m || !m.guest || doorRow(m)) return null;
+    return { id: guestRowAccount(m), shown: guestRowName(m), row: m, code: own.squad.code, seat: i + 1 };
   }
 
   async function handleFriends(ws, msg) {
@@ -3781,6 +3818,13 @@ export function createSocial({
     // fix), through the same shape test, so the log line stays safe.
     const shown = msg.handle !== undefined ? seatShown(seatName(ws, msg.handle))
       : msg.rid !== undefined ? seatShown((rowTarget(ws, msg.rid) || {}).shown) : null;
+    // A GUEST ROW WITH NO ACCOUNT BEHIND IT has no uuid to file against, and
+    // is reported by its row instead (reportGuestRow, final audit 2026-10-09).
+    // Resolved in the same tick as the two reads above, so it is the same row.
+    if (msg.handle === undefined && msg.rid !== undefined && !isUuid(id)) {
+      const t = rowTarget(ws, msg.rid);
+      if (t && !t.id) return reportGuestRow(ws, msg, t, shown);
+    }
     if (!isUuid(id)) return reply(ws, msg, { type: 'report', error: 'no_such_user' });
 
     if (id === wireId(ws.userId)) return reply(ws, msg, { type: 'report', error: 'self' });
@@ -3843,6 +3887,40 @@ export function createSocial({
     const seen = reportCallsign(shown ?? seenName(who));
     await store.addReport(ws.userId, id, seen);
     console.log(`[report] ${id} "${seen}" by ${ws.userId}`);
+    reply(ws, msg, { type: 'report', ok: true });
+  }
+
+  // A REPORT ON A GUEST ROW WITH NO ACCOUNT (final audit, 2026-10-09). Such a
+  // row now shows the guest's name (squadSnapshot), and every name shown to
+  // another player can be reported. name_reports keys a report to the
+  // reported ACCOUNT (its `reported` column is not null and references
+  // auth.users), and this guest has none, so the report cannot be a row
+  // there without a schema change that would have to ship and migrate with
+  // the release. It goes where every report's second copy already goes, the
+  // game server's log, and holds what the reporter saw and where:
+  //
+  //   [report] guest in squad <code> seat <n> "<name>" by <reporter-uuid>
+  //
+  // The row is named by its squad's code and its seat number as the reporter's
+  // screen numbered it, and NEVER by its handle: a handle is a token for
+  // addressing a row while it stands, and test/auth_sink.mjs (8c) keeps every
+  // handle out of the report log, where it would outlive the row. The name is
+  // `shown`, which passed seatShown's shape test, so the line is safe to
+  // print; a nameless row showed nothing to report and is answered
+  // no_such_user, the answer for any miss. One report per reporter per row
+  // per day, as the table's rule is per pair, held in memory beside the row,
+  // which lives no longer than its squad. A player's own row is 'self', though
+  // a socket with an account never holds a row with none.
+  const guestReports = new WeakMap();   // row -> Map(reporter id -> time)
+  function reportGuestRow(ws, msg, t, shown) {
+    if (t.row.ws === ws) return reply(ws, msg, { type: 'report', error: 'self' });
+    if (!shown) return reply(ws, msg, { type: 'report', error: 'no_such_user' });
+    const by = wireId(ws.userId), at = now();
+    let done = guestReports.get(t.row);
+    if (!done) { done = new Map(); guestReports.set(t.row, done); }
+    if (done.has(by) && at - done.get(by) < DAY) return reply(ws, msg, { type: 'report', error: 'already' });
+    done.set(by, at);
+    console.log(`[report] guest in squad ${t.code} seat ${t.seat} "${shown}" by ${ws.userId}`);
     reply(ws, msg, { type: 'report', ok: true });
   }
 

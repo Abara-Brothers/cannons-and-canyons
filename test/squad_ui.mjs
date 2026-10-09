@@ -1852,6 +1852,41 @@ if (want('t9')) try {
         && a7blk.length === 1 && JSON.stringify(strip(a7blk[0])) === JSON.stringify({ type: 'block', op: 'add', rid: A7N }))
       ok(`${V}: a guest row that shows a name has Report and Block, aimed by the row's handle and never an id; a named guest row with no handle has no menu`);
     else fail(`${V}: guest row menu ${JSON.stringify({ rows: a7c && a7c.rows.map((r) => [r.name, r.menu, r.anon]), a7m, a7menu, a7rep, a7blk })}`);
+    // A7d. A GUEST WITH NO ACCOUNT IS NAMED, AND ITS MENU HAS REPORT ONLY
+    //      (final audit, 2026-10-09). The server names such a row now and
+    //      flags it `noacct`: Report sends {report, rid} as for any guest
+    //      row, Block is not offered and the menu says why, and the leader's
+    //      Remove is still on the row. The Ready line names the guest.
+    const A7Q = T9R('e9');
+    await t9state({ members: [T9YOU({ ready: true }), T9M({ guest: true, rid: A7Q, callsign: 'Wren Hollow', noacct: true })] });
+    const a7d = await t9box();
+    const a7dm = await ev(`(() => { const b = document.querySelector('#bay [data-pmenu="${A7Q}"]'); return b ? { kind: b.dataset.pmkind, noblk: b.dataset.pmnoblk || '' } : null; })()`);
+    await clearTx();
+    await t9click(`#bay [data-pmenu="${A7Q}"]`); await sleep(60);
+    const a7dmenu = await ev(`(() => { const m = document.getElementById('pmenu'); return m && !m.hidden ? { items: [...m.querySelectorAll('button')].map((b) => b.textContent.trim()), note: (m.querySelector('.pmn') || {}).textContent || '', head: (m.querySelector('.pmh') || {}).textContent } : null; })()`);
+    await t9click('#pmenu [data-pm="report"]'); await sleep(40);
+    await t9click('#pmenu [data-pm="ok"]'); await sleep(40);
+    const a7drep = (await tx()).filter((f) => f.type === 'report');
+    if (a7drep.length) await answer(a7drep[a7drep.length - 1].id, { type: 'report', ok: true });
+    const a7dblk = (await tx()).filter((f) => f.type === 'block');
+    const a7dstrip = (f) => { const c = { ...f }; delete c.id; return c; };
+    if (a7d && a7d.rows[1].name === 'Wren Hollow' && a7d.rows[1].menu && a7d.rows[1].kick && a7d.rows[1].kick.v === 'kick:' + A7Q
+        && a7dm && a7dm.kind === 'rid' && a7dm.noblk === '1'
+        && a7dmenu && a7dmenu.head === 'Wren Hollow' && a7dmenu.items.join('|') === 'Report name|Close'
+        && a7dmenu.note === 'This guest has no account yet, so they cannot be blocked. The squad leader can remove them.'
+        && a7drep.length === 1 && JSON.stringify(a7dstrip(a7drep[0])) === JSON.stringify({ type: 'report', rid: A7Q }) && a7dblk.length === 0)
+      ok(`${V}: a guest with no account is named, its menu has Report by the row's handle and no Block, and says why; the leader can still remove the row`);
+    else fail(`${V}: guest with no account ${JSON.stringify({ row: a7d && a7d.rows[1], a7dm, a7dmenu, a7drep, a7dblk })}`);
+    // A7e. YOUR OWN SEAT ALWAYS SHOWS YOUR OWN NAME (final audit): a guest's
+    //      own row the server sent nameless reads this device's name, never
+    //      'No callsign (you)', and it has no menu.
+    const a7eWas = await ev(`(() => { const was = { v: $('nameInput').value, s: localStorage.getItem('pt_name') }; $('nameInput').value = 'Desert Fox'; return was; })()`);
+    await t9state({ leader: T9_MULE, you: 1, members: [T9MULE({ ready: true }), T9M({ guest: true, rid: T9R('ea'), callsign: null, noacct: true })] });
+    const a7e = await t9box();
+    await ev(`(() => { $('nameInput').value = ${JSON.stringify(a7eWas.v)}; if (${JSON.stringify(a7eWas.s)} === null) localStorage.removeItem('pt_name'); else localStorage.setItem('pt_name', ${JSON.stringify(a7eWas.s)}); return true; })()`);
+    if (a7e && a7e.rows.length === 2 && a7e.rows[1].name === 'Desert Fox' && a7e.rows[1].you && !a7e.rows[1].menu)
+      ok(`${V}: your own seat shows your own name when the server sent none, with no menu`);
+    else fail(`${V}: own seat ${JSON.stringify(a7e && a7e.rows)}`);
     // A7b. A ROW THE SERVER GAVE NO HANDLE IS A ROW NO KICK CAN NAME (D-UI-3):
     //      it keeps its menu, and it has no Remove.
     await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true, rid: undefined })] });

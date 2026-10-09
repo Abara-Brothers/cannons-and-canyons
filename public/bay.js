@@ -1044,11 +1044,21 @@ const sqAErr = (s) => '<p class="sqae' + (s ? '' : ' hidden') + '">' + esc(s || 
 // refuses it all the same (task 5), so it is never shown a tick. The menu is on
 // every row but your own (report.self and block.self can only fail). A GUEST
 // row has no id, so its menu is aimed by the row's handle, `rid` (round 2 fix:
-// server/social.js names a guest row only when the row can be reported, and
-// resolves the handle to the guest's account); a nameless guest row, or one
-// with no handle, has no menu. The leader's Remove is on every row but their
-// own, a guest's included, and names the row by its handle, `rid` (D-UI-3): a
-// row the server gave no handle is a row no kick can name.
+// server/social.js resolves the handle to the guest's account). A guest with
+// no account at all is named too since the final audit (2026-10-09), and its
+// row carries `noacct`: its menu has Report, which the server records by the
+// row, and says why there is no Block, which needs an account. A nameless
+// guest row, or one with no handle, has no menu. The leader's Remove is on
+// every row but their own, a guest's included, and names the row by its
+// handle, `rid` (D-UI-3): a row the server gave no handle is a row no kick
+// can name.
+// YOUR OWN SEAT ALWAYS SHOWS YOUR OWN NAME (final audit, 2026-10-09). The
+// server's name for it can be null -- a typed name an account has since
+// taken, a name read that failed, the sign-in door's row -- and a player was
+// shown 'No callsign (you)' under the name their own chip showed. The seat
+// falls back to this device's name, the one the chip and every create and
+// join frame carry (myName). It is your own name on your own screen, so it
+// puts nothing in front of anybody else.
 // TWO LINES (D-UI-5): the name has the first line (.sqm1) to itself, and the
 // status words (.sqms) and the controls share the second (.sqm2), so no status
 // word or button ever takes width from a name. The friend rows are built the
@@ -1061,7 +1071,8 @@ const sqAErr = (s) => '<p class="sqae' + (s ? '' : ' hidden') + '">' + esc(s || 
 const sqRid = (p) => (p && typeof p.rid === 'string' && p.rid ? p.rid : '');
 function sqRow(p, i, sn, ctl) { return '<div class="sqm">' + sqRowParts(p, i, sn, ctl) + '</div>'; }
 function sqRowParts(p, i, sn, ctl) {
-  const you = i === sn.you, name = nameOf(p), lead = sqIsLead(sn, p);
+  const you = i === sn.you, lead = sqIsLead(sn, p);
+  const name = you && !named(p) && has('myName') ? (myName() || nameOf(p)) : nameOf(p);
   const lit = !!p.online && !p.dropped;
   // THE LEADER'S ROW SAYS READY OR NOT, LIKE EVERY ROW (U3; owner,
   // 2026-10-06). Fix wave E9 took it off when the leader had no Ready and
@@ -1080,7 +1091,7 @@ function sqRowParts(p, i, sn, ctl) {
     + '<span class="sqmn"><span class="sqmt">' + esc(name) + '</span>' + (you ? '<span class="sqmy">(you)</span>' : '') + '</span></div>'
     + '<div class="sqm2"><span class="sqms">' + (lead ? '<span class="sql">Leader</span>' : '') + st + '</span>'
     + (you ? '' : p.id != null ? menuBtn(p.id, 'id', name, false, !named(p))
-      : p.guest && named(p) && sqRid(p) ? menuBtn(sqRid(p), 'rid', name, false, false) : '')
+      : p.guest && named(p) && sqRid(p) ? menuBtn(sqRid(p), 'rid', name, false, false, p.noacct === true) : '')
     // Never "Remove No callsign" to a screen reader (review T9-R1-12): the
     // question in the footer says "this player", and so does the label.
     + (kick ? '<button class="sqic" data-sq="kick:' + esc(sqRid(p)) + '" title="Remove from the squad" aria-label="Remove '
@@ -2417,7 +2428,7 @@ const bayAccountKey = () => {
   const a = window.CC_ACCOUNT;
   return a && a.id ? (a.anonymous === false ? 'in:' : 'guest:') + a.id : '';
 };
-let pm = null;      // the open player menu:  { key, kind:'id'|'handle', name, anon, err, busy }
+let pm = null;      // the open player menu:  { key, kind:'id'|'handle'|'rid', name, anon, noblk, err, busy }
 let pa = null;      // the confirm sheet:     { act:'report'|'block', key, kind, name, anon, err, busy }
 let pmEl = null;    // the overlay node
 let pmFrom = null;  // the control that opened it, to hand the keyboard back to
@@ -2663,9 +2674,12 @@ const nameOf = (p) => (named(p) ? p.callsign : 'No callsign');
 // sheet needs to know, because "Report the callsign No callsign" is nonsense.
 // It is a separate attribute rather than a test on the text, because a player
 // may legitimately CHOOSE the callsign "No callsign".
-const menuBtn = (key, kind, name, dis, anon) =>
+// `noblk` marks a squad guest row with no account behind it (the server's
+// `noacct`, final audit 2026-10-09): Report works on it, Block cannot, and
+// the menu says so rather than offering a button that could only fail.
+const menuBtn = (key, kind, name, dis, anon, noblk) =>
   '<button class="pmb" data-pmenu="' + esc(key) + '" data-pmkind="' + kind + '" data-pmname="' + esc(name)
-  + '"' + (anon ? ' data-pmanon="1"' : '') + ' aria-label="More for ' + esc(name) + '"' + (dis ? ' disabled' : '') + '>' + IC.more + '</button>';
+  + '"' + (anon ? ' data-pmanon="1"' : '') + (noblk ? ' data-pmnoblk="1"' : '') + ' aria-label="More for ' + esc(name) + '"' + (dis ? ' disabled' : '') + '>' + IC.more + '</button>';
 // BINDING resolution 23: a search result carries NO tank, because the paint is
 // not stored on the profile — the card shows the callsign alone. No card here
 // draws one, so there is no half-built path for a later project to trip over.
@@ -2706,13 +2720,13 @@ function pmHost() {
   }
   return pmEl;
 }
-function pmOpen(key, kind, name, anon) {
+function pmOpen(key, kind, name, anon, noblk) {
   if (has('Audio')) Audio.ensure();
   // WHERE THE KEYBOARD CAME FROM, so it can be sent back. A sheet that takes
   // focus and drops it on the floor leaves a keyboard player at the top of the
   // document, hunting for the card they were on.
   pmFrom = (document.activeElement && document.activeElement !== document.body) ? document.activeElement : null;
-  pm = { key, kind: kind === 'handle' || kind === 'rid' ? kind : 'id', name: name || '', anon: !!anon, err: '', busy: '' };
+  pm = { key, kind: kind === 'handle' || kind === 'rid' ? kind : 'id', name: name || '', anon: !!anon, noblk: !!noblk, err: '', busy: '' };
   pa = null;
   pmPaint();
 }
@@ -2736,6 +2750,10 @@ function pmItems() {
   // meaningless outside its room and says nothing about a friendship.
   const sn = who === 'in' ? snap() : null;
   const isFriend = pm.kind === 'id' && !!(sn && (sn.friends || []).some((x) => x && x.id === pm.key));
+  // A GUEST WITH NO ACCOUNT: Report only, and the reason in words (menuBtn's
+  // `noblk`). The leader's Remove stays on the row itself.
+  if (pm.noblk) return '<button class="pmi" data-pm="report">Report name</button>'
+    + '<p class="pmn">This guest has no account yet, so they cannot be blocked. The squad leader can remove them.</p>';
   return '<button class="pmi" data-pm="report">Report name</button>'
     + '<button class="pmi" data-pm="block">Block</button>'
     + (isFriend ? '<button class="pmi" data-pm="unfriend"' + (pm.busy ? ' disabled' : '') + '>Remove friend</button>' : '');
@@ -2810,7 +2828,7 @@ function pmClick(e) {
   if (a === 'signin') { pmClose(); const b = $('accountBtn'); if (b && b.onclick) b.onclick(); return; }
   if (a === 'cancel') { pa = null; pmPaint(); return; }
   if (a === 'report' || a === 'block') {
-    if (!pm) return;
+    if (!pm || (a === 'block' && pm.noblk)) return;
     pa = { act: a, key: pm.key, kind: pm.kind, name: pm.name, anon: pm.anon, err: '', busy: '' };
     pmPaint(); return;
   }
@@ -4400,7 +4418,7 @@ window.addEventListener('visibilitychange', sqBack);
 document.addEventListener('click', (e) => {
   const t = e.target.closest ? e.target.closest('[data-pmenu]') : null;
   if (!t) return;
-  pmOpen(t.dataset.pmenu, t.dataset.pmkind, t.dataset.pmname || '', t.dataset.pmanon === '1');
+  pmOpen(t.dataset.pmenu, t.dataset.pmkind, t.dataset.pmname || '', t.dataset.pmanon === '1', t.dataset.pmnoblk === '1');
 });
 // ESCAPE, and it dismisses ONE LAYER the way Cancel does: the confirm sheet
 // hands the player back to the menu, the menu closes and the keyboard goes back
