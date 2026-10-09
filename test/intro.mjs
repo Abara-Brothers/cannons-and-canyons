@@ -32,7 +32,12 @@
 // kept the moment it changes and its time while the page is on screen, so a
 // kill with no word (the iOS app switcher) still reopens onto it; no toast is
 // drawn on the quick doors and none is lost; and a native sign-in return gets
-// the quick doors.
+// the quick doors. ROUND 3 (owner, 2026-10-10, "Stay shut until ready"): the
+// doors stay shut until the last view is ready, under a safety limit of about
+// 15 s instead of 3; while a held seat's resume is out they say
+// "Reconnecting..." after a second; no frame shows home behind them on the way
+// to a match; nothing stands over them; and after ten minutes the full intro
+// still ends on the main menu.
 //
 // Self-hosted (its own server and Chrome on free ports, never 3000). Skips
 // cleanly (exit 3) without Chrome, like every other client-side suite.
@@ -56,7 +61,11 @@ if (!existsSync(CHROME)) {
 // checks (a 16.5 s wait for the last view's beat among them) took a whole run
 // from about 170 s to about 200 s on an idle machine, so the ceiling went from
 // 300 s to 420 s, which leaves a busy machine at least the room it had.
-const CDP_MS = 20000, RUN_MS = 420000;
+// Round 3 adds waits of 15 s (twice), 5 s (twice), 4.5 s and 4 s for the
+// doors, four more held matches and a full intro played to its end, about
+// 80 s in all (a whole run took 4 min 35 s on 2026-10-10), so the ceiling
+// goes to 540 s for the same reason.
+const CDP_MS = 20000, RUN_MS = 540000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const freePort = () => new Promise((resolve, reject) => {
   const s = net.createServer(); s.on('error', reject);
@@ -219,8 +228,49 @@ const INSTR = `(() => {
   // while the doors hold, and how many toasts are up (round 2 review: none
   // may be drawn on the doors). At the first frame they open: what they open
   // onto, and whether anything in the bay is still animating its entrance.
+  // ROUND 3 (owner, 2026-10-10: the doors stay shut until the last view is
+  // ready, up to about 15 s, and say "Reconnecting..." while a held seat's
+  // resume is out): each frame also reads the words' line on the doors (lit),
+  // what intro.js says of them (label), whether the bay is on screen and the
+  // connection banner up, and how many times app.js has drawn the match
+  // (draws, from DRAWS, when a case installs it). A wait of up to 15 s is
+  // about 900 frames, so rows are kept for the first 400 frames and for every
+  // frame that shows anything behind the doors, and S.qa counts what must hold
+  // on EVERY frame, kept or not: the shut doors cover the screen, nothing is
+  // up over them, and when the words are said and drawn. Every 15th frame the
+  // whole page is looked at for anything that could be drawn over the doors.
   S.quick = [];
+  S.qa = { n: 0, shut: 0, notOpaque: 0, toast: 0, mg: 0, conn: 0, scans: 0, over: [], labelFirst: null, litFirst: null, early: 0, full: 0, fullUnlit: 0, spinN: 0, spinMoved: 0, ring: '' };
   function px(cv, x, y) { const q = cv.getContext('2d'); return q.getImageData(Math.max(0, Math.min(cv.width - 1, Math.round(x))), Math.max(0, Math.min(cv.height - 1, Math.round(y))), 1, 1).data; }
+  // How many device pixels are lit on one row through the middle of where
+  // intro.js sets its words (status.labelGeo), 90 stage units either side of
+  // the seam, counted for each door: [left, right]. The doors there are dark
+  // and the words light, so a channel average over 120 is a letter.
+  function lit(cv, I, g, d) {
+    const L = I.labelGeo; if (!L) return [0, 0];
+    const y = Math.round((g[1] + L[1] * g[2]) * d), x0 = Math.round((g[0] + (L[0] - 90) * g[2]) * d), w = Math.max(2, Math.round(180 * g[2] * d));
+    const a = cv.getContext('2d').getImageData(x0, y, w, 1).data, seam = (g[0] + L[0] * g[2]) * d - x0, n = [0, 0];
+    for (let i = 0; i < a.length; i += 4) if (a[i + 3] > 0 && (a[i] + a[i + 1] + a[i + 2]) / 3 > 120) n[i / 4 < seam ? 0 : 1]++;
+    return n;
+  }
+  // Anything that could be drawn over the doors, whose canvas stands at its
+  // own z-index (89) among #app's children: in #app, anything drawn with a
+  // z-index as high or higher (counting one inside a lower stacking context
+  // too, which only errs on the strict side); outside #app, anything
+  // positioned and drawn. The toast layer is the one thing above (z 90), and
+  // is drawn only while it holds a toast.
+  function overDoors(cv) {
+    const app = document.getElementById('app'), out = [], zc = parseInt(getComputedStyle(cv).zIndex, 10);
+    for (const el of document.body.querySelectorAll('*')) {
+      if (el === cv || el.tagName === 'SCRIPT' || el.tagName === 'STYLE') continue;
+      const cs = getComputedStyle(el);
+      if (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity === 0) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) continue;
+      if (app.contains(el) ? !(parseInt(cs.zIndex, 10) < zc) && cs.zIndex !== 'auto' : cs.position !== 'static') out.push(el.id || String(el.className) || el.tagName);
+    }
+    return out;
+  }
   function quickFrame(I, cv) {
     const d = cv.width / (cv.clientWidth || 1), g = I.geo || [0, 0, 1], bay = document.getElementById('bay');
     const ring = [];
@@ -228,12 +278,32 @@ const INSTR = `(() => {
     const row = { t: Math.round(I.t), open: I.open || 0, shift: I.shift || 0, seam: g[0] + 466 * g[2], u: g[2], opacity: +getComputedStyle(cv).opacity,
       mid: px(cv, cv.width / 2, cv.height / 2)[3], left: px(cv, cv.width * .04, cv.height / 2)[3], right: px(cv, cv.width * .96, cv.height / 2)[3],
       ring: ring.join(','), scr: bay.dataset.scr || '', game: document.getElementById('game').classList.contains('active'), mg: mgUp(),
-      toast: document.querySelectorAll('.toast-item').length };
+      toast: document.querySelectorAll('.toast-item').length, bay: bay.classList.contains('active'), label: I.label || 0, lit: lit(cv, I, g, d),
+      conn: !document.getElementById('connErr').classList.contains('hidden'), draws: window.__draws || 0 };
     if (row.open > 0 && !S.quickOpen) {
       const anims = bay.getAnimations ? bay.getAnimations({ subtree: true }).filter((a) => { const it = a.effect && a.effect.getComputedTiming && a.effect.getComputedTiming(); return it && isFinite(it.iterations) && a.playState === 'running'; }).length : 0;
-      S.quickOpen = { t: row.t, scr: row.scr, game: row.game, anims, resume: localStorage.getItem('cc_resume') !== null };
+      S.quickOpen = { t: row.t, scr: row.scr, game: row.game, anims, resume: localStorage.getItem('cc_resume') !== null, draws: row.draws };
     }
-    if (S.quick.length < 400) S.quick.push(row);
+    const Q = S.qa, shut = row.open === 0 && row.opacity === 1;
+    Q.n++;
+    const litBoth = row.lit[0] >= 3 && row.lit[1] >= 3;
+    if (shut) {
+      Q.shut++;
+      if (row.mid !== 255 || row.left !== 255 || row.right !== 255) Q.notOpaque++;
+      // past 3.2 s, where the intro's own beacons have spun down to a stop:
+      // how many shut frames, and on how many the beacon looks different
+      if (I.t >= 3200) { Q.spinN++; if (row.ring !== Q.ring) Q.spinMoved++; }
+      Q.ring = row.ring;
+      if (litBoth && Q.litFirst === null) Q.litFirst = I.t;
+      if (row.label >= .999) { if (litBoth) Q.full++; else Q.fullUnlit++; }
+    }
+    if (row.toast) Q.toast++;
+    if (row.mg) Q.mg++;
+    if (row.conn) Q.conn++;
+    if (row.label > 0 && Q.labelFirst === null) Q.labelFirst = I.t;
+    if (I.t < 1000 && (row.label > 0 || (shut && row.lit[0] + row.lit[1] > 0))) Q.early++;
+    if (Q.n % 15 === 1) { Q.scans++; for (const o of overDoors(cv)) if (!Q.over.includes(o)) Q.over.push(o); }
+    if (S.quick.length < 400 || !shut) S.quick.push(row);
   }
   // THE NOTICE OF A MATCH THAT ENDED WHILE THE PLAYER WAS AWAY (bay.js
   // #mgone): whether it is up, on every quick-door frame above, and the first
@@ -292,8 +362,14 @@ const HELD = "try { localStorage.setItem('cc_resume', JSON.stringify({ code: 'AB
 // few milliseconds, inside the doors' first frames, so a wait for it could not
 // be told from no wait at all: from the resume's answer on, every frame the
 // page receives is held for RESUME_SLOW ms and then handed over in order.
+// slowAnswer(ms) is the same server slower still (round 3: 4, 5 and 20 s),
+// and answerAt(t) one whose answer is handed over in the first animation
+// frame at which the doors have been up for t ms of their own clock. The
+// moment the answer is handed over, on the doors' clock, is kept in
+// window.__answeredAt: the doors count only the time they are on screen and
+// the server's delay is wall time, so the two are compared on one clock.
 const RESUME_SLOW = 700;
-const SLOW_ANSWER = `(() => {
+const slowAnswer = (ms, atT = 0) => `(() => {
   const Real = window.WebSocket;
   const Slow = function (url, proto) {
     const s = new Real(url, proto);
@@ -303,7 +379,12 @@ const SLOW_ANSWER = `(() => {
       let t = null; try { t = JSON.parse(e.data).type; } catch (x) {}
       if (q === null && (t === 'restore' || t === 'resumeError')) {
         q = [];
-        setTimeout(() => { const held = q; q = false; held.forEach((ev) => { if (fn) fn.call(s, ev); }); }, ${RESUME_SLOW});
+        const go = () => {
+          try { window.__answeredAt = window.__ccIntro ? window.__ccIntro.t : null; } catch (x) {}
+          const held = q; q = false; held.forEach((ev) => { if (fn) fn.call(s, ev); });
+        };
+        if (${atT}) { const at = () => { const I = window.__ccIntro; if (I && I.t >= ${atT}) go(); else requestAnimationFrame(at); }; requestAnimationFrame(at); }
+        else setTimeout(go, ${ms});
       }
       if (q) { q.push(e); return; }
       if (fn) fn.call(s, e);
@@ -313,6 +394,23 @@ const SLOW_ANSWER = `(() => {
   Slow.prototype = Real.prototype;
   Slow.CONNECTING = 0; Slow.OPEN = 1; Slow.CLOSING = 2; Slow.CLOSED = 3;
   window.WebSocket = Slow;
+})();`;
+const SLOW_ANSWER = slowAnswer(RESUME_SLOW);
+const answerAt = (t) => slowAnswer(0, t);
+// HOW OFTEN app.js HAS DRAWN THE MATCH (round 3): every draw() made while the
+// game screen is up with a match in play, so a case can show the doors began
+// to open only after the restored match had been drawn under them. draw is a
+// global function of app.js, and its frame loop calls it by that name, as
+// TANK_CHECK's drawTank is.
+const DRAWS = `(() => {
+  window.__draws = 0;
+  document.addEventListener('DOMContentLoaded', () => {
+    const real = window.draw;
+    if (typeof real === 'function') window.draw = function () {
+      try { if (document.getElementById('game').classList.contains('active') && S.playing && S.terrain) window.__draws++; } catch (e) {}
+      return real.apply(this, arguments);
+    };
+  });
 })();`;
 // EVERY TOAST, ASKED FOR AND PUT UP (round 2 review: none may be drawn on the
 // quick doors, and none may be lost). window.__toasts.asked is every
@@ -475,8 +573,13 @@ async function quickRun(p, ms = 9000) {
 // cut; parting from the seam with the gap clear onto the destination and the
 // seam still, or under reduced motion (`fade`) not moving at all but fading;
 // on a screen already at rest; the launch hold let go once, with them up.
-const QUICK_OPEN = 500, QUICK_FADE = 400;
-function doorsOk(label, R, { dest, fade = false, prompt = true }) {
+// ROUND 3 (owner, 2026-10-10) adds two things every launch's doors are judged
+// on. `held`: the doors say "Reconnecting..." only while a held seat's
+// resume is out; then never in their first LABEL_AT ms, and from then on drawn
+// on every frame it is said. And on every frame of every launch's doors,
+// nothing stands over them (overOk).
+const QUICK_OPEN = 500, QUICK_FADE = 400, LABEL_AT = 1000;
+function doorsOk(label, R, { dest, fade = false, prompt = true, held = false }) {
   const { st, T, L, after } = R, rows = (T && T.quick) || [], at = T && T.quickOpen;
   const onto = dest === 'game' ? !!at && at.game && after.game : !!at && !at.game && at.scr === dest && after.scr === dest && !after.game;
   check(`[${label}] the quick doors, not the intro: up before anything is drawn, opening onto ${dest}, nothing left after`,
@@ -501,7 +604,62 @@ function doorsOk(label, R, { dest, fade = false, prompt = true }) {
   }
   check(`[${label}] nothing under them is still dealing itself in when they open, and the launch hold is let go once, with the doors up`,
     !!at && at.anims === 0 && !!L && L.hides === 1 && L.at[0].canvas && L.at[0].alpha === 255, JSON.stringify({ anims: at && at.anims, L }));
+  labelOk(label, R, held);
+  overOk(label, R);
   check(`[${label}] no console errors`, R.logs.length === 0 && T.errors === 0, R.logs.slice(0, 3).join(' | '));
+}
+// THE WORDS ON THE DOORS (round 3). Without a held seat nothing is said or
+// drawn. With one: nothing in the first LABEL_AT ms; if the doors were still
+// shut well after that, "Reconnecting..." is said within a frame or so of it,
+// drawn in full on the shut doors, never said without being drawn, and at
+// least 13 stage units tall (the house rules' floor for a label); and it is
+// gone by the time the doors are a third of the way open.
+function labelOk(label, R, held) {
+  const { st, T } = R, qa = T && T.qa, rows = (T && T.quick) || [];
+  if (!qa || !st) { check(`[${label}] the words on the doors were read`, false, JSON.stringify({ st, qa })); return; }
+  if (!held) {
+    check(`[${label}] nothing is said on these doors: only a held seat's wait says "Reconnecting..."`,
+      qa.labelFirst === null && qa.litFirst === null && qa.full === 0 && st.labelAt === undefined, JSON.stringify(qa));
+    return;
+  }
+  check(`[${label}] nothing is said on the doors in their first second (${qa.early} frames said or drew something then)`,
+    qa.early === 0 && (qa.labelFirst === null || qa.labelFirst >= LABEL_AT) && (qa.litFirst === null || qa.litFirst >= LABEL_AT), JSON.stringify(qa));
+  if (st.openAt >= LABEL_AT + 600) {
+    check(`[${label}] then "Reconnecting..." comes up on the shut doors (said at ${Math.round(qa.labelFirst)} ms, lit from ${Math.round(qa.litFirst)} ms, in full on ${qa.full} frames), across both doors, ${st.labelGeo && st.labelGeo[2]} stage units tall in the intro's Barlow, and drawn on every frame it is said`,
+      st.labelText === 'Reconnecting…' && qa.labelFirst >= LABEL_AT && qa.labelFirst <= LABEL_AT + 100 && qa.litFirst !== null && qa.litFirst <= LABEL_AT + 400
+      && qa.full >= 10 && qa.fullUnlit === 0 && !!st.labelGeo && st.labelGeo[2] >= 13 && /^Barlow,/.test(st.labelFace || ''), JSON.stringify({ qa, text: st.labelText, geo: st.labelGeo, face: st.labelFace }));
+  }
+  check(`[${label}] the words never first come up once the doors have begun to open`, qa.labelFirst === null || qa.labelFirst <= st.openAt, JSON.stringify({ first: qa.labelFirst, openAt: st.openAt }));
+  const late = rows.filter((r) => r.open >= .3);
+  check(`[${label}] and the words have gone by the time the doors are a third of the way open (${late.length} frames)`,
+    late.length > 0 && late.every((r) => r.label === 0), JSON.stringify(late.slice(0, 3)));
+}
+// NOTHING OVER THE DOORS (round 3: "make sure nothing else (resume toasts,
+// the connection banner, the bay's own entrance) shows over the shut doors").
+// The shut doors cover the screen on every frame; no toast, no notice of a
+// match that ended and no connection banner is up on any frame of them; and
+// the looks at the whole page found nothing that could be drawn over them.
+// The bay's entrance is under them, and doorsOk shows it finished at the open.
+function overOk(label, R) {
+  const qa = R.T && R.T.qa;
+  check(`[${label}] nothing stands over the doors: on all ${qa && qa.shut} shut frames they cover the screen, no toast, notice or connection banner is up on any of their ${qa && qa.n} frames, and ${qa && qa.scans} looks at the whole page found nothing that could be drawn over them`,
+    !!qa && qa.shut >= 1 && qa.notOpaque === 0 && qa.toast === 0 && qa.mg === 0 && qa.conn === 0 && qa.scans >= 1 && qa.over.length === 0, JSON.stringify(qa));
+}
+// STILL TURNING (round 3): doors that hold past 3.2 s, where the intro's own
+// beacons have spun down to a stop, are still not a frozen frame: the beacons
+// look different on most of those frames, every one of which is counted.
+function spinOk(label, R, min) {
+  const qa = R.T && R.T.qa;
+  check(`[${label}] past 3.2 s the shut doors are still alive: the beacons look different on ${qa && qa.spinMoved} of ${qa && qa.spinN} frames`,
+    !!qa && qa.spinN >= min && qa.spinMoved >= qa.spinN * .5, JSON.stringify(qa && { spinN: qa.spinN, spinMoved: qa.spinMoved }));
+}
+// NO FRAME SHOWS HOME BEHIND THEM (round 3): every frame that shows anything
+// behind the doors, parted or faded, shows the match with the bay off screen,
+// and app.js had drawn the restored match (DRAWS) before the first of them.
+function revealOk(label, R) {
+  const rows = (R.T && R.T.quick) || [], seen = rows.filter((r) => r.open > 0 || r.opacity < 1), at = R.T && R.T.quickOpen;
+  check(`[${label}] no frame shows home behind the doors: on all ${seen.length} frames that show anything behind them the match is up and the bay is not, and the restored match had been drawn (${at && at.draws} draws) before the first`,
+    seen.length >= 8 && seen.every((r) => r.game && !r.bay) && !!at && at.draws >= 1, JSON.stringify({ wrong: seen.filter((r) => !r.game || r.bay).slice(0, 3), at }));
 }
 async function bayReady(p) {
   for (let i = 0; i < 200; i++) {
@@ -640,7 +798,7 @@ async function offCase(label, opts, url = BASE) {
 async function quickCase(label, opts, url, want) {
   const p = await openPage({ w: 844, h: 390, dpr: 3, ...opts, extra: [...(opts.extra || []), opts.native ? LAUNCH_NATIVE : LAUNCH] });
   await p.go(url);
-  const R = await quickRun(p);
+  const R = await quickRun(p, want.ms);
   doorsOk(label, R, want);
   if (want.also) await want.also(p, R);
   await p.close();
@@ -654,7 +812,7 @@ await quickCase('A5 a squad link with a saved name: the quick doors, never the i
 // the doors opened onto home and nothing said why. They still wait for the
 // refusal and open onto home, and once they have gone, never while they are
 // shut, home says what happened.
-await quickCase('A5 a held seat the server no longer has: the doors wait for its answer, then open onto home', { extra: [HELD, SLOW_ANSWER] }, BASE, { dest: 'home', prompt: false,
+await quickCase('A5 a held seat the server no longer has: the doors wait for its answer, then open onto home', { extra: [HELD, SLOW_ANSWER] }, BASE, { dest: 'home', prompt: false, held: true,
   also: async (p, R) => {
     check(`A5 that held seat was answered (${RESUME_SLOW} ms late) and cleared before the doors opened, at ${R.st && Math.round(R.st.openAt)} ms`,
       !!R.st && R.st.openAt >= RESUME_SLOW && R.T.quickOpen && R.T.quickOpen.resume === false && !(await p.ev("localStorage.getItem('cc_resume')")), JSON.stringify(R.T.quickOpen));
@@ -934,6 +1092,13 @@ for (const [label, age] of [['V9 10 min 10 s after last use: the full intro agai
     const shown = await p.ev("(showToast('A boot message'), { cv: !!document.getElementById('intro'), running: window.__ccIntro.state === 'running', items: [...document.querySelectorAll('.toast-item')].map((t) => t.textContent) })");
     check('V9 over the full intro a toast still shows at once', shown.cv && shown.running && shown.items.includes('A boot message'), JSON.stringify(shown));
   }
+  // ROUND 3 (owner, 2026-10-10: "AFTER 10 MIN (no match): the full intro ends
+  // on the MAIN MENU"): played to its end, it lands on home with nothing of
+  // the old view put back, neither its screen nor its mode.
+  const end = await p.until((x) => x.state === 'ended', 12000);
+  await settled(p);
+  const at = await p.ev(`({ scr: ${SCR}, mode: ccMode, game: document.getElementById('game').classList.contains('active'), cv: !!document.getElementById('intro') })`);
+  check(`R3 ${label.slice(3)}: played to its end, onto the main menu`, !!end && end.reason === 'done' && at.scr === 'home' && at.mode === 'duel' && !at.game && !at.cv, JSON.stringify({ end, at }));
   await p.close();
 }
 await quickCase('V9 a last view naming a screen that cannot come back (a lobby)', { extra: [LAST(60000, { scr: 'lobby', path: ['home'], mode: 'duel' })] }, BASE, { dest: 'home' });
@@ -971,12 +1136,13 @@ await quickCase('V9 a reopen within ten minutes under reduced motion', { media: 
   // hour): the match is still there only because nobody else plays in it.
   await a.go('about:blank'); await sleep(200); await a.close();
   await sleep(OLD_HOLD_MS + 800);
-  const b = await openPage({ ...IP17, context: X, extra: [LAUNCH, SLOW_ANSWER, TOASTS] });
+  const b = await openPage({ ...IP17, context: X, extra: [LAUNCH, SLOW_ANSWER, TOASTS, DRAWS] });
   await b.go();
   const rec = await b.ev("JSON.parse(localStorage.getItem('cc_last_view') || 'null')");
   const R = await quickRun(b);
   check('V9 a match was running when the page was put away, and the view kept is home: the match is the held seat\'s to bring back', playing && !!rec && rec.scr === 'home', JSON.stringify(rec));
-  doorsOk('V9 reopened on a held seat', R, { dest: 'game', prompt: false });
+  doorsOk('V9 reopened on a held seat', R, { dest: 'game', prompt: false, held: true });
+  revealOk('V9 reopened on a held seat', R);
   check(`V9 the doors waited for the resume, answered ${RESUME_SLOW} ms late (they opened at ${R.st && Math.round(R.st.openAt)} ms), and the match under them is the one that was held, back in play`,
     !!R.st && R.st.openAt >= RESUME_SLOW && await b.ev("!!(S.playing && S.code && localStorage.getItem('cc_resume'))"), JSON.stringify(R.st));
   check(`V9 that match was brought back from more than ${OLD_HOLD_MS + 800} ms away, past the old hold of ${OLD_HOLD_MS} ms, and nothing says it ended`,
@@ -997,18 +1163,155 @@ await quickCase('V9 a reopen within ten minutes under reduced motion', { media: 
 }
 {
   // A held seat with no server to answer: the doors may not wait for ever.
-  // They hold, alive (the beacons turn), for their ceiling, then open onto
-  // what is there.
+  // They hold, alive (the beacons turn) and saying "Reconnecting..." (round
+  // 3), for their ceiling, then open onto what is there.
   const NOSOCK = `window.WebSocket = function () { this.readyState = 0; this.send = function () {}; this.close = function () {}; };
     window.WebSocket.CONNECTING = 0; window.WebSocket.OPEN = 1; window.WebSocket.CLOSING = 2; window.WebSocket.CLOSED = 3;`;
-  await quickCase('V9 a held seat with no server to answer', { extra: [HELD, NOSOCK] }, BASE, { dest: 'home', prompt: false,
+  await quickCase('V9 a held seat with no server to answer', { extra: [HELD, NOSOCK] }, BASE, { dest: 'home', prompt: false, held: true, ms: 25000,
     also: async (p, R) => {
       const hold = R.T.quick.filter((r) => r.open === 0 && r.t >= 300);
-      check(`V9 those doors hold for their ceiling and no longer (opened at ${R.st && Math.round(R.st.openAt)} ms)`, !!R.st && R.st.openAt >= 3000 && R.st.openAt <= 3060, JSON.stringify(R.st));
+      // CHANGED 2026-10-10 (owner, round 3: "a safety limit of about 15 s").
+      // The ceiling was 3 s and this pinned it (openAt 3000-3060), which is
+      // what opened a slow resume onto home before the match came back.
+      check(`R3 those doors hold for the owner's safety limit of 15 s and no longer (opened at ${R.st && Math.round(R.st.openAt)} ms)`, !!R.st && R.st.openAt >= 15000 && R.st.openAt <= 15060, JSON.stringify(R.st));
       check(`V9 and while they hold they are not a frozen frame: the beacons turn (${new Set(hold.map((r) => r.ring)).size} different looks in ${hold.length} frames)`,
         hold.length >= 20 && new Set(hold.map((r) => r.ring)).size >= hold.length / 2, JSON.stringify(hold.slice(0, 2)));
+      spinOk('V9 a held seat with no server to answer', R, 400);
     } });
 }
+
+// ---- ROUND 3: THE DOORS STAY SHUT UNTIL THE LAST VIEW IS READY ---------------
+// The owner (2026-10-10, item 26): "when a user loads back into a game and
+// where they left off, the loading bay doors animation needs to open into
+// what the player was last doing. The bay doors need to actually open and
+// behind the bay doors needs to be where the player last left off." His
+// answer, "Stay shut until ready": the doors stay closed, the studio mark and
+// beacons lit and a small "Reconnecting..." on them, until the match is fully
+// back, then open onto it; if the match is gone, onto home with the "match
+// ended" message; a safety limit of about 15 s. They used to open after 3 s
+// onto whatever was there, so a resume slower than that showed home first
+// and the match then cut in over it. The server is made slow here as
+// RESUME_SLOW makes it slow: 4 and 5 s, past the old limit and inside the
+// new one; 20 s, past both; and 0.9 s, just before the words are due.
+const IPHONE17 = { w: 874, h: 402, dpr: 3, insets: { left: 62, right: 62, top: 0, bottom: 21 } };
+// A MATCH HELD FOR A DEVICE, made as the V9 case above makes one: a match
+// against the computer started from Match setup in a page of browser context
+// X, which is then put away. The match's code and the device's record of it.
+async function holdMatch(X, view) {
+  const a = await openPage({ ...view, noIntro: true, context: X });
+  await a.go(); await bayReady(a);
+  await a.ev("(Bay.go('setup'), ccMode = 'duel', document.getElementById('createBtn').onclick(), true)");
+  let held = null;
+  for (let i = 0; i < 150 && !held; i++) {
+    held = await a.ev("S.playing && S.code && localStorage.getItem('cc_resume') ? { code: S.code, rec: JSON.parse(localStorage.getItem('cc_resume')) } : null");
+    if (!held) await sleep(100);
+  }
+  await a.go('about:blank'); await sleep(200); await a.close();
+  return held;
+}
+const BACK = "({ playing: S.playing === true && document.getElementById('game').classList.contains('active'), code: S.code, rec: JSON.parse(localStorage.getItem('cc_resume') || 'null'), mg: !!document.getElementById('mgone') && !document.getElementById('mgone').hidden })";
+{
+  // ANSWERED 5 s LATE: shut, alive and saying so until the match is back,
+  // then open onto it, never onto home first.
+  const SLOW = 5000, label = 'R3 a held seat answered 5 s late';
+  const { browserContextId: X } = await send('Target.createBrowserContext', { disposeOnDetach: true });
+  const held = await holdMatch(X, IPHONE17);
+  const b = await openPage({ ...IPHONE17, context: X, extra: [LAUNCH, slowAnswer(SLOW), TOASTS, DRAWS] });
+  await b.go();
+  const R = await quickRun(b, 25000);
+  doorsOk(label, R, { dest: 'game', prompt: false, held: true });
+  revealOk(label, R);
+  const back = await b.ev(BACK), qa = R.T.qa, ans = await b.ev('window.__answeredAt');
+  check(`${label}: the doors stayed shut until it was back, past the old 3 s limit (answered at ${Math.round(ans)} ms on the doors' clock, opened at ${R.st && Math.round(R.st.openAt)} ms), onto the very match that was held, in play, and nothing says it ended`,
+    !!held && !!R.st && ans > 3100 && R.st.openAt >= ans && R.st.openAt <= ans + 100 && R.st.openAt < 15000 && R.st.dest === 'game' && back.playing && back.code === held.code
+    && !!back.rec && back.rec.code === held.code && !R.T.mgFirst && !back.mg, JSON.stringify({ held, ans, st: R.st, back }));
+  const hold = R.T.quick.filter((r) => r.open === 0 && r.t >= 300);
+  check(`${label}: all through the wait the doors covered the screen and stayed alive, the beacons turning (${new Set(hold.map((r) => r.ring)).size} looks in ${hold.length} frames), over ${qa.shut} shut frames and ${qa.scans} looks at the page`,
+    qa.shut >= 200 && qa.scans >= 15 && hold.length >= 200 && new Set(hold.map((r) => r.ring)).size >= hold.length / 2, JSON.stringify({ shut: qa.shut, scans: qa.scans }));
+  await sleep(100);
+  const T = await b.ev('JSON.parse(JSON.stringify(window.__toasts))'), ask = T.asked.filter((x) => x.up).map((x) => x.text);
+  spinOk(label, R, 60);
+  check(`${label}: "Reconnected — battle on!" waited for the doors and showed once they had gone`,
+    ask.includes('Reconnected — battle on!') && T.shown.some((x) => x.text === 'Reconnected — battle on!') && T.shown.every((x) => !x.cv), JSON.stringify(T));
+  await b.close();
+  try { await send('Target.disposeBrowserContext', { browserContextId: X }); } catch {}
+}
+{
+  // ANSWERED 20 s LATE: past the safety limit the doors open onto whatever
+  // is there, home, and the resume that lands later still takes the player
+  // back to the match.
+  const SLOW = 20000, label = 'R3 a held seat answered 20 s late';
+  const { browserContextId: X } = await send('Target.createBrowserContext', { disposeOnDetach: true });
+  const held = await holdMatch(X, IPHONE17);
+  const b = await openPage({ ...IPHONE17, context: X, extra: [LAUNCH, slowAnswer(SLOW), TOASTS, DRAWS] });
+  await b.go();
+  const R = await quickRun(b, 25000);
+  doorsOk(label, R, { dest: 'home', prompt: false, held: true });
+  spinOk(label, R, 400);
+  check(`${label}: at the safety limit the doors open onto what is there (at ${R.st && Math.round(R.st.openAt)} ms, onto ${R.st && R.st.dest}), with the seat still held`,
+    !!R.st && R.st.openAt >= 15000 && R.st.openAt <= 15060 && R.st.dest === 'home' && !!R.T.quickOpen && R.T.quickOpen.resume === true, JSON.stringify({ st: R.st, at: R.T.quickOpen }));
+  let back = null;
+  for (let i = 0; i < 150; i++) { back = await b.ev(BACK); if (back.playing) break; await sleep(100); }
+  await sleep(100);
+  const T = await b.ev('JSON.parse(JSON.stringify(window.__toasts))');
+  check(`${label}: the resume that lands later still takes the player to the match that was held, says "Reconnected — battle on!", and nothing says the match ended`,
+    !!held && back.playing && back.code === held.code && !!back.rec && back.rec.code === held.code && !back.mg && !R.T.mgFirst
+    && T.shown.some((x) => x.text === 'Reconnected — battle on!' && !x.cv), JSON.stringify({ held, back, T }));
+  await b.close();
+  try { await send('Target.disposeBrowserContext', { browserContextId: X }); } catch {}
+}
+// REFUSED 5 s LATE: the match is gone. The doors wait for the answer, open
+// onto home, and only then is it said that the match ended.
+await quickCase('R3 a held seat the server no longer has, answered 5 s late', { extra: [HELD, slowAnswer(5000)] }, BASE, { dest: 'home', prompt: false, held: true, ms: 25000,
+  also: async (p, R) => {
+    const first = R.T.mgFirst, ans = await p.ev('window.__answeredAt');
+    const mg = await p.ev(`(() => { const m = document.getElementById('mgone'); const up = !!(m && !m.hidden); return { up, text: up ? m.querySelector('.mgh').textContent : null }; })()`);
+    check(`R3 those doors stayed shut until the refusal (answered at ${Math.round(ans)} ms on the doors' clock, past the old 3 s; opened at ${R.st && Math.round(R.st.openAt)} ms), opened onto home with the record cleared, and only once they had gone does home say "That match ended while you were away."`,
+      !!R.st && ans > 3100 && R.st.openAt >= ans && R.st.openAt <= ans + 100 && R.st.openAt < 15000 && !!R.T.quickOpen && R.T.quickOpen.resume === false && mg.up && mg.text === 'That match ended while you were away.'
+      && R.T.qa.mg === 0 && !!first && first.state === 'ended' && !first.cv, JSON.stringify({ st: R.st, mg, first }));
+  } });
+{
+  // UNDER REDUCED MOTION, "the same waiting, then the fade": shut and saying
+  // so until the match is back (4 s), then faded onto it.
+  const SLOW = 4000, label = 'R3 a held seat answered 4 s late, under reduced motion';
+  const { browserContextId: X } = await send('Target.createBrowserContext', { disposeOnDetach: true });
+  const held = await holdMatch(X, { w: 844, h: 390, dpr: 3 });
+  const b = await openPage({ w: 844, h: 390, dpr: 3, context: X, media: [{ name: 'prefers-reduced-motion', value: 'reduce' }], extra: [LAUNCH, slowAnswer(SLOW), DRAWS] });
+  await b.go();
+  const R = await quickRun(b, 25000);
+  doorsOk(label, R, { dest: 'game', fade: true, prompt: false, held: true });
+  revealOk(label, R);
+  const back = await b.ev(BACK), ans = await b.ev('window.__answeredAt');
+  check(`${label}: the doors waited for the match, past the old 3 s limit (answered at ${Math.round(ans)} ms on the doors' clock, faded from ${R.st && Math.round(R.st.openAt)} ms), and it is the match that was held, in play`,
+    !!held && !!R.st && ans > 3100 && R.st.openAt >= ans && R.st.openAt <= ans + 100 && R.st.openAt < 15000 && back.playing && back.code === held.code, JSON.stringify({ held, ans, st: R.st, back }));
+  await b.close();
+  try { await send('Target.disposeBrowserContext', { browserContextId: X }); } catch {}
+}
+{
+  // ANSWERED JUST BEFORE THE WORDS ARE DUE (0.9 s): the doors open onto the
+  // match, and the words, due at 1 s while the doors are part way open, never
+  // come up on doors that are opening onto the match they were waiting for.
+  const label = 'R3 a held seat answered at 0.9 s, just before the words are due';
+  const { browserContextId: X } = await send('Target.createBrowserContext', { disposeOnDetach: true });
+  const held = await holdMatch(X, { w: 844, h: 390, dpr: 3 });
+  const b = await openPage({ w: 844, h: 390, dpr: 3, context: X, extra: [LAUNCH, answerAt(900), DRAWS] });
+  await b.go();
+  const R = await quickRun(b, 25000);
+  doorsOk(label, R, { dest: 'game', prompt: false, held: true });
+  revealOk(label, R);
+  const back = await b.ev(BACK);
+  check(`${label}: they opened onto that match (at ${R.st && Math.round(R.st.openAt)} ms), and nothing was said on any frame of them`,
+    !!held && !!R.st && R.st.openAt >= 900 && R.st.openAt < LABEL_AT && back.playing && back.code === held.code
+    && R.T.qa.labelFirst === null && R.T.qa.litFirst === null && R.st.labelAt === undefined, JSON.stringify({ st: R.st, qa: R.T.qa, back }));
+  await b.close();
+  try { await send('Target.disposeBrowserContext', { browserContextId: X }); } catch {}
+}
+// A MENU SCREEN WITHIN TEN MINUTES keeps waiting for that screen, under the
+// same 15 s limit: here the bay comes 4.5 s late, past the old 3 s limit,
+// which opened these doors onto a bay that had drawn nothing.
+await quickCase('R3 a reopen within ten minutes whose screen is 4.5 s late', { slowBay: 4500, extra: [LAST(60000, { scr: 'career', path: ['home'], mode: 'duel' })] }, BASE, { dest: 'career', prompt: false, ms: 25000,
+  also: async (p, R) => check(`R3 those doors waited for the Career screen, past the old 3 s limit and inside the new one (opened at ${R.st && Math.round(R.st.openAt)} ms)`,
+    !!R.st && R.st.openAt > 3100 && R.st.openAt < 15000 && R.st.dest === 'career', JSON.stringify(R.st)) });
 {
   // THE NATIVE LAUNCH HOLD ON THE PATHS WITH NO DOORS: let go once, after the
   // menu has painted (the doors' paths are checked above, and the intro's

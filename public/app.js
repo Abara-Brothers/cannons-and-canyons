@@ -5874,13 +5874,13 @@ function toastHost() {
 // TOASTS WAIT FOR THE QUICK DOORS (round 2 review). #toast (z 90) is over
 // intro.js's canvas (z 89) on purpose, so a boot message still shows over the
 // full intro. The quick doors are different: they are the launch image, shut
-// for half a second to three while a reopened screen or a held seat's match
-// is drawn under them, and a resume's "Reconnected — battle on!" landed on
-// them before they parted. So while they are up every toast is held, in
-// order, and all of them are shown the moment intro.js says the doors have
-// gone (cc:doorsgone), on whatever screen they opened onto. intro.js ends the
-// doors on every path, a fault and its 30 s watchdog included, so a held
-// toast cannot wait for ever.
+// for as long as a reopened screen or a held seat's match takes to be drawn
+// under them (up to about fifteen seconds, intro.js Q.hold), and a resume's
+// "Reconnected — battle on!" landed on them before they parted. So while
+// they are up every toast is held, in order, and all of them are shown the
+// moment intro.js says the doors have gone (cc:doorsgone), on whatever screen
+// they opened onto. intro.js ends the doors on every path, a fault and its
+// 30 s watchdog included, so a held toast cannot wait for ever.
 let toastsHeld = null;
 function showHeldToasts() { const q = toastsHeld || []; toastsHeld = null; q.forEach(showToast); }
 function showToast(text) {

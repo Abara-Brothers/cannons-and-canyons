@@ -30,7 +30,9 @@
 // REOPEN, onto the screen the player left), a launch boot is taking somewhere
 // (BOOT_CLAIM: a held seat's match, a link), reduced motion and a native
 // sign-in return. The quick doors write nothing into the menu: they only
-// cover it.
+// cover it. Since 2026-10-10 (owner: "Stay shut until ready") they stay shut
+// for as long as a held seat's match takes to come back, up to about fifteen
+// seconds, and say "Reconnecting…" on themselves while they wait.
 //
 // Owner decisions and the acceptance criteria are recorded in the governance
 // repo, docs/superpowers/specs/2026-10-02-cold-start-intro-design.md.
@@ -486,9 +488,11 @@
     ctx.drawImage(sp.cv, -sp.rad, -sp.rad, sp.size, sp.size);
     ctx.restore();
   }
-  function paintBeacon(x, y, t, phase, alpha) {
+  // turn: the angle to stand at when the caller keeps its own (the quick
+  // doors, whose beacons never spin down); otherwise the intro's beaconAngle.
+  function paintBeacon(x, y, t, phase, alpha, turn) {
     if (alpha <= .002) return;
-    const th = beaconAngle(t) + phase, S2 = beaconSprites();
+    const th = (turn === undefined ? beaconAngle(t) : turn) + phase, S2 = beaconSprites();
     stampBeacon(S2.beam, x, y, th, 'lighter', alpha);
     stampBeacon(S2.body, x, y, 0, null, alpha);
     stampBeacon(S2.glow, x, y, th, 'lighter', alpha);
@@ -1326,36 +1330,96 @@
   // two halves is the same pixel. While the destination is not drawn yet (a
   // held seat's resume in flight, a first font load) they hold, and are not a
   // frozen frame: the studio mark and the beacons power on and the beacons
-  // turn, as in the intro's first quarter second. Then they part in Q.open
-  // with the gap between them clear onto the destination itself. Under
+  // turn, as in the intro's first quarter second, and keep turning at the
+  // intro's speed for as long as the doors hold: the intro's own beacons
+  // spin down as its doors part (SPIN_DOWN to SPIN_STOP), which on doors
+  // still shut past three seconds would stand them still. Then they part in
+  // Q.open with the gap between them clear onto the destination itself. Under
   // reduced motion nothing on them moves or lights: they hold as the launch
   // image held, and the canvas fades in Q.fade instead of parting.
-  // Q.hold is the visible time they may wait: past it they open onto whatever
-  // is there, and a resume that lands later takes the player to the match as
-  // it always has. Where the doors stand is measured once, at boot, from the
-  // probe stage (the launch image's own geometry), and again only if the
-  // overlay changes size: under them the bay may give way to the match, a
-  // hidden bay measures as nothing, and a seam that moved mid-open would split
-  // the doors.
-  const Q = { power: 250, open: 500, fade: 400, hold: 3000 };
+  // THEY STAY SHUT UNTIL THE LAST VIEW IS READY (owner, 2026-10-10: "Stay
+  // shut until ready"). Q.hold is the visible time they may wait. It was three
+  // seconds, so a resume slower than that opened them onto the menu and the
+  // match then cut in over it: the doors did not open onto what the player
+  // was doing. It is now the owner's safety limit of about fifteen seconds,
+  // for a held seat's match and a menu screen alike. Past it they open onto
+  // whatever is there, and a resume that lands later still takes the player
+  // to the match, as it always has. Where the doors stand is measured once,
+  // at boot, from the probe stage (the launch image's own geometry), and again
+  // only if the overlay changes size: under them the bay may give way to the
+  // match, a hidden bay measures as nothing, and a seam that moved mid-open
+  // would split the doors.
+  const Q = { power: 250, open: 500, fade: 400, hold: 15000 };
   let openAt = -1;
+  // THE WAIT, SAID ON THE DOORS (owner, 2026-10-10: "a small 'Reconnecting...'
+  // on them"). Only while a held seat's resume is out: that wait can run to
+  // the limit above, and doors that sat shut and silent for it would read as
+  // a hang. A menu screen is drawn in a moment and says nothing. The words
+  // come up after LABEL.at of waiting, so a resume answered at once never
+  // flashes them, and they go in the first LABEL.out of the opening, so no
+  // word of them is carried over the match. They are painted on both halves,
+  // as the studio mark is, and leave with them. They are set in the intro's
+  // own type for a line of status, the hint's (Barlow, bold, capitals, tracked
+  // out), lighter than the hint so that a glance reads them on a dark door,
+  // and 14 stage units tall, over the 13 the house rules ask of a label. The
+  // face is chosen once, as they first show, so it can never swap under the
+  // player's eyes. Under reduced motion they show too, and only fade in, as
+  // the doors there only fade.
+  const LABEL = { text: 'Reconnecting…', at: 1000, fade: 250, out: .3, size: 14, y: H * .83, track: .14 };
+  let labelAt = -1, labelFace = '', labelRun = null;
+  status.labelText = LABEL.text; status.labelGeo = [W / 2, LABEL.y, LABEL.size];
   function doorTravel() {                   // how far each half goes: as far as the intro's doorShift
     const g = doorGeom();
     return Math.max(W * .52 * 1.16, Math.max(g.seam, cw - g.seam) / u + 30);
   }
   function gameUp() { const g = document.getElementById('game'); return !!(g && g.classList.contains('active')); }
+  // A held seat whose resume has not been answered: boot is taking the
+  // player back to a match (BOOT_CLAIM, boot's own answer) and its record is
+  // still there. A refusal clears the record (app.js clearResume); a restore
+  // puts the match on screen (gameUp).
+  function heldWaiting() {
+    try { return BOOT_CLAIM === 'resume' && typeof loadResume === 'function' && !!loadResume(); } catch (e) { return false; }
+  }
   // The destination is drawn: a held seat's match once its resume has been
   // answered, either way (restored, or refused and cleared by boot); else the
-  // screen the bay has drawn, in its own type and with its pictures in.
+  // screen the bay has drawn, in its own type and with its pictures in. The
+  // match is up only once applySnapshot has put the restored state on it, and
+  // app.js draws it in the same animation frame, before the first frame that
+  // opens the doors is painted.
   function quickReady() {
     if (gameUp()) return true;
-    let held = false;
-    try { held = BOOT_CLAIM === 'resume' && typeof loadResume === 'function' && !!loadResume(); } catch (e) {}
-    if (held || !fontsOk || !bay.dataset.scr || !bay.classList.contains('active')) return false;
+    if (heldWaiting() || !fontsOk || !bay.dataset.scr || !bay.classList.contains('active')) return false;
     return Array.prototype.every.call(bay.querySelectorAll('img'), function (i) { return i.complete; });
+  }
+  function labelAlpha(t, p) {
+    return labelAt < 0 ? 0 : seg(t, labelAt, labelAt + LABEL.fade) * (1 - seg(p, 0, LABEL.out));
+  }
+  // Letter by letter for the tracking, as the logo is set: canvas letterSpacing
+  // is not in every WebKit the app runs on. Measured once, in the face chosen.
+  function paintLabel(a) {
+    if (a <= .002) return;
+    const str = LABEL.text.toUpperCase(), tr = LABEL.size * LABEL.track;
+    ctx.save();
+    ctx.font = '700 ' + LABEL.size + 'px ' + labelFace;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    if (!labelRun) {
+      const ws = [];
+      let total = -tr;
+      for (let i = 0; i < str.length; i++) { ws.push(ctx.measureText(str[i]).width); total += ws[i] + tr; }
+      labelRun = { ws: ws, x0: W / 2 - total / 2 };
+    }
+    function run(col, dy) {
+      ctx.fillStyle = col;
+      let x = labelRun.x0;
+      for (let i = 0; i < str.length; i++) { ctx.fillText(str[i], x, LABEL.y + dy); x += labelRun.ws[i] + tr; }
+    }
+    ctx.globalAlpha = a * .6; run('#000', 1.2);          // pressed into the door
+    ctx.globalAlpha = a; run('rgba(226,234,250,.9)', 0);
+    ctx.restore();
   }
   function paintQuick(t, p) {
     const shift = FADE ? 0 : eInOut(p) * doorTravel(), po = FADE ? 0 : eOut(seg(t, 0, Q.power));
+    const la = labelAlpha(t, p), turn = SPIN * t;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.filter = 'none';
     ctx.clearRect(0, 0, cv.width, cv.height);
@@ -1364,14 +1428,16 @@
     const BIG = 4000;
     ctx.save(); ctx.translate(-shift, 0); ctx.beginPath(); ctx.rect(-BIG, -BIG, W / 2 + BIG, H + 2 * BIG); ctx.clip();
     paintDoorHalf(-1); markPaths(t, W / 2, 0, po);
-    paintBeacon(W * .085, H * .12, t, 0, po); paintBeacon(W * .085, H * .88, t, Math.PI, po);
+    paintBeacon(W * .085, H * .12, t, 0, po, turn); paintBeacon(W * .085, H * .88, t, Math.PI, po, turn);
+    paintLabel(la);
     ctx.restore();
     ctx.save(); ctx.translate(shift, 0); ctx.beginPath(); ctx.rect(W / 2, -BIG, W / 2 + BIG, H + 2 * BIG); ctx.clip();
     paintDoorHalf(1); markPaths(t, W / 2, 0, po);
-    paintBeacon(W * .915, H * .12, t, Math.PI * .5, po); paintBeacon(W * .915, H * .88, t, Math.PI * 1.5, po);
+    paintBeacon(W * .915, H * .12, t, Math.PI * .5, po, turn); paintBeacon(W * .915, H * .88, t, Math.PI * 1.5, po, turn);
+    paintLabel(la);
     ctx.restore();
     if (FADE) cv.style.opacity = p >= 1 ? '0' : (1 - eInOut(p)).toFixed(4);
-    status.shift = shift; status.geo = [sx, sy, u];
+    status.shift = shift; status.geo = [sx, sy, u]; status.label = la;
   }
   const quickFrame = guard(function (now) {
     rafId = requestAnimationFrame(quickFrame);
@@ -1389,6 +1455,15 @@
         // A screen drawn under the doors is still dealing itself in: it is
         // finished now, while the doors are shut, so they open onto it at rest.
         finishEntrance();
+      }
+      // The words come up once, after LABEL.at of a held seat's wait (THE
+      // WAIT, above), and never once the doors have started to open.
+      if (openAt < 0 && labelAt < 0 && t >= LABEL.at && heldWaiting()) {
+        labelAt = t; status.labelAt = t;
+        let loaded = false;
+        try { loaded = !!(document.fonts && document.fonts.check('700 ' + LABEL.size + 'px Barlow')); } catch (e) {}
+        labelFace = loaded ? 'Barlow, system-ui, sans-serif' : 'system-ui, sans-serif';
+        status.labelFace = labelFace;
       }
     }
     const p = openAt < 0 ? 0 : seg(t, openAt, openAt + (FADE ? Q.fade : Q.open));
