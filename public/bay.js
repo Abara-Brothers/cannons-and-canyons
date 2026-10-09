@@ -795,6 +795,49 @@ function sqBox() {
   else mine = sqLead() || sqNote('No squad yet. Invite a friend below, or tap Manage to join a squad by code.');
   return inv + mine + '<div class="sqbf">' + sqBoxFriends() + '</div>';
 }
+// THE LIST AT REST CUTS NOTHING IT DRAWS (owner, 2026-10-10: "text cut off",
+// the friends list at the bottom among it). The list is as tall as the frame
+// leaves it, so where its foot falls among the rows is chance, and it fell
+// across a friend's name with half of it showing. sqRest moves the foot up,
+// by a margin under the list (--sqrest, set on the bay, which a repaint
+// leaves alone), to the top of the first thing it would cut: a name, a
+// status word, a button or a paragraph, each taken whole. So at rest
+// everything in view is whole, and what is cut is at most the empty edge of
+// a row, under the fade, which says there is more. Scrolled, the list is
+// the same list. A foot that would have to climb past half the list stays
+// where it is: a list that short is better cut than empty.
+// MEASURED ON THE LIST'S OWN AXIS. Boxes on the screen are exact to a
+// fraction of a pixel, where layout offsets are rounded to whole ones (a
+// button's 1px border at the foot is a whole pixel). In a narrow portrait
+// window the rotation shim turns the page 90 degrees clockwise (styles.css,
+// --rotated), and there the list's top is its right edge on the screen and
+// its height the box's width. The panel's entrance only slides it, which
+// moves the list and its rows alike.
+// Asked after every paint of home (render), a frame after a resize (once the
+// bay has taken its new size) and when a font arrives, which can rewrap a
+// paragraph.
+// (A row's lamp and "(you)" stand on its name's line, so the name speaks for
+// them; the menu, also on that line, is a button.)
+const SQ_DRAWN = '.sqmt, .sql, .sqr, .sqy, p, button';
+function sqRest() {
+  const host = $('bay'), l = $('sqBox');
+  if (!host || !l) return;
+  const rot = getComputedStyle(document.documentElement).getPropertyValue('--rotated').trim() === '1';
+  const lr = l.getBoundingClientRect();
+  // Where a box stands down the list at rest, and how tall it is there.
+  const at = (r) => (rot ? [lr.right - r.right, r.width] : [r.top - lr.top, r.height]);
+  const was = parseFloat(host.style.getPropertyValue('--sqrest')) || 0, H = at(lr)[1] + was;
+  // (A node that is not drawn has an empty box, which can cut nothing.)
+  const drawn = [...l.querySelectorAll(SQ_DRAWN)].map((e) => { const [y, h] = at(e.getBoundingClientRect()), t = y + l.scrollTop; return [t, t + h]; });
+  let foot = H;
+  for (let moved = true; moved;) {
+    moved = false;
+    for (const [t, b] of drawn) if (t < foot - 0.05 && b > foot + 0.05) { foot = t; moved = true; }
+  }
+  host.style.setProperty('--sqrest', (foot < H / 2 ? 0 : H - foot) + 'px');
+}
+window.addEventListener('resize', () => requestAnimationFrame(sqRest));
+if (document.fonts) document.fonts.addEventListener('loadingdone', () => sqRest());
 // THE SQUAD IN THE BOX: each member's name and ready status (U3's state, drawn
 // as the window draws it, sqRow), and the line a squad action was refused
 // with. No Remove and no Ready here: those are the window's, and Ready is the
@@ -4137,6 +4180,9 @@ function render(name) {
   // the iOS app switcher can kill it without a word. A redraw of the same
   // view writes nothing (noteLastView).
   if (fn('noteLastView')) noteLastView();
+  // The Squad box's list, cut where it cuts nothing it draws (sqRest; only
+  // home has it).
+  sqRest();
 }
 
 function go(name) {

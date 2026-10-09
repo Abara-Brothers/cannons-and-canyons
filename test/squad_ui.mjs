@@ -32,7 +32,11 @@ const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Conte
 if (!existsSync(CHROME)) { console.log(`SKIP  squad_ui tests -- no Chrome at ${CHROME}`); process.exit(3); }
 const ROOT = fileURLToPath(new URL('..', import.meta.url));   // decoded: the path has spaces
 const CDP_MS = 15000;                                           // one call
-const RUN_MS = 300000;                                          // the whole suite
+// The whole suite: a full run took about four minutes on its own before the
+// SP block, which adds five page loads and some fifteen seconds, so a busy
+// machine running other suites at the same time must not trip the watchdog
+// meant for a hung Chrome.
+const RUN_MS = 360000;
 const errors = [];
 const ok = (m) => console.log('  ok -- ' + m);
 const fail = (m) => { errors.push(m); console.error('FAIL ' + m); };
@@ -58,7 +62,7 @@ const watchdog =setTimeout(() => { console.error(`FAIL squad_ui overran ${RUN_MS
 
 // ONE BLOCK AT A TIME, ON REQUEST: SQUAD_UI_ONLY=t9,u4 runs only those blocks
 // (t8 task 8, t9 task 9, t11 task 11, w the fix waves, u3, u4, u8, v3 the
-// Your squad page). Each block
+// Your squad page, sp the home box's rows). Each block
 // loads its own page and shares no state with the others, so a mutation run
 // can take the one block that pins the line it changed. Unset, everything runs.
 const ONLY = (process.env.SQUAD_UI_ONLY || '').split(',').map((x) => x.trim()).filter(Boolean);
@@ -5645,6 +5649,294 @@ if (want('v3')) try {
   else fail(`page geometry ${JSON.stringify(geoBad)}`);
 } catch (e) {
   fail('squad_ui V3 stopped: ' + (e && e.message));
+}
+// ============================================================================
+// SP: THE HOME BOX'S ROWS IN A SQUAD (owner, 2026-10-10, seen in the iPhone
+// app: "when youre in a squad, the text in the squad box on the left of the
+// screen on the home dashboard has text spacing issues" -- rows too tall with
+// a gap inside them, the status line not under the name, words crowded or
+// overlapping ('Leader' and 'Ready', a name running into the ... button), and
+// text cut off, the friends list at the bottom among it). At the three phone
+// shapes he plays on -- the iPhone 17 (874x402 with its safe areas), 812x375
+// and 667x375 -- with a squad of one to four (ready, not ready, the leader,
+// reconnecting, offline, a guest, a reconnecting leader, the player's own
+// row last, 16-letter names of the widest letters) and the friends online,
+// every row in the box is read:
+//   S1 its second line -- Leader, Ready (by its tick's drawn mark), Not
+//      ready, Reconnecting, In your squad, or a friend's Invite -- starts on
+//      the name's left edge, within half a pixel;
+//   S2 no two things drawn in it overlap: the lamp, the name, (you), each
+//      status word, the tick's mark, Invite and the menu; status words on one
+//      line stand at least 8u apart (Leader and Ready no longer crowd), and
+//      every tick's mark stands 4u from its word;
+//   S3 every word in it ends at least 6 px left of the menu, the name
+//      included, and on one edge in every row, the player's own (which has
+//      no menu) as well; the menu's tap target is 34u by 37u less its 1px,
+//      inside the row's border and over nothing drawn;
+//   S4 nothing in it is cut: a name wider than its line ends in an ellipsis
+//      (text-overflow, its overflow hidden), no other word is wider than its
+//      box, the name's line holds its letters' full height, the lamp, name,
+//      (you) and menu are centred on the name's line and the status words
+//      and Invite stand within the second, everything drawn stands inside
+//      the row, and the row inside the list;
+//   S5 it is 48u: 3u, the name's 20u line, 2u, the 20u status line and 3u
+//      -- a status line that wraps grows by 20u a line;
+//   S6 at rest the list's foot cuts nothing it draws (bay.js sqRest), moving
+//      up by no more than one line (20u) to do it, and scrolled to its end
+//      the last row stands whole above the fade.
+// AND AGAIN IN A WIDER FACE: his screen is Safari's engine, whose text need
+// not set to Chrome's widths. S1-S4 and S6 are read once more with the
+// system face (San Francisco on a Mac, as on the iPhone) in the box in place
+// of Rajdhani -- far wider -- and must hold there too, its status lines
+// wrapping where they must: a row that only fits by a pixel fails.
+if (want('sp')) try {
+  const SP_MULE = '00000000-0000-4000-8000-0000000000cc', SP_PIKE = '00000000-0000-4000-8000-0000000000dd';
+  const SP_NIA = '00000000-0000-4000-8000-000000000011', SP_WIDE = '00000000-0000-4000-8000-000000000012', SP_KIT = '00000000-0000-4000-8000-000000000013';
+  const W16 = 'WWWWWWWWWWWWWWWW';
+  const SPR = (tag) => (tag + '0'.repeat(32)).slice(0, 32);
+  const spm = (id, callsign, rid, o) => Object.assign({ id, rid: SPR(rid), callsign, guest: false, online: true, ready: false, dropped: false }, o);
+  const SPYOU = (o) => spm(ME, 'Dusty Crag', 'a1', o);
+  const SPMULE = (o) => spm(SP_MULE, 'Steel Mule', 'c1', o);
+  const SPPIKE = (o) => spm(SP_PIKE, 'Ridge Pike', 'd1', o);
+  const spfits = (n) => ({ duel: n === 2, ffa: n >= 2 && n <= 4, boss: n >= 1 && n <= 2, aliens: n >= 1 && n <= 2, golf: n >= 1 && n <= 4 });
+  const SQUADS = [
+    ['one', { members: [SPYOU()] }],
+    ['two', { members: [SPYOU({ ready: true }), SPMULE()] }],
+    ['three', { members: [SPYOU(), SPMULE({ ready: true }), SPPIKE({ ready: true, dropped: true })] }],
+    ['four', { members: [SPYOU({ ready: true }), SPMULE(), SPPIKE({ ready: true, online: false }),
+      spm(null, 'Quiet Fox', 'e1', { guest: true, ready: true, noacct: true })] }],
+    // The player's own row last, where the list's foot can fall across it:
+    // it has no menu, so its name alone stands on its first line.
+    ['four, you last', { leader: SP_MULE, you: 3, members: [SPMULE({ ready: true }), SPPIKE(), spm(null, 'Quiet Fox', 'e1', { guest: true, noacct: true }), SPYOU({ ready: true })] }],
+    ['leader reconnecting', { leader: SP_PIKE, you: 1, members: [SPPIKE({ ready: true, dropped: true }), SPYOU(), SPMULE({ ready: true })] }],
+    ['long names', { leader: SP_WIDE, you: 1, members: [spm(SP_WIDE, W16, 'w1', { ready: true }), SPYOU({ callsign: 'MMMMMMMMMMMMMMMM', ready: true }),
+      SPPIKE({ callsign: 'WWWWWWWWWWWWWWWi', dropped: true }), spm(null, 'WWWWWWWWWWWWWWW', 'e1', { guest: true })] }],
+  ];
+  // Four friends online -- two of them squadmates in the bigger squads, one
+  // with the widest name -- and one offline, whom the box leaves out.
+  const SPFR = { friends: [{ id: SP_MULE, callsign: 'Steel Mule', online: true }, { id: SP_PIKE, callsign: 'Ridge Pike', online: true },
+    { id: SP_NIA, callsign: 'Nia Vale', online: true }, { id: SP_WIDE, callsign: W16, online: true }, { id: SP_KIT, callsign: 'Kit Harrow', online: false }],
+    requests: { in: [], out: [] }, blocked: [], friendCode: 'AB12CD', callsign: null };
+  // Everything drawn in the list: words, lamps, buttons, icons.
+  const SP_DRAWN = '.sqmt, .sqmy, .pdot, .sql, .sqr, .sqy, p, button, svg';
+  // THE BOX, ROW BY ROW, at rest. A word is the box of its text (a Range per
+  // text node, a box per line it sets on), a tick its path's own box -- the
+  // mark it draws, not the square it is drawn in -- and a lamp, a button or
+  // the menu its box. A name's text is clipped to its box: an ellipsis is
+  // drawn inside it.
+  const spRead = () => ev(`(() => {
+    Bay.show('home');
+    const l = document.querySelector('#bay .sqx .sqb'), fade = l.querySelector(':scope > .sqfade');
+    const u = document.querySelector('#bay .stage').getBoundingClientRect().width / 932;
+    const vis = (e) => !!e && !e.closest('.hidden') && e.getClientRects().length > 0;
+    const B = (r) => ({ l: r.left, r: r.right, t: r.top, b: r.bottom });
+    const texts = (e) => { const out = [], w = document.createTreeWalker(e, NodeFilter.SHOW_TEXT);
+      for (let n = w.nextNode(); n; n = w.nextNode()) { if (!n.data.trim()) continue; const g = document.createRange(); g.selectNodeContents(n); out.push(...[...g.getClientRects()].map(B)); }
+      return out; };
+    l.scrollTop = 0;
+    const lr = B(l.getBoundingClientRect());
+    const rows = [...l.querySelectorAll('.sqm')].filter(vis).map((r) => {
+      const n = r.querySelector('.sqmt'), nb = B(n.getBoundingClientRect()), nt = texts(n)[0], ncs = getComputedStyle(n);
+      const drawn = [{ k: 'name', l: nt.l, r: Math.min(nt.r, nb.r), t: nt.t, b: nt.b }];
+      const dot = r.querySelector('.pdot'); if (vis(dot)) drawn.push({ k: 'lamp', ...B(dot.getBoundingClientRect()) });
+      const y = r.querySelector('.sqmy'); if (vis(y)) drawn.push(...texts(y).map((x) => ({ k: '(you)', ...x })));
+      const words = [...r.querySelectorAll('.sql, .sqr, .sqy')].filter(vis);
+      for (const w of words) {
+        drawn.push(...texts(w).map((x) => ({ k: w.textContent.trim(), ...x })));
+        const pth = w.querySelector('svg path'); if (pth) drawn.push({ k: 'tick', ...B(pth.getBoundingClientRect()) });
+      }
+      const btns = [...r.querySelectorAll('button')].filter(vis), menu = btns.find((b) => b.classList.contains('pmb'));
+      for (const b of btns) drawn.push({ k: b === menu ? 'menu' : b.textContent.trim(), ...B(b.getBoundingClientRect()) });
+      const ms = r.querySelector('.sqms'), first = vis(ms) ? ms.firstElementChild : null, act = btns.find((b) => b !== menu);
+      const second = first ? (first.querySelector('svg path') ? first.querySelector('svg path').getBoundingClientRect().left : texts(first)[0].l) : act ? act.getBoundingClientRect().left : null;
+      const tops = new Set(words.map((w) => Math.round(w.getBoundingClientRect().top)));
+      const wide = [y, ...words, act].filter(vis).filter((e) => e.scrollWidth > e.clientWidth + 0.5).map((e) => e.textContent.trim());
+      const rb = B(r.getBoundingClientRect());
+      // Each line, and what must stand on it.
+      const L1 = B(r.querySelector('.sqm1').getBoundingClientRect()), L2 = B(r.querySelector('.sqm2').getBoundingClientRect());
+      const offLine = [[L1, [dot, n, y, menu], true], [L2, [...words, act], false]].flatMap(([L, es, mid]) => es.filter(vis).map((e) => [e.className, B(e.getBoundingClientRect())])
+        .filter(([, b]) => (mid ? Math.abs(b.t + b.b - L.t - L.b) / 2 > 0.25 : b.t < L.t - 0.25 || b.b > L.b + 0.25)).map(([k]) => k));
+      // Down each status line, in order: where each word's drawing starts
+      // (its tick's mark, or its text) and ends, and its tick's distance from
+      // its text.
+      const marks = words.map((w) => { const t = texts(w), pth = w.querySelector('svg path'), pb = pth ? B(pth.getBoundingClientRect()) : null;
+        return { top: Math.round(w.getBoundingClientRect().top), l: pb ? pb.l : t[0].l, r: Math.max(...t.map((x) => x.r)), tickGap: pb ? t[0].l - pb.r : null }; });
+      // The menu's tap target: its square widened by its ::before layer.
+      let target = null;
+      if (menu) { const mb = B(menu.getBoundingClientRect()), ps = getComputedStyle(menu, '::before'), px = (v) => parseFloat(v) || 0;
+        target = { l: mb.l + px(ps.left), r: mb.r - px(ps.right), t: mb.t + px(ps.top), b: mb.b - px(ps.bottom) }; }
+      return { name: n.textContent, row: rb, h: rb.b - rb.t, nameLeft: nt.l, second, drawn, menu: menu ? B(menu.getBoundingClientRect()) : null, offLine, marks, target,
+        ell: n.scrollWidth > n.clientWidth, ellOk: ncs.textOverflow === 'ellipsis' && ncs.overflowX === 'hidden' && ncs.whiteSpace === 'nowrap',
+        tall: nt.t < nb.t - 0.5 || nt.b > nb.b + 0.5, lines: tops.size, wide };
+    });
+    // AT REST: everything drawn in the list, against the list's foot.
+    const cutAtRest = [...l.querySelectorAll(${JSON.stringify(SP_DRAWN)})].filter(vis).map((e) => ({ k: (e.textContent || e.getAttribute('class') || e.tagName).trim().slice(0, 20), ...B(e.getBoundingClientRect()) }))
+      .filter((x) => x.t < lr.b - 0.25 && x.b > lr.b + 0.25);
+    const rest = parseFloat(document.getElementById('bay').style.getPropertyValue('--sqrest')) || 0;
+    // AT THE END: the last row whole above the fade.
+    l.scrollTop = l.scrollHeight;
+    // Within a pixel: the end of a scroll is a whole pixel, and the fade's
+    // top pixel is clear.
+    const last = [...l.querySelectorAll('.sqm')].filter(vis).pop(), endOk = !last || last.getBoundingClientRect().bottom <= fade.getBoundingClientRect().top + 1;
+    l.scrollTop = 0;
+    return { u, list: lr, rows, cutAtRest, rest, endOk, listOver: l.scrollWidth > l.clientWidth };
+  })()`);
+  const EPS = 0.25;
+  const hit = (a, b) => a.l < b.r - EPS && b.l < a.r - EPS && a.t < b.b - EPS && b.t < a.b - EPS;
+  const spJudge = (g, wide) => {
+    const bad = [];
+    const u = g.u;
+    for (const r of g.rows) {
+      const say = (what, x) => bad.push({ row: r.name, what, x });
+      if (r.second === null || Math.abs(r.second - r.nameLeft) > 0.5) say('S1 second line off the name\'s edge', [r.nameLeft, r.second]);
+      for (let i = 0; i < r.drawn.length; i++) for (let j = i + 1; j < r.drawn.length; j++)
+        if (hit(r.drawn[i], r.drawn[j])) say('S2 overlap', [r.drawn[i].k, r.drawn[j].k]);
+      for (let i = 1; i < r.marks.length; i++) if (r.marks[i].top === r.marks[i - 1].top && r.marks[i].l - r.marks[i - 1].r < 8 * u - 0.25)
+        say('S2 status words crowd', [r.marks[i - 1].r, r.marks[i].l]);
+      for (const m of r.marks) if (m.tickGap !== null && Math.abs(m.tickGap - 4 * u) > 0.5) say('S2 tick not 4u from its word', m.tickGap / u);
+      const words = r.drawn.filter((d) => d.k !== 'menu'), right = Math.max(...words.map((d) => d.r));
+      if (r.target) {
+        const T = r.target;
+        if (T.b - T.t < 34 * u - 0.5 || T.r - T.l < 37 * u - 1.5) say('S3 menu target too small', [(T.b - T.t) / u, (T.r - T.l) / u]);
+        if (T.r > r.row.r - 1 + 0.25) say('S3 menu target past the row\'s border', [T.r, r.row.r]);
+        const under = words.filter((d) => hit(d, T)).map((d) => d.k);
+        if (under.length) say('S3 menu target over something drawn', under);
+      }
+      if (r.menu && right > r.menu.l - 6) say('S3 within 6 px of the menu', [right, r.menu.l]);
+      if (right > r.row.r - 37 * u + 0.5) say('S3 past the words\' edge', [right, r.row.r - 37 * u]);
+      if (r.ell && !r.ellOk) say('S4 name cut without an ellipsis', r.ell);
+      if (r.wide.length) say('S4 wider than its box', r.wide);
+      if (r.tall) say('S4 name taller than its line', r.tall);
+      if (r.offLine.length) say('S4 off its line', r.offLine);
+      const out = r.drawn.filter((d) => d.l < r.row.l - 0.5 || d.r > r.row.r + 0.5 || d.t < r.row.t - 0.5 || d.b > r.row.b + 0.5).map((d) => d.k);
+      if (out.length) say('S4 outside the row', out);
+      if (r.row.l < g.list.l - 0.5 || r.row.r > g.list.r + 0.5) say('S4 row outside the list', [r.row, g.list]);
+      const want = (28 + 20 * Math.max(1, r.lines)) * u;          // a friend's Invite is the status line's 20u
+      if (!wide && (Math.abs(r.h - want) > 0.6 || r.lines > 2)) say('S5 height', [r.h / u, want / u, r.lines]);
+    }
+    if (g.cutAtRest.length) bad.push({ what: 'S6 cut at rest', x: g.cutAtRest });
+    if (g.rest > 20 * g.u + 0.25) bad.push({ what: 'S6 moved up more than a line', x: g.rest / g.u });
+    if (!g.endOk) bad.push({ what: 'S6 last row under the fade at the end' });
+    if (g.listOver) bad.push({ what: 'S4 the list scrolls sideways' });
+    if (!g.rows.length) bad.push({ what: 'no rows read' });
+    return bad;
+  };
+  const IPHONE17 = ':root{--sa-l:62px;--sa-r:62px;--sa-b:21px;--sa-t:0px}';
+  const spBad = [], spSeen = { rows: 0, wrapped: 0, ellipsis: 0, rested: 0, wideWrapped: 0 };
+  // A fresh page at a shape, signed in, with the friends online and no squad.
+  const spOpen = async (w, h, css) => {
+    await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: true });
+    await send('Page.navigate', { url: `http://127.0.0.1:${appPort}/` });
+    let up = false;
+    for (let i = 0; i < 80; i++) {
+      if (await ev('!!window.Bay && typeof handle === "function" && !!document.querySelector("#bay .sqx")').catch(() => false)) { up = true; break; }
+      await sleep(200);
+    }
+    if (!up) return false;
+    for (let k = 0; k < 40 && (await ev(`document.getElementById('bay').classList.contains('enter')`)); k++) await sleep(100);
+    await ev('document.fonts && document.fonts.ready ? document.fonts.ready.then(() => true) : true');
+    if (css) await ev(`(() => { const s = document.createElement('style'); s.textContent = ${JSON.stringify(css)}; document.head.appendChild(s); return true; })()`);
+    await ev(`(() => { const s = document.createElement('style'); s.textContent = '*,*::before,*::after{transition:none !important;animation:none !important;}'; document.head.appendChild(s); return true; })()`);
+    await ev(`(localStorage.removeItem('cc_squad'), ccMode = 'ffa', true)`);
+    await stubSocket(); await setWho('in');
+    await clearTx(); await ev('sendHello(S.ws).then(() => true)'); await sleep(60);
+    await reply({ op: 'gone' });
+    await ev(`(window.CC_SOCIAL = ${JSON.stringify(SPFR)}, document.dispatchEvent(new Event('cc:social')), true)`); await sleep(60);
+    return true;
+  };
+  const spState = async (patch) => {
+    await ev(`(handle(Object.assign({ type: 'squad', op: 'state', code: 'QK7T', leader: ${JSON.stringify(ME)}, mode: 'ffa', tees: null, max: null, you: 0,
+      held: true, members: [], fits: ${JSON.stringify(spfits(patch.members.length))} }, ${JSON.stringify(patch)})), true)`);
+    await sleep(80);
+  };
+  for (const [w, h, css] of [[874, 402, IPHONE17], [812, 375], [667, 375]]) {
+    const V = `${w}x${h}${css ? ' safe areas' : ''}`;
+    if (!(await spOpen(w, h, css))) { fail(`${V}: page never became ready for the SP checks`); continue; }
+    for (const face of ['Rajdhani', 'system']) {
+      const wide = face === 'system';
+      if (wide) await ev(`(() => { const s = document.createElement('style'); s.id = 'spWide'; s.textContent = '#bay .sqx, #bay .sqx * { font-family: system-ui, sans-serif !important; }'; document.head.appendChild(s); return true; })()`);
+      for (const [name, patch] of SQUADS) {
+        await spState(patch);
+        const g = await spRead();
+        for (const b of spJudge(g, wide)) spBad.push({ V, face, squad: name, ...b });
+        spSeen.rows += g.rows.length;
+        spSeen.ellipsis += g.rows.filter((r) => r.ell).length;
+        if (wide) spSeen.wideWrapped += g.rows.filter((r) => r.lines > 1).length; else spSeen.wrapped += g.rows.filter((r) => r.lines > 1).length;
+        if (g.rest > 0) spSeen.rested++;
+      }
+      if (wide) await ev(`(document.getElementById('spWide').remove(), true)`);
+    }
+    await ev(`(handle({ type: 'squad', op: 'ended', reason: 'left' }), Bay.show('home'), true)`); await sleep(60);
+  }
+  // ---- S7. THE RULE ITSELF, on a pattern no fixture happens to draw, and
+  //      ASKED WHEN IT MUST BE. Two paragraphs are put at the list's foot by
+  //      hand, the second starting 10 px inside the first and reaching past
+  //      the foot: the foot goes up to the second's top, which cuts the
+  //      first, so it goes on up to the first's top, 35 px above where it
+  //      was. bay.js measures them on the frame's resize, and again on a
+  //      font's arrival -- each is proved to ask. A paragraph that would take
+  //      the foot above half the list is left cut and the list kept.
+  //      In a landscape window, and in a narrow portrait one, where the
+  //      rotation shim turns the page and the list's foot is its left edge on
+  //      the screen; there the fixtures' rows are read for S6 too. And a
+  //      repaint while the list is scrolled -- a friend coming online, say --
+  //      puts the foot exactly where a repaint at rest does.
+  const spRule = (how, pattern) => ev(`(async () => {
+    const host = document.getElementById('bay'), l = document.getElementById('sqBox');
+    const rot = getComputedStyle(document.documentElement).getPropertyValue('--rotated').trim() === '1';
+    host.style.setProperty('--sqrest', '0px');
+    l.scrollTop = 0;
+    const r0 = l.getBoundingClientRect(), H = rot ? r0.width : r0.height, top = parseFloat(getComputedStyle(l).paddingTop);
+    const box = document.createElement('div'); box.className = 'spInj';
+    const p = (h, mt) => '<p style="height:' + h + 'px;margin-top:' + mt + 'px"></p>';
+    box.innerHTML = ${JSON.stringify(pattern)} === 'pair' ? '<div style="height:' + (H - 35 - top) + 'px"></div>' + p(30, 0) + p(30, -20)
+      : '<div style="height:' + (H * 0.4 - top) + 'px"></div>' + p(H * 0.8, 0);
+    l.prepend(box);
+    const frames = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    if (${JSON.stringify(how)} === 'resize') window.dispatchEvent(new Event('resize')); else document.fonts.dispatchEvent(new Event('loadingdone'));
+    await frames();
+    const rest = parseFloat(host.style.getPropertyValue('--sqrest'));
+    box.remove(); Bay.show('home');
+    return { rot, H, rest };
+  })()`);
+  // Everything drawn in the list against its foot, on the list's own axis.
+  const spCut = () => ev(`(() => {
+    const host = document.getElementById('bay'), l = document.getElementById('sqBox'), restOf = () => parseFloat(host.style.getPropertyValue('--sqrest')) || 0;
+    l.scrollTop = l.scrollHeight; Bay.show('home');
+    const st = l.scrollTop, scrolled = restOf();
+    l.scrollTop = 0; Bay.show('home');
+    const rot = getComputedStyle(document.documentElement).getPropertyValue('--rotated').trim() === '1', lr = l.getBoundingClientRect();
+    const rest = restOf();
+    const cut = [...l.querySelectorAll(${JSON.stringify(SP_DRAWN)})].filter((e) => e.getClientRects().length).map((e) => e.getBoundingClientRect())
+      .filter((r) => (rot ? r.left < lr.left - 0.25 && r.right > lr.left + 0.25 : r.top < lr.bottom - 0.25 && r.bottom > lr.bottom + 0.25)).length;
+    return { rot, rest, cut, st, scrolled };
+  })()`);
+  const s7 = {};
+  for (const [w, h] of [[667, 375], [390, 844]]) {
+    const V = `${w}x${h}`;
+    if (!(await spOpen(w, h))) { fail(`${V}: page never became ready for the S7 checks`); continue; }
+    await spState(SQUADS[1][1]);
+    const one = { resize: await spRule('resize', 'pair'), font: await spRule('font', 'pair'), tall: await spRule('resize', 'tall'), cuts: [] };
+    for (const [name, patch] of SQUADS) { await spState(patch); one.cuts.push({ name, ...(await spCut()) }); }
+    s7[V] = one;
+    await ev(`(handle({ type: 'squad', op: 'ended', reason: 'left' }), Bay.show('home'), true)`); await sleep(60);
+  }
+  const s7ok = (o, rot) => !!o && [o.resize, o.font].every((x) => x.rot === rot && Math.abs(x.rest - 35) < 0.1) && o.tall.rot === rot && o.tall.rest === 0
+    && o.cuts.length === SQUADS.length && o.cuts.every((c) => c.rot === rot && c.cut === 0 && Math.abs(c.scrolled - c.rest) < 0.1)
+    && o.cuts.some((c) => c.rest > 0 && c.st > 0);
+  if (s7ok(s7['667x375'], false) && s7ok(s7['390x844'], true))
+    ok(`the list's foot goes up past every line it would cut, a line that a moved foot cuts included, when the frame resizes and when a font arrives, and to the same place from a repaint while scrolled; a line taller than half the list is left cut; and in a portrait window, the page turned, the foot is read on the list's own axis and cuts nothing`);
+  else fail(`the foot's rule ${JSON.stringify(s7)}`);
+
+  // The fixtures reach every case the checks are for: 16-letter names cut
+  // with an ellipsis, a status line that wraps (the reconnecting leader, at
+  // every shape), a wider face that wraps more, and a list whose foot sqRest
+  // moved.
+  if (!spBad.length && spSeen.rows >= 100 && spSeen.ellipsis >= 12 && spSeen.wrapped >= 3 && spSeen.wideWrapped > spSeen.wrapped && spSeen.rested >= 3)
+    ok(`the home box's rows, in a squad of one to four and the friends online, at 874x402 with the iPhone's safe areas, 812x375 and 667x375, in Rajdhani and in the wider system face (${spSeen.rows} rows): each second line starts on its name's edge, nothing drawn overlaps, every word ends 6 px clear of the menu, nothing is cut, each row is 48u, and at rest the list's foot cuts nothing`);
+  else fail(`home box rows ${JSON.stringify({ seen: spSeen, bad: spBad.slice(0, 12), more: Math.max(0, spBad.length - 12) })}`);
+} catch (e) {
+  fail('squad_ui SP stopped: ' + (e && e.message));
 }
 clearTimeout(watchdog);
 cleanup();

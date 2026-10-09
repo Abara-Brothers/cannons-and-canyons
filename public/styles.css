@@ -2361,10 +2361,9 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
      #bay button sets border:0.) The controls stand on the row's second line,
      6u above its foot, and rows stand 6u apart, so a target reaches the foot
      of its row and stands clear of the next one. Upward it reaches over the
-     clear ground under the name, stopping short of the name's line.
-     A MEMBER ROW'S MENU reaches LEFT 12u and not right, over the empty end of
-     the status line, never over a status word (D-UI-5): the leader's Remove
-     then stands 8u beside it, the two targets 2u clear of each other.
+     clear ground under the name, stopping short of the name's line. (The
+     home box's rows carry their menu on the name's line instead: the rows in
+     the home box, below.)
      DECLINE HAS THE LARGER GAP rather than a question (the Friends screen's
      own Decline is one tap, and this one sends the same frame): it stands 14u
      from Accept and 20u from the menu, so between its target and each
@@ -2372,8 +2371,6 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .sqm .pmb,#bay .sqic{position:relative}
   #bay .sqm .pmb::before,#bay .sqic::before{content:'';position:absolute;inset:calc(-6 * var(--u))}
   #bay .sqic::before{inset:calc(-6 * var(--u) - 1px)}
-  #bay .sqml .sqm .pmb::before{inset:calc(-6 * var(--u)) 0 calc(-6 * var(--u)) calc(-12 * var(--u))}
-  #bay .sqml .sqm .pmb + .sqic{margin-left:calc(3 * var(--u))}
   #bay .sqm .sbtn + .sqic{margin-left:calc(9 * var(--u))}
   #bay .sqm .sqic + .pmb{margin-left:calc(15 * var(--u))}
   #bay .sqm .sbtn + .pmb{margin-left:calc(2 * var(--u))}
@@ -2414,6 +2411,75 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   #bay .sqfc{display:flex;align-items:center;gap:calc(6 * var(--u));margin-top:calc(6 * var(--u));font-family:Rajdhani,system-ui,sans-serif;
      font-weight:700;font-size:calc(15 * var(--u));letter-spacing:.1em;color:#ffb46b}
   #bay .sqfc span{flex:1;min-width:0}
+
+  /* ------------------------------------------ the rows in the home box -- */
+  /* COMPACT ROWS, IN LINE (owner, 2026-10-10, seen in the iPhone app: "when
+     youre in a squad, the text in the squad box on the left of the screen on
+     the home dashboard has text spacing issues" -- rows too tall with a gap
+     inside them, the status line not under the name, words crowded into
+     each other and a long name over the menu, and text cut off). These rules
+     are the box's alone (.sqx); the window's seats and sheet keep the rows
+     above.
+     A ROW IS 48u: 3u, the name's line (20u), 2u, the status line (20u:
+     Leader, Ready, Not ready, Reconnecting or In your squad, or a friend's
+     Invite) and 3u. Every line is given its height in u, so no font's own
+     metrics decide a row's height, and each holds its words with room to
+     spare: Core Text, which Safari's engine reads a font's height from,
+     gives the bundled Rajdhani 0.93em above its baseline and 0.35em below,
+     1.28em in all, so a 15u name needs 19.1u of its 20u line and a 13u
+     status word 16.6u of its 18u, and the space a word keeps for accents
+     and descenders never meets the next line's.
+     THE NAME AND THE STATUS LINE START AT ONE EDGE: after the row's border
+     and 6u of padding, the 11u lamp and a 6u gap before the name, and 17u
+     before the status words or the Invite.
+     THE MENU STANDS AT THE RIGHT END OF THE NAME'S LINE. The 37u the row
+     keeps on its right -- 5u, the menu's 20u and 12u of clear ground -- is
+     width no word on either line can take, so a long name ends in its
+     ellipsis 12u (7.3 px on the smallest phone) short of the menu and never
+     runs over or under it, and no status word reaches beneath it. Every row
+     keeps that ground, the player's own (which has no menu) as well, so
+     every name ends at one edge.
+     A STATUS LINE TOO LONG FOR ITS WIDTH WRAPS beneath itself rather than
+     run on: "Leader" and "Reconnecting" together are 122u of words, and the
+     line is about 112u on a phone. The status group keeps 1u above and below its
+     18u lines, 2u apart, so its first line stands where a single line does
+     and the row grows by 20u a line; nothing overlaps and nothing is cut.
+     The friend rows' empty status group (a friend to invite) is not drawn,
+     so their Invite starts on the same edge. */
+  #bay .sqx .sqm{position:relative;height:auto;
+     padding:calc(3 * var(--u) - 1px) calc(37 * var(--u) - 1px) calc(3 * var(--u) - 1px) calc(6 * var(--u))}
+  #bay .sqx .sqm1{gap:calc(6 * var(--u))}
+  /* The name and "(you)" are centred on their line, as the lamp and the menu
+     are, rather than set on one baseline: the name's overflow is hidden (for
+     its ellipsis), and a box whose overflow is hidden may take its baseline
+     from its bottom edge instead of its text -- CSS 2.1 says so of an inline
+     block -- which would drop "(you)" half a line in an engine that did. */
+  #bay .sqx .sqmn{align-items:center}
+  #bay .sqx .sqmt{line-height:calc(20 * var(--u))}
+  #bay .sqx .sqm2{height:auto;margin-top:calc(2 * var(--u));padding-left:calc(17 * var(--u))}
+  #bay .sqx .sqms{flex-wrap:wrap;column-gap:calc(9 * var(--u));row-gap:calc(2 * var(--u));padding:calc(1 * var(--u)) 0}
+  #bay .sqx .sqms:empty{display:none}
+  #bay .sqx .sql,#bay .sqx .sqr,#bay .sqx .sqy{gap:calc(4 * var(--u));line-height:calc(18 * var(--u))}
+  /* THE TICK STARTS WHERE THE WORDS DO. IC.tick draws its mark across x 5 to
+     19 of its 24-unit box, so a 14u tick's mark stands 2.9u (35/12u) inside
+     its box on either side. Those margins are given back: the box is the
+     mark, the tick of "Ready" or "In your squad" starts on the name's edge
+     as "Leader" and "Not ready" do, and it stands 4u from its word. */
+  #bay .sqx .sqr.on svg,#bay .sqx .sqy svg{margin:0 calc(-35 / 12 * var(--u))}
+  /* The menu is placed in the row (its containing block) on the name's
+     line, which runs from 3u to 23u: a 20u square, so no part of it stands
+     on the status line. Its tap reaches 7u above and below the square, 12u
+     left over the clear ground and right to the row's border: 34u by 37u
+     less the border's pixel, over no word. Above, it reaches 4u into the 6u between rows, and the
+     row above's own reaches no lower than 30u into that row's 48u. */
+  #bay .sqx .sqm .pmb{position:absolute;top:calc(3 * var(--u) - 1px);right:calc(5 * var(--u) - 1px);
+     width:calc(20 * var(--u));height:calc(20 * var(--u))}
+  #bay .sqx .sqm .pmb::before{inset:calc(-7 * var(--u)) calc(1px - 5 * var(--u)) calc(-7 * var(--u)) calc(-12 * var(--u))}
+  #bay .sqx .sqm .sbtn{height:calc(20 * var(--u))}
+  /* THE LIST AT REST CUTS NOTHING IT DRAWS: bay.js sqRest sets --sqrest, the
+     margin under the list that moves its foot up to the top of the first
+     word, button or paragraph it would otherwise cut across. */
+  #bay .sqx .sqb{margin-bottom:var(--sqrest,0px)}
 
   /* ------------------------------------------------------------ launch bar -- */
   #bay .lbar{position:absolute;left:calc(18 * var(--u));right:calc(18 * var(--u));bottom:calc(12 * var(--u));height:calc(56 * var(--u));z-index:16;display:flex;
