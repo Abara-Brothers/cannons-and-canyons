@@ -1480,6 +1480,8 @@ $('accSignOutBtn').onclick = async () => {
   // Tell the server this socket is nobody now, or it keeps the old identity
   // and this device carries on getting that account's turn nudges.
   sendMsg({ type: 'hello', token: null });
+  // And this device is a guest again, under its own name (round 3).
+  if (S.ws) sendClaim(S.ws, false);
   $('accountModal').classList.add('hidden');
   refreshAccountChip();
   showToast('Signed out');
@@ -1818,6 +1820,9 @@ function socialReply(m) {
   // squad op gets its roster first and its answer last, so a callback always
   // finds the slot already current.
   if (m.type === 'squad' && !m.error) socialSquad(m);
+  // THE NAME THE SERVER HOLDS FOR THIS PLAYER (round 3), the answer to the
+  // claim sendHello sends; no request waits on it.
+  if (m.type === 'name') { nameClaimed(m); return; }
   // AN INVITE IS ALWAYS A PUSH (task 9): no request is waiting on it.
   if (m.type === 'squad' && m.op === 'invited') { socialInvite(m); return; }
   // A REFUSED SQUAD START, the leader's answer or a member's push alike, may
@@ -2340,11 +2345,13 @@ function helloLate() { return !!(S.ws && S.ws.openedAt && Date.now() - S.ws.open
 // async, so re-check that THIS socket is still the live transport before
 // sending; a swap to offline play or a reconnect may have happened meanwhile.
 async function sendHello(ws) {
+  let introduced = false;
   try {
     if (!window.Cloud || !Cloud.enabled()) return;
     const token = await Cloud.token(false);
     if (token && S.ws === ws && ws.readyState === 1 && !S.local) {
       sendMsg({ type: 'hello', token });
+      introduced = true;
     }
   } finally {
     // The mark goes on whether or not a hello was sent: a socket with no
@@ -2360,8 +2367,85 @@ async function sendHello(ws) {
     // for. A tap made while the socket was down, or in the moment between its
     // opening and its hello going out, is parked in pendingIntent (intent)
     // and sent here, on this socket only.
-    if (S.ws === ws && ws.readyState === 1) { helloWs = ws; helloN++; flushIntent(); document.dispatchEvent(new Event('cc:squad')); }
+    //
+    // AND THE NAME CLAIM GOES FIRST (round 3, 2026-10-10: no two players with
+    // one name). After every hello this socket tells the server the name this
+    // player has, and the server answers with the name it holds for them
+    // (sendClaim, below). It is sent BEFORE the parked tap, so the server,
+    // which holds a seat's frame while a claim is out, seats the reserved name.
+    if (S.ws === ws && ws.readyState === 1) { sendClaim(ws, introduced); helloWs = ws; helloN++; flushIntent(); document.dispatchEvent(new Event('cc:squad')); }
   }
+}
+
+// ---- the player's one name, held by the server (round 3, 2026-10-10) -------
+// THE OWNER'S RULE: names are unique, ignoring capitals and look-alike
+// letters, for every player, guests included; the first to reserve a name
+// keeps it, and anyone else is given a new unused default and told once. The
+// server holds every player's name (server/reservations.js), and this is the
+// device's half of that:
+//   * a SECRET the server issued to this device, kept here and nowhere else in
+//     the page (the server holds only its hash). It is how the server knows
+//     this device's name when nobody is signed in, without the anonymous
+//     sign-in a busy mobile carrier can be refused. Account deletion clears it
+//     with every other cc_ key.
+//   * the CLAIM, sent after every hello: the name this player has (the
+//     device's own for a guest, the one on show for an account) and the
+//     secret. The answer is the player's name from then on, and the page shows
+//     it: a guest's as the device's own name, an account's as the name on show,
+//     handed back on sign-out exactly as a chosen callsign is.
+// A refused or unanswered claim changes nothing (a server whose table is not
+// there yet answers 'unavailable'), and the name stays what it was.
+const NAME_SECRET_KEY = 'cc_name_secret';
+const NAME_SECRET_RE = /^[A-Za-z0-9_-]{43}$/;
+// THIS LOAD ROLLED THE DEVICE'S FIRST NAME (boot), and no claim has been
+// answered: a default nobody has seen yet, so if the server swaps it for an
+// unused one there is nothing to tell the player.
+let nameFresh = false;
+function nameSecret() {
+  let v = '';
+  try { v = localStorage.getItem(NAME_SECRET_KEY) || ''; } catch {}
+  return NAME_SECRET_RE.test(v) ? v : '';
+}
+// A PLAIN FRAME, NOT A REQUEST: nothing waits on its answer (socialSend would
+// park a waiter and a twelve-second timer for every claim), and the answer is
+// handled where it lands, in socialReply, like a push. It is CAUGHT, because
+// it is sent from sendHello's finally, whose bookkeeping (the hello mark and
+// the parked tap) must run whatever this does.
+function sendClaim(ws, account) {
+  try {
+    if (S.local || !ws || S.ws !== ws || ws.readyState !== 1) return;
+    const secret = nameSecret();
+    const frame = { type: 'name', name: account ? myName() : (ownName() || myName()) };
+    if (secret) frame.secret = secret;
+    else if (nameFresh) frame.fresh = true;
+    sendMsg(frame);
+  } catch { /* the next hello claims again */ }
+}
+function nameClaimed(m) {
+  if (!m || m.type !== 'name' || m.ok !== true || typeof m.name !== 'string' || !m.name) return;
+  nameFresh = false;
+  if (typeof m.secret === 'string' && NAME_SECRET_RE.test(m.secret)) { try { localStorage.setItem(NAME_SECRET_KEY, m.secret); } catch {} }
+  const shown = ($('nameInput').value || '').trim();
+  if (m.chosen === true || m.linked === true) { if (shown !== m.name) setLocalName(m.name); }
+  else if (shown !== m.name || ownName() !== m.name) setOwnName(m.name);
+  if (m.moved === 'taken' || m.moved === 'refused') tellNameMoved(m.moved, m.name);
+  // The screens that show the name repaint in place (bay.js render morphs the
+  // DOM, so an open Callsign field keeps what the player has typed).
+  document.dispatchEvent(new Event('cc:social'));
+}
+// TOLD ONCE (owner, 2026-10-10: "Your name was taken, so you're now X. You
+// can change it in Bay controls."). The server marks only the claim that moved
+// the player, and this says it once for a name, however many answers carry
+// it. A name the guidelines now refuse (one typed before a term was added) is
+// said in the same shape, without blaming another player for it. A long
+// toast, held behind the quick doors like every other.
+let nameMovedTold = '';
+function tellNameMoved(why, name) {
+  if (nameMovedTold === name) return;
+  nameMovedTold = name;
+  showToast(why === 'taken'
+    ? `Your name was taken, so you're now ${name}. You can change it in Bay controls.`
+    : `Your name could not be used, so you're now ${name}. You can change it in Bay controls.`, true);
 }
 
 // Coming back from the background (app switch, phone lock, tab switch) is the
@@ -3166,7 +3250,7 @@ function handle(m) {
     // the client ever sends — and it is the one answer to a callsign frame that
     // does not carry type 'callsign', so it has to be routed here by name.
     case 'friends': case 'friend': case 'block': case 'callsign': case 'report':
-    case 'squad': case 'code':
+    case 'squad': case 'code': case 'name':
     case 'presence': case 'social':
       socialReply(m);
       break;
@@ -9077,7 +9161,7 @@ function boot() {
   // name the player actually owns, not one we just handed them a millisecond ago.
   const hadName = !!savedName();
   if (hadName) $('nameInput').value = savedName();
-  else setOwnName(rollCallsign(null));
+  else { setOwnName(rollCallsign(null)); nameFresh = true; }
   // A DEVICE FROM BEFORE BUILD 8 kept its name in pt_name alone. A rolled pair
   // there is its own default, so it is remembered as such and a sign-out comes
   // back to it; anything else there was an account's chosen name, which is not

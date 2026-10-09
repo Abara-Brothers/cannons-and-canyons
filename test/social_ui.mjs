@@ -103,8 +103,6 @@ await send('Page.addScriptToEvaluateOnNewDocument', { source: 'window.__ccNoIntr
 // to have say what a name may be: letters, numbers or spaces, nothing
 // offensive, one change a day.
 const RULE = '3–16 letters, numbers or spaces. Nothing offensive. One change a day.';
-// What a GUEST's Callsign row says it is for, now that a guest names themselves.
-const SAY = 'Your name in every match';
 const HINT = 'Friends find you by code until you choose a callsign';
 const WAIT = 'Not loaded yet — reopen this screen to retry';
 const OUT = 'Sign in to choose a callsign.';
@@ -875,23 +873,27 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
     ok(`${V}: a device with no name of its own is given one default on its first sign-out ('${pre8.first}') and comes back to that same name on the next`);
   else fail(`${V}: pre-build-8 sign-out ${JSON.stringify(pre8)}`);
 
-  // 21. a guest's row says what it is for and offers Change: a guest names
-  //     themselves now (owner, 2026-10-07). CHANGED: this pinned the guest row
-  //     as "Sign in to choose a callsign." with Roll alone. Signing out still
-  //     drops the WHOLE snapshot — the friends and blocked lists belong to the
-  //     account that left.
+  // 21. a guest's row names the guest and offers Change: a guest names
+  //     themselves now (owner, 2026-10-07). CHANGED twice: this pinned the
+  //     guest row as "Sign in to choose a callsign." with Roll alone, and then
+  //     as 'Your name in every match'. CHANGED AGAIN (round 3, 2026-10-10):
+  //     the server may now give a guest a new name and tell them "You can
+  //     change it in Bay controls", so the row shows the name it means, the
+  //     one this device plays under (myName). Signing out still drops the
+  //     WHOLE snapshot — the friends and blocked lists belong to the account
+  //     that left.
   await clearTx();
   const out = await ev(`(() => {
     window.CC_ACCOUNT = ${GUEST};
     document.dispatchEvent(new CustomEvent('cc:account'));
-    return { social: window.CC_SOCIAL };
+    return { social: window.CC_SOCIAL, me: myName() };
   })()`);
   await sleep(60);
   r = await rowInfo();
   t = await tx();
-  if (out.social === null && r && r.desc === SAY && r.btns.join('|') === 'Change' && r.acts.join('|') === 'data-cs=open'
+  if (out.social === null && r && out.me && r.desc === out.me && r.btns.join('|') === 'Change' && r.acts.join('|') === 'data-cs=open'
       && r.dis.join('|') === 'false' && new Set(r.heights).size === 1 && t.length === 0)
-    ok(`${V}: a guest's row says "${SAY}" and offers Change, asks the server for nothing, and keeps no trace of the account that left`);
+    ok(`${V}: a guest's row names the guest ('${out.me}') and offers Change, asks the server for nothing, and keeps no trace of the account that left`);
   else fail(`${V}: guest ${JSON.stringify({ social: out.social, r, t })}`);
 
   // 22. the outbox Task 8 inherits. BINDING resolution 3: block, report and

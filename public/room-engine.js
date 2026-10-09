@@ -220,6 +220,24 @@ const sanitizeSkin = (s, seat) => (SKINS.includes(s) ? s : SEAT_SKIN[seat % SEAT
 // non-empty string, opens nothing — the name falls through to the fallback.
 let nameCheck = null;
 export function setNameCheck(fn) { nameCheck = typeof fn === 'function' ? fn : null; }
+// NO TWO PLAYERS WITH ONE NAME (owner, 2026-10-10, item 28). The host
+// reserves every player's name (server/reservations.js) and hangs the
+// socket's own on it as ws.reservedName, which the door below takes the way it
+// takes a chosen callsign (allowedOf). A name the socket does NOT hold must
+// then not be somebody else's, rolled pairs included, and a stand-in name
+// must not be either. nameFree is the host's answer to "may a socket that
+// does not hold this name show it?", injected like nameCheck and asked from
+// memory, so the door stays synchronous. The default is null and the offline
+// page installs none: every name is free there, exactly as before, because
+// nobody else is in an offline match. A check that throws answers no.
+let nameFree = null;
+export function setNameFree(fn) { nameFree = typeof fn === 'function' ? fn : null; }
+const isFree = (name) => { if (!nameFree) return true; try { return nameFree(name) === true; } catch { return false; } };
+// The name the SERVER holds for this socket: a signed-in account's chosen
+// callsign first, then the name reserved for the player (both written by the
+// host, never by a frame). The offline page puts its own player's name in
+// chosenName (app.js startLocal).
+const allowedOf = (ws) => (ws && ((typeof ws.chosenName === 'string' && ws.chosenName) || (typeof ws.reservedName === 'string' && ws.reservedName))) || null;
 // THE NAME A SEAT IS GIVEN, and whether the one presented was REFUSED: the
 // seat object, which createRoom and join build from this, carries
 // `renamed: true` only when the name the player presented could not be used
@@ -240,6 +258,9 @@ function nameAtDoor(raw, seat = 0, allowed = null) {
   // player's screen. It is a property of the socket OBJECT: nothing a client
   // sends can set it. The offline page (which imports this same file) hands in
   // its own player's name (app.js startLocal), the one name in its match.
+  // Since round 3 it may also be the name the host RESERVED for the player
+  // (ws.reservedName, allowedOf above), which met the same guidelines when it
+  // was reserved and which no other player can hold.
   //
   // IT IS THE SEAT'S NAME, WHATEVER NAME THE FRAME CARRIES (owner, 2026-10-10:
   // "Ensure that the username for the person is accurately displayed across
@@ -266,7 +287,9 @@ function nameAtDoor(raw, seat = 0, allowed = null) {
   // contains — including a stored name from before a term was added to it.
   // It is checked against `allowed`, the SERVER's string, not the client's.
   if (typeof allowed === 'string' && allowed && !isProfane(allowed)) return { name: allowed };
-  if (isGeneratedCallsign(name) && !isProfane(name)) return { name };
+  // A ROLLED PAIR IS NO LONGER ANYBODY'S (round 3): one another player has
+  // reserved, or holds as a chosen callsign, is theirs, and falls through.
+  if (isGeneratedCallsign(name) && !isProfane(name) && isFree(name)) return { name };
   // THE THIRD DOOR: a name the player typed, held to the guidelines HERE, at
   // the moment it is presented, whatever the client claims it was told. What
   // is returned is the CHECK's string, never the client's copy — the same rule
@@ -278,6 +301,16 @@ function nameAtDoor(raw, seat = 0, allowed = null) {
     if (typeof shown === 'string' && shown && !isProfane(shown)) return { name: shown };
   }
   const h = [...name].reduce((a, c) => (a * 31 + c.charCodeAt(0)) | 0, 7) + seat * 2654435761;
+  // THE STAND-IN IS AN UNUSED NAME TOO (owner: "New default names are always
+  // picked from unused ones"). Still deterministic on the refused input, for
+  // the reason above: the seeds are walked in a fixed order and the first one
+  // nobody holds is taken. Offline, and on a host with no reservations, the
+  // first seed is free and the name is exactly what it always was. If every
+  // seed tried is held, the first stands, as before.
+  for (let k = 0; k < 64; k++) {
+    const stand = callsignFromSeed(h + k * 7919);
+    if (isFree(stand)) return { name: stand, renamed: true };
+  }
   return { name: callsignFromSeed(h), renamed: true };
 }
 
@@ -803,7 +836,7 @@ function createRoom(hostWs, name, skin, opts = {}) {
   const room = {
     code, mode, max, hostSeat: 0,
     players: [
-      { ws: hostWs, ...nameAtDoor(name, 0, hostWs && hostWs.chosenName), token: makeToken(), connected: true, dropTimer: null, skin: sanitizeSkin(skin, 0) },
+      { ws: hostWs, ...nameAtDoor(name, 0, allowedOf(hostWs)), token: makeToken(), connected: true, dropTimer: null, skin: sanitizeSkin(skin, 0) },
     ],
     state: 'waiting',
     terrain: null, tanks: null,
@@ -2204,7 +2237,7 @@ export function handleClientMessage(ws, msg) {
       let seat = r.players.indexOf(null);                 // reuse a lobby hole first
       if (seat < 0) { seat = r.players.length; r.players.push(null); }
       r.players[seat] = {
-        ws, ...nameAtDoor(msg.name, seat, ws.chosenName), token: makeToken(), loadout: sanitizeLoadoutFor(r.mode, msg.loadout),
+        ws, ...nameAtDoor(msg.name, seat, allowedOf(ws)), token: makeToken(), loadout: sanitizeLoadoutFor(r.mode, msg.loadout),
         connected: true, dropTimer: null, skin: sanitizeSkin(msg.skin, seat),
       };
       ws.roomCode = code; ws.seat = seat;
@@ -2224,11 +2257,11 @@ export function handleClientMessage(ws, msg) {
         }
         r.players[0].loadout = host._qloadout || null;
         releasePriorRoom(ws);            // the joiner may have been sitting in a lobby
-        r.players.push({ ws, name: sanitizeName(msg.name, 1, ws.chosenName), token: makeToken(), connected: true, dropTimer: null, skin: sanitizeSkin(msg.skin, 1), loadout: sanitizeLoadout(msg.loadout) });
+        r.players.push({ ws, name: sanitizeName(msg.name, 1, allowedOf(ws)), token: makeToken(), connected: true, dropTimer: null, skin: sanitizeSkin(msg.skin, 1), loadout: sanitizeLoadout(msg.loadout) });
         ws.roomCode = r.code; ws.seat = 1;
         startGame(r);
       } else {
-        waiting = ws; ws._qname = sanitizeName(msg.name, 0, ws.chosenName); ws._qskin = msg.skin; ws._qloadout = sanitizeLoadout(msg.loadout);
+        waiting = ws; ws._qname = sanitizeName(msg.name, 0, allowedOf(ws)); ws._qskin = msg.skin; ws._qloadout = sanitizeLoadout(msg.loadout);
         send(ws, { type: 'queued' });
       }
       break;

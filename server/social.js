@@ -31,6 +31,10 @@ import { isUuid, isRefusal, reportCallsign } from './store.js';
 // reviews and three decisions behind them — travelled with them; this layer's
 // behaviour is unchanged.
 import { createNameProofs } from './display-name.js';
+// THE NAME RESERVATIONS (round 3): every player's one name, held by the server.
+// The default is the host with no table, which answers every question the old
+// way, so a layer built without it behaves exactly as it did.
+import { RESERVATIONS_OFF, combineStates } from './reservations.js';
 // THE SQUAD STATE MACHINE. Built and held HERE rather than in server.js (plan
 // R1): every squad op needs the per-socket queue, the rate buckets, `reply`,
 // presence and the block reads, and all five are trapped inside
@@ -65,7 +69,11 @@ import { createCipheriv, createHmac, randomBytes, timingSafeEqual } from 'node:c
 // it itself, ahead of the hello wait and this layer's per-socket queue,
 // because the answer is two lookups in memory and a frame queued behind a slow
 // store read outlived the client's waiter. This layer never sees one.
-export const SOCIAL_TYPES = new Set(['friends', 'friend', 'block', 'callsign', 'report', 'squad', 'code']);
+//
+// `name` (round 3, 2026-10-10) is the claim a client sends after every hello:
+// the name this player has, and the device's secret, for the server to reserve
+// or to answer with the name it already holds for them (claimName below).
+export const SOCIAL_TYPES = new Set(['friends', 'friend', 'block', 'callsign', 'report', 'squad', 'code', 'name']);
 
 // Per-socket rate limits, messages per minute (design 4.2). These sit ON TOP of
 // the engine's 60 frames/s socket limiter: that one stops a flood of anything,
@@ -99,7 +107,12 @@ export const SOCIAL_TYPES = new Set(['friends', 'friend', 'block', 'callsign', '
 // this one bucket — an unknown op included, for handleFriend's reason — and
 // every later op (invite, ready, mode, start, resume) joins it by being
 // registered in SQUAD_OPS.
-const LIMITS = { callsign: 3, friend: 10, friends: 20, report: 5, squad: 20 };
+//
+// `name`, the claim, has a bucket of its own rather than the callsign one: a
+// page load, a first save and a sign-in each send one, and three in a minute
+// is ordinary, while a rename spends the callsign bucket as before. A claim
+// that WRITES a new row also spends a process-wide bucket (reservations.js).
+const LIMITS = { callsign: 3, friend: 10, friends: 20, report: 5, squad: 20, name: 6 };
 
 // The chosen-callsign cooling-off period: a rolling 24 hours since the last
 // set, not a calendar day, so there is no timezone to be wrong about.
@@ -351,6 +364,7 @@ export function createSocial({
   pushInvite = async () => false,
   names = { state: () => 'unknown', lookalikes: () => null, add() {}, remove() {} },
   seatName = () => null,
+  reservations = RESERVATIONS_OFF,
 }) {
 
   // userId -> that account's live sockets. "Online" is "the set is non-empty".
@@ -695,6 +709,13 @@ export function createSocial({
     try { alike = names && typeof names.lookalikes === 'function' ? keyReadings(v.key).map((r) => names.lookalikes(r)) : null; } catch { alike = null; }
     if (!Array.isArray(alike) || !alike.every(Array.isArray)) return reply(ws, msg, { type: 'callsign', error: 'unavailable' });
     if (alike.some((keys) => keys.some((k) => k !== prevKey))) return reply(ws, msg, { type: 'callsign', error: 'taken' });
+    // NOR A NAME ANOTHER PLAYER HAS RESERVED (round 3, 2026-10-10: "no 2
+    // players can have the same exact name"). Every reading of the key is asked
+    // of the reservations table itself, since a write follows: a row held by
+    // any other player, a guest's device included, refuses 'taken'. The
+    // account's own reservation is not a collision: a player may make the name
+    // they already hold their chosen callsign. With no table this says no.
+    if (await reservations.takenFor(keyReadings(v.key), ws.userId)) return reply(ws, msg, { type: 'callsign', error: 'taken' });
     // WHAT IS STORED IS WHAT WILL BE SHOWN. A spelling whose capitals read as
     // none of the key's readings (an odd mixture of Greek capitals) would be
     // shown as the key itself by every reader (shownSpelling), so it is stored
@@ -724,7 +745,15 @@ export function createSocial({
     // this field when a socket joins — so nobody is renamed mid-match.
     for (const w of socketsOf(ws.userId)) w.chosenName = spelled;
     ws.chosenName = spelled;
+    // ONE NAME PER PLAYER (round 3): the chosen callsign is the account's name
+    // now, so no socket of the account goes on carrying the name it had
+    // reserved, and that name is released for anyone, after the answer, so a
+    // slow store holds up nobody's Save. Best-effort: a release that fails is
+    // retried by the account's next claim, which releases it too.
+    for (const w of socketsOf(ws.userId)) { w.reservedName = null; w.nameRow = null; }
+    ws.reservedName = null; ws.nameRow = null;
     reply(ws, msg, { type: 'callsign', ok: true, callsign: spelled });
+    await reservations.release(ws.userId).catch(() => {});
     // AND THE ACCOUNT'S SQUAD ROW FOLLOWS AT ONCE (owner, 2026-10-10: a rename
     // takes effect everywhere at once). A linked row is named from the profile
     // row (displayName), which the write above has just changed, but nothing
@@ -744,11 +773,13 @@ export function createSocial({
   // the guidelines". A guest has no account a chosen callsign could be stored
   // on (requireLinked, above, and BINDING resolution 2), so their name is kept
   // on their own device — and this op is how the device learns, BEFORE it keeps
-  // one, whether the guidelines allow it. It STORES NOTHING and reads nothing
-  // from the store: the answer is the same test the room engine applies at the
-  // door (typedName here, its twin playerName there), so a name this says yes
-  // to is the name a lobby shows, and one it refuses would have been replaced
-  // there anyway. The check here is what lets the player be TOLD.
+  // one, whether the guidelines allow it. It stored nothing and read nothing
+  // from the store until round 3 (a socket that holds a reservation now
+  // renames it: see the last paragraph): the answer is the same test the room
+  // engine applies at the door (typedName here, its twin playerName there),
+  // so a name this says yes to is the name a lobby shows, and one it refuses
+  // would have been replaced there anyway. The check here is what lets the
+  // player be TOLD.
   //
   // OPEN TO ANY SOCKET, the one callsign op that is: a guest who never saved
   // anything has no account id at all. The 3-a-minute bucket is the same one a
@@ -786,16 +817,89 @@ export function createSocial({
   // takes the server's normalised name, and the squad is pushed. A refusal
   // changes nothing. A failed push costs only the cosmetic update, which the
   // next push carries.
+  //
+  // AND A YES IS NOW THE PLAYER'S RESERVATION (round 3, 2026-10-10). A socket
+  // whose claim answered a row (claimName below: ws.nameRow) holds its name on
+  // the server, so the check is a rename of that row: the new name is free or
+  // the holder's own in other capitals, the write is the authority on that
+  // (another player's row with the same key refuses it 'taken'), and the old
+  // name is free the moment the new one lands. A socket with no row (an old
+  // build, or a host with no table) is answered as before, and the reserved
+  // names are part of what 'taken' means for it too (keyState above).
   async function checkName(ws, msg) {
     if (!rateOk(ws, 'callsign', LIMITS.callsign)) return reply(ws, msg, { type: 'callsign', op: 'check', error: 'slow_down' });
-    const v = typedName(msg.name);
-    if (!v.ok) return reply(ws, msg, { type: 'callsign', op: 'check', error: v.error });
+    let v;
+    if (ws.nameRow && reservations.ready) {
+      const gen = ws.authGen;
+      const r = await reservations.rename(ws.nameRow, msg.name);
+      // A ROW THAT HAS GONE (swept, or deleted with its account) is forgotten
+      // here, and the device's next claim reserves again.
+      if (!r.ok && r.error === 'gone') { ws.nameRow = null; ws.reservedName = null; }
+      if (!r.ok) return reply(ws, msg, { type: 'callsign', op: 'check', error: r.error === 'gone' ? 'unavailable' : r.error });
+      // A hello for somebody else landed while the write was out: the next
+      // claim answers for whoever this socket is now.
+      if (ws.authGen === gen) { ws.nameRow = r.row; ws.reservedName = r.name; }
+      v = { ok: true, name: r.name };
+    } else {
+      v = typedName(msg.name);
+      if (!v.ok) return reply(ws, msg, { type: 'callsign', op: 'check', error: v.error });
+    }
     reply(ws, msg, { type: 'callsign', op: 'check', ok: true, name: v.name });
     const key = squadGuest(ws) ? squads.keyOfSocket(ws) : null;
     const own = key == null ? null : squads.memberOf(key);
     if (!own || !own.member.guest || own.member.ws !== ws || own.member.name === v.name) return;
     own.member.name = v.name;
     await pushSquad(own.squad, null, null).catch(() => {});
+  }
+
+  // ---- the name claim (round 3, 2026-10-10: item 28) -------------------------
+  // THE PLAYER'S ONE NAME, held by the server (server/reservations.js says
+  // how). The client sends this after every hello with the name it has and
+  // the secret its device was given, and the answer is the name the server
+  // holds for this player from now on: the socket carries it (ws.reservedName),
+  // the room engine seats it whatever name a frame carries (room-engine.js
+  // allowedOf), and the squad row shows it. `secret` is on the answer only
+  // when a new one was issued for this device. `moved` is there only when the
+  // name the device had could not be the player's ('taken' by another player
+  // first, or 'refused' by the guidelines) and a default stands in for it: the
+  // client tells the player once. `chosen` marks a signed-in account's chosen
+  // callsign, which is its name and needs no row, and `linked` an answer that
+  // belongs to a linked account rather than to this device.
+  //
+  // A failed claim ('unavailable': no table yet, a store fault, an index that
+  // has not loaded) leaves the socket as it was, and the old rules name it.
+  async function claimName(ws, msg) {
+    if (!rateOk(ws, 'name', LIMITS.name)) return reply(ws, msg, { type: 'name', error: 'slow_down' });
+    const gen = ws.authGen;
+    const linked = !!(ws.userId && !ws.isGuest);
+    const r = await reservations.claim({
+      userId: ws.userId || null, linked,
+      chosen: linked && typeof ws.chosenName === 'string' ? ws.chosenName : null,
+      secret: typeof msg.secret === 'string' ? msg.secret : null,
+      name: typeof msg.name === 'string' ? msg.name : '',
+      fresh: msg.fresh === true,
+    });
+    // A HELLO LANDED WHILE THE CLAIM WAS OUT: the answer is for an account this
+    // socket no longer is, so it is not kept and not sent. The client claims
+    // again after every hello.
+    if (ws.authGen !== gen) return reply(ws, msg, { type: 'name', error: 'unavailable' });
+    if (!r || !r.ok) return reply(ws, msg, { type: 'name', error: r && r.error === 'slow_down' ? 'slow_down' : 'unavailable' });
+    const was = ws.reservedName || null;
+    ws.reservedName = r.chosen ? null : r.name;
+    ws.nameRow = r.row || null;
+    const frame = { type: 'name', ok: true, name: r.name };
+    if (r.secret) frame.secret = r.secret;
+    if (r.moved) frame.moved = r.moved;
+    if (r.chosen) frame.chosen = true;
+    else if (linked) frame.linked = true;
+    reply(ws, msg, frame);
+    // The squad row shows the reserved name (squadSnapshot), so a claim that
+    // named this socket differently tells the squad. A failed push costs only
+    // the cosmetic update, which the next push carries.
+    if (was !== ws.reservedName) {
+      const own = squadOf(ws);
+      if (own) await pushSquad(own.squad, null, null).catch(() => {});
+    }
   }
 
   // ---- ONE SOCIAL FRAME AT A TIME, PER SOCKET -------------------------------
@@ -847,6 +951,13 @@ export function createSocial({
           // never runs, the client never gets a reply, and the whole net under
           // this function is decoration. Every await in here is deliberate.
           await callsign(ws, msg);
+          return;
+        case 'name':
+          // NO GATE: every player holds a name, a guest with no account at all
+          // included (round 3). The claim waits for the socket's hello like
+          // every other social frame (server.js), so it answers for the
+          // account the socket is.
+          await claimName(ws, msg);
           return;
         case 'friends':
           if (!requireLinked(ws, msg)) return;
@@ -1020,7 +1131,17 @@ export function createSocial({
   //
   // keyState is the injected index (`names`, above), asked through a guard so a
   // malformed one counts as knowing nothing: 'unknown' refuses a typed name.
-  const keyState = (key) => (names && typeof names.state === 'function' ? names.state(key) : 'unknown');
+  //
+  // AND EVERY RESERVED NAME (round 3). A typed name another player has
+  // reserved is 'taken' exactly as a chosen callsign is, so the guest's check
+  // op and a guest's squad seat refuse it as the door does. With no table the
+  // reservations answer 'free' and the rule is the round 2 one.
+  const keyState = (key) => {
+    const chosen = names && typeof names.state === 'function' ? names.state(key) : 'unknown';
+    let held = 'unknown';
+    try { held = reservations.state(key); } catch { held = 'unknown'; }
+    return combineStates(chosen, held);
+  };
   const { provenName, rolledName, displayName, seenName, checkPlayerName, typedName, guestName, seatName: seatShown } = createNameProofs({ terms, keyState });
   // The index's two hooks, called when a callsign_key write lands. A host with
   // no index (or a malformed one) has nothing to keep current.
@@ -1469,15 +1590,36 @@ export function createSocial({
   // row whose socket was one when it dropped (droppedLinked): its guest-time
   // name stays withheld, as the paragraph above says, and it carries no
   // `noacct`, because it does stand for an account.
+  //
+  // A ROW SHOWS ITS PLAYER'S RESERVED NAME (round 3, 2026-10-10). A player
+  // whose socket's claim was answered holds a name on the server
+  // (ws.reservedName), and the match the squad starts seats that name
+  // (room-engine.js allowedOf), so the row shows it too: a guest's in place of
+  // the name its frame carried, and a linked account's when it has no chosen
+  // callsign, in place of the rolled pair the profile's own copy of the name
+  // says, which the account may PATCH and another player may hold. It is
+  // shown only while it still meets the guidelines (checkPlayerName), the
+  // blocklist pass displayName gives every name. A row that dropped keeps the
+  // name its socket held (droppedReserved), as it keeps its account.
   const droppedAcct = new WeakMap();
   const droppedLinked = new WeakSet();
+  const droppedReserved = new WeakMap();
+  const reservedOf = (m) => {
+    const n = !m ? null : m.ws ? m.ws.reservedName : droppedReserved.get(m);
+    if (typeof n !== 'string' || !n) return null;
+    const v = checkPlayerName(n);
+    return v.ok ? v.name : null;
+  };
   const guestRowAccount = (m) => {
     if (!m || !m.guest) return '';
     if (m.ws) return squadGuest(m.ws) && m.ws.userId ? wireId(m.ws.userId) : '';
     return droppedAcct.get(m) || '';
   };
   const doorRow = (m) => !!(m && m.guest && (m.ws ? !squadGuest(m.ws) : droppedLinked.has(m)));
-  const guestRowName = (m) => (m && m.guest && !doorRow(m) ? guestName(m.name) : null);
+  const guestRowName = (m) => (m && m.guest && !doorRow(m) ? reservedOf(m) ?? guestName(m.name) : null);
+  // A linked row: its chosen callsign when it has one, else its reserved name,
+  // else what the profile proves, as before.
+  const linkedRowName = (m, p) => (provenName(p) !== null ? displayName(p) : reservedOf(m) ?? displayName(p));
   const guestNoAcct = (m) => !!(m && m.guest && !doorRow(m) && !guestRowAccount(m));
   async function squadSnapshot(sq) {
     const ids = sq.members.filter((m) => m.userId).map((m) => m.userId);
@@ -1492,7 +1634,7 @@ export function createSocial({
       members: sq.members.map((m) => ({
         id: m.userId,
         rid: rowRid(m),
-        callsign: m.userId ? displayName(names.get(m.userId)) : guestRowName(m),
+        callsign: m.userId ? linkedRowName(m, names.get(m.userId)) : guestRowName(m),
         guest: m.guest,
         online: m.userId ? isOnline(m.userId) : !!(m.ws && m.ws.readyState === 1),
         ready: m.ready,
@@ -2316,6 +2458,10 @@ export function createSocial({
         const acct = squadGuest(ws) && ws.userId ? wireId(ws.userId) : '';
         if (acct) droppedAcct.set(held.member, acct); else droppedAcct.delete(held.member);
         if (!squadGuest(ws)) droppedLinked.add(held.member); else droppedLinked.delete(held.member);
+      }
+      if (held) {
+        if (typeof ws.reservedName === 'string' && ws.reservedName) droppedReserved.set(held.member, ws.reservedName);
+        else droppedReserved.delete(held.member);
       }
       const sq = squads.markDropped(key, at);
       if (!sq) return;

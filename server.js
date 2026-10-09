@@ -19,7 +19,7 @@ import http2 from 'node:http2';
 import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import {
-  rooms, send, handleClientMessage, handleClose, resolveSeatHandle, resolveSeatName, setCodeTaken, setNameCheck,
+  rooms, send, handleClientMessage, handleClose, resolveSeatHandle, resolveSeatName, setCodeTaken, setNameCheck, setNameFree,
   MODE_SEATS, TEE_IDS, validRackFor, abandonRoom,
 
   setPushNudge, setAuthSink, setPushSubSink, setFaultSink, setCapacitySink, setMatchSink,
@@ -40,6 +40,9 @@ import { createNameProofs } from './server/display-name.js';
 // Which callsign keys an account holds, kept in memory so the engine's door
 // can ask synchronously whether a typed name is somebody's chosen callsign.
 import { createNameIndex } from './server/name-index.js';
+// Every player's one name, held by the server (owner, 2026-10-10, item 28: no
+// two players with the same name). Off until its table answers; see the file.
+import { createReservations, combineStates } from './server/reservations.js';
 // Which hosts a web push may be sent to. See server/push-hosts.js for why a
 // client-supplied endpoint must never choose where this process connects.
 import { webPushHostAllowed } from './server/push-hosts.js';
@@ -206,7 +209,7 @@ const seatSquad = createSeatSquad({
 // running it unfiltered — an unfiltered chosen callsign is the one outcome
 // this feature must never produce — and says so loudly on stderr. It also
 // leaves the room engine with no name check, so no typed name is shown either.
-let store = null, social = null, names = null;
+let store = null, social = null, names = null, reserved = null;
 try {
   const terms = loadBlocklist(path.join(__dirname, 'server', 'blocklist.txt'));
   // THE ROOM ENGINE'S NAME CHECK (owner, 2026-10-07: every player may name
@@ -222,8 +225,19 @@ try {
   // no Supabase there are no accounts, so no key can be taken and every key is
   // free. With Supabase configured but no index (createStore threw), every key
   // is unknown, and the door refuses typed names rather than guess.
-  const keyState = (key) => (names ? names.state(key) : SB_URL && SB_SECRET ? 'unknown' : 'free');
-  setNameCheck(createNameProofs({ terms, keyState }).playerName);
+  //
+  // AND NOBODY'S RESERVED NAME (round 3, 2026-10-10: "no 2 players can have
+  // the same exact name"). The reservations (server/reservations.js, built
+  // below) answer 'free' until their table has been read, so before the
+  // migration, and with no Supabase, the rule is exactly the round 2 one.
+  const chosenState = (key) => (names ? names.state(key) : SB_URL && SB_SECRET ? 'unknown' : 'free');
+  const keyState = (key) => combineStates(chosenState(key), reserved ? reserved.state(key) : 'free');
+  const proofs = createNameProofs({ terms, keyState });
+  setNameCheck(proofs.playerName);
+  // THE DOOR'S OTHER QUESTION (room-engine.js setNameFree): may a socket show
+  // a rolled pair, or a stand-in name, that it does not hold itself? Not when
+  // another player has reserved it or holds it as a chosen callsign.
+  setNameFree((name) => (reserved ? reserved.free(name) : true));
   if (SB_URL && SB_SECRET) {
     store = createStore({ sbAdmin });
     // THE NAME INDEX (server/name-index.js): every chosen callsign's key, read
@@ -236,6 +250,24 @@ try {
       onError: (e) => console.error(`[names] index read failed: ${e && e.message}`),
     });
     names.start();
+    // THE NAME RESERVATIONS: one row per player in name_reservations, read
+    // into memory at boot and every ten minutes like the index above, so the
+    // door can ask them synchronously. OFF until that read lands: a missing
+    // table (the migration is applied by hand) is a failed read, retried every
+    // thirty seconds, and until then every question is answered the old way.
+    // Once a day it deletes the reservations of guests unseen for 90 days.
+    // A missing table is said ONCE, not every thirty seconds: /health and the
+    // boot line carry it from then on.
+    let missingSaid = false;
+    reserved = createReservations({
+      store, chosenState, checkName: proofs.checkPlayerName,
+      onError: (e) => {
+        const m = String(e && e.message);
+        if (!/ 40[04]$/.test(m)) console.error(`[names] reservations: ${m}`);
+        else if (!missingSaid) { missingSaid = true; console.error('[names] reservations OFF: name_reservations is not there yet (its migration has not been applied); the old name rules apply'); }
+      },
+    });
+    reserved.start();
     // resolveSeatHandle is the JOIN, and this line is the only place the two
     // halves meet (BINDING.md resolution 24). The room engine mints a per-room
     // opaque handle for every occupied, accounted seat and puts it in the lobby
@@ -276,6 +308,9 @@ try {
       // AND THE NAME ON A SEAT, beside resolveHandle and across the same seam:
       // a report against a lobby seat records the name the reporter saw.
       seatName: resolveSeatName,
+      // AND THE RESERVATIONS, for the claim, the guest's rename, the Set's
+      // check and the names on squad rows.
+      reservations: reserved,
     });
     // ONE CODE NAMESPACE (plan R4). makeCode has always collided against
     // `rooms` alone, so a squad code drawn from the same 31-character
@@ -404,6 +439,9 @@ function helloSink(ws, token) {
     // holds the current one.
     ws.authGen = (ws.authGen || 0) + 1;
     ws.userId = null; ws.isGuest = false; ws.chosenName = null; ws.authPending = null;
+    // The reserved name goes with the identity (round 3): it may have been the
+    // account's. The client claims again after this hello, as a guest.
+    ws.reservedName = null; ws.nameRow = null;
     return;
   }
 
@@ -449,6 +487,14 @@ function helloSink(ws, token) {
     // A socket that hellos as a DIFFERENT account would otherwise leave the
     // previous one's presence behind — same reason as the sign-out branch.
     if (social && ws.userId && ws.userId !== id) social.onClose(ws);
+    // ANOTHER ACCOUNT, ANOTHER NAME (round 3). A name this socket reserved for
+    // a different account is not this one's, so it is let go, and the claim
+    // the client sends after every hello names the socket again. A socket
+    // that had NO account keeps its name: the device's row moves to the
+    // account it has just got, name and all (server/reservations.js), and a
+    // hello that is never followed by a claim (the push opt-in's) must not
+    // leave the player unnamed until they reconnect.
+    if (ws.userId && ws.userId !== id) { ws.reservedName = null; ws.nameRow = null; }
     ws.userId = id;
     ws.isGuest = acct.anonymous;
     ws.chosenName = null;
@@ -1295,6 +1341,7 @@ if (SB_SECRET) {
 let supabaseHealth = 'unchecked';        // auth/client path: publishable key
 let supabaseAdminHealth = 'unchecked';   // privileged path: secret key
 let supabaseSocialHealth = 'unchecked';  // phase 6 tables + profiles columns: the MIGRATION
+let supabaseNamesHealth = 'unchecked';   // round 3's name_reservations: ITS migration
 let lastHealthCheck = 0;                 // re-probe throttle, see the /health route
 // THE VERDICT RULE FOR A SET OF PROBES, IN ONE PLACE.
 //
@@ -1342,7 +1389,7 @@ function probeVerdict(responses) {
 }
 async function checkSupabase() {
   if (!SB_URL || !SB_PUB || !SB_SECRET) {
-    supabaseHealth = supabaseAdminHealth = supabaseSocialHealth = 'unconfigured';
+    supabaseHealth = supabaseAdminHealth = supabaseSocialHealth = supabaseNamesHealth = 'unconfigured';
     return supabaseHealth;
   }
   try {
@@ -1433,11 +1480,28 @@ async function checkSupabase() {
       : v === 'schema' ? 'migration_missing'
       : 'bad_secret_key';
   } catch { supabaseSocialHealth = 'unreachable'; }
+  try {
+    // ROUND 3'S TABLE, name_reservations, ON ITS OWN FIELD for the reason the
+    // phase 6 group has one: its migration is applied by hand, and until it is
+    // the server runs with the old name rules (server/reservations.js), which
+    // is a state to report, not a fault in any key. Every column is named, so
+    // a table that exists with the wrong shape is a 400 and reads
+    // 'migration_missing' too. A zero-row read: no player's row is returned.
+    const r = await fetch(`${SB_URL}/rest/v1/name_reservations?select=id,name,name_key,secret_hash,user_id,linked,created_at,last_seen_at&limit=0`, {
+      headers: { apikey: SB_SECRET, Authorization: `Bearer ${SB_SECRET}` },
+      signal: AbortSignal.timeout(8000),
+    });
+    const v = probeVerdict([r]);
+    supabaseNamesHealth = v === 'ok' ? 'ok'
+      : v === 'upstream' ? 'upstream_error'
+      : v === 'schema' ? 'migration_missing'
+      : 'bad_secret_key';
+  } catch { supabaseNamesHealth = 'unreachable'; }
   return supabaseHealth;
 }
 checkSupabase().then(() => {
   const line = `[boot] supabase=${supabaseHealth} supabaseAdmin=${supabaseAdminHealth}`
-    + ` supabaseSocial=${supabaseSocialHealth}`
+    + ` supabaseSocial=${supabaseSocialHealth} supabaseNames=${supabaseNamesHealth}`
     + ` webpush=${!!webpush} fcm=${!!fcm}`;
   // 'unconfigured' is the NORMAL state for local dev and CI, which have no
   // Supabase env by design — shouting there would train everyone to ignore
@@ -1470,6 +1534,15 @@ checkSupabase().then(() => {
       : supabaseSocialHealth === 'upstream_error'
         ? 'FRIENDS/CALLSIGNS could not be verified: Supabase answered with an error of its own. Nothing here needs changing — read /health again in a minute'
         : 'FRIENDS/CALLSIGNS are dead: check SUPABASE_SECRET_KEY and the phase 6 tables');
+  }
+  // NOT A FAULT BEFORE THE OWNER APPLIES IT: unique names are simply off and
+  // the old rules run, which this line says in those words.
+  if (supabaseNamesHealth !== 'ok' && supabaseNamesHealth !== 'unconfigured') {
+    bad.push(supabaseNamesHealth === 'migration_missing'
+      ? 'UNIQUE NAMES are off: the name reservations migration has not been applied to this project (the old name rules apply until it is)'
+      : supabaseNamesHealth === 'upstream_error'
+        ? 'UNIQUE NAMES could not be verified: Supabase answered with an error of its own. Nothing here needs changing — read /health again in a minute'
+        : 'UNIQUE NAMES are off: check SUPABASE_SECRET_KEY and the name_reservations table');
   }
   if (!bad.length) console.log(line);
   else console.error(`${line}\n       <-- ${bad.join('\n       <-- ')}`);
@@ -1643,6 +1716,15 @@ function handleRequest(req, res) {
       // OUTRANKS 'upstream_error' on purpose: this field is the gate the ship
       // procedure reads, so a coincident blip must not hide a missing migration.
       supabaseSocial: supabaseSocialHealth, // ok | unconfigured | unchecked | migration_missing | bad_secret_key | upstream_error | unreachable
+      // Round 3's name_reservations, the same words for the same states.
+      // 'migration_missing' here is not a fault: unique names are off and the
+      // old name rules run until the owner applies that migration.
+      supabaseNames: supabaseNamesHealth,  // ok | unconfigured | unchecked | migration_missing | bad_secret_key | upstream_error | unreachable
+      // WHETHER UNIQUE NAMES ARE ON IN THIS PROCESS, which is not the same
+      // question: 'on' once the reservations have been read into memory (at
+      // most thirty seconds after the table appears, no restart), 'off' before
+      // that and on a deploy with no Supabase.
+      nameReservations: reserved && reserved.ready ? 'on' : 'off',
       webpush: !!webpush,
       fcm: !!fcm,
       apns: !!apns,
@@ -1860,11 +1942,19 @@ const CODE_RATE = 10;
 // settled by then lets the frames go: the seat is named by what is known, and
 // a name that cannot be used is replaced and its player told (the room
 // engine's `renamed`). Every hello GoTrue answers settles long before it.
+//
+// AND FOR THE NAME CLAIM (round 3, 2026-10-10). The seat's name is now the
+// name the server holds for the player (ws.reservedName), which the claim the
+// client sends after its hello sets (server/social.js claimName), so these
+// frames wait for a claim in flight exactly as they wait for a hello, under
+// the same limit. The client sends the claim ahead of any tap it parked, so
+// the wait is the claim's own store round trip.
 const SEATS_BY_NAME = new Set(['create', 'ai', 'join', 'quick']);
 const HELLO_HOLD_MS = 3000;
 function engineFrame(ws, msg) {
   if (ws.heldFrames) { ws.heldFrames.push(msg); return; }
-  if (!(ws.authPending && SEATS_BY_NAME.has(msg.type))) { handleClientMessage(ws, msg); return; }
+  const waits = [ws.authPending, ws.namePending].filter(Boolean);
+  if (!(waits.length && SEATS_BY_NAME.has(msg.type))) { handleClientMessage(ws, msg); return; }
   // THIS BATCH, by identity: the limit and the hello both call drain, and
   // whichever comes second must not take a later batch that is waiting on a
   // newer hello. Frames that arrive behind it join this same array.
@@ -1882,7 +1972,7 @@ function engineFrame(ws, msg) {
     }
   };
   limit = setTimeout(drain, HELLO_HOLD_MS);
-  ws.authPending.then(drain, drain);
+  Promise.allSettled(waits).then(drain);
 }
 
 wss.on('connection', (ws) => {
@@ -1997,7 +2087,15 @@ wss.on('connection', (ws) => {
           return;
         }
         const run = () => social.handle(ws, msg).catch((e) => reportServerError('social', e));
-        if (ws.authPending) ws.authPending.then(run, run); else run();
+        const done = ws.authPending ? ws.authPending.then(run, run) : run();
+        // A CLAIM IN FLIGHT is what the frames that seat a player wait for
+        // (engineFrame above). Only the newest claim is waited on, and it is
+        // cleared when it settles, by identity, so an older one settling late
+        // cannot clear a newer one's.
+        if (msg.type === 'name') {
+          const p = ws.namePending = Promise.resolve(done).catch(() => {});
+          p.then(() => { if (ws.namePending === p) ws.namePending = null; });
+        }
         return;
       }
       engineFrame(ws, msg);

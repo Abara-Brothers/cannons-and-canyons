@@ -13,7 +13,7 @@
 import { readFileSync } from 'node:fs';
 import {
   createStore, isUuid, isRefusal, FRIEND_CODE_ALPHABET, FRIEND_CODE_LEN, FRIEND_CODE_TRIES,
-  CALLSIGN_COL_MAX, NO_CALLSIGN,
+  CALLSIGN_COL_MAX, NO_CALLSIGN, RES_KEY_MAX,
 } from '../server/store.js';
 
 const out = { errors: [] };
@@ -553,6 +553,106 @@ function mkSb(routes = []) {
   else fail('(o) failure and junk: ' + JSON.stringify({ threw: String(threw), junk: String(junk) }));
 }
 
+// ---- (p) the name reservations (round 3, 2026-10-10) --------------------------
+// Every path name_reservations is read and written by, exactly; what a 409
+// means on each write (the table's unique constraints are the authority on who
+// holds a name, so a refusal is an answer); and the shape gates in front of
+// every value: a row id, a SHA-256 hex, a uuid and a time this store wrote.
+{
+  const RCOLS = 'id,name,name_key,secret_hash,user_id,linked,last_seen_at';
+  const H = 'ab'.repeat(32);
+  const T = Date.parse('2026-10-10T01:02:03.004Z');
+  const row = { id: 7, name: 'Dune Viper', name_key: 'dune viper', secret_hash: H, user_id: null, linked: false, last_seen_at: '2026-10-10T01:02:03.004Z' };
+  const paths = [];
+  const want = [];
+  // Keys, paged in key order: the first page from the start, the next strictly
+  // past the last key, encoded, and a body that is not a list fails the read.
+  const hk = mkSb([[/^GET \/name_reservations\?select=name_key&order/, [{ name_key: 'a b' }, { name_key: 'c' }]], [/^GET \/name_reservations\?select=name_key&name_key=gt\./, []]]);
+  const k1 = await hk.store.reservationKeys(null, 2);
+  const k2 = await hk.store.reservationKeys('a (b)', 5000);
+  const hj = mkSb([[/./, null]]);
+  let junk = null;
+  try { await hj.store.reservationKeys(null, 10); } catch (e) { junk = e; }
+  if (same(k1, ['a b', 'c']) && same(k2, []) && junk && /not a list/.test(junk.message)
+      && hk.calls[0].path === '/name_reservations?select=name_key&order=name_key.asc&limit=2'
+      && hk.calls[1].path === '/name_reservations?select=name_key&name_key=gt.a%20%28b%29&order=name_key.asc&limit=1000')
+    ok('(p) reservationKeys: select=name_key only, from the start and then strictly past the last key (encoded whole, parentheses too), in key order, at most 1000 a page; a body that is not a list fails');
+  else fail('(p) reservationKeys: ' + JSON.stringify({ k1, k2, junk: String(junk), paths: hk.calls.map((c) => c.path) }));
+
+  const hr = mkSb([[/^GET \/name_reservations\?user_id=eq\./, [row]], [/^GET \/name_reservations\?secret_hash=eq\./, [row]]]);
+  const byU = await hr.store.reservationByUser(A.toUpperCase());
+  const byS = await hr.store.reservationBySecret(H);
+  const noS = await hr.store.reservationBySecret('not-a-hash');
+  let threwU = null;
+  try { await hr.store.reservationByUser('../rpc/x'); } catch (e) { threwU = e; }
+  if (byU === row && byS === row && noS === null && threwU && threwU.message === 'bad uuid' && hr.calls.length === 2
+      && hr.calls[0].path === `/name_reservations?user_id=eq.${A}&select=${RCOLS}&limit=1`
+      && hr.calls[1].path === `/name_reservations?secret_hash=eq.${H}&select=${RCOLS}&limit=1`)
+    ok('(p) reservationByUser and reservationBySecret: one row by an exact uuid or hash; anything else is refused before a call (a bad uuid throws, a non-hash answers null)');
+  else fail('(p) by user / secret: ' + JSON.stringify({ byU, byS, noS, threwU: String(threwU), paths: hr.calls.map((c) => c.path) }));
+
+  // Held keys: one exact read per key, never an in-list, and a key longer than
+  // the table allows is never sent.
+  const hb = mkSb([[/name_key=eq\.dune%20viper&/, [{ name_key: 'dune viper', user_id: B }]], [/^GET/, []]]);
+  const held = await hb.store.reservationsByKeys(['dune viper', '(1) x', 'dune viper', 'k'.repeat(RES_KEY_MAX + 1)]);
+  if (same(held, [{ name_key: 'dune viper', user_id: B }]) && hb.calls.length === 2
+      && hb.calls[0].path === '/name_reservations?name_key=eq.dune%20viper&select=name_key,user_id&limit=1'
+      && hb.calls[1].path === '/name_reservations?name_key=eq.%281%29%20x&select=name_key,user_id&limit=1')
+    ok('(p) reservationsByKeys: one eq read per distinct key, encoded whole (the "(1)" a look-alike key can carry included), a key over the table\'s 288 never sent, and only held keys answered');
+  else fail('(p) reservationsByKeys: ' + JSON.stringify({ held, paths: hb.calls.map((c) => c.path) }));
+
+  // Insert: the body, representation, and a 409 as an answer.
+  const hi = mkSb([[/^POST/, [row]]]);
+  const ins = await hi.store.insertReservation({ name: 'Dune Viper', key: 'dune viper', secretHash: H });
+  const hc = mkSb([[/^POST/, new Error('sb POST 409')]]);
+  const lost = await hc.store.insertReservation({ name: 'Dune Viper', key: 'dune viper', userId: B, linked: true });
+  const h5 = mkSb([[/^POST/, new Error('sb POST 503')]]);
+  let down = null;
+  try { await h5.store.insertReservation({ name: 'Dune Viper', key: 'dune viper', secretHash: H }); } catch (e) { down = e; }
+  let noHolder = null;
+  try { await hi.store.insertReservation({ name: 'X Y Z', key: 'x y z' }); } catch (e) { noHolder = e; }
+  if (ins.ok === true && ins.row === row && same(lost, { ok: false }) && down && down.message === 'sb POST 503' && noHolder
+      && hi.calls.length === 1 && hi.calls[0].path === `/name_reservations?select=${RCOLS}` && hi.calls[0].prefer === 'return=representation'
+      && same(hi.calls[0].body, { name: 'Dune Viper', name_key: 'dune viper', linked: false, secret_hash: H })
+      && same(hc.calls[0].body, { name: 'Dune Viper', name_key: 'dune viper', linked: true, user_id: B }))
+    ok('(p) insertReservation: the row with its holder, returned in full; a 409 answers { ok:false }, any other failure throws, and a row with no holder is never sent');
+  else fail('(p) insertReservation: ' + JSON.stringify({ ins, lost, down: String(down), noHolder: String(noHolder), calls: hi.calls, c2: hc.calls }));
+
+  // Move, attach, rename, touch: by row id, each guarded where it must be.
+  const hm = mkSb([[/^PATCH \/name_reservations\?id=eq\.7&user_id=is\.null/, [{ ...row, user_id: B }]], [/^PATCH \/name_reservations\?id=eq\.8&user_id/, new Error('sb PATCH 409')],
+    [/^PATCH \/name_reservations\?id=eq\.7&secret_hash=is\.null/, [row]], [/^PATCH \/name_reservations\?id=eq\.9&select/, new Error('sb PATCH 409')],
+    [/^PATCH \/name_reservations\?id=eq\.10&select/, []], [/^PATCH/, [row]]]);
+  const mv = await hm.store.moveReservation(7, B, true, T);
+  const mv409 = await hm.store.moveReservation(8, B, false, T);
+  const at = await hm.store.attachSecret(7, H);
+  const rn409 = await hm.store.renameReservation(9, 'Iron Hawk', 'iron hawk', T);
+  const rnGone = await hm.store.renameReservation(10, 'Iron Hawk', 'iron hawk', T);
+  const rn = await hm.store.renameReservation(7, 'Iron Hawk', 'iron hawk', T);
+  await hm.store.touchReservation(7, true, T);
+  const P = hm.calls.map((c) => c.path);
+  let badId = null, badT = null;
+  try { await hm.store.renameReservation('7&x=1', 'A b c', 'a b c', T); } catch (e) { badId = e; }
+  try { await hm.store.touchReservation(7, true, 'yesterday'); } catch (e) { badT = e; }
+  if (mv && mv.user_id === B && mv409 === null && at === row && same(rn409, { ok: false, error: 'taken' }) && same(rnGone, { ok: false, error: 'gone' }) && rn.ok === true
+      && P[0] === `/name_reservations?id=eq.7&user_id=is.null&select=${RCOLS}` && same(hm.calls[0].body, { user_id: B, linked: true, last_seen_at: '2026-10-10T01:02:03.004Z' })
+      && P[2] === `/name_reservations?id=eq.7&secret_hash=is.null&select=${RCOLS}` && same(hm.calls[2].body, { secret_hash: H })
+      && P[5] === `/name_reservations?id=eq.7&select=${RCOLS}` && same(hm.calls[5].body, { name: 'Iron Hawk', name_key: 'iron hawk', last_seen_at: '2026-10-10T01:02:03.004Z' })
+      && P[6] === '/name_reservations?id=eq.7' && hm.calls[6].prefer === 'return=minimal' && same(hm.calls[6].body, { last_seen_at: '2026-10-10T01:02:03.004Z', linked: true })
+      && badId && badId.message === 'bad row id' && badT && badT.message === 'bad time' && hm.calls.length === 7)
+    ok('(p) move (only where user_id is null), attach (only where secret_hash is null), rename and touch: by row id, the time written as ISO; a 409 is null or "taken", no row is "gone", and a bad id or time throws before any call');
+  else fail('(p) move/attach/rename/touch: ' + JSON.stringify({ mv, mv409, at, rn409, rnGone, rn, P, badId: String(badId), badT: String(badT), bodies: hm.calls.map((c) => c.body) }));
+
+  // The two deletes answer the keys they freed.
+  const hd = mkSb([[/^DELETE/, [{ name_key: 'dune viper' }, { name_key: 'iron hawk' }]]]);
+  const freed = await hd.store.deleteReservationOfUser(B);
+  const swept = await hd.store.sweepReservations(T);
+  if (same(freed, ['dune viper', 'iron hawk']) && same(swept, ['dune viper', 'iron hawk'])
+      && hd.calls[0].path === `/name_reservations?user_id=eq.${B}&select=name_key` && hd.calls[0].prefer === 'return=representation'
+      && hd.calls[1].path === '/name_reservations?linked=is.false&last_seen_at=lt.2026-10-10T01%3A02%3A03.004Z&select=name_key' && hd.calls[1].prefer === 'return=representation')
+    ok('(p) deleteReservationOfUser and sweepReservations: by account, and every unlinked row last seen before the cutoff, each answering the names it freed');
+  else fail('(p) deletes: ' + JSON.stringify({ freed, swept, calls: hd.calls }));
+}
+
 // ---- (l) the standing guard: nothing raw ever lands in a query value ---------
 {
   // THE CHARACTERS THAT MATTER ARE NOT THE ONES THAT LOOK ALARMING. This check used
@@ -586,9 +686,11 @@ function mkSb(routes = []) {
   };
   // Every parameter name the store writes. An unknown one means a new method (add it
   // here, deliberately) or a raw & that split a value into a parameter of its own.
+  // ROUND 3 adds name_reservations' five filter columns.
   const KEYS = new Set([
     'id', 'friend_code', 'callsign_key', 'or', 'user_a', 'user_b', 'from_user',
     'to_user', 'created_at', 'blocker', 'blocked', 'reporter', 'reported',
+    'name_key', 'user_id', 'secret_hash', 'linked', 'last_seen_at',
     ...Object.keys(CONST_SHAPE),
   ]);
   const RAW = /[\s"'<>#\\&=,()]/;

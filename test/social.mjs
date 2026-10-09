@@ -114,9 +114,11 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
 
 // ---- (a) the frame types this layer owns ------------------------------------
 {
-  const want = ['friends', 'friend', 'block', 'callsign', 'report', 'squad', 'code'];
+  // EIGHT SINCE ROUND 3 (2026-10-10): `name`, the claim every client sends
+  // after its hello so the server can reserve the player's name.
+  const want = ['friends', 'friend', 'block', 'callsign', 'report', 'squad', 'code', 'name'];
   if (SOCIAL_TYPES instanceof Set && want.every((t) => SOCIAL_TYPES.has(t)) && SOCIAL_TYPES.size === want.length)
-    ok('(a) SOCIAL_TYPES is exactly the seven social frame types');
+    ok('(a) SOCIAL_TYPES is exactly the eight social frame types');
   else fail('(a) SOCIAL_TYPES is ' + JSON.stringify([...(SOCIAL_TYPES || [])]));
 }
 

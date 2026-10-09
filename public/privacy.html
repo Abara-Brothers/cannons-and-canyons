@@ -18,7 +18,7 @@
 <body>
 <main>
   <h1>Privacy Policy — Cannons &amp; Canyons</h1>
-  <p class="muted">Made by Abara Brothers · Last updated: 9 October 2026</p>
+  <p class="muted">Made by Abara Brothers · Last updated: 10 October 2026</p>
   <p class="muted">Abara Brothers is a small Australian business. This policy is written to
   meet Australian privacy law, the EU and UK GDPR where they apply to you, and the app
   stores' own privacy rules.</p>
@@ -28,7 +28,7 @@
   no analytics, no trackers, no chat, and nothing to buy. The game keeps a small cloud save so
   your progress can follow you between devices, and — only if you turn them on — push
   subscriptions so we can tell you when it's your turn. The game gives you a callsign, which you
-  can change once a day, and if you sign in you can add friends: the only things another player
+  can change once a day, and no two players can have the same one: our server keeps yours for you. If you sign in you can add friends: the only things another player
   sees about you are your callsign, the tank paint you are using in a match with them, and — if
   they are a friend or in a squad with you — whether you are online. Reporting or blocking another
   player does not need a signed-in account. You can download
@@ -74,6 +74,7 @@
     <tr><td>Google account id, name and profile picture (only if you link Google)</td><td>Returned by Google with the sign-in and kept by our sign-in provider as part of that record</td><td>Our database</td></tr>
     <tr><td>Apple account identifier (only if you link Apple, in the iOS app)</td><td>Carried in Apple's identity token with the sign-in and kept by our sign-in provider as part of that record</td><td>Our database</td></tr>
     <tr><td>Callsign — the default one the game gave you from its word lists, or one you choose — and, if you are signed in, when you last set it</td><td>Shown on your profile, in matches and squads, and to your friends and anyone you invite; the time holds a name to one change a day</td><td>Our database</td></tr>
+    <tr><td>Your reserved callsign: the callsign, a scrambled copy (a SHA-256 hash) of a random key our server gave your device, your account identifier once you have one, whether that account is linked, and when you last connected</td><td>So no two players can have the same callsign: whoever reserved a name first keeps it, guests included</td><td>Our database — see <a href="#keep">How long we keep it</a></td></tr>
     <tr><td>Friend code (6 characters, generated for you)</td><td>So someone can add you without searching for your name</td><td>Our database</td></tr>
     <tr><td>Friends and friend requests (which accounts, and when)</td><td>Your friends list, and adding or accepting a friend</td><td>Our database</td></tr>
     <tr><td>Blocks (which accounts you blocked, and when)</td><td>Keeping a blocked player away from you, both ways</td><td>Our database</td></tr>
@@ -138,7 +139,11 @@
 
   <h2>Friends, blocking and reporting</h2>
   <p>The game gives you a callsign from its word lists the first time you play, and you keep it
-  until you set one of your own, which any player can do once a day, signed in or not. We check
+  until you set one of your own, which any player can do once a day, signed in or not. Callsigns are
+  unique, ignoring capitals and letters that look alike: the first time you connect, our server
+  reserves your callsign for you, whether you are signed in or not, and nobody else can then use it.
+  Whoever reserved a name first keeps it. If the name you had was already taken, the game gives you a
+  new one that nobody is using and tells you so, and you can change it in Bay controls. We check
   every name a player sets on our server against a list of banned terms before another player can
   see it, so a name that fails the check is never shown to anyone. Your callsign and your
   6-character friend code are the only things
@@ -176,7 +181,9 @@
 
   <h2>On your device</h2>
   <p>Your device's local storage holds your callsign (and, if you play as a guest, when you last
-  changed it, so a name changes at most once a day), preferences (paint, mute, difficulty,
+  changed it, so a name changes at most once a day), the random key our server gave your device so
+  it knows the callsign it keeps for you (our server stores only a scrambled copy of that key, never
+  the key itself), preferences (paint, mute, difficulty,
   tees), your progression, a match-resume token, the menu screen you were last on and when you
   left it (so a quick reopen opens there), and your sign-in session. Your callsign and
   progression are also sent to us as described above, and your sign-in session is exchanged
@@ -226,8 +233,10 @@
 
   <h2 id="keep">How long we keep it</h2>
   <p>Your account and everything attached to it exist until you delete them — deleting your
-  account (below) removes the account, cloud save, sign-in identity, push subscriptions, friend
-  code, friends, friend requests, blocks and name reports immediately, in one action. A
+  account (below) removes the account, cloud save, sign-in identity, push subscriptions, reserved
+  callsign, friend code, friends, friend requests, blocks and name reports immediately, in one
+  action. A callsign reserved for a player who has not linked an account is deleted when they have not
+  connected for 90 days, and the name is then free for anyone to use. A
   friendship, a friend request or a block lasts until you remove it or delete your account,
   whichever comes first; a friend request nobody answers stops counting after 30 days and is
   deleted. A name report is kept while we may still need to act on it, and is erased when either
@@ -257,8 +266,8 @@
       match results, or the details Google or Apple returned at sign-in — ask us through the
       <a href="https://abarabrothers.com/support">support page</a> and we will provide it.</li>
     <li><b>Delete my account</b> — in the same panel: erases the account, cloud save, sign-in
-      identity, push subscriptions, friend code, friends, friend requests, blocks, name reports
-      and this device's local progress. It cannot be undone. The match-result rows described under
+      identity, push subscriptions, reserved callsign, friend code, friends, friend requests, blocks,
+      name reports and this device's local progress. It cannot be undone. The match-result rows described under
       <a href="#keep">How long we keep it</a> are the one thing it leaves behind, holding the random
       account identifier and nothing that can be joined back to you. If you no longer have the app,
       you can request the same deletion at

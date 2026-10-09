@@ -113,11 +113,15 @@ const modeOf = (id) => MODES.find((m) => m.id === id) || MODES[0];
 // alone, and the one time it matters the 'taken' sentence says so.
 const CS_RULE = '3&ndash;16 letters, numbers or spaces. Nothing offensive. One change a day.';
 const CS_HINT = 'Friends find you by code until you choose a callsign';
-// WHAT THE ROW DOES, for a player whose name lives on this device (a guest, or
-// nobody signed in). A signed-in account's row says something about the
-// account instead -- its chosen name, or how friends find it -- and so it
-// always has. Short enough to stay on one line beside Change at 667x375.
-const CS_SAY = 'Your name in every match';
+// THE ROW NAMES THE PLAYER (round 3, 2026-10-10). A guest's row used to say
+// what the name was for ('Your name in every match') and name nobody, but the
+// server now holds every player's name and may give them a new one ("Your name
+// was taken, so you're now X. You can change it in Bay controls."), so the
+// row the sentence sends them to shows the name it means: the one this device
+// plays under (myName). A signed-in account's row says something about the
+// account instead -- its chosen name, or how friends find it -- as it always
+// has. A name is at most 16 characters, shorter than the sentence it
+// replaces, so the row still stays on one line beside Change at 667x375.
 // WHEN, IN WORDS (owner, 2026-10-07: "You can change your name again in 7
 // hours"). Rounded UP, so the time it names has always passed when it says it
 // will: a player told "in 7 hours" who comes back in seven finds the gate open.
@@ -2249,7 +2253,7 @@ SCREENS.settings = function () {
     const max = (has('CALLSIGN_MAX') ? CALLSIGN_MAX : 16) * 2;
     const wait = st.nameWait > 0 ? st.nameWait : 0;
     const desc = st.linked ? (!known ? CS_WAIT : held ? esc(held) : CS_HINT)
-      : wait ? 'Change it again in ' + waitWords(wait) : CS_SAY;
+      : wait ? 'Change it again in ' + waitWords(wait) : esc(st.name);
     // SAVE STANDS DOWN WHILE A GUEST'S DAY RUNS, and the line under the field
     // says until when instead of the rules: a Save that can only be refused is
     // a control that reads as broken. An error from a try still outranks it.

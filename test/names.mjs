@@ -31,6 +31,15 @@
 //      waits for the socket's hello, in order, for a limited time, and acts on
 //      nothing once its socket has gone; and `renamed` is on the refused
 //      seat's own frames and nobody else's.
+//   H. EVERY NAME RESERVED (owner, 2026-10-10, item 28). Parts A to G run with
+//      the stand-in's name_reservations table MISSING, which is the state the
+//      server ships into before the owner applies its migration: the old name
+//      rules, end to end. Then the table appears, the server turns unique names
+//      on with no restart, and two real pages are reserved their names, a
+//      duplicate from before is moved to an unused default and told once,
+//      Bay controls and the home chip show the new name, a match seats it
+//      whatever name a frame carries, the move to an account keeps it, and a
+//      rename frees the old one.
 //
 // A local stand-in answers for Supabase (GoTrue and PostgREST), and the
 // browser resolves no host but this machine, so nothing here can reach the
@@ -49,11 +58,12 @@ import { fileURLToPath } from 'node:url';
 const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 if (!existsSync(CHROME)) { console.log(`SKIP  names tests — no Chrome at ${CHROME}`); process.exit(3); }
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const ONLY = new Set(String(process.env.NAMES_ONLY || 'A,B,C,D,E,F,G').split(',').map((s) => s.trim()));
+const ONLY = new Set(String(process.env.NAMES_ONLY || 'A,B,C,D,E,F,G,H').split(',').map((s) => s.trim()));
 const errors = [];
 const ok = (m) => console.log('  ok — ' + m);
 const fail = (m) => { errors.push(m); console.error('FAIL ' + m); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const freePort = () => new Promise((res, rej) => { const s = net.createServer(); s.on('error', rej); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => res(port)); }); });
 const MODES = ['duel', 'ffa', 'boss', 'aliens', 'golf'];
 
@@ -84,7 +94,18 @@ const fresh = () => ({
   [OTHER_ID]: { id: OTHER_ID, callsign: OTHER, friend_code: 'ABC235', callsign_key: OTHER.toLowerCase(), callsign_set_at: null },
 });
 const SB = { rows: fresh(), friendsMs: 0 };
-const TOKENS = { 'tok-chosen': CHOSEN_ID, 'tok-other': OTHER_ID, 'tok-late': OTHER_ID, 'tok-slow2': OTHER_ID };
+// An ANONYMOUS account, for part H's move: a guest's first save.
+const ANON_ID = '33333333-3333-4333-8333-333333333333';
+// Two more anonymous accounts, for H7's change of account on one socket.
+const ANON2_ID = '44444444-4444-4444-8444-444444444444', ANON3_ID = '55555555-5555-4555-8555-555555555555';
+const ANONS = new Set([ANON_ID, ANON2_ID, ANON3_ID]);
+const TOKENS = { 'tok-chosen': CHOSEN_ID, 'tok-other': OTHER_ID, 'tok-late': OTHER_ID, 'tok-slow2': OTHER_ID, 'tok-anon': ANON_ID, 'tok-anon2': ANON2_ID, 'tok-anon3': ANON3_ID };
+// ROUND 3'S TABLE, name_reservations, as the migration makes it: name_key,
+// secret_hash and user_id each unique (a 409 on a clash), answered the way
+// PostgREST answers server/store.js's paths. OFF (a 404, the migration not
+// applied) until part H turns it on.
+const RES = { on: false, rows: [], seq: 0, refused: 0 };
+const resClash = (r, self) => RES.rows.some((o) => o !== self && (o.name_key === r.name_key || (r.secret_hash && o.secret_hash === r.secret_hash) || (r.user_id && o.user_id === r.user_id)));
 // Two hellos slower than the rest, for G6: one that settles after the server's
 // hold has given up on it, and one that settles a little after that.
 const DELAY = { 'tok-late': 3500, 'tok-slow2': 1000 };
@@ -102,7 +123,41 @@ mock = http.createServer((req, res) => {
       if ((req.headers.authorization || '') === 'Bearer tok-hang') return;
       const id = TOKENS[(req.headers.authorization || '').replace('Bearer ', '')];
       const tok = (req.headers.authorization || '').replace('Bearer ', '');
-      return id ? json(200, { id, aud: 'authenticated', is_anonymous: false }, DELAY[tok] ?? USER_MS) : json(401, {});
+      return id ? json(200, { id, aud: 'authenticated', is_anonymous: ANONS.has(id) }, DELAY[tok] ?? USER_MS) : json(401, {});
+    }
+    if (u.pathname === '/rest/v1/name_reservations') {
+      // `refused` counts the server's reads of the table into memory (its
+      // keys), not /health's probe, which reads every column.
+      if (!RES.on) { if (u.searchParams.get('select') === 'name_key') RES.refused++; return json(404, { code: '42P01', message: 'relation does not exist' }); }
+      const q = (k) => u.searchParams.get(k) || '';
+      const eqv = (k) => (q(k).startsWith('eq.') ? q(k).slice(3) : null);
+      const at = new Date().toISOString();
+      let b = {}; try { b = body ? JSON.parse(body) : {}; } catch {}
+      if (req.method === 'GET' && q('select') === 'name_key' && eqv('name_key') === null) {
+        const after = q('name_key').startsWith('gt.') ? q('name_key').slice(3) : '';
+        return json(200, RES.rows.map((r) => r.name_key).sort().filter((k) => !after || k > after).slice(0, +q('limit') || 1000).map((k) => ({ name_key: k })));
+      }
+      let rows = RES.rows;
+      for (const k of ['id', 'user_id', 'secret_hash', 'name_key']) if (eqv(k) !== null) rows = rows.filter((r) => String(r[k]) === eqv(k));
+      if (q('user_id') === 'is.null') rows = rows.filter((r) => !r.user_id);
+      if (q('secret_hash') === 'is.null') rows = rows.filter((r) => !r.secret_hash);
+      if (req.method === 'GET') return json(200, rows.slice(0, 1));
+      if (req.method === 'POST') {
+        const r = { id: ++RES.seq, secret_hash: null, user_id: null, linked: false, ...b, created_at: at, last_seen_at: at };
+        if (resClash(r)) return json(409, { code: '23505' });
+        RES.rows.push(r);
+        return json(201, [r]);
+      }
+      if (req.method === 'PATCH') {
+        for (const r of rows) if (resClash({ ...r, ...b }, r)) return json(409, { code: '23505' });
+        for (const r of rows) Object.assign(r, b);
+        return json(200, rows);
+      }
+      if (req.method === 'DELETE') {
+        if (q('linked') === 'is.false') rows = rows.filter((r) => !r.linked && r.last_seen_at < q('last_seen_at').slice(3));
+        RES.rows = RES.rows.filter((r) => !rows.includes(r));
+        return json(200, rows.map((r) => ({ name_key: r.name_key })));
+      }
     }
     const rows = Object.values(SB.rows);
     if (u.pathname === '/rest/v1/profiles' && req.method === 'GET' && u.searchParams.get('select') === 'callsign_key') {
@@ -166,6 +221,18 @@ const ORIGIN = `http://127.0.0.1:${appPort}/`;
 // network. cloud.js assigns window.Cloud once, and this setter amends it there.
 const STUB = `(() => {
   window.__ccNoIntro = true;
+  // EVERY FRAME THE PAGE SENDS, kept (part H asks what a claim carried).
+  const sendWs = WebSocket.prototype.send;
+  WebSocket.prototype.send = function (d) { try { (window.__sent = window.__sent || []).push(JSON.parse(d)); } catch {} return sendWs.call(this, d); };
+  // AND EVERY TOAST, from the moment the page starts: a claim's answer can
+  // land before nav() has wrapped showToast.
+  // The DOCUMENT is observed, not its root element: at document start there is
+  // no root element yet, and a throw here would take the stand-in below with it.
+  window.__toastsDom = [];
+  try {
+    new MutationObserver((ms) => { for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1 && n.classList && n.classList.contains('toast-item')) window.__toastsDom.push(n.textContent); })
+      .observe(document, { childList: true, subtree: true });
+  } catch {}
   let tok = null, who = null;
   try { tok = localStorage.getItem('__ccTestTok'); who = JSON.parse(localStorage.getItem('__ccTestWho') || 'null'); } catch {}
   if (!tok || !who) return;
@@ -289,10 +356,10 @@ const endsShow = (e, me) => {
   return want.every((t) => typeof t === 'string' && t.includes(me));
 };
 // Leave the way a player does (Leave, then Yes): the page goes home.
-async function leave(p) {
+async function leave(p, opts) {
   await p.ev(`(document.getElementById('leaveYesBtn').onclick(), true)`).catch(() => {});
   await sleep(300);
-  await p.nav();
+  await p.nav(opts);
 }
 // The screens outside a match that name the player.
 const SCREENS = `(() => {
@@ -722,6 +789,211 @@ try {
       else fail('G6: ' + JSON.stringify({ st1: st1 && { me: st1.names[st1.you], r: st1.renamed }, st2: st2 && { me: st2.names[st2.you], r: st2.renamed } }));
       tx(w, { type: 'leave' }); w.close();
     }
+  }
+
+  // ==== H. EVERY NAME RESERVED =================================================================
+  if (ONLY.has('H')) {
+    const { createHash } = await import('node:crypto');
+    const sha = (v) => createHash('sha256').update(String(v)).digest('hex');
+    SB.rows = fresh();
+    if (!B) B = await openChrome('B');
+    // THE MIGRATION LANDS while the server runs: within its thirty-second
+    // retry it reads the table and turns unique names on, with no restart.
+    const before = await (await get(`${ORIGIN}health`)).json();
+    // THE MISSING TABLE IS SAID ONCE, however often the server tries it: wait
+    // for its first retry (thirty seconds after boot), then count the lines.
+    for (let i = 0; i < 90 && RES.refused < 2; i++) await sleep(500);
+    const offLines = (srvLog.match(/\[names\] reservations OFF: name_reservations is not there yet/g) || []).length;
+    if (RES.refused >= 2 && offLines === 1) ok(`H: the server was refused the missing table ${RES.refused} times and said so once in its log`);
+    else fail('H: the missing table in the log: ' + JSON.stringify({ refused: RES.refused, offLines }));
+    RES.on = true;
+    let on = false;
+    for (let i = 0; i < 80 && !on; i++) { on = (await (await get(`${ORIGIN}health`)).json()).nameReservations === 'on'; if (!on) await sleep(500); }
+    if (before.nameReservations === 'off' && on) ok('H: with the table missing the server ran parts A to G on the old rules (nameReservations off), and turned unique names on within its retry once the table appeared, with no restart');
+    else fail('H: turning on: ' + JSON.stringify({ before: before.nameReservations, on }));
+    // H1. A NEW DEVICE: its first default is reserved, silently.
+    const nameA = await become(A, KINDS.default);
+    await A.until(`!!localStorage.getItem('cc_name_secret')`, 5000);
+    const secA = await A.ev(`localStorage.getItem('cc_name_secret')`);
+    const rowA = RES.rows.find((r) => r.name === nameA);
+    const toastsA = await A.ev('(window.__toastsDom || []).slice()');
+    const claimA = (await A.ev(`(window.__sent || []).filter((f) => f.type === 'name')`))[0];
+    if (rowA && secA && rowA.secret_hash === sha(secA) && !RES.rows.some((r) => JSON.stringify(r).includes(secA)) && !toastsA.some((t) => /your name/i.test(t))
+        && claimA && claimA.name === nameA && claimA.fresh === true && !('secret' in claimA))
+      ok(`H1: a new device's default ('${nameA}') is reserved on its first connect (its claim marked fresh, with no secret), the device keeps the server's secret and the table only its SHA-256, and nothing is said`);
+    else fail('H1: ' + JSON.stringify({ nameA, secA: !!secA, rowA, toastsA, claimA }));
+    // H2. A DUPLICATE FROM BEFORE THIS SHIPPED: a device that has carried the
+    // same default for weeks, with no secret. The first to reserve keeps it.
+    await B.nav();
+    await B.ev(`(() => { localStorage.clear(); sessionStorage.clear(); localStorage.setItem('pt_name', ${JSON.stringify(nameA)}); localStorage.setItem('cc_name_own', ${JSON.stringify(nameA)}); return true; })()`);
+    await B.nav();
+    const moved = await B.until(`myName() !== ${JSON.stringify(nameA)} && !!localStorage.getItem('cc_name_secret')`, 6000);
+    const nameB = await B.ev('myName()');
+    const toldB = await B.until(`(window.__toastsDom || []).some((t) => t.startsWith('Your name was taken'))`, 3000);
+    const saidB = (await B.ev('(window.__toastsDom || []).slice()')).filter((t) => /your name/i.test(t));
+    const scrB = await B.ev(SCREENS);
+    const ownB = await B.ev('ownName()');
+    const rowB = RES.rows.find((r) => r.name === nameB);
+    const claimB = (await B.ev(`(window.__sent || []).filter((f) => f.type === 'name')`))[0];
+    if (claimB && claimB.name === nameA && !('fresh' in claimB) && !('secret' in claimB)) ok(`H2: a device that has carried its name before claims it plainly: '${nameA}', not fresh, no secret`);
+    else fail('H2: the old device\'s claim: ' + JSON.stringify(claimB));
+    const want = `Your name was taken, so you're now ${nameB}. You can change it in Bay controls.`;
+    if (moved && toldB && same(saidB, [want]) && nameB !== nameA && /^[A-Z][a-z]+ [A-Z][a-z]+( [2-9])?$/.test(nameB) && ownB === nameB && rowB && !rowB.user_id
+        && scrB.chip === nameB && scrB.controls.includes(nameB) && RES.rows.filter((r) => r.name === nameA).length === 1)
+      ok(`H2: a second device carrying '${nameA}' from before is moved to an unused default ('${nameB}') and told, in the owner's words: "${want}"; the home chip and Bay controls show '${nameB}'`);
+    else fail('H2: ' + JSON.stringify({ moved, nameB, toldB, saidB, ownB, rowB, chip: scrB.chip, controls: scrB.controls.includes(nameB) }));
+    // Told once: a reload says nothing more, and the name stays.
+    await B.nav();
+    await sleep(800);
+    const again = (await B.ev('(window.__toastsDom || []).slice()')).filter((t) => /your name/i.test(t));
+    const claimB2 = (await B.ev(`(window.__sent || []).filter((f) => f.type === 'name')`))[0];
+    // And an answer that arrives twice says it once.
+    const twice = await B.ev(`new Promise((r) => { const m = { type: 'name', ok: true, name: myName(), moved: 'taken' }; nameMovedTold = ''; window.__toastsDom = [];
+      nameClaimed(m); nameClaimed(m); setTimeout(() => r(window.__toastsDom.filter((t) => t.startsWith('Your name was taken')).length), 50); })`);
+    if (!again.length && (await B.ev('myName()')) === nameB && claimB2 && claimB2.secret && !('fresh' in claimB2) && twice === 1)
+      ok('H2: told once: the next load claims with the device\'s secret, is answered the same name and says nothing, and an answer that arrives twice is said once');
+    else fail('H2 once: ' + JSON.stringify({ again, me: await B.ev('myName()'), claimB2, twice }));
+    // The notice, legible: on screen, whole, at least 14px, at the two phone
+    // shapes the layout suite holds, on top of the home screen.
+    const NOTICE = `(() => { const t = [...document.querySelectorAll('.toast-item')].find((e) => e.textContent.startsWith('Your name was taken')); if (!t) return null;
+      const r = t.getBoundingClientRect(), fs = parseFloat(getComputedStyle(t).fontSize), lh = parseFloat(getComputedStyle(t).lineHeight) || fs * 1.2;
+      return { inView: r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight, fs, lines: Math.round((t.clientHeight - parseFloat(getComputedStyle(t).paddingTop) - parseFloat(getComputedStyle(t).paddingBottom)) / lh), w: Math.round(r.width), vw: innerWidth,
+        whole: t.scrollWidth <= t.clientWidth + 1 && t.scrollHeight <= t.clientHeight + 1 }; })()`;
+    const legible = [];
+    for (const [w, h] of [[874, 402], [667, 375]]) {
+      await B.metrics(w, h);
+      await B.ev(`(nameMovedTold = '', tellNameMoved('taken', 'Scorched Turret 9'), true)`);
+      await sleep(150);
+      legible.push(await B.ev(NOTICE));
+    }
+    await B.metrics(874, 402);
+    if (legible.every((v) => v && v.inView && v.whole && v.fs >= 14 && v.lines <= 2))
+      ok(`H2: the notice with the longest default name is whole, inside the screen and ${legible[0].fs}px at 874x402 (${legible[0].lines} line, ${legible[0].w}px) and 667x375 (${legible[1].lines} lines, ${legible[1].w}px)`);
+    else fail('H2 legible: ' + JSON.stringify(legible));
+    // H3. A MATCH SEATS THE RESERVED NAME, and a frame carrying another
+    // player's name is seated under this player's own.
+    await B.nav();
+    await B.ev(LAUNCH('duel'));
+    const sB = (await B.until(PLAYING('duel'), 8000)) ? await B.ev(SEEN) : null;
+    await leave(B);
+    await B.ev(`(intent({ type: 'ai', difficulty: 'easy', name: ${JSON.stringify(nameA)}, skin: mySkin() }), true)`);
+    const sF = (await B.until(PLAYING('duel'), 8000)) ? await B.ev(SEEN) : null;
+    await leave(B);
+    if (sB && sB.me === nameB && sB.card === `${nameB} (you)` && !sB.toasts.some((t) => /could not be used/.test(t)) && sF && sF.me === nameB)
+      ok(`H3: a match seats '${nameB}', the reserved name, and a frame that carries '${nameA}' is seated as '${nameB}' too`);
+    else fail('H3: ' + JSON.stringify({ sB, sF }));
+    // H4. THE MOVE TO AN ACCOUNT KEEPS THE NAME: the guest's first save makes
+    // an anonymous account, and the device's row becomes the account's.
+    const rowIdB = RES.rows.find((r) => r.name === nameB).id;
+    await B.ev(`(() => { localStorage.setItem('__ccTestTok', 'tok-anon'); localStorage.setItem('__ccTestWho', ${JSON.stringify(JSON.stringify({ id: ANON_ID, anonymous: true, google: false, apple: false, email: null, accounts: [] }))}); return true; })()`);
+    // An anonymous account has no friends snapshot to wait for.
+    await B.nav({ settle: false });
+    let rowAcct = null;
+    for (let i = 0; i < 40 && !rowAcct; i++) { rowAcct = RES.rows.find((r) => r.id === rowIdB && r.user_id === ANON_ID) || null; if (!rowAcct) await sleep(100); }
+    const meAcct = await B.ev('myName()');
+    const saidAcct = (await B.ev('(window.__toastsDom || []).slice()')).filter((t) => /your name/i.test(t));
+    if (rowAcct && rowAcct.name === nameB && meAcct === nameB && !saidAcct.length && RES.rows.filter((r) => r.user_id === ANON_ID).length === 1)
+      ok(`H4: a guest who gets an account keeps '${nameB}': the same row moved to the account, and nothing was said`);
+    else fail('H4: ' + JSON.stringify({ rowAcct, meAcct, saidAcct, rows: RES.rows }));
+    // H5. A RENAME frees the old name and holds the new one, for everyone.
+    const r1 = await typeName(B, 'Quiet Dawn');
+    const r2 = await typeName(A, 'QUIET DAWN');
+    const r3 = await typeName(A, nameB);
+    const rowNow = RES.rows.find((r) => r.id === rowIdB);
+    if (r1 && r1.ok && rowNow && rowNow.name === 'Quiet Dawn' && r2 && r2.error === 'taken' && r3 && r3.ok && RES.rows.find((r) => r.name === nameB && r.secret_hash === sha(secA)))
+      ok(`H5: B's rename to 'Quiet Dawn' moves B's row; A is refused 'QUIET DAWN' ("taken") and may now take '${nameB}', which B gave up`);
+    else fail('H5: ' + JSON.stringify({ r1, r2, r3, rowNow, rows: RES.rows.map((r) => r.name) }));
+    // H12. A claim's answer lands while a player is typing in Bay controls'
+    // Callsign field (their socket reconnected): the screen repaints in place
+    // and the field keeps what they typed.
+    const h12 = await A.ev(`new Promise((r) => { Bay.show('settings'); document.querySelector('#bay [data-cs="open"]').click();
+      setTimeout(() => { const i = document.getElementById('bayCall'); if (!i) return r(null); i.value = 'Half Typed';
+        nameClaimed({ type: 'name', ok: true, name: myName() });
+        setTimeout(() => { const j = document.getElementById('bayCall'); r({ same: j === i, value: j && j.value }); closeCallsign(); Bay.show('home'); }, 100); }, 120); })`);
+    if (h12 && h12.same && h12.value === 'Half Typed') ok('H12: a claim\'s answer arriving under an open Callsign field leaves the field, and the half-typed name in it, as it was');
+    else fail('H12: ' + JSON.stringify(h12));
+    // ON THE WIRE (server.js): A holds '${nameB}' (a rolled pair) and B holds
+    // 'Quiet Dawn' (a typed name) from here on.
+    const WS_URL = `ws://127.0.0.1:${appPort}/ws`;
+    const sock = () => new Promise((res, rej) => { const w = new WebSocket(WS_URL); w.rx = []; w.onmessage = (e) => { try { w.rx.push(JSON.parse(e.data)); } catch {} }; w.onopen = () => res(w); w.onerror = rej; });
+    const tx = (w, m) => w.send(JSON.stringify(m));
+    const wait = async (w, pred, ms) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { const m = w.rx.find(pred); if (m) return m; await sleep(20); } return null; };
+    const AI = (name) => ({ type: 'ai', difficulty: 'easy', name, skin: 'olive' });
+    const seatOf = (st) => st && { me: st.names[st.you], renamed: st.renamed === true };
+    // H6. A seat sent straight behind its claim waits for the claim.
+    {
+      const w = await sock();
+      tx(w, { type: 'name', name: 'Grim Raven' }); tx(w, AI('Steady Hammer'));
+      const st = seatOf(await wait(w, (m) => m.type === 'start', 5000));
+      const ans = w.rx.find((m) => m.type === 'name');
+      if (ans && ans.ok && ans.name === 'Grim Raven' && st && st.me === 'Grim Raven' && !st.renamed) ok('H6: a seat sent straight behind its claim waits for it, and is the reserved name (\'Grim Raven\'), not the name the frame carried');
+      else fail('H6: ' + JSON.stringify({ ans, st }));
+      tx(w, { type: 'leave' }); w.close();
+    }
+    // H7. A socket that changes account lets go of the name it reserved for the
+    // last one: without a new claim, a seat no longer wears it.
+    {
+      const w = await sock();
+      tx(w, { type: 'hello', token: 'tok-anon2' }); tx(w, { type: 'name', name: 'Ashen Spire' });
+      const ans = await wait(w, (m) => m.type === 'name', 4000);
+      tx(w, { type: 'hello', token: 'tok-anon3' });
+      await sleep(USER_MS + 300);
+      tx(w, AI('Ashen Spire'));
+      const st = seatOf(await wait(w, (m) => m.type === 'start', 5000));
+      if (ans && ans.name === 'Ashen Spire' && RES.rows.some((r) => r.name === 'Ashen Spire' && r.user_id === ANON2_ID) && st && st.me !== 'Ashen Spire' && st.renamed)
+        ok(`H7: after a hello for another account, the socket no longer carries the first account's name: a seat presenting it is refused ('${st.me}', renamed)`);
+      else fail('H7: ' + JSON.stringify({ ans, st }));
+      tx(w, { type: 'leave' }); w.close();
+    }
+    // H7b. A sign-out with no claim after it (an old build's) leaves the
+    // socket without the account's name too.
+    {
+      const w = await sock();
+      tx(w, { type: 'hello', token: 'tok-anon2' }); tx(w, { type: 'name', name: 'x' });
+      const ans = await wait(w, (m) => m.type === 'name', 4000);
+      tx(w, { type: 'hello', token: null });
+      tx(w, AI('Ashen Spire'));
+      const st = seatOf(await wait(w, (m) => m.type === 'start', 5000));
+      if (ans && ans.name === 'Ashen Spire' && st && st.me !== 'Ashen Spire' && st.renamed)
+        ok(`H7b: an account answered its own name ('Ashen Spire') on any socket; after a sign-out with no new claim, that socket cannot wear it ('${st.me}', renamed)`);
+      else fail('H7b: ' + JSON.stringify({ ans, st }));
+      tx(w, { type: 'leave' }); w.close();
+    }
+    // H8 and H9. A socket that never claimed (an old build) cannot show a
+    // reserved name: a rolled pair (the door's own question, setNameFree) and
+    // a typed one (the name check, which now asks the reservations too).
+    for (const [tag, n, how] of [['H8', nameB, 'a reserved rolled pair'], ['H9', 'Quiet Dawn', 'a reserved typed name']]) {
+      const w = await sock();
+      tx(w, AI(n));
+      const st = seatOf(await wait(w, (m) => m.type === 'start', 5000));
+      if (st && st.me !== n && st.renamed && /^[A-Z][a-z]+ [A-Z][a-z]+$/.test(st.me) && !RES.rows.some((r) => r.name === st.me))
+        ok(`${tag}: a socket that never claimed, presenting ${how} ('${n}'), is seated under an unused name ('${st.me}') and told`);
+      else fail(`${tag}: ` + JSON.stringify({ n, st }));
+      tx(w, { type: 'leave' }); w.close();
+    }
+    // H10. A tap made while the page's socket was down goes out behind the
+    // claim, so it is seated under the reserved name, not refused for it.
+    await B.nav({ settle: false });
+    await B.ev(`(window.__toasts = [], S.ws.close(), true)`);
+    await B.until('S.connected === false', 4000, 10);
+    await B.ev(LAUNCH('duel'));
+    const s10 = (await B.until(PLAYING('duel'), 10000)) ? await B.ev(SEEN) : null;
+    const order = await B.ev(`(() => { const f = (window.__sent || []).map((x) => x.type); const last = f.lastIndexOf('name'); return { claim: last, ai: f.indexOf('ai', last) }; })()`);
+    await leave(B, { settle: false });
+    if (s10 && s10.me === 'Quiet Dawn' && !s10.toasts.some((t) => /could not be used/.test(t)) && order.claim >= 0 && order.ai > order.claim)
+      ok('H10: a tap made while the socket reopened is sent behind the socket\'s claim and seated as \'Quiet Dawn\', with nothing said');
+    else fail('H10: ' + JSON.stringify({ s10, order }));
+    // H11. Signing out claims again, as this device: the name follows the
+    // device's secret, so the next match still seats it.
+    await B.ev(`(window.__toasts = [], window.confirm = () => true, document.getElementById('accSignOutBtn').onclick(), true)`);
+    await B.until(`(window.__sent || []).some((f) => f.type === 'hello' && f.token === null)`, 4000, 20);
+    await B.ev(LAUNCH('duel'));
+    const s11 = (await B.until(PLAYING('duel'), 10000)) ? await B.ev(SEEN) : null;
+    const after = await B.ev(`(() => { const f = (window.__sent || []); const out = f.findIndex((x) => x.type === 'hello' && x.token === null); return f.slice(out).map((x) => x.type); })()`);
+    await leave(B, { settle: false });
+    if (s11 && s11.me === 'Quiet Dawn' && !s11.toasts.some((t) => /could not be used/.test(t)) && after[1] === 'name')
+      ok('H11: signing out sends the device\'s claim straight after the hello that drops the account, and the next match still seats \'Quiet Dawn\'');
+    else fail('H11: ' + JSON.stringify({ s11, after }));
   }
 } catch (e) {
   fail('threw: ' + (e && e.stack || e));

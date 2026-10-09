@@ -1,5 +1,5 @@
 // server/store.js — the social data store: friend codes, chosen-callsign keys,
-// friendships, requests, blocks and name reports. Server only. Static files are
+// friendships, requests, blocks, name reports and name reservations. Server only. Static files are
 // served from public/ alone with a containment check (server.js:1175-1176), so
 // nothing in this directory is web-reachable.
 //
@@ -15,7 +15,9 @@
 // social handlers catch it and answer error:'unavailable'. Two exceptions, both
 // deliberate and both tested: setChosenCallsign turns a unique violation into
 // { ok:false, error:'taken' } (an answer, not a failure), and requestsOf's 30-day
-// sweep is housekeeping whose failure changes no returned value.
+// sweep is housekeeping whose failure changes no returned value. The name
+// reservation writes (round 3) answer a unique violation the same way, for the
+// same reason: the table's constraints decide who holds a name.
 //
 // This module does NOT check SB_SECRET. Every caller guards with `if (!SB_SECRET)`
 // first, exactly as server.js's existing call sites do.
@@ -91,6 +93,30 @@ const ISO_RE = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d
 // in reportedSince for why a shape check alone does not catch it.
 const SINCE_FLOOR_MS = Date.UTC(2025, 0, 1);            // 2025-01-01T00:00:00.000Z
 
+// THE NAME RESERVATION ROW (round 3): every column server/reservations.js
+// reads, and the shapes a value must have before it is spliced into a path.
+// A secret is only ever held as its SHA-256, 64 lower-case hex. A row id is
+// the table's identity column, a positive integer. RES_KEY_MAX is the
+// table's own CHECK on name_key, measured, not guessed: a name is at most 16
+// code points and the longest look-alike skeleton of one code point is 18
+// (U+FDFA, which NFKD spells out as a phrase), so no key can pass 288.
+const RES_COLS = 'id,name,name_key,secret_hash,user_id,linked,last_seen_at';
+const HASH_RE = /^[0-9a-f]{64}$/;
+export const RES_KEY_MAX = 288;
+function mustId(v) {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && /^[1-9][0-9]{0,17}$/.test(v) ? Number(v) : NaN;
+  if (!Number.isSafeInteger(n) || n < 1) throw new Error('bad row id');
+  return n;
+}
+// A time for a row, always one this function wrote: an ISO string from a
+// number or a Date, and a throw for anything else, so nothing a caller passed
+// in reaches a query string or a body unparsed.
+function isoOf(at) {
+  const d = at instanceof Date ? at : new Date(typeof at === 'number' ? at : NaN);
+  if (!Number.isFinite(d.getTime())) throw new Error('bad time');
+  return d.toISOString();
+}
+
 export function isUuid(v) {
   return typeof v === 'string' && UUID_RE.test(v.toLowerCase());
 }
@@ -114,6 +140,12 @@ function pair(a, b) {
 }
 
 const enc = (v) => encodeURIComponent(v);
+// A NAME RESERVATION'S KEY IS ENCODED WHOLE. encodeURIComponent leaves
+// ! ' ( ) * . and ~ as they are, and a look-alike key is a compatibility
+// decomposition that can carry them (U+2474 reads "(1)", U+2488 "1."). They are
+// PostgREST's filter grammar, so every one is percent-encoded too, and what
+// reaches the query string is letters, digits, '-', '_' and escapes.
+const encKey = (v) => encodeURIComponent(v).replace(/[!'()*.~]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
 const one = (rows) => (Array.isArray(rows) && rows[0] ? rows[0] : null);
 const isConflict = (e) => !!e && CONFLICT_RE.test(String((e && e.message) || ''));
 
@@ -476,7 +508,142 @@ export function createStore({ sbAdmin } = {}) {
     return Array.isArray(rows) && rows.length > 0;
   }
 
+  // ---- name reservations (round 3, 2026-10-10: item 28) ----------------------
+  // server/reservations.js decides; these only read and write the rows, one
+  // shape each, and every value spliced into a path goes through enc() after a
+  // shape check of its own. A row is one player's one name: `name` as shown,
+  // `name_key` its look-alike skeleton (the uniqueness key, UNIQUE in the
+  // table), and the holder, a device (secret_hash) or an account (user_id),
+  // or both once a device's row has moved to the account it got.
+  //
+  // A 409 IS AN ANSWER HERE, as it is in setChosenCallsign: the table's unique
+  // constraints are the authority on who holds a name, so a write that loses
+  // to one of them answers null or { ok:false } and the caller decides what
+  // that means. Anything else throws, as every method in this file does.
+  async function reservationKeys(after, limit) {
+    const n = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 1000) : 1000;
+    const from = typeof after === 'string' && after ? `name_key=gt.${encKey(after)}&` : '';
+    const rows = await sbAdmin('GET', `/name_reservations?select=name_key&${from}order=name_key.asc&limit=${n}`);
+    // Not a list is not a page, for chosenCallsignKeys' reason: read as an
+    // empty one it would end the index's read early and free every later name.
+    if (!Array.isArray(rows)) throw new Error('sb GET name_reservations: not a list');
+    return rows.map((r) => (r && typeof r.name_key === 'string' ? r.name_key : ''));
+  }
+
+  async function reservationByUser(userId) {
+    const id = mustUuid(userId);
+    return one(await sbAdmin('GET', `/name_reservations?user_id=eq.${enc(id)}&select=${RES_COLS}&limit=1`));
+  }
+
+  async function reservationBySecret(hash) {
+    const h = String(hash ?? '');
+    if (!HASH_RE.test(h)) return null;          // not a hash this server could have made
+    return one(await sbAdmin('GET', `/name_reservations?secret_hash=eq.${enc(h)}&select=${RES_COLS}&limit=1`));
+  }
+
+  // Who holds each of these keys: [{ name_key, user_id }] for the ones held.
+  // One request per key and `eq`, never an `in.(...)` list: a skeleton is a
+  // compatibility decomposition and can carry '(' ',' and '.' (U+2474 reads
+  // "(1)", U+1F101 "0,"), which an in-list would have to quote, and eq takes
+  // any value once it is encoded. The Set asks at most three.
+  async function reservationsByKeys(keys) {
+    const out = [];
+    for (const k of [...new Set((Array.isArray(keys) ? keys : []).map(String))]) {
+      if (!k || [...k].length > RES_KEY_MAX) continue;
+      const row = one(await sbAdmin('GET', `/name_reservations?name_key=eq.${encKey(k)}&select=name_key,user_id&limit=1`));
+      if (row) out.push({ name_key: row.name_key, user_id: row.user_id || null });
+    }
+    return out;
+  }
+
+  // A NEW ROW. { ok:true, row } or { ok:false } when a unique constraint
+  // refused it: the name's key, the device's secret or the account (409 does
+  // not say which, so the caller reads its holder again to find out).
+  async function insertReservation({ name, key, secretHash = null, userId = null, linked = false }) {
+    const body = { name: String(name), name_key: String(key), linked: linked === true };
+    if (secretHash !== null) { if (!HASH_RE.test(String(secretHash))) throw new Error('bad hash'); body.secret_hash = String(secretHash); }
+    if (userId !== null) body.user_id = mustUuid(userId);
+    if (!body.secret_hash && !body.user_id) throw new Error('reservation without a holder');
+    let rows;
+    try {
+      rows = await sbAdmin('POST', `/name_reservations?select=${RES_COLS}`, body, 'return=representation');
+    } catch (e) {
+      if (isConflict(e)) return { ok: false };
+      throw e;
+    }
+    const row = one(rows);
+    if (!row) throw new Error('sb POST name_reservations: no row');
+    return { ok: true, row };
+  }
+
+  // A DEVICE'S ROW BECOMES THE ACCOUNT'S: user_id is written only where it is
+  // still null, so of two sockets moving it the second matches nothing. null
+  // when nothing moved (that race, or the account already holding a row,
+  // which the unique user_id refuses with a 409).
+  async function moveReservation(id, userId, linked, at) {
+    const n = mustId(id);
+    const body = { user_id: mustUuid(userId), linked: linked === true, last_seen_at: isoOf(at) };
+    try {
+      return one(await sbAdmin('PATCH', `/name_reservations?id=eq.${n}&user_id=is.null&select=${RES_COLS}`, body, 'return=representation'));
+    } catch (e) {
+      if (isConflict(e)) return null;
+      throw e;
+    }
+  }
+
+  // The device's secret onto an ACCOUNT's row that has none yet (an account
+  // that reserved before this device ever had one). null when the row already
+  // carries one, or another row holds this secret.
+  async function attachSecret(id, hash) {
+    const n = mustId(id);
+    if (!HASH_RE.test(String(hash ?? ''))) throw new Error('bad hash');
+    try {
+      return one(await sbAdmin('PATCH', `/name_reservations?id=eq.${n}&secret_hash=is.null&select=${RES_COLS}`, { secret_hash: String(hash) }, 'return=representation'));
+    } catch (e) {
+      if (isConflict(e)) return null;
+      throw e;
+    }
+  }
+
+  // A RENAME: { ok:true, row }, { ok:false, error:'taken' } when another row
+  // holds the new key, or { ok:false, error:'gone' } when the row is no longer
+  // there (swept, or deleted with its account).
+  async function renameReservation(id, name, key, at) {
+    const n = mustId(id);
+    let rows;
+    try {
+      rows = await sbAdmin('PATCH', `/name_reservations?id=eq.${n}&select=${RES_COLS}`,
+        { name: String(name), name_key: String(key), last_seen_at: isoOf(at) }, 'return=representation');
+    } catch (e) {
+      if (isConflict(e)) return { ok: false, error: 'taken' };
+      throw e;
+    }
+    const row = one(rows);
+    return row ? { ok: true, row } : { ok: false, error: 'gone' };
+  }
+
+  async function touchReservation(id, linked, at) {
+    const n = mustId(id);
+    await sbAdmin('PATCH', `/name_reservations?id=eq.${n}`, { last_seen_at: isoOf(at), linked: linked === true }, 'return=minimal');
+  }
+
+  // Both deletes answer the keys they freed, so the in-memory index can let
+  // go of exactly those names.
+  async function deleteReservationOfUser(userId) {
+    const id = mustUuid(userId);
+    const rows = await sbAdmin('DELETE', `/name_reservations?user_id=eq.${enc(id)}&select=name_key`, undefined, 'return=representation');
+    return (Array.isArray(rows) ? rows : []).map((r) => (r && typeof r.name_key === 'string' ? r.name_key : '')).filter(Boolean);
+  }
+
+  async function sweepReservations(before) {
+    const rows = await sbAdmin('DELETE', `/name_reservations?linked=is.false&last_seen_at=lt.${enc(isoOf(before))}&select=name_key`, undefined, 'return=representation');
+    return (Array.isArray(rows) ? rows : []).map((r) => (r && typeof r.name_key === 'string' ? r.name_key : '')).filter(Boolean);
+  }
+
   return {
+    reservationKeys, reservationByUser, reservationBySecret, reservationsByKeys,
+    insertReservation, moveReservation, attachSecret, renameReservation, touchReservation,
+    deleteReservationOfUser, sweepReservations,
     ensureFriendCode, profileById, profileByFriendCode, profileByCallsignKey, profilesByIds,
     chosenCallsignKeys, setChosenCallsign, clearCallsignKey,
     friendIdsOf, addFriendship, removeFriendship,

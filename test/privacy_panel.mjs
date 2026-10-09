@@ -395,8 +395,11 @@ try {
         else if (a.target === '_blank' && /noopener/.test(a.rel) && /^(https|mailto):/.test(a.getAttribute('href'))) out.out++;
         else out.loose.push(a.outerHTML.slice(0, 80)); }
       return out; })()`);
+    // FOUR IN-PAGE LINKS SINCE ROUND 3 (2026-10-10): the reserved callsign's
+    // row in the data table points at "How long we keep it", as the match
+    // results row does. It was three.
     check(`4 every link in the policy is sorted: ${sorted.jump} in-page, ${sorted.page} to the deletion page, ${sorted.out} https or mailto to a new window`,
-      sorted.loose.length === 0 && sorted.jump === 3 && sorted.page === 2 && sorted.out >= 7, JSON.stringify(sorted));
+      sorted.loose.length === 0 && sorted.jump === 4 && sorted.page === 2 && sorted.out >= 7, JSON.stringify(sorted));
     // In-page: "Your rights and controls".
     await tapLink('#docpC a[data-dpl="jump"][data-dpid="doc-rights"]');
     await sleep(150);

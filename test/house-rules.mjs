@@ -1698,8 +1698,20 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
     .replace(/&amp;/g, '&').replace(/\s+/g, ' ');
   const MUST = [
     // MOVED ON 2026-10-09, when rule 24's corrections (Sign in with Apple, the
-    // Apple Push Notification service) changed the page again.
-    [/Last updated: 9 October 2026/, 'its date is the day of its latest corrections (rule 24, 9 October)'],
+    // Apple Push Notification service) changed the page again, and ON
+    // 2026-10-10, when round 3 reserved every player's name on the server.
+    [/Last updated: 10 October 2026/, 'its date is the day of its latest corrections (round 3, 10 October)'],
+    // ROUND 3 (owner, 2026-10-10, item 28: "the privacy policy says so"): every
+    // player's name is reserved on the server, what a reservation holds, how
+    // long it is kept, and that deleting an account deletes it.
+    [/can change once a day, and no two players can have the same one: our server keeps yours for you\./, 'the short version: no two players share a name, the server keeps it'],
+    [/Callsigns are unique, ignoring capitals and letters that look alike: the first time you connect, our server reserves your callsign for you, whether you are signed in or not, and nobody else can then use it\./, 'Friends: every player\'s name is reserved on first connect, guests included'],
+    [/Whoever reserved a name first keeps it\. If the name you had was already taken, the game gives you a new one that nobody is using and tells you so, and you can change it in Bay controls\./, 'Friends: first keeps it, and a taken name is replaced and said'],
+    [/Your reserved callsign: the callsign, a scrambled copy \(a SHA-256 hash\) of a random key our server gave your device, your account identifier once you have one, whether that account is linked, and when you last connected/, 'the data table: what a reservation holds'],
+    [/the random key our server gave your device so it knows the callsign it keeps for you \(our server stores only a scrambled copy of that key, never the key itself\)/, 'On your device: the reservation key, and that only its hash leaves'],
+    [/removes the account, cloud save, sign-in identity, push subscriptions, reserved callsign, friend code,/, 'How long we keep it: deleting the account deletes its reservation'],
+    [/A callsign reserved for a player who has not linked an account is deleted when they have not connected for 90 days, and the name is then free for anyone to use\./, 'How long we keep it: an unlinked reservation goes after 90 days unused'],
+    [/erases the account, cloud save, sign-in identity, push subscriptions, reserved callsign, friend code,/, 'Delete my account: it erases the reservation'],
     [/The game gives you a callsign, which you can change once a day,/, 'the short version: a callsign is given, and changed once a day'],
     [/and — if they are a friend or in a squad with you — whether you are online\./, 'the short version: a squad\'s members see whether you are online'],
     [/Callsign — the default one the game gave you from its word lists, or one you choose — and, if you are signed in, when you last set it/, 'the data table: the default name, a chosen one, and the time a signed-in name was set'],

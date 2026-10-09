@@ -44,6 +44,7 @@ const SOCIAL_TABLES = ['profiles', 'friendships', 'friend_requests', 'blocks', '
 // object keys a status per table (with `_` as that group's default), which is
 // how the PRECEDENCE cases are built — one probe refused while another is merely
 // having a bad second.
+// `names` is round 3's name_reservations (200 when a world leaves it out).
 let world = { auth: 200, admin: 200, social: 200 };
 const pick = (spec, table) => (typeof spec === 'number' ? spec : (spec[table] ?? spec._ ?? 200));
 
@@ -63,6 +64,7 @@ const mock = http.createServer((req, res) => {
   const table = u.pathname.startsWith('/rest/v1/') ? u.pathname.slice('/rest/v1/'.length) : '';
   if (ADMIN_TABLES.includes(table)) return send(pick(world.admin, table));
   if (SOCIAL_TABLES.includes(table)) return send(pick(world.social, table));
+  if (table === 'name_reservations') return send(pick(world.names ?? 200, table));
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end('[]');
 });
@@ -74,11 +76,18 @@ await new Promise((r) => mock.listen(mockPort, '127.0.0.1', r));
 // That is itself a state the endpoint can return, and the reason the owner steps
 // must say "read it again" rather than treating one reading as authoritative.
 const kids = [];
-async function boot(w, what) {
+// `until`, when given, is asked of every settled reading as well, so a field
+// that settles after the probes (nameReservations reads 'on' once the
+// reservations have been read into memory) is waited for too. `bare` boots
+// with no Supabase at all.
+async function boot(w, what, until = () => true, bare = false) {
   world = w;
   const p = await freePort();
+  const sb = bare ? {} : { SUPABASE_URL: `http://127.0.0.1:${mockPort}`, SUPABASE_PUBLISHABLE_KEY: 'pk', SUPABASE_SECRET_KEY: 'sk' };
+  const env = { ...process.env, PORT: String(p), ...sb };
+  if (bare) { delete env.SUPABASE_URL; delete env.SUPABASE_PUBLISHABLE_KEY; delete env.SUPABASE_SECRET_KEY; }
   const s = spawn('node', ['server.js'], {
-    env: { ...process.env, PORT: String(p), SUPABASE_URL: `http://127.0.0.1:${mockPort}`, SUPABASE_PUBLISHABLE_KEY: 'pk', SUPABASE_SECRET_KEY: 'sk' },
+    env,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   kids.push(s);
@@ -88,7 +97,7 @@ async function boot(w, what) {
   for (let i = 0; i < 80; i++) {
     try {
       const j = await (await fetch(`http://127.0.0.1:${p}/health`)).json();
-      if (j && j.supabase !== 'unchecked' && j.supabaseAdmin !== 'unchecked' && j.supabaseSocial !== 'unchecked') {
+      if (j && j.supabase !== 'unchecked' && j.supabaseAdmin !== 'unchecked' && j.supabaseSocial !== 'unchecked' && j.supabaseNames !== 'unchecked' && until(j)) {
         await sleep(60);                    // let the boot line finish flushing
         s.kill();
         return { h: j, log };
@@ -136,6 +145,13 @@ try {
     eq(h, 'supabase', 'ok', 'when the auth endpoint answers 200');
     eq(h, 'supabaseAdmin', 'ok', 'when both privileged tables answer 200');
     eq(h, 'supabaseSocial', 'ok', 'when all five phase 6 probes answer 200 — the state the ship procedure waits for');
+    eq(h, 'supabaseNames', 'ok', 'when name_reservations answers 200 — round 3\'s migration is applied');
+  }
+  {
+    // AND THE FEATURE IS ON IN THE PROCESS, which is a different question from
+    // the table being there: the reservations have been read into memory.
+    const { h } = await boot({ auth: 200, admin: 200, social: 200 }, 'names on', (j) => j.nameReservations === 'on');
+    eq(h, 'nameReservations', 'on', 'once the reservations have been read into memory: unique names are on');
   }
 
   // ---- 2. the key really is refused ----------------------------------------
@@ -249,6 +265,49 @@ try {
     }, 'precedence 404');
     eq(h, 'supabaseSocial', 'migration_missing', 'when the migration is absent AND one probe 5xxs — a blip must not hide a missing migration from the one field the ship procedure reads');
     eq(h, 'supabaseAdmin', 'tables_missing', 'when a table is absent AND another probe 5xxs — the durable answer wins over the transient one');
+  }
+
+  // ---- 9. ROUND 3: the name reservations migration is not applied yet --------
+  // THE STATE THE SERVER SHIPS INTO (owner, 2026-10-10, item 28). The table is
+  // applied by hand after the owner approves it, and until then the server
+  // runs with the old name rules. That is a state to report in the words the
+  // owner reads, not a key fault, and the other three fields must not move.
+  {
+    const { h, log } = await boot({ auth: 200, admin: 200, social: 200, names: 404 }, 'names 404');
+    eq(h, 'supabaseNames', 'migration_missing', 'when name_reservations 404s — its migration has not been applied');
+    notKeyBlame(h, 'supabaseNames', 'on a 404');
+    eq(h, 'nameReservations', 'off', 'with the table missing: unique names are off, the old rules run');
+    eq(h, 'supabaseSocial', 'ok', 'and the phase 6 field is untouched by round 3\'s table');
+    eq(h, 'supabaseAdmin', 'ok', 'and the privileged field is untouched by it');
+    const i = instructions(log);
+    if (/UNIQUE NAMES are off: the name reservations migration has not been applied to this project \(the old name rules apply until it is\)/.test(i) && !/SUPABASE_SECRET_KEY/.test(i))
+      ok('and the boot line says unique names are off because the migration is not applied, naming no key');
+    else fail(`the names boot line for a missing migration: ${JSON.stringify(i)}`);
+    if ((log.match(/\[names\] reservations OFF: name_reservations is not there yet/g) || []).length === 1)
+      ok('and the reservations say once, not on every retry, that their table is not there yet');
+    else fail(`the reservations' own line: ${JSON.stringify(log.split('\n').filter((l) => l.includes('[names]')))}`);
+  }
+  {
+    const { h } = await boot({ auth: 200, admin: 200, social: 200, names: 400 }, 'names 400');
+    eq(h, 'supabaseNames', 'migration_missing', 'when name_reservations answers 400 — a column the server reads is not there, so the migration is not the one this server needs');
+  }
+  {
+    const { h, log } = await boot({ auth: 200, admin: 200, social: 200, names: 503 }, 'names 503');
+    eq(h, 'supabaseNames', 'upstream_error', 'when name_reservations answers 503');
+    notKeyBlame(h, 'supabaseNames', 'on a 503');
+    if (/UNIQUE NAMES could not be verified: Supabase answered with an error of its own\. Nothing here needs changing — read \/health again in a minute/.test(instructions(log)))
+      ok('and its boot line says to read /health again, naming no variable');
+    else fail(`the names boot line on a 503: ${JSON.stringify(instructions(log))}`);
+  }
+  {
+    const { h } = await boot({ auth: 200, admin: 200, social: 200, names: 401 }, 'names 401');
+    eq(h, 'supabaseNames', 'bad_secret_key', 'when name_reservations refuses the key (401)');
+  }
+  {
+    // No Supabase at all: unconfigured, and off.
+    const { h } = await boot({ auth: 200, admin: 200, social: 200 }, 'bare', () => true, true);
+    eq(h, 'supabaseNames', 'unconfigured', 'with no Supabase configured');
+    eq(h, 'nameReservations', 'off', 'with no Supabase configured');
   }
 } catch (e) { fail('threw — ' + (e && e.message ? e.message : String(e))); }
 done();

@@ -70,7 +70,15 @@ export const PAGE = 1000;
 // load, and the index stays as it was rather than growing without bound.
 export const MAX_PAGES = 2000;
 
-export function createNameIndex({ load, refreshMs = REFRESH_MS, retryMs = RETRY_MS, page = PAGE, maxPages = MAX_PAGES, onError = () => {} } = {}) {
+// THE READINGS ARE INJECTABLE (round 3, 2026-10-10), and keyReadings stays the
+// default. A chosen callsign's key may be SHOWN in more than one casing,
+// because the spelling beside it is the account's to PATCH, so the index keeps
+// every way it can look. A name RESERVATION (server/reservations.js) is
+// different: its key is the look-alike skeleton of the one spelling the
+// server stored, and no client can write that spelling, so it can only ever
+// look one way. Its index is built with `readings: (k) => [k]`, and a name
+// that merely looks like the reservation in capitals is not refused for it.
+export function createNameIndex({ load, readings = keyReadings, refreshMs = REFRESH_MS, retryMs = RETRY_MS, page = PAGE, maxPages = MAX_PAGES, onError = () => {} } = {}) {
   let keys = null;          // the loaded set; null until the first load lands
   let looks = null;         // reading -> Set of keys that read that way, beside `keys`
   let loading = null;       // the load in flight, shared by every caller
@@ -95,8 +103,8 @@ export function createNameIndex({ load, refreshMs = REFRESH_MS, retryMs = RETRY_
     throw new Error('name index: more pages than MAX_PAGES');
   }
 
-  const link = (map, k) => { for (const r of keyReadings(k)) { let s = map.get(r); if (!s) map.set(r, (s = new Set())); s.add(k); } };
-  const unlink = (map, k) => { for (const r of keyReadings(k)) { const s = map.get(r); if (s) { s.delete(k); if (!s.size) map.delete(r); } } };
+  const link = (map, k) => { for (const r of readings(k)) { let s = map.get(r); if (!s) map.set(r, (s = new Set())); s.add(k); } };
+  const unlink = (map, k) => { for (const r of readings(k)) { const s = map.get(r); if (s) { s.delete(k); if (!s.size) map.delete(r); } } };
 
   // ONE LOAD AT A TIME. A second caller gets the load already in flight.
   function refresh() {

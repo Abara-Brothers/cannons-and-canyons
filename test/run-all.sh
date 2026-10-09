@@ -207,6 +207,14 @@ run social node test/social.mjs
 # the unique-violation-to-'taken' translation and the friend-code retry. Headless
 # — a recording fake stands in for sbAdmin, so it never reaches Supabase.
 run social_store node test/social_store.mjs
+# EVERY PLAYER'S ONE NAME, HELD BY THE SERVER (owner, 2026-10-10, item 28: no
+# two players with the same name), in process: server/reservations.js against a
+# fake of name_reservations that keeps its three unique keys, the social layer on
+# top of it as server.js builds it, and the REAL room engine's door with the two
+# hooks server.js installs. Off with the table missing (the old rules), first
+# keeps it, look-alikes, the move to an account, unused defaults, the 90-day
+# sweep. Headless — no server, no Supabase.
+run reserve node test/reserve.mjs
 # The per-room seat handle (BINDING.md resolution 24), both halves and the join
 # between them: the REAL room engine mints one per occupied accounted seat and
 # puts it in the lobby payload, the REAL social layer reports and blocks through
