@@ -1350,26 +1350,33 @@ function sqKickGo() {
       done: (m, mine) => { if (m.op !== 'state') mine.aerr = socErr('squad.kick', 'unavailable'); },
       end: (mine) => { mine.kick = null; } });
 }
-// COPY THE LINK, NOT THE CODE (design 4.4 and 5.7): /?squad=<code> is what the
-// invite push opens, so the two ways in are one URL.
+// COPY THE LINK, NOT THE CODE (design 4.4 and 5.7). THE PUBLIC LINK (owner,
+// 2026-10-10: "The share button doesn't work"): app.js squadLink builds
+// https://<public host>/squad/CODE, which opens the app where it is installed
+// and the download page where it is not. It was this page's own origin, and in
+// the app that is capacitor://localhost, a link nobody else can open.
+const sqLink = (sn) => (sn && typeof sn.code === 'string' && fn('squadLink') ? squadLink(sn.code) : '');
 function sqCopyLink() {
-  const sn = sq.snap;
-  if (!sn || typeof sn.code !== 'string' || !sn.code) return;
-  const url = location.origin + '/?squad=' + encodeURIComponent(sn.code);
+  const url = sqLink(sq.snap);
+  if (!url) return;
   try { navigator.clipboard.writeText(url).then(() => { if (fn('showToast')) showToast('Squad link copied.'); }, () => prompt('Your squad link:', url)); }
   catch { prompt('Your squad link:', url); }
 }
 // SHARE IT, where the device has a share sheet (owner, 2026-10-06: the squad
 // code with Copy and Share): the same link, with the code in words for a
 // friend who types it in by hand. The window offers Share only where
-// navigator.share exists, as the Friends screen does; a dismissed sheet is not
-// an error.
+// navigator.share exists, as the Friends screen does. A dismissed sheet
+// (AbortError) is the player's choice and says nothing; ANY OTHER FAILURE COPIES
+// THE LINK INSTEAD, and says so (owner, 2026-10-10): a refusal was caught and
+// dropped, so a Share that did nothing looked exactly like one that worked.
 function sqShareLink() {
-  const sn = sq.snap;
-  if (!sn || typeof sn.code !== 'string' || !sn.code) return;
+  const sn = sq.snap, url = sqLink(sn);
+  if (!url) return;
   if (typeof navigator === 'undefined' || typeof navigator.share !== 'function') { sqCopyLink(); return; }
-  const url = location.origin + '/?squad=' + encodeURIComponent(sn.code);
-  try { const p = navigator.share({ text: 'Join my squad in Cannons and Canyons. Squad code ' + sn.code + '.', url }); if (p && p.catch) p.catch(() => {}); } catch {}
+  let p = null;
+  try { p = navigator.share({ text: 'Join my squad in Cannons & Canyons! Squad code ' + sn.code + '.', url }); }
+  catch { sqCopyLink(); return; }
+  if (p && typeof p.then === 'function') p.then(null, (e) => { if (!e || e.name !== 'AbortError') sqCopyLink(); });
 }
 // D7: THE LEADER'S BOARDS ARE THE SQUAD'S MODE CONTROL. The window's squad
 // footer reads the squad's mode; it never chooses it. A board tap -- and a tee

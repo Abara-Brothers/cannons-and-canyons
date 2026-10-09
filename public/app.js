@@ -1348,6 +1348,17 @@ if (IS_NATIVE) {
   if (capApp && capApp.addListener) {
     capApp.addListener('appUrlOpen', (ev) => {
       const url = ev && ev.url;
+      // A SQUAD LINK (owner, 2026-10-10: "Tapping the link opens the app
+      // straight into the squad if your friend has it"). iOS opens the app
+      // with the https://<host>/squad/CODE link the AASA in server.js claims,
+      // on a cold launch as on a warm one: @capacitor/app holds the event
+      // until this listener exists. It joins as a squad invite's notification
+      // tap does, through onPushTap, so the same rules decide: a match in
+      // progress says so, a held seat's resume wins, and a launch waits for
+      // the socket's hello. Read before the OAuth check, so a squad link is
+      // never taken for a sign-in reply, whatever it carries.
+      const squad = squadLinkCode(url);
+      if (squad) { onPushTap('/?squad=' + squad); return; }
       // Only an OAuth reply carries a fragment. A link that reopens the app for
       // any other reason is not ours to consume.
       if (!url || url.indexOf('#') === -1) return;
@@ -2554,6 +2565,33 @@ function deepLink(u) {
   const squad = deepLinkCode(p.get('squad'));
   if (squad) return { kind: 'squad', code: squad };
   return null;
+}
+// THE SQUAD LINK A PLAYER SHARES, and the one function that builds it (owner,
+// 2026-10-10: "The share button doesn't work when you share in the squad
+// menu"). Share and Copy built location.origin + '/?squad=CODE', and in the
+// app location.origin is capacitor://localhost: a link to the sender's own
+// phone, which no friend could open. The link
+// is now https://<CC_NATIVE_HOST>/squad/CODE on the web and in the app alike:
+// config.js's public host, the one host the app's Universal Links belong to,
+// and never this page's origin, so never capacitor: and never a localhost. On
+// an iPhone with the game, iOS opens it in the app (squadLinkCode below, read
+// by the appUrlOpen listener); anywhere else server.js answers it with the
+// download page, never the game. '' for a code that is not one.
+function squadLink(code) {
+  const c = deepLinkCode(code);
+  return c ? 'https://' + (window.CC_NATIVE_HOST || 'tanks.abarabrothers.com') + '/squad/' + c : '';
+}
+// -> the code of a squad link the app was opened with, '' for any other URL.
+// Only the shape squadLink builds is read: https, the public host, and
+// /squad/CODE with nothing after the code. Its query and fragment are never
+// read, so a squad link carries nothing else in with it.
+function squadLinkCode(u) {
+  if (typeof u !== 'string' || !u) return '';
+  let p;
+  try { p = new URL(u); } catch { return ''; }
+  if (p.protocol !== 'https:' || p.host !== (window.CC_NATIVE_HOST || 'tanks.abarabrothers.com')) return '';
+  const m = /^\/squad\/([^/]*)$/.exec(p.pathname);
+  return m ? deepLinkCode(m[1]) : '';
 }
 
 // A ?squad= link CANNOT ride intent(). Squad frames are intercepted in server.js

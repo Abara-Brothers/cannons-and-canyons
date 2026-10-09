@@ -57,7 +57,9 @@
 // "Enter a code" field could not type, or one it would read as a room code's
 // neighbour, is a code nobody can use. test/squad.mjs (s2) holds this copy to
 // the engine's by BEHAVIOUR: the same bytes mint the same codes in both.
-const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+// EXPORTED for the squad link's page (server/squad-page.js), which reads a code
+// off a URL and must answer for exactly the codes this mints, and no others.
+export const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
 // ONE CHARACTER FROM ONE BYTE, drawn exactly as the engine's makeCode draws
 // it: a one-byte getRandomValues, rejection-sampled against the largest

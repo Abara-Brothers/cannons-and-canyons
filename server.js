@@ -43,6 +43,8 @@ import { createNameIndex } from './server/name-index.js';
 // Which hosts a web push may be sent to. See server/push-hosts.js for why a
 // client-supplied endpoint must never choose where this process connects.
 import { webPushHostAllowed } from './server/push-hosts.js';
+// The page a squad link opens in a browser: never the game (owner, 2026-10-10).
+import { squadPage, squadPathCode } from './server/squad-page.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, 'public');
@@ -1547,6 +1549,20 @@ const CSP = [
   "manifest-src 'self'",
 ].join('; ');
 
+// THE PUBLIC ORIGIN A SHARED SQUAD LINK NAMES: https:// and public/config.js's
+// CC_NATIVE_HOST, the one host the client builds every shared link on (app.js
+// squadLink), read the way CONNECT_ORIGINS reads CC_SUPABASE_URL so the page's
+// QR and the link that was shared can never name two hosts. NEVER the request's
+// Host header: that is whatever the asker sent, and the QR would hand it on.
+const LINK_ORIGIN = (() => {
+  try {
+    const cfg = fs.readFileSync(path.join(__dirname, 'public', 'config.js'), 'utf8');
+    const m = cfg.match(/CC_NATIVE_HOST\s*=\s*['"]([a-z0-9.-]+(?::\d+)?)['"]/i);
+    if (m) return 'https://' + m[1].toLowerCase();
+  } catch { /* no config.js: the production host below */ }
+  return 'https://tanks.abarabrothers.com';
+})();
+
 function setSecurityHeaders(res) {
   // Set once, at the top of every request, so no individual writeHead can
   // forget them. Node merges these with whatever writeHead passes later.
@@ -1703,7 +1719,14 @@ function handleRequest(req, res) {
           // which a store reviewer opens from the listing. Both would bounce
           // into the app instead, and the deletion path would appear broken to
           // exactly the person the policy exists to protect.
-          components: [{ '/': '/auth/callback', comment: 'OAuth return only' }],
+          // AND THE SQUAD LINK (owner, 2026-10-10): a squad's Share hands out
+          // /squad/CODE, which opens the app straight into the squad where it
+          // is installed (app.js appUrlOpen) and the download page where it is
+          // not (the /squad/ route below). Still never "/".
+          components: [
+            { '/': '/auth/callback', comment: 'OAuth return only' },
+            { '/': '/squad/*', comment: 'Squad invite links' },
+          ],
         }],
       },
     }));
@@ -1752,6 +1775,20 @@ function handleRequest(req, res) {
   if (urlPath === '/auth/callback' || urlPath === '/auth/callback/') {
     res.writeHead(302, { Location: '/', 'Cache-Control': 'no-store' });
     return res.end();
+  }
+  // THE SQUAD LINK'S PAGE. /squad/CODE is what a squad's Share and Copy hand
+  // out. A browser only gets here when iOS did not open the app (the AASA above
+  // claims /squad/*): the friend has no app, or is on a computer. They get the
+  // download page, never the game (server/squad-page.js says why). Anything
+  // under /squad that names no valid code is a 404 rather than the SPA
+  // fallback below, because that fallback IS the game. noindex twice over (the
+  // header and the page's meta): an invite is not a page to be found by
+  // searching. no-store: a code is a squad's, and a squad ends.
+  if (urlPath === '/squad' || urlPath.startsWith('/squad/')) {
+    const code = squadPathCode(urlPath);
+    if (!code) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); return res.end('Not found'); }
+    res.writeHead(200, { 'Content-Type': MIME['.html'], 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' });
+    return res.end(squadPage({ code, origin: LINK_ORIGIN }));
   }
   if (urlPath === '/') urlPath = '/index.html';
   const filePath = path.join(PUBLIC, path.normalize(urlPath));

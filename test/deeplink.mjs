@@ -204,6 +204,77 @@ const CASES = [
   else ok(`A: deepLink reads ?room= and ?squad= off ${CASES.length} links, room before squad, and refuses xroom, notaroom, the wrong length and the five characters the code alphabet does not have`);
 }
 
+// ---- A2. THE SQUAD LINK: ONE BUILDER, ONE READER (owner, 2026-10-10) --------
+// squadLink builds what a squad's Share and Copy hand out; squadLinkCode reads
+// the link iOS opens the app with. The builder never reads this page's origin
+// (in the app that is capacitor://localhost, the link nobody could open), so
+// on this page, http://127.0.0.1, the link is still the public one; and it
+// follows config.js's CC_NATIVE_HOST. The reader takes only that exact shape.
+const PUB = 'https://tanks.abarabrothers.com';
+{
+  const built = await ev(`JSON.stringify([squadLink('ABCD'), squadLink('abcd'), squadLink('ABIO'), squadLink(''), squadLink(null),
+    (() => { const h = window.CC_NATIVE_HOST; window.CC_NATIVE_HOST = 'staging.example.test'; try { return squadLink('ABCD'); } finally { window.CC_NATIVE_HOST = h; } })()])`).then(JSON.parse);
+  const want = [PUB + '/squad/ABCD', PUB + '/squad/ABCD', '', '', '', 'https://staging.example.test/squad/ABCD'];
+  if (JSON.stringify(built) === JSON.stringify(want)) ok(`A2: squadLink builds ${PUB}/squad/CODE on a page served from 127.0.0.1 (never its origin), upper-cases the code, refuses a code outside the alphabet, and follows CC_NATIVE_HOST`);
+  else fail(`A2: squadLink built ${JSON.stringify(built)}, expected ${JSON.stringify(want)}`);
+  const READ = [
+    [PUB + '/squad/ABCD', 'ABCD'],
+    [PUB + '/squad/abcd', 'ABCD'],
+    [PUB + '/squad/ABCD?x=1#access_token=t', 'ABCD'],
+    ['http://tanks.abarabrothers.com/squad/ABCD', ''],
+    ['https://evil.example/squad/ABCD', ''],
+    ['https://tanks.abarabrothers.com.evil.example/squad/ABCD', ''],
+    ['https://evil.example/https://tanks.abarabrothers.com/squad/ABCD', ''],
+    ['capacitor://localhost/squad/ABCD', ''],
+    [PUB + '/squad/ABCD/', ''],
+    [PUB + '/squad/ABCD/x', ''],
+    [PUB + '/squad/ABIO', ''],
+    [PUB + '/squad/ABCDE', ''],
+    [PUB + '/squads/ABCD', ''],
+    [PUB + '/x/squad/ABCD', ''],
+    [PUB + '/?squad=ABCD', ''],
+    [PUB + '/auth/callback#access_token=t', ''],
+    ['/squad/ABCD', ''],
+    ['', ''], [null, ''], [42, ''],
+  ];
+  const got = await ev(`JSON.stringify(${JSON.stringify(READ.map((c) => c[0]))}.map((u) => squadLinkCode(u)))`).then(JSON.parse);
+  const wrong = READ.map(([u, w], i) => [u, w, got[i]]).filter(([, w, g]) => g !== w).map(([u, w, g]) => `${String(u)} -> ${JSON.stringify(g)}, expected ${JSON.stringify(w)}`);
+  if (!wrong.length) ok(`A2: squadLinkCode reads https://<public host>/squad/CODE and refuses ${READ.filter((c) => !c[1]).length} other shapes: http, another host, capacitor:, a trailing slash or path, a bad code, the old ?squad= and the OAuth return`);
+  else fail(`A2: squadLinkCode disagrees on ${wrong.length} links: ${wrong.join(' | ')}`);
+}
+
+// ---- A3. THE LINK'S OTHER END, IN A REAL BROWSER ----------------------------
+// A browser that opens a squad link gets the download page (server.js
+// /squad/:code; test/http_contract.mjs owns its words and headers). Measured
+// here: it runs no script and links nowhere, the code is on it, and the QR is
+// drawn on a computer's screen and an iPad's, never on a phone's, either way
+// round, and nothing scrolls sideways.
+{
+  const look = async (w, h, mobile) => {
+    await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile });
+    await ev('window.__stale = true').catch(() => {});
+    await send('Page.navigate', { url: `http://127.0.0.1:${appPort}/squad/QK7T` });
+    for (let i = 0; i < 80; i++) {
+      const r = await ev(`(!window.__stale && document.readyState === 'complete' && document.querySelector('.qr svg')) ? JSON.stringify((() => {
+        const q = document.querySelector('.qr svg').getBoundingClientRect(), el = document.documentElement;
+        return { qr: getComputedStyle(document.querySelector('.qr')).display, qw: Math.round(q.width), code: document.querySelector('.code').textContent,
+          scripts: document.scripts.length, links: document.links.length, forms: document.forms.length, sideways: el.scrollWidth > el.clientWidth,
+          game: !!document.getElementById('bay') || typeof window.Bay !== 'undefined' };
+      })()) : ''`).catch(() => '');
+      if (r) return JSON.parse(r);
+      await sleep(100);
+    }
+    return null;
+  };
+  const sizes = { computer: await look(1280, 800, false), ipad: await look(820, 1180, true), phone: await look(390, 844, true), phoneLandscape: await look(932, 430, true) };
+  await send('Emulation.setDeviceMetricsOverride', { width: 932, height: 430, deviceScaleFactor: 2, mobile: true });
+  const plain = Object.values(sizes).every((v) => v && v.code === 'QK7T' && v.scripts === 0 && v.links === 0 && v.forms === 0 && !v.sideways && !v.game);
+  const qr = sizes.computer && sizes.computer.qr === 'block' && sizes.computer.qw >= 200 && sizes.ipad && sizes.ipad.qr === 'block'
+    && sizes.phone && sizes.phone.qr === 'none' && sizes.phoneLandscape && sizes.phoneLandscape.qr === 'none';
+  if (plain && qr) ok('A3: /squad/CODE is the download page at every size (the code, no script, no link, not the game, nothing sideways), with the QR on a computer and an iPad and never on a phone');
+  else fail(`A3: download page ${JSON.stringify(sizes)}`);
+}
+
 // ---- B. BOOT: THREE CLAIMANTS, ONE WINNER ----------------------------------
 // The rule, in one line: THE MOST PERISHABLE CLAIM WINS. A held seat (120 s, or
 // 24 h for an async duel) beats both links; ?room= (a lobby that is filling)
@@ -471,8 +542,30 @@ await send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
     requestPermissions: async () => { calls.push('requestPermissions'); return { receive: 'granted' }; },
     register: async () => { calls.push('register'); },
   };
-  window.Capacitor = { getPlatform: () => 'android', isNativePlatform: () => true, Plugins: { PushNotifications: Push } };
-  window.__cap = { calls, fire: notify, count: (ev) => (live.get(ev) || []).length };
+  // THE APP PLUGIN'S appUrlOpen, as @capacitor/app 8 fires it for a link the
+  // app was opened with (AppPlugin.swift: notifyListeners('appUrlOpen', ...,
+  // retainUntilConsumed: true)): a link that opened the app before any
+  // listener existed is HELD and handed, async, to the first one added.
+  // window.__urls records each delivery and the state it landed in.
+  const appLive = [], appHeld = [], appCalls = [];
+  window.__urls = [];
+  const openUrl = (url) => {
+    if (!appLive.length) { appHeld.push(url); return; }
+    setTimeout(() => {
+      let resume = null; try { resume = !!localStorage.getItem('cc_resume'); } catch {}
+      window.__urls.push({ url, resume, connected: typeof S === 'object' && S ? !!S.connected : null });
+      appLive.slice().forEach((cb) => cb({ url }));
+    }, 0);
+  };
+  const App = {
+    addListener(ev, cb) {
+      appCalls.push('addListener:' + ev);
+      if (ev === 'appUrlOpen') { appLive.push(cb); if (appLive.length === 1) appHeld.splice(0).forEach(openUrl); }
+      return { remove: async () => { const i = appLive.indexOf(cb); if (i !== -1) appLive.splice(i, 1); } };
+    },
+  };
+  window.Capacitor = { getPlatform: () => 'android', isNativePlatform: () => true, Plugins: { PushNotifications: Push, App } };
+  window.__cap = { calls, fire: notify, count: (ev) => (live.get(ev) || []).length, open: openUrl, appCalls };
 
   let tap = null, intro = null;
   try { tap = sessionStorage.getItem('cc_test_tap'); sessionStorage.removeItem('cc_test_tap'); } catch {}
@@ -482,6 +575,10 @@ await send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
   // which gets the quick doors and never the intro.
   if (intro) { gate = true; window.__ccNoIntro = false; try { sessionStorage.removeItem('cc_intro'); localStorage.removeItem('cc_last_view'); } catch {} }
   if (tap) notify('pushNotificationActionPerformed', JSON.parse(tap));
+  // A squad link that LAUNCHED the app, planted on the page before.
+  let link = null;
+  try { link = sessionStorage.getItem('cc_test_url'); sessionStorage.removeItem('cc_test_url'); } catch {}
+  if (link) openUrl(link);
 })();` });
 // HOLDING THE SERVER'S ANSWER, AND HEARING WHAT THE PAGE SAYS. Two more
 // recorders for part D, installed the same way and over the same socket.
@@ -749,6 +846,107 @@ for (const url of ['/?room=ABCD', '/?squad=ABCD']) {
   if (t.length === 1 && t[0].intro === 'running' && seated && r.length === 1 && st && st.reason === 'abort' && !left) {
     ok('D8: a room tap that lands while the intro plays takes the seat, and the intro steps aside cleanly (abort, no overlay, nothing inert)');
   } else fail(`D8: room tap during the intro — taps ${JSON.stringify(t)}, seated ${seated}, joins ${JSON.stringify(r)}, intro ${JSON.stringify(st)}, overlay or inert left ${left}`);
+}
+
+// ---- D12-D16. A SQUAD LINK THAT OPENS THE APP (owner, 2026-10-10) ----------
+// "Tapping the link opens the app straight into the squad if your friend has
+// it." iOS opens the app with https://<host>/squad/CODE (the AASA claims
+// /squad/*), cold or warm, through @capacitor/app's appUrlOpen, and the app
+// joins it by the push tap's rules (onPushTap): it waits for the socket's
+// hello, a held seat's resume wins, a match in progress says so. Every frame
+// goes to this suite's own server; the link's host is only ever a string here.
+const SQ_URL = PUB + '/squad/ABCD';
+const plantUrl = (u) => ev(`(sessionStorage.setItem('cc_test_url', ${JSON.stringify(u)}), true)`);
+const openNow = (u) => ev(`(window.__cap.open(${JSON.stringify(u)}), true)`);
+const urls = () => ev('JSON.stringify(window.__urls)').then(JSON.parse);
+const appCalls = () => ev('JSON.stringify(window.__cap.appCalls)').then(JSON.parse);
+{
+  await seed(false);
+  await plantUrl(SQ_URL);
+  await nav('');
+  const f = await tx(), s = squadJoins(f), r = roomJoins(f), u = await urls(), m = await sentSquadJoins(), calls = await appCalls(), heard = await said();
+  if (u.length === 1 && u[0].connected === false && s.length === 1 && s[0].code === 'ABCD' && !r.length && m.length === 1 && m[0].intro > 0
+      && JSON.stringify(calls) === '["addListener:appUrlOpen"]' && !heard.toasts.some((x) => /Reconnecting|No connection|Sign/.test(x)) && !heard.homeError.length) {
+    ok('D12: a squad link that launched the app (cold) is held until boot listens, lands before the socket opens, and sends one squad join once the hello has settled, quietly');
+  } else fail(`D12: cold squad link — urls ${JSON.stringify(u)}, squad ${JSON.stringify(s)}, room ${JSON.stringify(r)}, sent ${JSON.stringify(m)}, plugin calls ${JSON.stringify(calls)}, said ${JSON.stringify(heard)}`);
+}
+{
+  // WARM: the app is open and connected. A squad link joins; a link of any
+  // other shape opens the app and does nothing, as before (the old ?squad=
+  // shape included: iOS never opens the app with it, and the web reads it at
+  // boot, unchanged); a squad link carrying a fragment is still a squad link.
+  await ev('(window.__tx = [], window.__sent = [], true)');
+  await openNow(SQ_URL);
+  await sleep(500);
+  const a = squadJoins(await tx());
+  await ev('(window.__tx = [], true)');
+  for (const u of ['https://evil.example/squad/WXYZ', 'http://tanks.abarabrothers.com/squad/WXYZ', PUB + '/?squad=WXYZ', 'capacitor://localhost/squad/WXYZ', PUB + '/squad/WXYZ/x']) await openNow(u);
+  await sleep(500);
+  const b = await tx();
+  await ev('(window.__tx = [], true)');
+  await openNow(PUB + '/squad/WXYZ#access_token=t&refresh_token=r');
+  await sleep(500);
+  const c = squadJoins(await tx());
+  if (a.length === 1 && a[0].code === 'ABCD' && !squadJoins(b).length && !roomJoins(b).length && c.length === 1 && c[0].code === 'WXYZ') {
+    ok('D13: a squad link opening the running app (warm) sends one join; five other shapes send nothing; a squad link with a fragment is still read as the squad');
+  } else fail(`D13: warm — squad link ${JSON.stringify(a)}, other shapes ${JSON.stringify(b.filter((x) => x.type === 'join' || x.type === 'squad'))}, with a fragment ${JSON.stringify(c)}`);
+}
+{
+  // A HELD SEAT'S RESUME WINS, as it does over a push tap (D5): the link waits
+  // for the answer, and goes once the resume is refused.
+  await seed(true);
+  await holdNext(['resumeError']);
+  await plantUrl(SQ_URL);
+  await nav('');
+  const u = await urls(), early = squadJoins(await tx()), parked = await ev('pendingPushTap'), held = await ev('window.__held ? window.__held.length : -1');
+  const n = await release();
+  await sleep(700);
+  const f = await tx(), j = squadJoins(f), resumes = f.filter((m) => m.type === 'resume' && m.code === 'WXYZ');
+  const after = await ev('pendingPushTap'), rec = await ev(`localStorage.getItem('cc_resume')`);
+  if (u.length === 1 && u[0].resume === true && !early.length && parked === '/?squad=ABCD' && held === 1 && n === 1
+      && resumes.length === 1 && j.length === 1 && j[0].code === 'ABCD' && f.indexOf(j[0]) > f.indexOf(resumes[0]) && after === '' && rec === null) {
+    ok('D14: a squad link landing while a held seat\'s resume is unanswered waits; the resume is refused, and the link then joins once, after it');
+  } else fail(`D14: held seat + squad link — urls ${JSON.stringify(u)}, early ${JSON.stringify(early)}, parked ${JSON.stringify(parked)}, held ${held}, released ${n}, resumes ${JSON.stringify(resumes)}, joins ${JSON.stringify(j)}, parked after ${JSON.stringify(after)}, record ${rec}`);
+}
+{
+  // AND A HELD SEAT THAT IS RESTORED KEEPS THE PLAYER IN THE MATCH (D10): the
+  // waiting link is dropped and no join is sent.
+  const host = await hostRoom();
+  await seed(false);
+  await plant(`/?room=${host.code}`);
+  await nav('');
+  const seated = await seatedIn(host.code);
+  await holdNext(['restore']);
+  await plantUrl(SQ_URL);
+  await nav('');
+  const u = await urls(), parked = await ev('pendingPushTap');
+  await release();
+  const back = await seatedIn(host.code);
+  await sleep(700);
+  const f = await tx(), after = await ev('pendingPushTap');
+  host.close();
+  if (seated && u.length === 1 && u[0].resume === true && parked === '/?squad=ABCD' && back && !squadJoins(f).length && !roomJoins(f).length && after === '') {
+    ok('D15: a squad link that waited on a held seat is dropped when the seat is restored: the player is back in the match and no join is sent');
+  } else fail(`D15: restored seat + squad link — seated ${seated}, urls ${JSON.stringify(u)}, parked ${JSON.stringify(parked)}, back ${back}, joins ${JSON.stringify(f.filter((m) => m.type === 'join' || m.type === 'squad'))}, parked after ${JSON.stringify(after)}`);
+}
+{
+  // A MATCH IN PROGRESS OUTRANKS THE LINK, and says so (C4).
+  await seed(false);
+  await nav('');
+  await ev('(window.__tx = [], S.playing = true, S.code = "WXYZ", true)');
+  await openNow(SQ_URL);
+  let seen = '';
+  for (let i = 0; i < 30; i++) { seen = await ev('document.body.innerText || ""'); if (seen.includes('Finish this match first')) break; await sleep(120); }
+  const f = await tx();
+  await ev('(S.playing = false, S.code = null, true)');
+  if (!squadJoins(f).length && !roomJoins(f).length && seen.includes('Finish this match first')) ok('D16: a squad link during a match sends nothing and says so out loud');
+  else fail(`D16: squad link during a match sent ${JSON.stringify(f.filter((m) => m.type === 'join' || m.type === 'squad'))}, body=${JSON.stringify(seen.slice(0, 160))}`);
+}
+{
+  // THE NATIVE PAGE BUILDS THE SAME PUBLIC LINK: the app's origin is never in it.
+  const l = await ev(`JSON.stringify({ native: IS_NATIVE, link: squadLink('abcd') })`).then(JSON.parse);
+  if (l.native === true && l.link === SQ_URL) ok(`D17: in the native page squadLink builds ${SQ_URL}, never the app's own origin`);
+  else fail(`D17: native squadLink ${JSON.stringify(l)}`);
 }
 
 console.log(errors.length ? `\n${errors.length} FAILED` : '\nall deeplink checks passed');

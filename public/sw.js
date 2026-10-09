@@ -108,6 +108,13 @@ self.addEventListener('fetch', (e) => {
   if (url.origin !== self.location.origin) return;      // never touch other origins
   // /push/* is state, not an asset, and /ws never reaches fetch anyway.
   if (url.pathname.startsWith('/push/')) return;
+  // A SQUAD LINK'S PAGE IS LEFT TO THE NETWORK. /squad/CODE is the download
+  // page a shared squad link opens in a browser, and it must never be the game
+  // (owner, 2026-10-10). Handled below, an offline visit would get the cached
+  // GAME SHELL, broken besides, since its relative assets resolve under
+  // /squad/; and every code visited online would be cached under its own name.
+  // It is no part of the offline game, so the worker does not touch it.
+  if (url.pathname === '/squad' || url.pathname.startsWith('/squad/')) return;
 
   // Navigations: network-first so an online player is never stuck on an old
   // build; cached shell only when the network actually fails.

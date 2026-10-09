@@ -2182,31 +2182,76 @@ if (want('t9')) try {
       ok(`${V}: Ready and Leave pressed past a dead attribute send nothing -- seats, a squad of one, a dropped member, an unheld roster, a refused re-ask -- and a Start pressed by anyone sends nothing at all`);
     else fail(`${V}: handler gates ${JSON.stringify(b6)}`);
 
-    // ---- B7. THE CODE LINK COPIES THE LINK, NOT THE CODE (design 4.4 / 5.7):
-    //      /?squad=<code> is what an invite push opens. Nothing is sent.
+    // ---- B7. THE CODE LINK COPIES THE LINK, NOT THE CODE (design 4.4 / 5.7),
+    //      AND THE LINK IS THE PUBLIC ONE (owner, 2026-10-10: "The share button
+    //      doesn't work when you share in the squad menu"). UPDATED: it was
+    //      this page's origin + /?squad=CODE, and in the app that origin is
+    //      capacitor://localhost, a link nobody else can open. It is now
+    //      https://<CC_NATIVE_HOST>/squad/CODE whatever page builds it, and this
+    //      page is http://127.0.0.1, so a link built from location.origin fails
+    //      here. Copying says so. Nothing is sent.
+    const PUB = 'https://tanks.abarabrothers.com/squad/QK7T';
+    const toastsNow = () => ev(`[...document.querySelectorAll('.toast-item')].map((t) => t.textContent)`);
     await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true })] });
-    await ev(`(window.__clip = null, navigator.clipboard.writeText = (t) => { window.__clip = t; return Promise.resolve(); }, true)`);
+    await ev(`(window.__clip = null, navigator.clipboard.writeText = (t) => { window.__clip = t; return Promise.resolve(); }, document.querySelectorAll('.toast-item').forEach((t) => t.remove()), true)`);
     await clearTx(); await t9click('#bay [data-sq="link"]'); await sleep(60);
-    const clip = await ev('window.__clip'), b7f = await squads();
-    if (clip === `http://127.0.0.1:${appPort}/?squad=QK7T` && b7f.length === 0)
-      ok(`${V}: the code link copies /?squad=QK7T and sends nothing`);
-    else fail(`${V}: code link copied ${JSON.stringify(clip)}, sent ${JSON.stringify(b7f)}`);
+    const clip = await ev('window.__clip'), b7f = await squads(), b7t = await toastsNow();
+    if (clip === PUB && b7f.length === 0 && JSON.stringify(b7t) === '["Squad link copied."]')
+      ok(`${V}: the code link copies the public link ${PUB}, never this page's origin, says "Squad link copied." and sends nothing`);
+    else fail(`${V}: code link copied ${JSON.stringify(clip)}, toasts ${JSON.stringify(b7t)}, sent ${JSON.stringify(b7f)}`);
     // ---- B7b. SHARE (U4; owner, 2026-10-06: the squad code with Copy and
     //       Share). Offered only where the device has a share sheet, as the
-    //       Friends screen's is, and it shares the same link, with the code in
-    //       words. A squad with no code to share offers it dead. Nothing is sent.
+    //       Friends screen's is, and it shares the same public link with the
+    //       code in words (UPDATED, owner 2026-10-10: the message is "Join my
+    //       squad in Cannons & Canyons! Squad code CODE."). A sheet that shared
+    //       copies nothing and says nothing. Nothing is sent.
     await ev(`(window.__shareHad = Object.getOwnPropertyDescriptor(navigator, 'share'), Object.defineProperty(navigator, 'share', { value: undefined, configurable: true }), true)`);
     const b7none = await ev(`(Bay.show('squad'), document.dispatchEvent(new Event('cc:social')), !!document.querySelector('#bay [data-sq="share"]'))`);
-    await ev(`(window.__shared = null, Object.defineProperty(navigator, 'share', { value: (o) => { window.__shared = o; return Promise.resolve(); }, configurable: true }), document.dispatchEvent(new Event('cc:social')), true)`);
+    await ev(`(window.__shared = null, window.__clip = null, Object.defineProperty(navigator, 'share', { value: (o) => { window.__shared = o; return Promise.resolve(); }, configurable: true }), document.dispatchEvent(new Event('cc:social')), document.querySelectorAll('.toast-item').forEach((t) => t.remove()), true)`);
     await sleep(40);
     const b7live = await ev(`(() => { const b = document.querySelector('#bay [data-sq="share"]'); return b ? !b.disabled : null; })()`);
-    await clearTx(); await t9click('#bay [data-sq="share"]'); await sleep(60);
-    const shared = await ev('window.__shared'), b7sf = await squads();
-    await ev(`(() => { const d = window.__shareHad; if (d) Object.defineProperty(navigator, 'share', d); else delete navigator.share; document.dispatchEvent(new Event('cc:social')); return true; })()`);
-    if (b7none === false && b7live === true && shared && shared.url === `http://127.0.0.1:${appPort}/?squad=QK7T`
-        && shared.text === 'Join my squad in Cannons and Canyons. Squad code QK7T.' && b7sf.length === 0)
-      ok(`${V}: Share is offered only with a share sheet, and shares /?squad=QK7T with the code in words, sending nothing`);
-    else fail(`${V}: share ${JSON.stringify({ none: b7none, live: b7live, shared, sent: b7f })}`);
+    await clearTx(); await t9click('#bay [data-sq="share"]'); await sleep(120);
+    const shared = await ev('window.__shared'), b7sf = await squads(), b7sc = await ev('window.__clip'), b7st = await toastsNow();
+    if (b7none === false && b7live === true && shared && shared.url === PUB
+        && shared.text === 'Join my squad in Cannons & Canyons! Squad code QK7T.' && b7sf.length === 0 && b7sc === null && b7st.length === 0)
+      ok(`${V}: Share is offered only with a share sheet, and shares ${PUB} with the code in words, copying nothing and sending nothing`);
+    else fail(`${V}: share ${JSON.stringify({ none: b7none, live: b7live, shared, sent: b7sf, clip: b7sc, toasts: b7st })}`);
+    // ---- B7c. A SHARE THAT FAILS IS NEVER SILENT (owner, 2026-10-10). The
+    //       sheet's refusal was caught and dropped, so a Share that did nothing
+    //       looked like one that worked. Any failure but the player's own
+    //       dismissal (AbortError) copies the same link and says so; a
+    //       clipboard that refuses too shows the link to copy by hand. No share
+    //       sheet at all copies (the window offers no Share then, so the
+    //       control is pressed through the same delegated listener).
+    const shareCase = async (shareSrc, clipSrc) => {
+      await ev(`(window.__clip = null, window.__shared = null, window.__prompted = null,
+        window.__promptHad = window.__promptHad || window.prompt,
+        window.prompt = (m, v) => { window.__prompted = [m, v]; return null; },
+        navigator.clipboard.writeText = ${clipSrc || '(t) => { window.__clip = t; return Promise.resolve(); }'},
+        Object.defineProperty(navigator, 'share', { value: ${shareSrc}, configurable: true }),
+        document.querySelectorAll('.toast-item').forEach((t) => t.remove()), true)`);
+      await clearTx();
+      await ev(`(() => { const b = document.createElement('button'); b.setAttribute('data-sq', 'share');
+        document.getElementById('sqWin-squad').appendChild(b); b.click(); b.remove(); return true; })()`);
+      await sleep(150);
+      return ev(`({ clip: window.__clip, shared: !!window.__shared, prompted: window.__prompted,
+        toasts: [...document.querySelectorAll('.toast-item')].map((t) => t.textContent), sent: window.__tx.filter((f) => f.type === 'squad').length })`);
+    };
+    const COPIED = (r) => r.clip === PUB && JSON.stringify(r.toasts) === '["Squad link copied."]' && r.prompted === null && r.sent === 0;
+    const b7c = {
+      refused: await shareCase(`(o) => { window.__shared = o; return Promise.reject(new DOMException('refused', 'NotAllowedError')); }`),
+      badData: await shareCase(`(o) => { window.__shared = o; return Promise.reject(new TypeError('bad data')); }`),
+      threw: await shareCase(`(o) => { window.__shared = o; throw new TypeError('no'); }`),
+      missing: await shareCase('undefined'),
+      dismissed: await shareCase(`(o) => { window.__shared = o; return Promise.reject(new DOMException('dismissed', 'AbortError')); }`),
+      noClip: await shareCase(`(o) => { window.__shared = o; return Promise.reject(new DOMException('refused', 'NotAllowedError')); }`, `() => Promise.reject(new DOMException('no', 'NotAllowedError'))`),
+    };
+    await ev(`(() => { window.prompt = window.__promptHad; const d = window.__shareHad; if (d) Object.defineProperty(navigator, 'share', d); else delete navigator.share; document.dispatchEvent(new Event('cc:social')); return true; })()`);
+    if (COPIED(b7c.refused) && b7c.refused.shared && COPIED(b7c.badData) && COPIED(b7c.threw) && COPIED(b7c.missing) && !b7c.missing.shared
+        && b7c.dismissed.shared && b7c.dismissed.clip === null && b7c.dismissed.toasts.length === 0 && b7c.dismissed.prompted === null && b7c.dismissed.sent === 0
+        && b7c.noClip.clip === null && JSON.stringify(b7c.noClip.prompted) === JSON.stringify(['Your squad link:', PUB]) && b7c.noClip.sent === 0)
+      ok(`${V}: a refused, failed or thrown Share, and a device with no share sheet, copy the link and say "Squad link copied."; a dismissed sheet says nothing; a refusing clipboard shows the link to copy by hand`);
+    else fail(`${V}: share failures ${JSON.stringify(b7c)}`);
     // ---- C0. A CLEAN START FOR THE INVITE CHECKS (review T9-R1-9): a frame an
     //      earlier check left unanswered would keep the box busy, and every Join
     //      below would be dead for a reason that has nothing to do with invites.

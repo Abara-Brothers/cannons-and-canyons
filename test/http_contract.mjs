@@ -24,6 +24,11 @@
 import { spawn } from 'node:child_process';
 import http from 'node:http';
 import net from 'node:net';
+import fs from 'node:fs';
+import vm from 'node:vm';
+import crypto from 'node:crypto';
+import { qrMatrix, qrSvg } from '../server/qr.js';
+import { squadPage, squadPathCode, APP_STORE_URL } from '../server/squad-page.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const withTimeout = (p, ms, label) =>
@@ -283,6 +288,146 @@ const comps = details.flatMap((d) => d.components || []);
 const claimsEverything = comps.some((c) => ['/', '*', '/*'].includes(c['/']));
 const target = (alinks && alinks[0] && alinks[0].target) || {};
 
+// ---- (k) THE SQUAD LINK'S PAGE (owner, 2026-10-10) ---------------------------
+// A squad's Share hands out https://tanks.abarabrothers.com/squad/CODE. Where
+// the app is installed iOS opens it there (the AASA's /squad/* above); a
+// browser gets THIS: a download page, never the game. "It must not link to the
+// website if they dont have the app, it should prompt the user to download
+// the app", and on a computer, the same page with a QR code to scan. Before
+// this route, /squad/CODE had no file extension, so the SPA fallback answered
+// it with the GAME (the (c) deep-link rule), which is exactly what the owner
+// ruled out.
+const SQ_LINK = 'https://tanks.abarabrothers.com/squad/QK7T';
+const sqGet = async (p) => {
+  const r = await fetch(`http://127.0.0.1:${port}${p}`);
+  return { status: r.status, type: r.headers.get('content-type') || '', robots: r.headers.get('x-robots-tag') || '',
+    cache: r.headers.get('cache-control') || '', hsts: r.headers.get('strict-transport-security') || '',
+    nosniff: r.headers.get('x-content-type-options') || '', referrer: r.headers.get('referrer-policy') || '',
+    csp: r.headers.get('content-security-policy') || '', body: await r.text() };
+};
+const sqPage = await sqGet('/squad/QK7T');
+const sqLower = await sqGet('/squad/qk7t');
+// Every way a path under /squad can fail to name a code: none, the wrong
+// length, a letter or digit the alphabet leaves out (I, O, 0, 1), a space,
+// a trailing slash, anything after the code. Each is a plain 404, never html.
+const SQ_BAD = ['/squad', '/squad/', '/squad/QK7', '/squad/QK7TT', '/squad/QK7I', '/squad/QK7O', '/squad/QK70',
+  '/squad/QK71', '/squad/QK%20T', '/squad/QK7T/', '/squad/QK7T/x', '/squad/QK7T.html'];
+const sqBad = [];
+for (const p of SQ_BAD) { const r = await sqGet(p); sqBad.push([p, r.status, r.type]); }
+const sqBody = sqPage.body;
+const sqQr = (sqBody.match(/<div class="qr">(<svg[\s\S]*?<\/svg>)/) || [])[1] || '';
+const sqHrefs = [...sqBody.matchAll(/\b(?:href|src|action)="([^"]*)"/g)].map((m) => m[1]);
+// THE QR, PINNED. This matrix is server/qr.js's encoding of the link above,
+// and Apple's reader (CoreImage CIDetector, macOS, 2026-10-09) decoded it back
+// to exactly that link, as it decoded versions 1 to 10 and all eight masks from
+// the same encoder. A change to the encoder that changes the picture fails here.
+const QR_GOLDEN = [
+  '#######..####...#..##.#######',
+  '#.....#....#..###...#.#.....#',
+  '#.###.#.###.#..#..###.#.###.#',
+  '#.###.#.#..###.#.#.#..#.###.#',
+  '#.###.#.#..#.#..#####.#.###.#',
+  '#.....#.#...#####.#...#.....#',
+  '#######.#.#.#.#.#.#.#.#######',
+  '........#..#..###.##.........',
+  '#.#####...#.#.####..#.#####..',
+  '..#.##..##....#.#.###.###...#',
+  '...#.##...###..##....#.#.....',
+  '.#.#....###...##...#..#..#.#.',
+  '#.#####.##..#.####...#...##..',
+  '.###.#..#..#.#..#..######...#',
+  '#...#######.##.####.#.#..##..',
+  '.##..#.#.#.#..#...#..###...#.',
+  '#.##..##..####.###.......##..',
+  '#.#.#...##.#..#.#..######.#.#',
+  '#.#######...#######..#.##.#..',
+  '#.##.#.#..###.#.#..#....#..#.',
+  '#.#.#.#.#.##..#..##.#####.###',
+  '........##.##.#..####...#####',
+  '#######...##..####.##.#.###..',
+  '#.....#.#.##...##.###...#..##',
+  '#.###.#.#.##.....#..#####.###',
+  '#.###.#.#.#.....#.##.....####',
+  '#.###.#.#..##.#####..#######.',
+  '#.....#..#.#..#.#...##..##.#.',
+  '#######.######...#.#.######..',
+];
+const qm = qrMatrix(SQ_LINK);
+// AND EVERY PATH THROUGH THE ENCODER the link above does not take: a 42-byte
+// link fills version 3 exactly (no pad bytes) and scores only one mask. So the
+// pictures of that link under each mask, and of texts that use the pad bytes,
+// two and four blocks, the version bits and the 16-bit count, are pinned by
+// the sha256 of their rows; CoreImage decoded each one when it was pinned.
+const QR_PINS = [
+  [SQ_LINK, 0, 3, '655d9fda436af118e4b986895e7d15fa031e4edeff617aae2f4c9d6aeb7e374b'],
+  [SQ_LINK, 1, 3, 'cebfddd1705267bff8efba4ab3104880acbc7f9c41d17149d12b285881239c1a'],
+  [SQ_LINK, 2, 3, '456f194db0ec66ab9feeaf0db01f4f76735633eb369f2e7f343b17289b024448'],
+  [SQ_LINK, 3, 3, '1fc23610fa5c6f95fbb6ba2240dda487575d4633bafcfc9a8056715f11435243'],
+  [SQ_LINK, 4, 3, 'df9b712ee8a2075b84775c8131a3ed7ed10b50c7a56f82c829da794210d5a8e3'],
+  [SQ_LINK, 5, 3, 'aa375de699201d2200064791c2dece462c38bbf4dcde9604f653c8e9a6573e1f'],
+  [SQ_LINK, 6, 3, '8ece16fb7bee06a89cc64939d45928bfff047028e1bbd0068a39f80a9623a5b4'],
+  [SQ_LINK, 7, 3, '26d2a622c2af45496e84354cd5262c0458058c055ce1d8d692c7b7e9609e521e'],
+  ['A', undefined, 1, 'c8529cd82afac26fa7f7b81f17fa4de152e3f53e14293727dece53aef0cfc86f'],
+  ['y'.repeat(60), undefined, 4, '6b3dbc8f33b1ea074e8a909ced1b796a8f4a422201e89e7ca053eead08098641'],
+  ['v'.repeat(110), undefined, 7, 'f15f16e406bef1ae6e5c597dc6ee0c1af65199e649020205b80064418d998853'],
+  ['t'.repeat(213), undefined, 10, '0cfb07d0ea416105bd4d8b27506103b10f07884f68cbed408d1fd8f06d4fdbcd'],
+];
+const qrPinWrong = QR_PINS.filter(([t, k, v, sha]) => {
+  const m = qrMatrix(t, k);
+  const rows = m.modules.map((r) => r.map((d) => (d ? '#' : '.')).join('')).join('\n');
+  return m.version !== v || crypto.createHash('sha256').update(rows).digest('hex') !== sha;
+}).map(([t, k]) => `${t.slice(0, 12)}${t.length > 12 ? '...' : ''} mask ${k}`);
+let qrTooLong = false;
+try { qrMatrix('t'.repeat(214)); } catch (e) { qrTooLong = e instanceof RangeError; }
+const qrRows = qm.modules.map((r) => r.map((d) => (d ? '#' : '.')).join(''));
+// The SVG draws exactly that matrix: every run of its one path, offset by the
+// four-module quiet zone, is a run of dark modules, and every dark module is
+// in exactly one run.
+const svgCells = (() => {
+  const svg = qrSvg(SQ_LINK), cells = new Map();
+  const d = (svg.match(/<path fill="#000" d="([^"]*)"/) || [])[1] || '';
+  for (const m of d.matchAll(/M(\d+) (\d+)h(\d+)v1h-(\d+)z/g)) {
+    const [x, y, w, back] = m.slice(1).map(Number);
+    if (w !== back) return null;
+    for (let k = 0; k < w; k++) { const key = `${x - 4 + k},${y - 4}`; cells.set(key, (cells.get(key) || 0) + 1); }
+  }
+  return { cells, view: (svg.match(/viewBox="0 0 (\d+) (\d+)"/) || []).slice(1).map(Number) };
+})();
+let darkCount = 0;
+qm.modules.forEach((r) => r.forEach((dk) => { if (dk) darkCount++; }));
+const svgExact = !!svgCells && svgCells.cells.size === darkCount
+  && [...svgCells.cells].every(([k, n]) => { const [x, y] = k.split(',').map(Number); return n === 1 && qm.modules[y] && qm.modules[y][x] === true; })
+  && svgCells.view[0] === qm.size + 8 && svgCells.view[1] === qm.size + 8;
+// THE ALPHABET IS THE ENGINE'S: every character of room-engine's CODE_CHARS
+// names a code, and no other letter or digit does.
+const engineChars = (fs.readFileSync(new URL('../public/room-engine.js', import.meta.url), 'utf8').match(/const CODE_CHARS = '([A-Z0-9]+)';/) || [])[1] || '';
+const alphaWrong = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'].filter((ch) => (squadPathCode('/squad/' + ch.repeat(4)) === ch.repeat(4)) !== engineChars.includes(ch));
+// THE APP STORE LINE IS ONE CONSTANT: empty today (coming soon); a listing
+// turns the line into a Download button and the coming-soon line goes.
+const STORE = 'https://apps.apple.com/app/id1234567890';
+const sqStore = squadPage({ code: 'QK7T', origin: 'https://tanks.abarabrothers.com', appStoreUrl: STORE });
+// THE SERVICE WORKER LEAVES /squad/ TO THE NETWORK. Its navigation handler
+// falls back to the cached GAME offline, so it must not take a squad page at
+// all. Driven through sw.js's own fetch listener: respondWith is the whole
+// difference between handling a request and leaving it to the browser.
+const swTook = (() => {
+  const handlers = {};
+  const self = { location: { origin: 'https://tanks.abarabrothers.com' }, addEventListener: (t, f) => { handlers[t] = f; },
+    skipWaiting() {}, clients: { claim: async () => {} }, registration: {} };
+  vm.runInContext(fs.readFileSync(new URL('../public/sw.js', import.meta.url), 'utf8'), vm.createContext({
+    self, URL, console, clients: {}, Response: { error: () => null },
+    caches: { open: async () => ({ put() {}, match: async () => null }), match: async () => null, keys: async () => [] },
+    fetch: () => new Promise(() => {}),
+  }), { filename: 'sw.js' });
+  const took = (p, mode) => {
+    let n = 0;
+    handlers.fetch({ request: { method: 'GET', url: 'https://tanks.abarabrothers.com' + p, mode }, respondWith: () => { n++; } });
+    return n;
+  };
+  return { squad: took('/squad/QK7T', 'navigate'), bare: took('/squad', 'navigate'), sub: took('/squad/QK7T/x.png', 'no-cors'),
+    game: took('/', 'navigate'), privacy: took('/privacy.html', 'navigate'), asset: took('/app.js?v=14', 'no-cors') };
+})();
+
 srv.kill();
 
 const results = [
@@ -347,11 +492,48 @@ const results = [
   ['(h) AASA appID is TEAMID.bundleid',
     details.some((d) => (d.appIDs || []).includes('ABCDE12345.com.abarabrothers.cannonsandcanyons'))],
   ['(h) AASA scoped to the OAuth callback', comps.some((c) => c['/'] === '/auth/callback')],
+  // (owner, 2026-10-10) and to the squad link, so iOS opens the app for one.
+  ['(h) AASA keeps the OAuth callback exactly and adds the squad link: two components, nothing else',
+    JSON.stringify(comps.map((c) => c['/'])) === JSON.stringify(['/auth/callback', '/squad/*'])],
   ['(h) AASA does NOT claim the whole domain', claimsEverything === false],
   ['(h) delete-account.html is still an ordinary web page', deleteStillWeb === 200],
   ['(h) assetlinks names the package', target.package_name === 'com.abarabrothers.cannonsandcanyons'],
   ['(h) assetlinks carries every fingerprint, trimmed',
     JSON.stringify(target.sha256_cert_fingerprints) === JSON.stringify(['AA:BB:CC:DD', 'EE:FF:00:11'])],
+  ['(k) /squad/CODE -> 200 html', sqPage.status === 200 && sqPage.type.includes('text/html')],
+  ['(k) it is the download page, never the game: no script, none of the game\'s files, the invite heading',
+    !/<script/i.test(sqBody) && !/app\.js|bay\.js|intro\.js|id="bay"|manifest/.test(sqBody) && sqBody.includes('<h1>You&#39;ve been invited to a squad</h1>')],
+  ['(k) the game is named and shown: its name, its icon and a still from the game',
+    sqBody.includes('<span>Cannons &amp; Canyons</span>') && sqHrefs.includes('/icons/icon-180.png') && sqHrefs.includes('/bay/card-duel-wide.webp')],
+  ['(k) the code is shown large', sqBody.includes('<p class="code">QK7T</p>')],
+  ['(k) coming soon to the App Store, from the one constant', APP_STORE_URL === '' && sqBody.includes('<p class="soon">Cannons &amp; Canyons is coming soon to the App Store.</p>') && !/<a\b/i.test(sqBody)],
+  ['(k) it links to nothing: no anchor, no form, and the only href is its favicon',
+    !/<a\b|<form\b/i.test(sqBody) && JSON.stringify(sqHrefs.filter((h) => !/^\/(icons|bay)\//.test(h))) === '[]' && JSON.stringify([...sqBody.matchAll(/href="([^"]*)"/g)].map((m) => m[1])) === '["/icons/icon-32.png"]'],
+  ['(k) noindex, in the header and the page', /noindex/.test(sqPage.robots) && sqBody.includes('<meta name="robots" content="noindex, nofollow">')],
+  ['(k) never cached', /no-store/.test(sqPage.cache)],
+  ['(k) the same security headers as every page (HSTS, nosniff, Referrer-Policy, the one CSP)',
+    /max-age=31536000/.test(sqPage.hsts) && sqPage.nosniff === 'nosniff' && sqPage.referrer === 'no-referrer' && sqPage.csp === sec.csp && sec.csp !== ''],
+  ['(k) the QR is the shared public link, not this server\'s own host', sqQr !== '' && sqQr === qrSvg(SQ_LINK)],
+  // Hidden by default, shown inside the large-screen query (deeplink.mjs A2
+  // measures it in a real browser at a computer's size and a phone's).
+  ['(k) the QR is for a large screen only', (() => {
+    const off = sqBody.indexOf('.qr{display:none}'), q = sqBody.indexOf('@media (min-width:700px) and (min-height:500px){');
+    const on = sqBody.indexOf('.qr{display:block'), close = sqBody.indexOf('\n}\n', q);
+    return off !== -1 && q > off && on > q && close > on;
+  })()],
+  ['(k) a lower-case link is the same squad', sqLower.status === 200 && sqLower.body === sqBody],
+  ['(k) every path under /squad that names no code is a plain 404, never the game',
+    sqBad.every(([, st, ty]) => st === 404 && !ty.includes('html'))],
+  ['(k) the codes it answers are exactly the engine\'s alphabet', engineChars.length === 31 && alphaWrong.length === 0],
+  ['(k) the QR matrix is the decoded, pinned one (version 3, level M)', qm.version === 3 && JSON.stringify(qrRows) === JSON.stringify(QR_GOLDEN)],
+  ['(k) the SVG draws exactly that matrix, in a four-module quiet zone', svgExact],
+  ['(k) every mask, the pad bytes, several blocks, the version bits and the 16-bit count draw their pinned, decoded pictures',
+    qrPinWrong.length === 0],
+  ['(k) text longer than version 10 holds is refused, never drawn wrong', qrTooLong],
+  ['(k) an App Store link turns the line into a Download button, and the coming-soon line goes',
+    sqStore.includes(`<a class="store" href="${STORE}">Download on the App Store</a>`) && !sqStore.includes('coming soon')],
+  ['(k) the service worker leaves /squad/ to the network, and still serves the game, its pages and its assets',
+    swTook.squad === 0 && swTook.bare === 0 && swTook.sub === 0 && swTook.game === 1 && swTook.privacy === 1 && swTook.asset === 1],
   ['(h) assetlinks uses the handle_all_urls relation',
     !!(alinks && alinks[0] && (alinks[0].relation || []).includes('delegate_permission/common.handle_all_urls'))],
 ];
@@ -359,6 +541,7 @@ const results = [
 let bad = 0;
 for (const [name, ok] of results) { if (!ok) bad++; console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}`); }
 if (bad) {
+  console.log('(k) /squad paths:', JSON.stringify(sqBad), 'alphabet wrong:', JSON.stringify(alphaWrong), 'sw:', JSON.stringify(swTook), 'qr pins wrong:', JSON.stringify(qrPinWrong));
   console.log('\n--- server output ---\n' + state.log.slice(-1200));
   console.log(`\n${bad} FAILED`);
   process.exit(1);
