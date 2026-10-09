@@ -1697,7 +1697,9 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   const text = read('public/privacy.html').replace(/<!--[\s\S]*?-->/g, ' ').replace(/<[^>]+>/g, ' ')
     .replace(/&amp;/g, '&').replace(/\s+/g, ' ');
   const MUST = [
-    [/Last updated: 8 October 2026/, 'its date is the day round 2\'s corrections were made'],
+    // MOVED ON 2026-10-09, when rule 24's corrections (Sign in with Apple, the
+    // Apple Push Notification service) changed the page again.
+    [/Last updated: 9 October 2026/, 'its date is the day of its latest corrections (rule 24, 9 October)'],
     [/The game gives you a callsign, which you can change once a day,/, 'the short version: a callsign is given, and changed once a day'],
     [/and — if they are a friend or in a squad with you — whether you are online\./, 'the short version: a squad\'s members see whether you are online'],
     [/Callsign — the default one the game gave you from its word lists, or one you choose — and, if you are signed in, when you last set it/, 'the data table: the default name, a chosen one, and the time a signed-in name was set'],
@@ -1730,6 +1732,130 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
   const stale = STALE.filter(([re]) => re.test(text)).map(([re, why]) => `stale — ${why}: "${(text.match(re) || [''])[0]}"`);
   if (missing.length || stale.length) fail(`privacy.html no longer says what the game does:\n      ${missing.concat(stale).join('\n      ')}`);
   else ok(`privacy.html states round 2's names, presence, invites, held match, last screen and in-app export (${MUST.length} statements), and none of the ${STALE.length} old ones`);
+}
+
+// ---- 24. THE POLICY NAMES EVERY WAY TO SIGN IN AND EVERY PUSH ROUTE (final audit, 2026-10-09)
+// The policy read inside the iOS app said Google was the only account a player
+// could link, that sign-in was "handled by Google or by an anonymous token",
+// that the birth-year check ran before Google only, and that notifications
+// went through Firebase Cloud Messaging and browser push services only. The
+// same build offers Sign in with Apple (PROVIDERS, since 4ea4a39) and the
+// server delivers iOS nudges straight to Apple's Push Notification service
+// (69dc5c0). App Review reads that page in the app (Guideline 5.1.1), so each
+// was a false statement in front of the reviewer, and the store documents said
+// the same two things ("iOS still ships without push", "Blocked on BQ-005").
+//
+// SO THIS RULE READS THE CODE AS WELL AS THE PAGES, and a provider or a push
+// route added without a sentence fails here rather than in review:
+//   a. every provider app.js's PROVIDERS line can offer is named where the
+//      policy says what linking gives us, in its birth-year sentence and in
+//      the sentence on who handles sign-in;
+//   b. a push host in server.js (Apple's, Firebase's) is named in both the
+//      Notifications section and the section on where the data lives;
+//   c. the policy says Apple is asked for the email address and nothing else,
+//      which stays true only while the native sheet asks for the email scope
+//      alone (SceneDelegate.swift, requestedScopes);
+//   d. while app.js hides the iOS nudge opt-in, both store documents say so,
+//      and once it is unhidden neither may (the declarations change with it).
+// Then the corrected sentences are pinned and the old ones may not come back,
+// in the policy, the deletion page and the two store documents. Pages are read
+// as rules 16, 19 and 23 read them: comments blanked, tags dropped, entities
+// decoded, every run of white space one space.
+{
+  const flatHtml = (src) => src.replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ');
+  const polRaw = read('public/privacy.html').replace(/<!--[\s\S]*?-->/g, ' ');
+  const pol = flatHtml(polRaw);
+  const del = flatHtml(read('public/delete-account.html').replace(/<!--[\s\S]*?-->/g, ' '));
+  // A Markdown quote's "> " marker opens every wrapped line of a pasted block,
+  // so it is dropped before the white space is, or a wrapped sentence would
+  // carry one in the middle and never match.
+  const md = (rel) => read(rel).replace(/^[ \t]*>[ \t]?/gm, '').replace(/\s+/g, ' ');
+  const listing = md('store/STORE_LISTING.md'), review = md('store/REVIEW_NOTES.md');
+  // Executable code only, as rule 21 reads app.js: a provider or a gate left in
+  // a comment is not one the app has.
+  const code = (rel) => read(rel).replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+  const app = code('public/app.js'), server = code('server.js');
+  const scene = read('ios/App/App/SceneDelegate.swift').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+  // One section of the policy by its heading, read flat.
+  const section = (head) => {
+    const parts = polRaw.split(/<h2\b/);
+    const hit = parts.find((p) => flatHtml(p.replace(/^[^>]*>/, '')).trim().startsWith(head));
+    return hit ? flatHtml(hit.replace(/^[^>]*>/, '')) : '';
+  };
+  const bad = [];
+
+  // a. the providers
+  const provLine = (app.match(/^const PROVIDERS = .*$/m) || [''])[0];
+  const provs = [...new Set((provLine.match(/'([a-z]+)'/g) || []).map((q) => q.slice(1, -1)))];
+  const NAME = { apple: 'Apple', google: 'Google' };
+  const LINKS = { apple: /in the iOS app you can link an Apple account with Sign in with Apple/, google: /You can optionally link a Google account/ };
+  const ageWho = ((pol.match(/Before anyone can sign in with ([^,]+), the game asks for a birth year\./) || [])[1]) || '';
+  const handled = ((pol.match(/sign-in is handled by ([^)]+)\)/) || [])[1]) || '';
+  if (!provs.length) bad.push('app.js has no PROVIDERS line this rule can read');
+  for (const p of provs) {
+    if (!NAME[p]) { bad.push(`app.js offers a sign-in provider this rule does not know (${p}): add it to the policy and here`); continue; }
+    if (!LINKS[p].test(pol)) bad.push(`the policy does not say a player can link ${NAME[p]}`);
+    if (!ageWho.includes(NAME[p])) bad.push(`the birth-year sentence does not name ${NAME[p]} ("${ageWho}")`);
+    if (!handled.includes(NAME[p])) bad.push(`"sign-in is handled by" does not name ${NAME[p]} ("${handled}")`);
+  }
+
+  // b. the push routes
+  const notes = section('Notifications'), where = section('Where your data lives');
+  const ROUTES = [[/api\.push\.apple\.com/, 'Apple Push Notification service', 'in the iOS app'], [/fcm\.googleapis\.com/, 'Firebase Cloud Messaging', 'in the Android app']];
+  if (!notes || !where) bad.push('the policy has lost its Notifications or "Where your data lives" section');
+  for (const [host, name, where2] of ROUTES) {
+    if (!host.test(server)) continue;
+    for (const [label, txt] of [['Notifications', notes], ['Where your data lives', where]]) {
+      if (!new RegExp(name + ' \\((?:Apple|Google)\\) ' + where2).test(txt)) bad.push(`server.js delivers through ${name}, and the policy's "${label}" section does not name it ${where2}`);
+    }
+  }
+
+  // c. what Apple is asked for
+  const scopes = ((scene.match(/request\.requestedScopes = \[([^\]]*)\]/) || [])[1] || '').replace(/\s+/g, '');
+  if (scopes !== '.email') bad.push(`the native Apple sheet asks for [${scopes}], not [.email] alone: the policy says Apple is asked for the email address and nothing else`);
+
+  // d. the iOS nudge opt-in
+  const iosHidden = /getPlatform\(\) === 'ios'\) \{\s*\$\('notifyBtn'\)\.classList\.add\('hidden'\);/.test(app);
+  const LS_HIDDEN = /In build 1\.0\.0 \(8\) the opt-in is still hidden on iOS/, RN_HIDDEN = /The "nudge me" option is hidden there/;
+  if (iosHidden && !(LS_HIDDEN.test(listing) && RN_HIDDEN.test(review))) bad.push('app.js hides the iOS nudge opt-in, and a store document no longer says so');
+  if (!iosHidden && (LS_HIDDEN.test(listing) || RN_HIDDEN.test(review))) bad.push('app.js no longer hides the iOS nudge opt-in: the store documents still say it is hidden, and the iOS push declarations must be added');
+
+  const MUST = [
+    [pol, /The game asks Apple for your email address and nothing else, so Apple does not give us your name\./, 'the policy: Apple is asked for the email address only'],
+    [pol, /signed identity token carrying your Apple account identifier and that email address/, 'the policy: what Apple\'s identity token carries'],
+    [pol, /if you choose Apple's Hide My Email, a private relay address that Apple forwards to you/, 'the policy: the private relay address'],
+    [pol, /The token goes from your device straight to our sign-in provider, Supabase, which checks Apple's signature on it/, 'the policy: who processes the token'],
+    [pol, /Apple account identifier \(only if you link Apple, in the iOS app\)/, 'the policy\'s data table: the Apple account identifier'],
+    [pol, /It asks before either kind of sign-in and before linking either kind of account\./, 'the policy: the birth-year check covers sign-in and linking alike'],
+    [pol, /does not continue to Google or Apple\./, 'the policy: an under-13 answer goes on to neither provider'],
+    [pol, /What we hand that service is the subscription or device token to deliver to and the notification itself/, 'the policy: what a push service is handed'],
+    [del, /sign in with Google or Apple, if you linked one/, 'the deletion page: the Apple email is a way to find the account'],
+    [del, /and the Apple account identifier and email or relay address held if you linked Apple/, 'the deletion page: the Apple sign-in details are deleted'],
+    [listing, /the iOS app offers Sign in with Apple first and Google second/, 'the store listing: Sign in with Apple ships'],
+    [review, /the app asks Apple for the email scope only/, 'the review notes: what Apple returns'],
+  ];
+  const STALE = [
+    [pol, /sign-in is handled by Google or by an anonymous token/, 'the policy: sign-in by Google or an anonymous token'],
+    [pol, /Before anyone can sign in with Google, the game/, 'the policy: a birth-year check for Google only'],
+    [pol, /Linking Google is optional/, 'the policy: Google as the only account to link'],
+    [pol, /Email address \(only if you link Google\)/, 'the policy\'s data table: an email from Google only'],
+    [pol, /Notifications are delivered by Firebase Cloud Messaging/, 'the policy: push by Firebase and browsers only'],
+    [pol, /Delivery goes through your platform's push service — Firebase/, 'the policy: push by Firebase and browsers only'],
+    [del, /If you linked a Google account, sign in first/, 'the deletion page: Google as the only linked account'],
+    [del, /sign in with Google, if you linked one/, 'the deletion page: Google as the only linked account'],
+    [listing, /iOS still ships without push/, 'the store listing: iOS without push'],
+    [listing, /Blocked on BQ-005/, 'the store listing: Sign in with Apple blocked'],
+    [listing, /before either Google entry point/, 'the store listing: a birth-year check for Google only'],
+    [review, /ships \*\*without push notifications\*\*/, 'the review notes: iOS without push'],
+    [review, /There is no APNs entitlement/, 'the review notes: no APNs entitlement'],
+    [review, /Push is Android-only/, 'the review notes: push on Android only'],
+    [review, /chooses to sign in with Google,/, 'the review notes: a birth-year check for Google only'],
+    [review, /Signing in with Google is optional\./, 'the review notes: Google as the only sign-in'],
+  ];
+  for (const [src, re, why] of MUST) if (!re.test(src)) bad.push(`missing — ${why}`);
+  for (const [src, re, why] of STALE) if (re.test(src)) bad.push(`stale — ${why}: "${(src.match(re) || [''])[0]}"`);
+  if (bad.length) fail(`the policy or a store document no longer says how the game signs in or delivers a nudge:\n      ${bad.join('\n      ')}`);
+  else ok(`the policy names every sign-in provider app.js offers (${provs.join(', ')}) and every push route server.js delivers through, Apple's email-only scope matches the native sheet, the iOS opt-in is described as the code has it, and ${MUST.length} statements stand with none of ${STALE.length} old ones`);
 }
 
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nALL GOOD');

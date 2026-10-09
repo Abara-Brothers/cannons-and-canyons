@@ -18,7 +18,7 @@
 <body>
 <main>
   <h1>Privacy Policy — Cannons &amp; Canyons</h1>
-  <p class="muted">Made by Abara Brothers · Last updated: 8 October 2026</p>
+  <p class="muted">Made by Abara Brothers · Last updated: 9 October 2026</p>
   <p class="muted">Abara Brothers is a small Australian business. This policy is written to
   meet Australian privacy law, the EU and UK GDPR where they apply to you, and the app
   stores' own privacy rules.</p>
@@ -49,20 +49,30 @@
   <h2>Your account</h2>
   <p>Playing creates a <b>guest account</b>: a random identifier with no name, email or
   password attached. It exists so your progress has somewhere to live. You can optionally
-  link a <b>Google account</b> ("Keep my progress") so you can sign in from another device.
-  When you do, Google gives us the basic profile information covered by its standard
-  <i>email</i> and <i>profile</i> permissions — <b>your email address, your Google account
-  identifier, your name, and your profile picture</b> — and our sign-in provider stores it
-  against your account. We use the email address to identify you at sign-in; we do not display
-  or otherwise use your Google name or picture in the game. Linking is never required to
-  play.</p>
+  link a <b>Google account</b> ("Keep my progress") so you can sign in from another device,
+  and in the iOS app you can link an <b>Apple account</b> with Sign in with Apple. Linking is
+  never required to play.</p>
+  <p><b>Google.</b> When you link Google, Google gives us the basic profile information covered
+  by its standard <i>email</i> and <i>profile</i> permissions — <b>your email address, your
+  Google account identifier, your name, and your profile picture</b> — and our sign-in provider
+  stores it against your account. We use the email address to identify you at sign-in; we do not
+  display or otherwise use your Google name or picture in the game.</p>
+  <p><b>Apple.</b> Sign in with Apple runs in Apple's own sign-in sheet on your device. The game
+  asks Apple for your email address and nothing else, so Apple does not give us your name. Apple
+  hands the app a signed <b>identity token</b> carrying <b>your Apple account identifier and that
+  email address</b> — your real address, or, if you choose Apple's Hide My Email, a private relay
+  address that Apple forwards to you. The token goes from your device straight to our sign-in
+  provider, Supabase, which checks Apple's signature on it and stores the Apple account
+  identifier and the email address against your account; our game server never sees the token.
+  As with Google, we use the email address to identify you at sign-in.</p>
 
   <h2>What the game stores, and why</h2>
   <table>
     <tr><th>Data</th><th>Why</th><th>Where</th></tr>
     <tr><td>Account identifier (random)</td><td>Ties your save to you</td><td>Our database</td></tr>
-    <tr><td>Email address (only if you link Google)</td><td>Signing in from another device</td><td>Our database</td></tr>
+    <tr><td>Email address (only if you link Google, or Apple in the iOS app; with Apple's Hide My Email, a private relay address)</td><td>Signing in from another device</td><td>Our database</td></tr>
     <tr><td>Google account id, name and profile picture (only if you link Google)</td><td>Returned by Google with the sign-in and kept by our sign-in provider as part of that record</td><td>Our database</td></tr>
+    <tr><td>Apple account identifier (only if you link Apple, in the iOS app)</td><td>Carried in Apple's identity token with the sign-in and kept by our sign-in provider as part of that record</td><td>Our database</td></tr>
     <tr><td>Callsign — the default one the game gave you from its word lists, or one you choose — and, if you are signed in, when you last set it</td><td>Shown on your profile, in matches and squads, and to your friends and anyone you invite; the time holds a name to one change a day</td><td>Our database</td></tr>
     <tr><td>Friend code (6 characters, generated for you)</td><td>So someone can add you without searching for your name</td><td>Our database</td></tr>
     <tr><td>Friends and friend requests (which accounts, and when)</td><td>Your friends list, and adding or accepting a friend</td><td>Our database</td></tr>
@@ -88,11 +98,17 @@
   from the game. An invite notification shows your friend's callsign and how many are in their
   squad. An invite from a player who is not your friend is never sent as a notification. If you
   enable nudges, your browser or device
-  issues a push subscription — a delivery address plus encryption keys — which we store against
+  issues a push subscription — on the web a delivery address plus encryption keys, in the iOS
+  and Android apps a device token — which we store against
   your account so notifications work in every future match and on every device you enabled them
-  on. Delivery goes through your platform's push service — Firebase Cloud Messaging (Google) in
+  on. Delivery goes through your platform's push service — Apple Push Notification service
+  (Apple) in the iOS app, Firebase Cloud Messaging (Google) in
   the Android app, and your browser's own push service on the web: Apple for Safari, Google for
   Chrome, Microsoft (Windows Push Notification Services) for Edge, and Mozilla for Firefox.
+  What we hand that service is the subscription or device token to deliver to and the
+  notification itself: its title, its text (for your turn, the name of another player in the
+  match; for an invite, your friend's callsign and the squad's size) and a link that opens the
+  match or the squad.
   You can revoke notifications in your browser or device
   notification settings at any time, which withdraws your consent for future ones. A
   subscription your push service reports as expired is deleted the next time a turn nudge
@@ -127,7 +143,7 @@
   see it, so a name that fails the check is never shown to anyone. Your callsign and your
   6-character friend code are the only things
   another player can use to find you — never your email address, never the name or picture Google
-  returned when you signed in, and never your account identifier. Friends, and the players in a
+  returned when you signed in, never anything Apple returned, and never your account identifier. Friends, and the players in a
   squad with you, can see whether you are online; nobody else can. If you set a callsign while
   signed in, anyone signed in who knows it can invite you to their squad; if they are not your friend,
   the invite reaches you only while you are in the game, never as a notification, and the answer
@@ -176,9 +192,10 @@
 
   <h2>Where your data lives, and transfers</h2>
   <p>The game server runs on <b>Render</b> and the database and sign-in service run on
-  <b>Supabase</b>, both hosted in <b>Singapore</b>. Notifications are delivered by
+  <b>Supabase</b>, both hosted in <b>Singapore</b>. Notifications are delivered by the
+  <b>Apple Push Notification service</b> (Apple) in the iOS app, by
   <b>Firebase Cloud Messaging</b> (Google) in the Android app, and by your browser's push
-  service (Apple, Google or Mozilla) on the web. These providers are our processors: they
+  service (Apple, Google, Microsoft or Mozilla) on the web. These providers are our processors: they
   handle the data to run the service on our behalf and for no other purpose.</p>
   <p>Singapore is not covered by a UK or European Commission adequacy decision, so if you play
   from the EEA or UK your data is transferred outside that area. Those transfers are made under
@@ -193,8 +210,8 @@
   written by you: access is enforced by database-level row security tied to your signed-in
   identity, not by the app asking nicely. Push subscriptions and crash reports sit in tables no
   player can reach at all — only the game server, holding a key that never ships inside the
-  app, can touch them. We hold no passwords (sign-in is handled by Google or by an anonymous
-  token), no payment details, and no IP addresses against your account or your crash reports.
+  app, can touch them. We hold no passwords (sign-in is handled by Google, by Apple in the iOS
+  app, or by an anonymous token), no payment details, and no IP addresses against your account or your crash reports.
   We keep as little as the game needs, for as long as the section below describes.</p>
   <p>No system is perfect. If a breach ever affects your data and is likely to put you at
   risk, we will tell you and the relevant regulator — in Australia the Office of the
@@ -216,7 +233,7 @@
   <p><b>The one thing deleting your account does not erase</b> is the match-result rows described
   above. They are kept permanently, and they still carry the random account identifier you played
   under. Everything that could join that identifier to you — your account, the email address and
-  Google profile held against it, your callsign, your progression, your friends, your blocks and
+  the Google or Apple sign-in details held against it, your callsign, your progression, your friends, your blocks and
   your reports — is deleted with the account, so nothing we hold connects a surviving row back to
   you. If you would like us to go further than that, ask us through the
   <a href="https://abarabrothers.com/support">support page</a>.</p>
@@ -231,7 +248,7 @@
       it does not mean zero, and the file says so. Friends and a friend code need a signed-in
       account, so for a guest those stay null until they sign in. For anything held about you that
       is not in that file — such as your stored push subscriptions, who your friends are, your
-      match results, or the profile details Google returned at sign-in — ask us through the
+      match results, or the details Google or Apple returned at sign-in — ask us through the
       <a href="https://abarabrothers.com/support">support page</a> and we will provide it.</li>
     <li><b>Delete my account</b> — in the same panel: erases the account, cloud save, sign-in
       identity, push subscriptions, friend code, friends, friend requests, blocks, name reports
@@ -251,8 +268,8 @@
       that is the OAIC; in the EEA or UK it is your national supervisory authority.</li>
   </ul>
   <p class="muted">You do not have to give us anything to play: a guest account is created
-  automatically and needs nothing from you. Linking Google is optional — without it, your
-  progress simply stays on the device you played on. There is no automated decision-making or
+  automatically and needs nothing from you. Linking Google or Apple is optional — without it,
+  your progress simply stays on the device you played on. There is no automated decision-making or
   profiling of any kind in the game.</p>
 
   <h2>Children</h2>
@@ -262,19 +279,21 @@
   any player can report or block without signing in. A guest account holds no personal details at
   all.</p>
 
-  <p><strong>Before anyone can sign in with Google, the game asks for a birth year.</strong> It
-  tells you why it is asking — signing in shares your email address and profile with us — but it
-  never says which answer will let you through, so it cannot coach the response, and the field
+  <p><strong>Before anyone can sign in with Google or Apple, the game asks for a birth
+  year.</strong> It asks before either kind of sign-in and before linking either kind of account.
+  It tells you why it is asking — signing in shares your email address with us, and Google
+  shares your profile as well — but it never says which answer will let you through, so it cannot coach the response, and the field
   starts empty. The year you enter is <strong>never stored and never sent to us</strong>: it is
   checked once, on your device, and discarded. The only thing kept is a note on your device that
   the check was passed. If the answer indicates the player is under 13, the game says that
   signing in needs a grown-up, explains that their progress still saves on that device, and does
-  not continue to Google. Guest play is never blocked or interrupted by this — the question only
+  not continue to Google or Apple. Guest play is never blocked or interrupted by this — the question only
   appears if someone chooses to sign in.</p>
 
   <p>If a Google account is linked, that account's email address, Google identifier, name and
-  profile picture are stored as described above — so if your child plays, we suggest leaving the
-  game on its guest account. You can delete everything at any time from the account panel or the
+  profile picture are stored as described above, and if an Apple account is linked, its Apple
+  account identifier and email or relay address are — so if your child plays, we suggest leaving
+  the game on its guest account. You can delete everything at any time from the account panel or the
   <a href="delete-account.html">deletion page</a>.</p>
 
   <h2>Changes</h2>

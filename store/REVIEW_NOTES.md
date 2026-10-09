@@ -4,19 +4,21 @@
 > 2026-08-15 from the shipping code, not from the marketing copy. Keep it short in the
 > field itself — the detail below is here so whoever submits can answer follow-ups.
 
-> **OWNER — read this before you paste.** TWO things ARE behind Google sign-in from this release:
+> **OWNER — read this before you paste.** TWO things ARE behind sign-in from this release (Sign in
+> with Apple or Google in the iOS app, Google on Android):
 > the Friends screen (with a unique callsign other players can search for), and starting a squad or
 > inviting friends to one (joining a squad by its code or link needs no account). Since build 8
 > every player may type their own callsign, a guest included. Apple Guideline 2.1 expects working demo
 > credentials for anything behind a login, so decide before submitting whether to supply a test
-> Google account or to say you will provide one on request, and add that line to the block below.
+> account or to say you will provide one on request, and add that line to the block below.
 > The sentence that used to stand here — "there is no review test account because there is nothing
 > to unlock" — was true before 2026-09-18 and is false now.
 
 ## The short version (safe to paste as-is)
 
 > **No account is needed to play**, and none is needed to report a callsign or block a player
-> either. Every mode is reachable without signing in. Signing in with Google is optional. It
+> either. Every mode is reachable without signing in. Signing in is optional (in the iOS app with
+> Sign in with Apple or Google; on Android with Google). It
 > saves progress across devices and it adds exactly two things: the Friends screen, where friends
 > find each other by a unique callsign or a friend code, and starting a squad or inviting friends to one.
 > **Joining** a squad or a game by its code or link stays open to everyone, signed in or not. No
@@ -48,8 +50,10 @@
 > **The game is free.** No ads, no in-app purchases, no analytics SDKs. Every cosmetic is
 > earned by playing.
 >
-> **iOS build only:** this version ships **without push notifications**. There is no APNs
-> entitlement and the "nudge me" option is hidden on iOS. Push is Android-only for now.
+> **iOS build only:** this version does not offer notifications on iOS. The "nudge me" option is
+> hidden there, so the app never asks for notification permission and no notification is sent to
+> an iOS device. The Push Notifications entitlement is in the app, and our server can deliver
+> through Apple's Push Notification service, for when that option is switched on in a later build.
 
 ## If a reviewer asks
 
@@ -59,8 +63,8 @@ web version rotates its whole UI 90° instead of reflowing, which is deliberate 
 the same game, and turning the device makes it upright. There is no "please rotate"
 prompt by design.
 
-**Where is the age gate?** It appears only when a player chooses to sign in with Google,
-never at launch and never before play. It asks for a birth year, neutrally. The year is
+**Where is the age gate?** It appears only when a player chooses to sign in or link an account,
+with Apple or Google, never at launch and never before play. It asks for a birth year, neutrally. The year is
 **never stored and never transmitted** — only a local "this was answered" flag. Under 13,
 the app explains that the player can keep playing as a guest.
 
@@ -69,7 +73,10 @@ their callsign, and gameplay counters — nothing that identifies a person. That
 hold the blocks and the name reports that player made, since both tools work without signing in.
 If a player links a Google account, the OAuth scope also returns their email, Google id, name and
 picture; the scope cannot be narrowed, and the name and picture are never displayed anywhere in
-the app. A signed-in account additionally holds a 6-character friend code, the callsign they set
+the app. If a player signs in with Apple (iOS app only), the app asks Apple for the email scope
+only: Apple's identity token carries the Apple account identifier and the email address (a private
+relay address under Hide My Email) and no name, and it goes from the device straight to our
+sign-in provider, never through the game server. A signed-in account additionally holds a 6-character friend code, the callsign they set
 and the day they set it, their friends, their pending friend requests, their blocks, and any name
 reports they filed or that were filed about them. Crash reports carry no account id and no IP
 address, and are deleted after 30 days. The live match relay — shots, aim, movement and the names
@@ -147,7 +154,7 @@ block caused it, and the blocked account cannot rejoin by code, be invited back,
 seat beside you. Squad members are shown by callsign only: another player's app receives each
 signed-in member's random account identifier, which the menu needs in order to report or block them
 (an invite from a player who is not a friend carries the inviter's, for the same menu), and never an
-email address or any Google profile detail.
+email address or any Google or Apple sign-in detail.
 
 **Where do name reports actually go?** We would rather state this plainly than imply a mailbox
 we do not have. The game has no email provider, so nothing is emailed. A report is written as a
