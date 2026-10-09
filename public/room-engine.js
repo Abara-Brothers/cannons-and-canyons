@@ -191,7 +191,8 @@ const sanitizeSkin = (s, seat) => (SKINS.includes(s) ? s : SEAT_SKIN[seat % SEAT
 // Names are not ANY text (ISSUE-015), and since 2026-10-07 they are not only
 // rolled ones either. A client may send a callsign it rolled from the two
 // curated lists in game-core.js, the one chosen callsign the SERVER has already
-// validated and stored for that socket's account (passed in as `allowed`), OR
+// validated and stored for that socket's account (passed in as `allowed`, and
+// the seat's name whenever there is one, whatever the frame carries), OR
 // a name of the player's own that the HOST's name check passes at this door
 // (nameCheck below — the owner: "the player is given a default name and then
 // they can change it to whatever they like, as long as it stays within the
@@ -219,7 +220,16 @@ const sanitizeSkin = (s, seat) => (SKINS.includes(s) ? s : SEAT_SKIN[seat % SEAT
 // non-empty string, opens nothing — the name falls through to the fallback.
 let nameCheck = null;
 export function setNameCheck(fn) { nameCheck = typeof fn === 'function' ? fn : null; }
-function sanitizeName(raw, seat = 0, allowed = null) {
+// THE NAME A SEAT IS GIVEN, and whether the one presented was REFUSED: the
+// seat object, which createRoom and join build from this, carries
+// `renamed: true` only when the name the player presented could not be used
+// and the fallback below stands in for it, and snapshot tells that seat's own
+// socket so in every match frame (owner, 2026-10-10: the player is told
+// plainly and sees what they are called). Every other seat carries no such
+// key, so every other frame is exactly what it was. sanitizeName below is the same
+// answer without the flag, for the one path no current client takes (quick).
+function sanitizeName(raw, seat = 0, allowed = null) { return nameAtDoor(raw, seat, allowed).name; }
+function nameAtDoor(raw, seat = 0, allowed = null) {
   const name = String(raw ?? '');
   // THE ONE EXEMPTION (design 4.5). `allowed` is the display form of a CHOSEN
   // callsign that this socket's signed-in account already owns: server.js reads
@@ -228,21 +238,22 @@ function sanitizeName(raw, seat = 0, allowed = null) {
   // and blocklist rules and the unique index, on the server, before it was ever
   // stored — so it is the one player-authored string that may reach another
   // player's screen. It is a property of the socket OBJECT: nothing a client
-  // sends can set it, and the offline page (which imports this same file) never
-  // passes it, so offline behaviour is unchanged.
+  // sends can set it. The offline page (which imports this same file) hands in
+  // its own player's name (app.js startLocal), the one name in its match.
   //
-  // Normalise the incoming copy the way the server normalised the stored one —
-  // NFC, trim, collapse runs — so a stray space, or an accented letter the
-  // client spells decomposed, does not cost the player their own name. NFC is
-  // not optional here: "Zoé" is one code point on one keyboard and two on
-  // another, and without it the second spelling silently loses its callsign.
-  // This repeats server/callsign.js normaliseCallsign rather than importing it,
-  // because that module reads the blocklist off disk and this file is loaded by
-  // the OFFLINE page, which must gain no Node API (ADR-001).
+  // IT IS THE SEAT'S NAME, WHATEVER NAME THE FRAME CARRIES (owner, 2026-10-10:
+  // "Ensure that the username for the person is accurately displayed across
+  // the whole game and every game mode"). It used to be shown only when the
+  // client presented the same string, so a page that had not yet learned the
+  // account's name (a second device, a reinstall, a sign-in a moment ago)
+  // seated the account under its own default name, and a squad row that kept
+  // the name its join carried seated a player who had renamed since under the
+  // OLD name, which the rename had freed. The account's name is the one the
+  // server holds for that player; there is no Roll any more to choose another
+  // (owner, 2026-10-07), and an old build's roll clears this field first.
   //
   // What is returned is `allowed` — the SERVER's stored string — never the
-  // client's copy of it. A near-miss that normalises equal still cannot smuggle
-  // a different sequence of characters onto another player's screen.
+  // client's copy of anything.
   //
   // AND IT STILL FACES THIS FILE'S OWN FILTER. The exemption used to return
   // before isProfane() below, which made the one player-AUTHORED string in the
@@ -254,9 +265,8 @@ function sanitizeName(raw, seat = 0, allowed = null) {
   // in depth that makes the ordering safe whatever the server's term list
   // contains — including a stored name from before a term was added to it.
   // It is checked against `allowed`, the SERVER's string, not the client's.
-  if (typeof allowed === 'string' && allowed && !isProfane(allowed)
-    && name.normalize('NFC').trim().replace(/\s+/gu, ' ') === allowed) return allowed;
-  if (isGeneratedCallsign(name) && !isProfane(name)) return name;
+  if (typeof allowed === 'string' && allowed && !isProfane(allowed)) return { name: allowed };
+  if (isGeneratedCallsign(name) && !isProfane(name)) return { name };
   // THE THIRD DOOR: a name the player typed, held to the guidelines HERE, at
   // the moment it is presented, whatever the client claims it was told. What
   // is returned is the CHECK's string, never the client's copy — the same rule
@@ -265,10 +275,10 @@ function sanitizeName(raw, seat = 0, allowed = null) {
   if (nameCheck) {
     let shown = null;
     try { shown = nameCheck(name); } catch { shown = null; }
-    if (typeof shown === 'string' && shown && !isProfane(shown)) return shown;
+    if (typeof shown === 'string' && shown && !isProfane(shown)) return { name: shown };
   }
   const h = [...name].reduce((a, c) => (a * 31 + c.charCodeAt(0)) | 0, 7) + seat * 2654435761;
-  return callsignFromSeed(h);
+  return { name: callsignFromSeed(h), renamed: true };
 }
 
 // ---- Teams ----------------------------------------------------------------------
@@ -793,7 +803,7 @@ function createRoom(hostWs, name, skin, opts = {}) {
   const room = {
     code, mode, max, hostSeat: 0,
     players: [
-      { ws: hostWs, name: sanitizeName(name, 0, hostWs && hostWs.chosenName), token: makeToken(), connected: true, dropTimer: null, skin: sanitizeSkin(skin, 0) },
+      { ws: hostWs, ...nameAtDoor(name, 0, hostWs && hostWs.chosenName), token: makeToken(), connected: true, dropTimer: null, skin: sanitizeSkin(skin, 0) },
     ],
     state: 'waiting',
     terrain: null, tanks: null,
@@ -889,6 +899,9 @@ function snapshot(room, seat) {
     aimRange: [AIM_MIN, AIM_MAX],
     turn: room.turn, fuel: room.fuel,
     you: seat,
+    // THIS SEAT'S OWN NAME WAS REFUSED (nameAtDoor): only on its own frame,
+    // and only then, so no other snapshot moves by a byte.
+    ...(room.players[seat].renamed ? { renamed: true } : {}),
     ammo: room.ammo[seat],
     token: room.players[seat].token,
     code: room.code,
@@ -2191,7 +2204,7 @@ export function handleClientMessage(ws, msg) {
       let seat = r.players.indexOf(null);                 // reuse a lobby hole first
       if (seat < 0) { seat = r.players.length; r.players.push(null); }
       r.players[seat] = {
-        ws, name: sanitizeName(msg.name, seat, ws.chosenName), token: makeToken(), loadout: sanitizeLoadoutFor(r.mode, msg.loadout),
+        ws, ...nameAtDoor(msg.name, seat, ws.chosenName), token: makeToken(), loadout: sanitizeLoadoutFor(r.mode, msg.loadout),
         connected: true, dropTimer: null, skin: sanitizeSkin(msg.skin, seat),
       };
       ws.roomCode = code; ws.seat = seat;

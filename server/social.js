@@ -725,6 +725,17 @@ export function createSocial({
     for (const w of socketsOf(ws.userId)) w.chosenName = spelled;
     ws.chosenName = spelled;
     reply(ws, msg, { type: 'callsign', ok: true, callsign: spelled });
+    // AND THE ACCOUNT'S SQUAD ROW FOLLOWS AT ONCE (owner, 2026-10-10: a rename
+    // takes effect everywhere at once). A linked row is named from the profile
+    // row (displayName), which the write above has just changed, but nothing
+    // told the squad, so every member's box, the player's own included, went on
+    // showing the old name until something else pushed the squad. The match
+    // the squad starts needs nothing here: the engine seats ws.chosenName, set
+    // just above, whatever name the row carried in. checkName does the same
+    // for a guest's row. A failed push costs only the cosmetic update, which
+    // the next push carries.
+    const own = squadOf(ws);
+    if (own) await pushSquad(own.squad, null, null).catch(() => {});
   }
 
   // ---- the name check (owner, 2026-10-07) ------------------------------------

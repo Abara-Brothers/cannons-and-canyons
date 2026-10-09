@@ -408,15 +408,20 @@ try {
   // the page hands the engine its own player's name as `allowed` (app.js
   // startLocal). Without that, a name the player SET was swapped for a rolled
   // pair in their own offline match. Only THAT name: any other typed name is
-  // still replaced, because the offline door is otherwise shut as it was.
+  // still kept out, because the offline door is otherwise shut as it was.
+  // CHANGED (owner, 2026-10-10, item 27): the page's own name is now the
+  // seat's name whatever the frame carries (room-engine.js nameAtDoor), so a
+  // frame carrying another typed name seats the player under their own name,
+  // where it used to seat them under a rolled pair. The typed name still never
+  // reaches the match.
   await fresh(); await cut({ offline: true });
   await ev(`(setOwnName('Tank Ace'), intent({ type: 'ai', difficulty: 'easy', name: myName(), skin: 'olive' }), true)`);
   const own2b = (await until(`S.local === true && S.playing === true`, 4000)) ? await ev('({ me: S.names[S.you], name: myName() })') : null;
   await fresh(); await cut({ offline: true });
   await ev(`(setOwnName('Tank Ace'), intent({ type: 'ai', difficulty: 'easy', name: 'Somebody Else', skin: 'olive' }), true)`);
   const other2b = (await until(`S.local === true && S.playing === true`, 4000)) ? await ev('S.names[S.you]') : null;
-  if (own2b && own2b.me === 'Tank Ace' && own2b.name === 'Tank Ace' && typeof other2b === 'string' && other2b !== 'Somebody Else' && other2b !== 'Tank Ace' && /^[A-Z][a-z]+ [A-Z][a-z]+$/.test(other2b))
-    ok("2b: offline, the player's own name ('Tank Ace') is the name in their match; any other typed name is still replaced with a rolled pair");
+  if (own2b && own2b.me === 'Tank Ace' && own2b.name === 'Tank Ace' && other2b === 'Tank Ace')
+    ok("2b: offline, the player's own name ('Tank Ace') is the name in their match, and a frame carrying any other typed name seats them under it too");
   else fail('2b: offline own name ' + JSON.stringify({ own2b, other2b }));
   await ev(`(localStorage.removeItem('cc_name_own'), localStorage.removeItem('pt_name'), true)`);
 

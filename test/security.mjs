@@ -348,6 +348,10 @@ async function noFreeTextNames() {
   //    name check installed — which is exactly the offline page, whose only
   //    player is the one on the device. Every typed name is replaced, a
   //    verified socket included; only its ONE stored name passes.
+  //    CHANGED (owner, 2026-10-10, item 27: the right name in every mode): a
+  //    verified socket's stored name is now the SEAT's name whatever its frame
+  //    carries, so a socket presenting another typed name is seated under its
+  //    own chosen callsign. The typed name still never reaches the lobby.
   const CHOSEN = 'Marguerite Vale';
   const mkLocal = (chosen = CHOSEN) => ({ readyState: 1, chosenName: chosen, _rx: [], send(s) { this._rx.push(JSON.parse(s)); } });
   const nameIn = (w) => {
@@ -362,9 +366,10 @@ async function noFreeTextNames() {
   const other = mkLocal();
   handleClientMessage(other, { type: 'create', name: 'Someone Else Entirely', skin: 'olive', mode: 'duel' });
   const second = nameIn(other);
-  if (second && second !== 'Someone Else Entirely' && isGeneratedCallsign(second))
-    step('with no name check installed (the offline page) a verified socket still may not present any OTHER typed name');
-  else fail(`a typed name passed an engine with no name check: ${JSON.stringify(second)}`);
+  const otherLobby = other._rx.find((m) => m.type === 'lobby');
+  if (second === CHOSEN && otherLobby && !('renamed' in otherLobby))
+    step('with no name check installed (the offline page) a verified socket that presents ANOTHER typed name is seated under its own chosen callsign, not the typed one, and is not told it was renamed');
+  else fail(`a verified socket presenting another typed name was seated as ${JSON.stringify(second)} (renamed: ${JSON.stringify(otherLobby && otherLobby.renamed)})`);
   const guest = { readyState: 1, userId: 'anon-uuid', isGuest: true, chosenName: null, _rx: [], send(s) { this._rx.push(JSON.parse(s)); } };
   handleClientMessage(guest, { type: 'create', name: CHOSEN, skin: 'olive', mode: 'duel' });
   const guestName = nameIn(guest);

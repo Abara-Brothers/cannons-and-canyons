@@ -460,6 +460,14 @@ body.golf .golf-only { display: flex; }
    report. #toast is a child of #app at rest and of #stage during a match. */
 #toast { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 6px; align-items: center; pointer-events: none; z-index: 90; }
 .toast-item { background: rgba(10,14,30,.85); border: 1px solid var(--line); padding: 8px 14px; border-radius: 999px; font-weight: 700; font-size: 14px; animation: toastIn .3s ease, toastOut .3s ease 1.4s forwards; }
+/* A sentence to read, not glance at (app.js showToast's `long`): the same pill,
+   up for five seconds, and as wide as its words up to most of the screen's long
+   side, so it reads on one line on a phone. #toast is centred from the middle
+   of the stage, which left a pill only half the stage wide and broke this one
+   over two lines; a width of its own is what lets the column grow around it.
+   vmax, because a portrait phone draws the game turned (the landscape lock),
+   and the screen's long side is the width the player sees either way. */
+.toast-item.long { width: max-content; max-width: 86vmax; text-align: center; animation: toastIn .3s ease, toastOut .3s ease 4.4s forwards; }
 
 @keyframes toastIn { from { opacity: 0; transform: translateY(-8px); } }
 @keyframes toastOut { to { opacity: 0; transform: translateY(-8px); } }

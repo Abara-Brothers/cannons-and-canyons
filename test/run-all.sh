@@ -384,6 +384,14 @@ else
   # legible inside the safe area at four phone sizes. Self-hosted on its own
   # free ports (it restarts its own server once). Skips without Chrome.
   run solo_resume node test/solo_resume.mjs
+  # The player's own name in every mode (owner, 2026-10-10, item 27): offline,
+  # online and in a squad, for a guest with the default name, a guest with a
+  # typed name and a signed-in player with a chosen one, a tap that beats its
+  # own hello, right after a rename, and a name the server refuses (told
+  # once). Two real pages against a server of its own on free ports, with a
+  # local Supabase stand-in; its Chrome resolves no host but this machine.
+  # Skips without Chrome.
+  run names node test/names.mjs
   # SECOND client-side suite, and the only one that looks at LAYOUT. Drives the
   # real bundle in headless Chrome at 14 exact viewports and diffs the measured
   # geometry against test/fixtures/layout-baseline.json. It is a change

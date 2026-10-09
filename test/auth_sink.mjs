@@ -347,11 +347,15 @@ async function presentedName(token, typed) {
   // lobby shows the key, which only ws.chosenName can admit (the third door
   // refuses a typed name that is a held key, and this one is), and the
   // mixture the client presents is not shown.
+  // CHANGED (owner, 2026-10-10, item 27): the socket's chosen name is now the
+  // seat's name whatever the frame carries (room-engine.js nameAtDoor), so a
+  // client presenting the mixture is seated under the key too, where it used
+  // to get the default. The mixture is still never shown.
   const gKey = await presentedName('tok-greek', GREEK_KEY);
   const gMix = await presentedName('tok-greek', GREEK_MIXED);
   if (gKey.err || gMix.err) fail(`(2b) ${gKey.err || gMix.err}`);
-  else if (gKey.name === GREEK_KEY && gMix.name !== GREEK_MIXED && isGeneratedCallsign(gMix.name))
-    ok(`(2b) a column whose capitals read as none of its key's readings is presented as the key itself; the mixture gets the default (${JSON.stringify(gMix.name)})`);
+  else if (gKey.name === GREEK_KEY && gMix.name === GREEK_KEY)
+    ok(`(2b) a column whose capitals read as none of its key's readings is presented as the key itself, and so is a client presenting the mixture`);
   else fail(`(2b) the sink trusted the column's capitals: key presented as ${JSON.stringify(gKey.name)}, mixture as ${JSON.stringify(gMix.name)}`);
 
   // ---- 4. A LATE HELLO MUST NOT RESURRECT A SIGNED-OUT IDENTITY -------------

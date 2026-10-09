@@ -1836,6 +1836,55 @@ const MSG_BURST = Number(process.env.MSG_BURST) || 120;   // bucket capacity
 // The code frame's own bucket, per socket: its capacity and its refill a minute.
 const CODE_RATE = 10;
 
+// THE FRAMES THAT SEAT A PLAYER BY NAME, and why they wait for the hello
+// (owner, 2026-10-10: "some game modes does not display the correct
+// username"). The room engine gives a seat its socket's chosen callsign
+// (ws.chosenName), and the auth sink fills that only once the socket's token
+// and profile row have been read, which takes a round trip to GoTrue and one
+// to PostgREST. A create or a join that arrived in that window met an empty
+// field, so the player's own chosen name went to the name check, which
+// refuses every name an account holds, theirs included: the seat got a rolled
+// pair. A player who left a match (the page reloads, so the socket is new)
+// and tapped the next mode at once met it every time. So while a hello is
+// being verified these frames wait for it, as every social frame already does
+// (below), and every engine frame that arrives behind one waits too, so a
+// socket's frames reach the engine in the order it sent them. Nothing else in
+// the engine reads who the socket is, so nothing else waits; a resume, in
+// particular, goes at once. A socket that closed while its frames waited acts
+// on nothing: handleClose has already run for it, and a room created for a
+// dead socket would be a room nobody could ever leave.
+//
+// THE WAIT HAS A LIMIT, HELLO_HOLD_MS. The verification itself may take up to
+// two of sbAdmin's 8 s timeouts against a Supabase that hangs, and a tap that
+// does nothing for sixteen seconds is a broken button. A hello that has not
+// settled by then lets the frames go: the seat is named by what is known, and
+// a name that cannot be used is replaced and its player told (the room
+// engine's `renamed`). Every hello GoTrue answers settles long before it.
+const SEATS_BY_NAME = new Set(['create', 'ai', 'join', 'quick']);
+const HELLO_HOLD_MS = 3000;
+function engineFrame(ws, msg) {
+  if (ws.heldFrames) { ws.heldFrames.push(msg); return; }
+  if (!(ws.authPending && SEATS_BY_NAME.has(msg.type))) { handleClientMessage(ws, msg); return; }
+  // THIS BATCH, by identity: the limit and the hello both call drain, and
+  // whichever comes second must not take a later batch that is waiting on a
+  // newer hello. Frames that arrive behind it join this same array.
+  const held = ws.heldFrames = [msg];
+  let limit = null;
+  const drain = () => {
+    clearTimeout(limit);
+    if (ws.heldFrames !== held) return;
+    ws.heldFrames = null;
+    for (const m of held) {
+      if (ws.readyState !== 1) return;
+      // The same net the message loop puts under every frame.
+      try { handleClientMessage(ws, m); }
+      catch (err) { reportServerError('clientMessage', err); try { ws.close(4000, 'bad frame'); } catch {} return; }
+    }
+  };
+  limit = setTimeout(drain, HELLO_HOLD_MS);
+  ws.authPending.then(drain, drain);
+}
+
 wss.on('connection', (ws) => {
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
@@ -1951,7 +2000,7 @@ wss.on('connection', (ws) => {
         if (ws.authPending) ws.authPending.then(run, run); else run();
         return;
       }
-      handleClientMessage(ws, msg);
+      engineFrame(ws, msg);
     } catch (err) {
       reportServerError('clientMessage', err);
       try { ws.close(4000, 'bad frame'); } catch {}

@@ -1625,7 +1625,15 @@ function connect() {
     if (he && /offline|reach the server/i.test(he.textContent)) he.textContent = '';
     const r = loadResume();
     if (r && (S.playing || !S.code)) sendMsg({ type: 'resume', code: r.code, token: r.token });
-    flushIntent();
+    // A TAP THAT WAITED FOR THIS SOCKET GOES AFTER ITS HELLO, not here: see
+    // sendHello, which sends it the moment the hello is out. The wait has a
+    // limit (HELLO_WAIT_MS): the hello waits on the session's token, which a
+    // refresh over a bad network can hold for twelve seconds, and a tap that
+    // does nothing for that long is a broken button. Past the limit the tap
+    // goes without it, and a name the server then cannot use is replaced and
+    // the player told (applySnapshot).
+    ws.openedAt = Date.now();
+    setTimeout(() => { if (S.ws === ws && ws.readyState === 1) flushIntent(); }, HELLO_WAIT_MS);
     // THE SCREENS THAT GREY THEMSELVES OUT WHILE THE SOCKET IS DOWN HAVE TO
     // LEARN THAT IT CAME BACK. bay.js's Friends screen captures wsReady() once
     // per render and threads it into every control's `disabled` attribute, and
@@ -2321,6 +2329,10 @@ function sendGuestName(name, cb) {
 // per mark: a new socket, or a new hello on this one (a sign-in), is a new one.
 let helloWs = null, helloN = 0;
 function socialIntro() { return helloWs && helloWs === S.ws && S.ws.readyState === 1 ? helloN : 0; }
+// How long a tap waits for its socket's hello before it goes anyway (see
+// connect()'s onopen), and whether this socket has been open that long.
+const HELLO_WAIT_MS = 2500;
+function helloLate() { return !!(S.ws && S.ws.openedAt && Date.now() - S.ws.openedAt >= HELLO_WAIT_MS); }
 // Introduce this socket's account to the server (8.48): with an identity on
 // the socket, turn nudges reach every device the player ever subscribed, not
 // just one browser's in-memory copy. create:false — merely CONNECTING must
@@ -2338,7 +2350,17 @@ async function sendHello(ws) {
     // The mark goes on whether or not a hello was sent: a socket with no
     // session to introduce, or whose token read failed, gets no better hello
     // by waiting.
-    if (S.ws === ws && ws.readyState === 1) { helloWs = ws; helloN++; document.dispatchEvent(new Event('cc:squad')); }
+    //
+    // AND THE TAP THAT WAITED FOR IT GOES NOW (owner, 2026-10-10: the right
+    // name in every mode). A create or a join names the player, and the server
+    // gives a seat the account's chosen name only once it knows whose socket
+    // it is: a frame ahead of the hello was seated under a rolled pair. The
+    // server holds such a frame while the hello is being verified (server.js
+    // SEATS_BY_NAME); this makes sure the hello is ahead of it to be waited
+    // for. A tap made while the socket was down, or in the moment between its
+    // opening and its hello going out, is parked in pendingIntent (intent)
+    // and sent here, on this socket only.
+    if (S.ws === ws && ws.readyState === 1) { helloWs = ws; helloN++; flushIntent(); document.dispatchEvent(new Event('cc:squad')); }
   }
 }
 
@@ -2904,7 +2926,11 @@ function endLocal() {
 // the lobby in a pending state and OFFERS Play solo. Nothing that carries a
 // code or an invite is ever converted into a solo game by a timer.
 function intent(m) {
-  if (S.connected) { sendMsg(m); return; }              // UNCHANGED, first line: a connected client never reaches the rest
+  // A connected client never reaches the rest. The one wait: a real socket
+  // whose hello has not gone out yet parks the frame for sendHello to send
+  // behind it, so the server knows whose seat it is (see sendHello). The
+  // offline stand-in has no hello and needs none.
+  if (S.connected) { if (S.local || socialIntro() || helloLate()) sendMsg(m); else pendingIntent = m; return; }
   const offline = navigator.onLine === false;
   if (offline && soloByConstruction(m)) { startLocal(m); return; }
   // A ROOM FOR ONE, WITH THE DEVICE KNOWN TO BE OFFLINE: Match setup's Start
@@ -3596,6 +3622,25 @@ function renderLobby(m) {
 }
 $('startMatchBtn').onclick = () => { Audio.ensure(); sendMsg({ type: 'startMatch' }); };
 
+// A NAME THE SERVER COULD NOT USE, SAID PLAINLY (owner, 2026-10-10: the
+// player is told and sees what they are called). The room engine replaces a
+// name it cannot show (the guidelines, a name an account has since taken, a
+// check that could not run) with a default, and marks that seat's own match
+// frames `renamed`. Said once a match, on the first frame that carries it,
+// with the name the match shows, which is also on the player's own card
+// ("... (you)"). A lobby says nothing: none is painted any more (every room
+// this page asks for starts at once, and a squad's room starts as it fills),
+// and the match a moment later says it.
+// The device's own name is left as it is: why the server refused it is the
+// server's to say, and a refusal that was only a moment's (the check not yet
+// able to run) is gone by the next match.
+let renamedTold = '';
+function tellRenamed(renamed, code, name) {
+  if (renamed !== true || code === renamedTold) return;
+  renamedTold = code;
+  showToast(`Your name could not be used, so you are ${name} in this match.`, true);
+}
+
 // ---------------------------------------------------------------------------
 // Game setup (also used to restore a resumed match)
 // ---------------------------------------------------------------------------
@@ -3620,6 +3665,7 @@ function applySnapshot(m) {
   S.world = m.world || S.world;
   S.lavaY = m.lavaY ?? (S.world.h - 300);
   S.you = m.you; S.names = m.names; S.weapons = m.weapons;
+  tellRenamed(m.renamed, m.code, m.names && m.names[m.you]);
   // THE SEAT HANDLES, positional — index IS the seat, parallel to names and
   // skins (task 6b, F2/F6). null at an index means that seat has no account, so
   // there is no report row to file against it and its card carries no menu. The
@@ -5882,19 +5928,21 @@ function toastHost() {
 // they opened onto. intro.js ends the doors on every path, a fault and its
 // 30 s watchdog included, so a held toast cannot wait for ever.
 let toastsHeld = null;
-function showHeldToasts() { const q = toastsHeld || []; toastsHeld = null; q.forEach(showToast); }
-function showToast(text) {
+function showHeldToasts() { const q = toastsHeld || []; toastsHeld = null; q.forEach((x) => showToast(x.text, x.long)); }
+// `long`: a sentence the player has to read, not glance at (tellRenamed), stays
+// up for five seconds instead of two (styles.css .toast-item.long).
+function showToast(text, long) {
   if (window.CC_DOORS === 'quick' && window.CC_DOORS_UP === true) {
     if (!toastsHeld) { toastsHeld = []; document.addEventListener('cc:doorsgone', showHeldToasts, { once: true }); }
-    toastsHeld.push(text);
+    toastsHeld.push({ text, long: long === true });
     return;
   }
   const host = toastHost();
   if (!host) return;
   const t = document.createElement('div');
-  t.className = 'toast-item'; t.textContent = text;
+  t.className = long === true ? 'toast-item long' : 'toast-item'; t.textContent = text;
   host.appendChild(t);
-  setTimeout(() => t.remove(), 1900);
+  setTimeout(() => t.remove(), long === true ? 4900 : 1900);
 }
 
 // ---------------------------------------------------------------------------
