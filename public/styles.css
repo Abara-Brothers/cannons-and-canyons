@@ -2432,13 +2432,20 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
      THE NAME AND THE STATUS LINE START AT ONE EDGE: after the row's border
      and 6u of padding, the 11u lamp and a 6u gap before the name, and 17u
      before the status words or the Invite.
-     THE MENU STANDS AT THE RIGHT END OF THE NAME'S LINE. The 37u the row
-     keeps on its right -- 5u, the menu's 20u and 12u of clear ground -- is
-     width no word on either line can take, so a long name ends in its
-     ellipsis 12u (7.3 px on the smallest phone) short of the menu and never
-     runs over or under it, and no status word reaches beneath it. Every row
-     keeps that ground, the player's own (which has no menu) as well, so
-     every name ends at one edge.
+     THE MENU STANDS AT THE RIGHT END OF THE NAME'S LINE. The 37u a row with
+     the menu keeps on its right -- 5u, the menu's 20u and 12u of clear
+     ground -- is width no word on either line can take, so a long name ends
+     in its ellipsis 12u (7.3 px on the smallest phone) short of the menu and
+     never runs over or under it, and no status word reaches beneath it.
+     A ROW WITH NO MENU KEEPS NO GROUND FOR ONE (round 3 review, 2026-10-10):
+     the player's own row, and a squadmate's the server gave no handle to
+     name, keep 6u on their right, as on their left (bay.js marks them
+     .sqnm). Kept there, the ground cut the player's own name for a menu the
+     row never shows: "Steel Howitzer (you)" read "Steel Howit... (you)" on an
+     iPhone 17, and so did a third of the default names. Every default name
+     fits again, and the name has a little more width than it had before the
+     rows were made compact (the 6u gap after the lamp is 1u wider than it
+     was, and the 6u here 2u narrower than the 8u kept then).
      A STATUS LINE TOO LONG FOR ITS WIDTH WRAPS beneath itself rather than
      run on: "Leader" and "Reconnecting" together are 122u of words, and the
      line is about 112u on a phone. The status group keeps 1u above and below its
@@ -2448,6 +2455,7 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
      so their Invite starts on the same edge. */
   #bay .sqx .sqm{position:relative;height:auto;
      padding:calc(3 * var(--u) - 1px) calc(37 * var(--u) - 1px) calc(3 * var(--u) - 1px) calc(6 * var(--u))}
+  #bay .sqx .sqm.sqnm{padding-right:calc(6 * var(--u))}
   #bay .sqx .sqm1{gap:calc(6 * var(--u))}
   /* The name and "(you)" are centred on their line, as the lamp and the menu
      are, rather than set on one baseline: the name's overflow is hidden (for

@@ -1112,7 +1112,18 @@ const sqAErr = (s) => '<p class="sqae' + (s ? '' : ' hidden') + '">' + esc(s || 
 // with their ready status", easy to read): "Ready" beside the drawn tick, as
 // "Not ready" and "Reconnecting" are words.
 const sqRid = (p) => (p && typeof p.rid === 'string' && p.rid ? p.rid : '');
-function sqRow(p, i, sn, ctl) { return '<div class="sqm">' + sqRowParts(p, i, sn, ctl) + '</div>'; }
+// Whether a member's row carries the menu, by the rule above: every row but
+// your own, aimed by the member's id, or by a named guest's handle.
+const sqMenuOn = (p, you) => !you && (p.id != null || (!!p.guest && named(p) && !!sqRid(p)));
+// A BOX ROW WITH NO MENU IS MARKED (.sqnm) so that it keeps no room for one
+// (round 3 review, 2026-10-10). In the home box the menu stands at the right
+// end of the name's line, and a row keeps clear ground there for it
+// (styles.css, the rows in the home box); the player's own row has no menu,
+// and keeping that ground there cut "Steel Howitzer (you)" to "Steel
+// Howit... (you)" on an iPhone 17, as it did a third of the default names.
+function sqRow(p, i, sn, ctl) {
+  return '<div class="sqm' + (sqMenuOn(p, i === sn.you) ? '' : ' sqnm') + '">' + sqRowParts(p, i, sn, ctl) + '</div>';
+}
 function sqRowParts(p, i, sn, ctl) {
   const you = i === sn.you, lead = sqIsLead(sn, p);
   const name = you && !named(p) && has('myName') ? (myName() || nameOf(p)) : nameOf(p);
@@ -1133,8 +1144,8 @@ function sqRowParts(p, i, sn, ctl) {
     + '<span class="pdot' + (lit ? ' on' : '') + '" title="' + (p.dropped ? 'Reconnecting' : lit ? 'Online' : 'Offline') + '">' + IC.dot + '</span>'
     + '<span class="sqmn"><span class="sqmt">' + esc(name) + '</span>' + (you ? '<span class="sqmy">(you)</span>' : '') + '</span></div>'
     + '<div class="sqm2"><span class="sqms">' + (lead ? '<span class="sql">Leader</span>' : '') + st + '</span>'
-    + (you ? '' : p.id != null ? menuBtn(p.id, 'id', name, false, !named(p))
-      : p.guest && named(p) && sqRid(p) ? menuBtn(sqRid(p), 'rid', name, false, false, p.noacct === true) : '')
+    + (!sqMenuOn(p, you) ? '' : p.id != null ? menuBtn(p.id, 'id', name, false, !named(p))
+      : menuBtn(sqRid(p), 'rid', name, false, false, p.noacct === true))
     // Never "Remove No callsign" to a screen reader (review T9-R1-12): the
     // question in the footer says "this player", and so does the label.
     + (kick ? '<button class="sqic" data-sq="kick:' + esc(sqRid(p)) + '" title="Remove from the squad" aria-label="Remove '

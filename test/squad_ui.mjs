@@ -27,6 +27,8 @@ import { existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// The default names (SP's S8 sets every one of them in the home box's rows).
+import { CALL_ADJ, CALL_NOUN, NAME_MAX } from '../public/game-core.js';
 
 const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 if (!existsSync(CHROME)) { console.log(`SKIP  squad_ui tests -- no Chrome at ${CHROME}`); process.exit(3); }
@@ -5670,9 +5672,9 @@ if (want('v3')) try {
 //      line stand at least 8u apart (Leader and Ready no longer crowd), and
 //      every tick's mark stands 4u from its word;
 //   S3 every word in it ends at least 6 px left of the menu, the name
-//      included, and on one edge in every row, the player's own (which has
-//      no menu) as well; the menu's tap target is 34u by 37u less its 1px,
-//      inside the row's border and over nothing drawn;
+//      included, and on one edge in every row with the menu; the menu's tap
+//      target is 34u by 37u less its 1px, inside the row's border and over
+//      nothing drawn;
 //   S4 nothing in it is cut: a name wider than its line ends in an ellipsis
 //      (text-overflow, its overflow hidden), no other word is wider than its
 //      box, the name's line holds its letters' full height, the lamp, name,
@@ -5683,7 +5685,17 @@ if (want('v3')) try {
 //      -- a status line that wraps grows by 20u a line;
 //   S6 at rest the list's foot cuts nothing it draws (bay.js sqRest), moving
 //      up by no more than one line (20u) to do it, and scrolled to its end
-//      the last row stands whole above the fade.
+//      the last row stands whole above the fade;
+//   S8 a row keeps ground for the menu only when it has one (round 3
+//      review, 2026-10-10): both its lines end 37u from the row's edge when
+//      it carries the menu, and 6u inside its border when it does not --
+//      the player's own row, and a guest's the server gave no handle. CHANGED
+//      FROM S3 as first written, which held the player's own row to the
+//      37u edge as well: that ground, kept for a menu the row never shows,
+//      cut "Steel Howitzer (you)" to "Steel Howit... (you)" on an iPhone 17.
+//      And every default name (game-core's CALL_ADJ x CALL_NOUN, within
+//      NAME_MAX) is whole on the player's own row, a squadmate's and a
+//      friend's, at each shape, with "(you)" whole beside it.
 // AND AGAIN IN A WIDER FACE: his screen is Safari's engine, whose text need
 // not set to Chrome's widths. S1-S4 and S6 are read once more with the
 // system face (San Francisco on a Mac, as on the iPhone) in the box in place
@@ -5709,6 +5721,12 @@ if (want('sp')) try {
     // it has no menu, so its name alone stands on its first line.
     ['four, you last', { leader: SP_MULE, you: 3, members: [SPMULE({ ready: true }), SPPIKE(), spm(null, 'Quiet Fox', 'e1', { guest: true, noacct: true }), SPYOU({ ready: true })] }],
     ['leader reconnecting', { leader: SP_PIKE, you: 1, members: [SPPIKE({ ready: true, dropped: true }), SPYOU(), SPMULE({ ready: true })] }],
+    // A guest the server gave no handle: a row with no menu that is not the
+    // player's own (S8). And a leader not ready on a row with the menu, whose
+    // "Leader Not ready" wraps in the wider face alone: the player's own row
+    // in "three" was that case while it kept ground for a menu, and since it
+    // keeps none (S8) its words fit on one line in both faces.
+    ['four, a guest with no handle', { leader: SP_MULE, members: [SPYOU({ ready: true }), SPMULE(), SPPIKE({ ready: true }), spm(null, 'Quiet Fox', 'e1', { guest: true, rid: '' })] }],
     ['long names', { leader: SP_WIDE, you: 1, members: [spm(SP_WIDE, W16, 'w1', { ready: true }), SPYOU({ callsign: 'MMMMMMMMMMMMMMMM', ready: true }),
       SPPIKE({ callsign: 'WWWWWWWWWWWWWWWi', dropped: true }), spm(null, 'WWWWWWWWWWWWWWW', 'e1', { guest: true })] }],
   ];
@@ -5765,7 +5783,7 @@ if (want('sp')) try {
       let target = null;
       if (menu) { const mb = B(menu.getBoundingClientRect()), ps = getComputedStyle(menu, '::before'), px = (v) => parseFloat(v) || 0;
         target = { l: mb.l + px(ps.left), r: mb.r - px(ps.right), t: mb.t + px(ps.top), b: mb.b - px(ps.bottom) }; }
-      return { name: n.textContent, row: rb, h: rb.b - rb.t, nameLeft: nt.l, second, drawn, menu: menu ? B(menu.getBoundingClientRect()) : null, offLine, marks, target,
+      return { name: n.textContent, row: rb, h: rb.b - rb.t, nameLeft: nt.l, second, drawn, menu: menu ? B(menu.getBoundingClientRect()) : null, offLine, marks, target, edge: [L1.r, L2.r],
         ell: n.scrollWidth > n.clientWidth, ellOk: ncs.textOverflow === 'ellipsis' && ncs.overflowX === 'hidden' && ncs.whiteSpace === 'nowrap',
         tall: nt.t < nb.t - 0.5 || nt.b > nb.b + 0.5, lines: tops.size, wide };
     });
@@ -5803,7 +5821,11 @@ if (want('sp')) try {
         if (under.length) say('S3 menu target over something drawn', under);
       }
       if (r.menu && right > r.menu.l - 6) say('S3 within 6 px of the menu', [right, r.menu.l]);
-      if (right > r.row.r - 37 * u + 0.5) say('S3 past the words\' edge', [right, r.row.r - 37 * u]);
+      // (S8) A row with the menu keeps 37u for it; one with none keeps its
+      // 1px border and 6u, as on its left.
+      const keep = r.menu ? 37 * u : 6 * u + 1;
+      if (right > r.row.r - keep + 0.5) say('S3 past the words\' edge', [right, r.row.r - keep]);
+      if (r.edge.some((e) => Math.abs(r.row.r - keep - e) > 0.5)) say(r.menu ? 'S8 a row with the menu not keeping 37u for it' : 'S8 a row with no menu keeping ground for one', [r.edge, r.row.r - keep]);
       if (r.ell && !r.ellOk) say('S4 name cut without an ellipsis', r.ell);
       if (r.wide.length) say('S4 wider than its box', r.wide);
       if (r.tall) say('S4 name taller than its line', r.tall);
@@ -5821,6 +5843,32 @@ if (want('sp')) try {
     if (!g.rows.length) bad.push({ what: 'no rows read' });
     return bad;
   };
+  // S8: EVERY DEFAULT NAME, set in turn in the player's own row (beside its
+  // "(you)"), a squadmate's and a friend's, as each row is drawn: how many
+  // end in an ellipsis on each, and on how many "(you)" does not stand whole
+  // on the name's line. The box is drawn afresh after.
+  const SP_DEFAULTS = CALL_ADJ.flatMap((a) => CALL_NOUN.map((n) => a + ' ' + n)).filter((x) => x.length <= NAME_MAX);
+  const spNames = () => ev(`(() => {
+    Bay.show('home');
+    const rows = [...document.querySelectorAll('#bay .sqx .sqb .sqm')], out = {};
+    const pick = { own: rows.find((r) => r.querySelector('.sqmy')), squadmate: rows.find((r) => !r.querySelector('.sqmy') && !r.classList.contains('sqfr')),
+      friend: rows.find((r) => r.classList.contains('sqfr')) };
+    for (const [k, r] of Object.entries(pick)) {
+      if (!r) { out[k] = null; continue; }
+      const n = r.querySelector('.sqmt'), y = r.querySelector('.sqmy'), line = r.querySelector('.sqm1'), was = n.textContent, cut = [];
+      let youCut = 0;
+      for (const s of ${JSON.stringify(SP_DEFAULTS)}) {
+        n.textContent = s;
+        if (n.scrollWidth > n.clientWidth) cut.push(s);
+        if (y && (y.scrollWidth > y.clientWidth + 0.5 || y.getBoundingClientRect().right > line.getBoundingClientRect().right + 0.5)) youCut++;
+      }
+      n.textContent = was;
+      out[k] = { n: ${SP_DEFAULTS.length}, cut: cut.length, ex: cut.slice(0, 3), youCut, howitzer: !cut.includes('Steel Howitzer') };
+    }
+    Bay.show('home');
+    return out;
+  })()`);
+  const s8 = {};
   const IPHONE17 = ':root{--sa-l:62px;--sa-r:62px;--sa-b:21px;--sa-t:0px}';
   const spBad = [], spSeen = { rows: 0, wrapped: 0, ellipsis: 0, rested: 0, wideWrapped: 0 };
   // A fresh page at a shape, signed in, with the friends online and no squad.
@@ -5859,6 +5907,7 @@ if (want('sp')) try {
         await spState(patch);
         const g = await spRead();
         for (const b of spJudge(g, wide)) spBad.push({ V, face, squad: name, ...b });
+        if (!wide && name === 'four') s8[V] = await spNames();
         spSeen.rows += g.rows.length;
         spSeen.ellipsis += g.rows.filter((r) => r.ell).length;
         if (wide) spSeen.wideWrapped += g.rows.filter((r) => r.lines > 1).length; else spSeen.wrapped += g.rows.filter((r) => r.lines > 1).length;
@@ -5868,6 +5917,13 @@ if (want('sp')) try {
     }
     await ev(`(handle({ type: 'squad', op: 'ended', reason: 'left' }), Bay.show('home'), true)`); await sleep(60);
   }
+  // S8, the default names: none is cut on the player's own row, a
+  // squadmate's or a friend's, at any of the three shapes.
+  const S8K = ['own', 'squadmate', 'friend'];
+  if (SP_DEFAULTS.length > 1400 && Object.keys(s8).length === 3
+    && Object.values(s8).every((o) => S8K.every((k) => !!o[k] && o[k].n === SP_DEFAULTS.length && o[k].cut === 0 && o[k].youCut === 0 && o[k].howitzer)))
+    ok(`S8 each of the ${SP_DEFAULTS.length} default names is whole in the home box on the player's own row (beside "(you)", "Steel Howitzer (you)" among them), a squadmate's and a friend's, at 874x402 with the iPhone's safe areas, 812x375 and 667x375`);
+  else fail(`S8 default names cut in the home box ${JSON.stringify(s8)}`);
   // ---- S7. THE RULE ITSELF, on a pattern no fixture happens to draw, and
   //      ASKED WHEN IT MUST BE. Two paragraphs are put at the list's foot by
   //      hand, the second starting 10 px inside the first and reaching past
@@ -5933,7 +5989,7 @@ if (want('sp')) try {
   // every shape), a wider face that wraps more, and a list whose foot sqRest
   // moved.
   if (!spBad.length && spSeen.rows >= 100 && spSeen.ellipsis >= 12 && spSeen.wrapped >= 3 && spSeen.wideWrapped > spSeen.wrapped && spSeen.rested >= 3)
-    ok(`the home box's rows, in a squad of one to four and the friends online, at 874x402 with the iPhone's safe areas, 812x375 and 667x375, in Rajdhani and in the wider system face (${spSeen.rows} rows): each second line starts on its name's edge, nothing drawn overlaps, every word ends 6 px clear of the menu, nothing is cut, each row is 48u, and at rest the list's foot cuts nothing`);
+    ok(`the home box's rows, in a squad of one to four and the friends online, at 874x402 with the iPhone's safe areas, 812x375 and 667x375, in Rajdhani and in the wider system face (${spSeen.rows} rows): each second line starts on its name's edge, nothing drawn overlaps, every word ends 6 px clear of the menu, a row keeps ground for the menu only when it has one, nothing is cut, each row is 48u, and at rest the list's foot cuts nothing`);
   else fail(`home box rows ${JSON.stringify({ seen: spSeen, bad: spBad.slice(0, 12), more: Math.max(0, spBad.length - 12) })}`);
 } catch (e) {
   fail('squad_ui SP stopped: ' + (e && e.message));

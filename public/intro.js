@@ -1231,9 +1231,18 @@
   // latch: only a click aimed at the canvas is swallowed.
   let sawDown = false;
   function swallow(e) { try { e.preventDefault(); } catch (x) {} try { e.stopPropagation(); } catch (x) {} }
+  // A HELD SEAT'S DOORS ARE NOT SKIPPED while its match is on its way (owner,
+  // 2026-10-10: "Stay shut until ready"; round 3 review). A tap, a key or a
+  // click from assistive technology on them is swallowed and ends nothing:
+  // ending them there put home on screen while the resume was still out,
+  // and the match then cut in over it, which is what the doors wait to
+  // prevent. Once they have begun to open, onto the match or at the safety
+  // limit, a tap ends them as it ends any doors (heldShut, below). Other
+  // doors are skipped as they always were.
   const onDown = function (e) {
     if (shield) { swallow(e); return; }
     if (dead) return;
+    if (heldShut()) { swallow(e); return; }
     sawDown = true;
     swallow(e);
     end('skip-pointer');
@@ -1243,6 +1252,7 @@
   const onClick = function (e) {
     if (shield) { if (e.target === cv) { swallow(e); removeOverlay(); } return; }
     if (dead) return;
+    if (heldShut()) { swallow(e); return; }
     // a click with no pointer before it is assistive technology activating
     // something: it skips, and it does not reach the menu
     if (!sawDown) { swallow(e); end('skip-click'); }
@@ -1251,6 +1261,7 @@
   const onKey = function (e) {
     if (dead) return;
     if (!(e.ctrlKey || e.metaKey || e.altKey || MODS[e.key])) swallow(e);
+    if (heldShut()) return;
     end('skip-key');
   };
   const LISTEN = [['pointerdown', onDown], ['pointerup', onUp], ['pointercancel', onCancel], ['click', onClick], ['keydown', onKey]];
@@ -1335,8 +1346,13 @@
   // spin down as its doors part (SPIN_DOWN to SPIN_STOP), which on doors
   // still shut past three seconds would stand them still. Then they part in
   // Q.open with the gap between them clear onto the destination itself. Under
-  // reduced motion nothing on them moves or lights: they hold as the launch
-  // image held, and the canvas fades in Q.fade instead of parting.
+  // reduced motion nothing on them moves, but they are lit as they are
+  // elsewhere (owner, 2026-10-10: shut "studio mark and beacons lit"; round 3
+  // review: left dark there, a held seat's doors were blank but for their
+  // words for up to fifteen seconds). The mark and the beacons come up over
+  // the same Q.power, a change of light and not a movement, and the beacons
+  // stand still at the angle the intro's own start at; the canvas fades in
+  // Q.fade instead of parting.
   // THEY STAY SHUT UNTIL THE LAST VIEW IS READY (owner, 2026-10-10: "Stay
   // shut until ready"). Q.hold is the visible time they may wait. It was three
   // seconds, so a resume slower than that opened them onto the menu and the
@@ -1380,6 +1396,12 @@
   function heldWaiting() {
     try { return BOOT_CLAIM === 'resume' && typeof loadResume === 'function' && !!loadResume(); } catch (e) { return false; }
   }
+  // Doors that no tap or key may end (SKIPPING, above): still shut, while a
+  // held seat's resume is out. Only the quick doors wait for one (a held
+  // seat is boot's claim, which never gets the full intro), and they give
+  // way at the safety limit on their own: the frame that reaches Q.hold
+  // sets openAt, and from then on a tap ends them as it ends any doors.
+  function heldShut() { return openAt < 0 && heldWaiting(); }
   // The destination is drawn: a held seat's match once its resume has been
   // answered, either way (restored, or refused and cleared by boot); else the
   // screen the bay has drawn, in its own type and with its pictures in. The
@@ -1418,8 +1440,8 @@
     ctx.restore();
   }
   function paintQuick(t, p) {
-    const shift = FADE ? 0 : eInOut(p) * doorTravel(), po = FADE ? 0 : eOut(seg(t, 0, Q.power));
-    const la = labelAlpha(t, p), turn = SPIN * t;
+    const shift = FADE ? 0 : eInOut(p) * doorTravel(), po = eOut(seg(t, 0, Q.power));
+    const la = labelAlpha(t, p), turn = FADE ? 0 : SPIN * t;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.filter = 'none';
     ctx.clearRect(0, 0, cv.width, cv.height);

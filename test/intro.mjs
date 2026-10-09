@@ -239,6 +239,10 @@ const INSTR = `(() => {
   // on EVERY frame, kept or not: the shut doors cover the screen, nothing is
   // up over them, and when the words are said and drawn. Every 15th frame the
   // whole page is looked at for anything that could be drawn over the doors.
+  // ROUND 3 REVIEW (the doors stay shut "studio mark and beacons lit", under
+  // reduced motion as well): each frame also reads the light at the top-left
+  // beacon's centre (beacon) and along one row of device pixels through the
+  // studio mark's letters (mark, the channels summed).
   S.quick = [];
   S.qa = { n: 0, shut: 0, notOpaque: 0, toast: 0, mg: 0, conn: 0, scans: 0, over: [], labelFirst: null, litFirst: null, early: 0, full: 0, fullUnlit: 0, spinN: 0, spinMoved: 0, ring: '' };
   function px(cv, x, y) { const q = cv.getContext('2d'); return q.getImageData(Math.max(0, Math.min(cv.width - 1, Math.round(x))), Math.max(0, Math.min(cv.height - 1, Math.round(y))), 1, 1).data; }
@@ -271,15 +275,26 @@ const INSTR = `(() => {
     }
     return out;
   }
+  // The row through the mark: intro.js sets the mark 466 stage units wide
+  // from x 233, and the middle of its letters ABARA 219.5 units down.
+  function markLine(cv, g, d) {
+    const y = Math.round((g[1] + 219.5 * g[2]) * d), x0 = Math.round((g[0] + 233 * g[2]) * d), w = Math.max(2, Math.round(466 * g[2] * d));
+    const a = cv.getContext('2d').getImageData(x0, y, w, 1).data;
+    let n = 0;
+    for (let i = 0; i < a.length; i += 4) n += a[i] + a[i + 1] + a[i + 2];
+    return n;
+  }
   function quickFrame(I, cv) {
     const d = cv.width / (cv.clientWidth || 1), g = I.geo || [0, 0, 1], bay = document.getElementById('bay');
+    const bc = px(cv, (g[0] + 932 * .085 * g[2]) * d, (g[1] + 430 * .12 * g[2]) * d);
     const ring = [];
     for (let k = 0; k < 12; k++) { const a = k / 12 * 6.283, p = px(cv, (g[0] + (932 * .085 + Math.cos(a) * 40) * g[2]) * d, (g[1] + (430 * .12 + Math.sin(a) * 40) * g[2]) * d); ring.push(p[0] + p[1] + p[2]); }
     const row = { t: Math.round(I.t), open: I.open || 0, shift: I.shift || 0, seam: g[0] + 466 * g[2], u: g[2], opacity: +getComputedStyle(cv).opacity,
       mid: px(cv, cv.width / 2, cv.height / 2)[3], left: px(cv, cv.width * .04, cv.height / 2)[3], right: px(cv, cv.width * .96, cv.height / 2)[3],
       ring: ring.join(','), scr: bay.dataset.scr || '', game: document.getElementById('game').classList.contains('active'), mg: mgUp(),
       toast: document.querySelectorAll('.toast-item').length, bay: bay.classList.contains('active'), label: I.label || 0, lit: lit(cv, I, g, d),
-      conn: !document.getElementById('connErr').classList.contains('hidden'), draws: window.__draws || 0 };
+      conn: !document.getElementById('connErr').classList.contains('hidden'), draws: window.__draws || 0,
+      beacon: bc[0] + bc[1] + bc[2], mark: markLine(cv, g, d) };
     if (row.open > 0 && !S.quickOpen) {
       const anims = bay.getAnimations ? bay.getAnimations({ subtree: true }).filter((a) => { const it = a.effect && a.effect.getComputedTiming && a.effect.getComputedTiming(); return it && isFinite(it.iterations) && a.playState === 'running'; }).length : 0;
       S.quickOpen = { t: row.t, scr: row.scr, game: row.game, anims, resume: localStorage.getItem('cc_resume') !== null, draws: row.draws };
@@ -652,6 +667,27 @@ function spinOk(label, R, min) {
   const qa = R.T && R.T.qa;
   check(`[${label}] past 3.2 s the shut doors are still alive: the beacons look different on ${qa && qa.spinMoved} of ${qa && qa.spinN} frames`,
     !!qa && qa.spinN >= min && qa.spinMoved >= qa.spinN * .5, JSON.stringify(qa && { spinN: qa.spinN, spinMoved: qa.spinMoved }));
+}
+// LIT WHILE THEY WAIT (owner, 2026-10-10: shut "studio mark and beacons
+// lit"; round 3 review: under reduced motion they were left dark, blank doors
+// but for their words). On every shut frame from the end of the power-on
+// (250 ms) the light over the studio mark and at the top-left beacon's
+// centre is well up on frame 0's, the launch image's, where neither is lit
+// yet. And with `still` (reduced motion) nothing on them moves: the light
+// round the beacon, and at its centre, stays within a few levels of the
+// first of those frames on every one of them (a turning beam moves it by
+// tens).
+function litOk(label, R, still) {
+  const rows = (R.T && R.T.quick) || [], f0 = rows.find((r) => r.t === 0);
+  const held = rows.filter((r) => r.t >= 300 && r.open === 0 && r.opacity === 1), h0 = held[0];
+  check(`[${label}] the shut doors are lit, the studio mark and the beacons, on all ${held.length} of their frames from the power-on's end (the mark's row ${h0 && h0.mark} against frame 0's ${f0 && f0.mark}, the beacon ${h0 && h0.beacon} against ${f0 && f0.beacon})`,
+    !!f0 && held.length >= 20 && held.every((r) => r.mark >= f0.mark * 1.25 && r.beacon >= f0.beacon + 200),
+    JSON.stringify({ f0: f0 && { mark: f0.mark, beacon: f0.beacon }, held: held.filter((_, i) => i % 40 === 0).map((r) => ({ t: r.t, mark: r.mark, beacon: r.beacon })) }));
+  if (!still) return;
+  const ring0 = h0 ? h0.ring.split(',').map(Number) : [];
+  const moved = held.map((r) => Math.max(Math.abs(r.beacon - h0.beacon), ...r.ring.split(',').map((v, k) => Math.abs(+v - ring0[k]))));
+  check(`[${label}] and nothing on them moves: round the beacon and at its centre the light stays within 6 levels of its first lit frame on every one (at most ${moved.length ? Math.max(...moved) : null})`,
+    held.length >= 20 && moved.every((m) => m <= 6), JSON.stringify({ moved: moved.filter((_, i) => i % 20 === 0) }));
 }
 // NO FRAME SHOWS HOME BEHIND THEM (round 3): every frame that shows anything
 // behind the doors, parted or faded, shows the match with the bay off screen,
@@ -1231,6 +1267,7 @@ const BACK = "({ playing: S.playing === true && document.getElementById('game').
   await sleep(100);
   const T = await b.ev('JSON.parse(JSON.stringify(window.__toasts))'), ask = T.asked.filter((x) => x.up).map((x) => x.text);
   spinOk(label, R, 60);
+  litOk(label, R, false);
   check(`${label}: "Reconnected — battle on!" waited for the doors and showed once they had gone`,
     ask.includes('Reconnected — battle on!') && T.shown.some((x) => x.text === 'Reconnected — battle on!') && T.shown.every((x) => !x.cv), JSON.stringify(T));
   await b.close();
@@ -1281,9 +1318,71 @@ await quickCase('R3 a held seat the server no longer has, answered 5 s late', { 
   const R = await quickRun(b, 25000);
   doorsOk(label, R, { dest: 'game', fade: true, prompt: false, held: true });
   revealOk(label, R);
+  litOk(label, R, true);
   const back = await b.ev(BACK), ans = await b.ev('window.__answeredAt');
   check(`${label}: the doors waited for the match, past the old 3 s limit (answered at ${Math.round(ans)} ms on the doors' clock, faded from ${R.st && Math.round(R.st.openAt)} ms), and it is the match that was held, in play`,
     !!held && !!R.st && ans > 3100 && R.st.openAt >= ans && R.st.openAt <= ans + 100 && R.st.openAt < 15000 && back.playing && back.code === held.code, JSON.stringify({ held, ans, st: R.st, back }));
+  await b.close();
+  try { await send('Target.disposeBrowserContext', { browserContextId: X }); } catch {}
+}
+{
+  // TAPPED WHILE IT WAITS (round 3 review): a tap, a mouse click, a key press
+  // and an assistive-technology click on a held seat's shut doors, while its
+  // resume is still out, end nothing and reach nothing. The doors stay shut
+  // until the match is back (5 s), then open onto it, as they do untouched.
+  // A tap used to end them at once: home came up with the resume still out,
+  // and the match then cut in over it.
+  const SLOW = 5000, label = 'R3 a held seat answered 5 s late, tapped, clicked and keyed at while it waits';
+  const { browserContextId: X } = await send('Target.createBrowserContext', { disposeOnDetach: true });
+  const held = await holdMatch(X, { w: 844, h: 390, dpr: 3 });
+  const b = await openPage({ w: 844, h: 390, dpr: 3, context: X, extra: [LAUNCH, slowAnswer(SLOW), DRAWS] });
+  await b.go();
+  const after = [];
+  const note = async (what) => { await sleep(120); const st = await b.intro(); after.push({ what, t: st && Math.round(st.t), state: st && st.state, reason: st && st.reason, open: st && st.open }); };
+  await b.until((x) => x.state === 'running' && x.t >= 1500, 10000);
+  const boards = await boardsState(b);
+  await b.s('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 422, y: 195 }] });
+  await b.s('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await note('a tap');
+  await b.until((x) => x.t >= 2000, 10000);
+  await b.s('Input.dispatchMouseEvent', { type: 'mousePressed', x: 300, y: 200, button: 'left', clickCount: 1 });
+  await b.s('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 300, y: 200, button: 'left', clickCount: 1 });
+  await note('a mouse click');
+  await b.until((x) => x.t >= 2500, 10000);
+  await b.s('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', text: 'a' });
+  await b.s('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA' });
+  await note('a key press');
+  await b.until((x) => x.t >= 3000, 10000);
+  // assistive technology activates by click with no pointer before it
+  await b.ev("(document.querySelectorAll('#bay .board')[3] || document.getElementById('app')).click(), true");
+  await note('an assistive-technology click');
+  const R = await quickRun(b, 25000);
+  doorsOk(label, R, { dest: 'game', prompt: false, held: true });
+  revealOk(label, R);
+  const back = await b.ev(BACK), ans = await b.ev('window.__answeredAt'), clicks = await b.ev('window.__t.clicks');
+  check(`${label}: each of them left the doors shut and running (${after.map((a) => a.what + ' at ' + a.t + ' ms').join(', ')}), none reached the page, and the doors opened only once the match was back (answered at ${Math.round(ans)} ms, opened at ${R.st && Math.round(R.st.openAt)} ms), onto the very match that was held, in play`,
+    !!held && after.length === 4 && after.every((a) => a.state === 'running' && !a.reason && a.open === 0 && a.t < ans) && clicks === 0 && (await boardsState(b)) === boards
+    && !!R.st && ans > 3100 && R.st.openAt >= ans && R.st.openAt <= ans + 100 && back.playing && back.code === held.code, JSON.stringify({ after, clicks, ans, st: R.st, back }));
+  await b.close();
+  try { await send('Target.disposeBrowserContext', { browserContextId: X }); } catch {}
+}
+{
+  // ...AND ONCE THEY HAVE BEGUN TO OPEN onto the match (answered at 1.5 s),
+  // a tap ends them as it ends any doors: what they wait for is there.
+  const label = 'R3 a held seat answered at 1.5 s, tapped once its doors have begun to open';
+  const { browserContextId: X } = await send('Target.createBrowserContext', { disposeOnDetach: true });
+  const held = await holdMatch(X, { w: 844, h: 390, dpr: 3 });
+  const b = await openPage({ w: 844, h: 390, dpr: 3, context: X, extra: [LAUNCH, answerAt(1500), DRAWS] });
+  await b.go();
+  const was = await b.until((x) => x.state === 'running' && x.open > .05, 10000);
+  await b.s('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 422, y: 195 }] });
+  const st = await b.intro();
+  await b.s('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await sleep(150);
+  const back = await b.ev(BACK), clicks = await b.ev('window.__t.clicks');
+  check(`${label}: the tap ended them there and then (tapped ${was && was.open.toFixed(2)} of the way open), onto the match that was held, and pressed nothing`,
+    !!held && !!was && was.open < .5 && st && st.state === 'ended' && st.reason === 'skip-pointer' && back.playing && back.code === held.code && clicks === 0,
+    JSON.stringify({ was, st, back, clicks }));
   await b.close();
   try { await send('Target.disposeBrowserContext', { browserContextId: X }); } catch {}
 }
@@ -1312,6 +1411,21 @@ await quickCase('R3 a held seat the server no longer has, answered 5 s late', { 
 await quickCase('R3 a reopen within ten minutes whose screen is 4.5 s late', { slowBay: 4500, extra: [LAST(60000, { scr: 'career', path: ['home'], mode: 'duel' })] }, BASE, { dest: 'career', prompt: false, ms: 25000,
   also: async (p, R) => check(`R3 those doors waited for the Career screen, past the old 3 s limit and inside the new one (opened at ${R.st && Math.round(R.st.openAt)} ms)`,
     !!R.st && R.st.openAt > 3100 && R.st.openAt < 15000 && R.st.dest === 'career', JSON.stringify(R.st)) });
+{
+  // ONLY A HELD SEAT'S DOORS ARE KEPT FROM A TAP (round 3 review): the same
+  // reopen, its screen 4.5 s late, tapped at 1.5 s, ends its doors as a tap
+  // always has.
+  const p = await openPage({ w: 844, h: 390, dpr: 3, slowBay: 4500, extra: [LAST(60000, { scr: 'career', path: ['home'], mode: 'duel' }), LAUNCH] });
+  await p.go();
+  const was = await p.until((x) => x.state === 'running' && x.t >= 1500, 10000);
+  await p.s('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 422, y: 195 }] });
+  const st = await p.intro();
+  await p.s('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  check('R3 the doors of a reopen with no held seat still end on a tap while they wait for a late screen',
+    !!was && was.mode === 'quick' && was.open === 0 && st && st.state === 'ended' && st.reason === 'skip-pointer', JSON.stringify({ was, st }));
+  await sleep(150);
+  await p.close();
+}
 {
   // THE NATIVE LAUNCH HOLD ON THE PATHS WITH NO DOORS: let go once, after the
   // menu has painted (the doors' paths are checked above, and the intro's
