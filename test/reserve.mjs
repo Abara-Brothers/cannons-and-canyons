@@ -1658,6 +1658,175 @@ const sameName = (a, b) => nameReadings(a).some((x) => nameReadings(b).includes(
     ok(`L6: with no engine handed in, a squad's box still shows the guest who joined as 'IRON RIDGE' beside its leader 'Iron Ridge' as '${rows[1]}', and one who joined as another player's reserved 'Steel Gunner' as '${rows[2]}'`);
   else fail('L6: no door: ' + JSON.stringify({ rows, firstTried }));
 }
+// A ROW THE BOX COULD NOT NAME (the round 3 check, 2026-10-10). A row whose
+// name came out null was given no stand-in, so the player's own page drew
+// that row with the device's own name, which could be the name another member
+// is shown under, and the match then seated the player under a stand-in the
+// box had never shown. What a member's own page draws for its own row is
+// played out here as the client draws it (bay.js sqRowParts): the server's
+// name whenever the frame carries one, and the device's name otherwise.
+const drawnBy = (box, mine) => box.members.map((m, i) => (typeof m.callsign === 'string' && m.callsign ? m.callsign : i === box.you ? mine : null));
+const noTwo = (rows) => rows.every((n, i) => n === null || rows.every((x, j) => i === j || x === null || !sameName(n, x)));
+{
+  // L7. THE SHIPPING STATE, ON THE GUEST'S OWN SCREEN. The table missing; a
+  // signed-in leader whose chosen callsign is 'Marguerite Vale'; a guest whose
+  // device name is the same typed name, typed before the account chose it (so
+  // the guidelines now refuse it to the guest: an account holds it); a second
+  // guest as 'Iron Ridge'. Every row carries a name, the guest's is the
+  // stand-in the match seats them under, and no screen shows one name twice.
+  const w = socialWorld({ live: true, door: true, chosen: ['marguerite vale'] });
+  w.table.keysFail = new Error('sb GET 404');
+  await w.res.refresh();
+  const unwire = wire(w);
+  w.profiles.set(U1, { id: U1, callsign: 'Marguerite Vale', callsign_key: 'marguerite vale' });
+  const lead = Object.assign(ews(), mkws(U1, false), { chosenName: 'Marguerite Vale' }); w.social.onAuth(lead);
+  const guest = Object.assign(ews(), mkws()), guest2 = Object.assign(ews(), mkws());
+  await w.social.handle(lead, { type: 'squad', op: 'create', name: 'Marguerite Vale', skin: 'olive', id: 'c' });
+  const code = (lead._rx.find((m) => m.type === 'squad' && m.op === 'state') || {}).code;
+  await w.social.handle(guest, { type: 'squad', op: 'join', code, name: 'Marguerite Vale', skin: 'gold', id: 'j1' });
+  await w.social.handle(guest2, { type: 'squad', op: 'join', code, name: 'Iron Ridge', skin: 'gold', id: 'j2' });
+  const box = [...guest._rx].reverse().find((m) => m.type === 'squad' && m.op === 'state') || { members: [], you: -1 };
+  const rows = box.members.map((m) => m.callsign);
+  const screens = [lead, guest, guest2].map((s, k) => {
+    const f = [...s._rx].reverse().find((m) => m.type === 'squad' && m.op === 'state') || { members: [], you: -1 };
+    return drawnBy(f, ['Marguerite Vale', 'Marguerite Vale', 'Iron Ridge'][k]);
+  });
+  // A REPORT ON THE ROW RECORDS THE NAME THE ROW SHOWED (handleReport, for a
+  // guest with no account: the log line), which is the stand-in the leader
+  // saw, never nothing.
+  const said = [];
+  const realLog = console.log;
+  console.log = (...a) => { said.push(a.join(' ')); };
+  try { await w.social.handle(lead, { type: 'report', rid: (box.members[1] || {}).rid, id: 'q' }); }
+  finally { console.log = realLog; }
+  const reported = lead._rx.find((m) => m.type === 'report' && m.id === 'q');
+  const logged = said.find((l) => l.startsWith('[report] guest in squad'));
+  await w.social.handle(lead, { type: 'squad', op: 'mode', mode: 'ffa', id: 'm' });
+  for (const [s, k] of [[lead, 'r0'], [guest, 'r1'], [guest2, 'r2']]) await w.social.handle(s, { type: 'squad', op: 'ready', ready: true, loadout: FIVE, id: k });
+  await w.social.handle(lead, { type: 'squad', op: 'start', id: 's' });
+  const seats = [lead, guest, guest2].map(seatOfWs);
+  const st = guest._rx.find((m) => m.type === 'start');
+  shut(lead, guest, guest2);
+  unwire();
+  if (box.you === 1 && rows.length === 3 && rows.every((n) => typeof n === 'string' && n) && rows[0] === 'Marguerite Vale' && rows[2] === 'Iron Ridge'
+      && !sameName(rows[1], 'Marguerite Vale') && noTwo(rows) && screens.every((s) => s.every((n) => typeof n === 'string') && noTwo(s))
+      && seats.every(Boolean) && same(seats.map((s) => s.name), rows) && !seats[0].renamed && seats[1].renamed && !seats[2].renamed
+      && st && st.renamed === true && st.names[st.you] === rows[1]
+      && reported && reported.ok === true && logged === `[report] guest in squad ${code} seat 2 "${rows[1]}" by ${U1}`)
+    ok(`L7: with the table missing, a guest whose device name an account has since chosen ('Marguerite Vale') is shown in the box, on every member's screen and their own, as '${rows[1]}', the match seats them so and tells them, and a report on the row records '${rows[1]}'`);
+  else fail('L7: the guest\'s own screen: ' + JSON.stringify({ you: box.you, rows, screens, seats, st: st && { renamed: st.renamed, names: st.names, you: st.you }, reported, logged }));
+}
+{
+  // L8. A PROFILE READ THAT FAILS. The table missing; the squad's one name
+  // read fails. The leader's chosen callsign is the one their socket holds,
+  // which the match seats; a second account with no chosen callsign presented
+  // the rolled pair 'Iron Ridge', which the match seats too; a guest who
+  // joined after them as 'Iron Ridge' is the later member and is moved; and a
+  // third account presented 'Quiet Dawn' while a player elsewhere is shown
+  // under it, a name the server does not hold for them, so the match moves
+  // them and the box must too. The box says all four and agrees with the
+  // match. Before this fix the accounts' rows were null, the second account's
+  // own page drew its own row 'Iron Ridge' beside the guest's 'Iron Ridge',
+  // and the match moved a member the box had not.
+  const w = socialWorld({ live: true, door: true, chosen: ['marguerite vale'] });
+  w.table.keysFail = new Error('sb GET 404');
+  await w.res.refresh();
+  const unwire = wire(w);
+  w.profiles.set(U1, { id: U1, callsign: 'Marguerite Vale', callsign_key: 'marguerite vale' });
+  w.profiles.set(U2, { id: U2, callsign: 'Iron Ridge', callsign_key: null });
+  w.profiles.set(U3, { id: U3, callsign: 'Quiet Dawn', callsign_key: null });
+  const lead = Object.assign(ews(), mkws(U1, false), { chosenName: 'Marguerite Vale' }); w.social.onAuth(lead);
+  const acct = Object.assign(ews(), mkws(U2, false)); w.social.onAuth(acct);
+  const third = Object.assign(ews(), mkws(U3, false)); w.social.onAuth(third);
+  const guest = Object.assign(ews(), mkws());
+  const elsewhere = ews();
+  openRoom(elsewhere, 'Quiet Dawn');
+  const realRead = w.table.profilesByIds;
+  w.table.profilesByIds = async () => { throw new Error('sb GET 500'); };
+  await w.social.handle(lead, { type: 'squad', op: 'create', name: 'Marguerite Vale', skin: 'olive', id: 'c' });
+  const code = (lead._rx.find((m) => m.type === 'squad' && m.op === 'state') || {}).code;
+  await w.social.handle(acct, { type: 'squad', op: 'join', code, name: 'Iron Ridge', skin: 'desert', id: 'j1' });
+  await w.social.handle(guest, { type: 'squad', op: 'join', code, name: 'Iron Ridge', skin: 'gold', id: 'j2' });
+  await w.social.handle(third, { type: 'squad', op: 'join', code, name: 'Quiet Dawn', skin: 'olive', id: 'j3' });
+  const box = [...acct._rx].reverse().find((m) => m.type === 'squad' && m.op === 'state') || { members: [], you: -1 };
+  const rows = box.members.map((m) => m.callsign);
+  const screens = [lead, acct, guest, third].map((s) => {
+    const f = [...s._rx].reverse().find((m) => m.type === 'squad' && m.op === 'state') || { members: [], you: -1 };
+    return drawnBy(f, ['Marguerite Vale', 'Iron Ridge', 'Iron Ridge', 'Quiet Dawn'][f.you]);
+  });
+  await w.social.handle(lead, { type: 'squad', op: 'mode', mode: 'ffa', id: 'm' });
+  for (const [s, k] of [[lead, 'r0'], [acct, 'r1'], [guest, 'r2'], [third, 'r3']]) await w.social.handle(s, { type: 'squad', op: 'ready', ready: true, loadout: FIVE, id: k });
+  await w.social.handle(lead, { type: 'squad', op: 'start', id: 's' });
+  const seats = [lead, acct, guest, third].map(seatOfWs);
+  w.table.profilesByIds = realRead;
+  shut(lead, acct, guest, third);
+  shut(elsewhere);
+  unwire();
+  if (box.you === 1 && rows.length === 4 && same(rows.slice(0, 2), ['Marguerite Vale', 'Iron Ridge']) && rows.every((n) => typeof n === 'string' && n) && noTwo(rows)
+      && !sameName(rows[3], 'Quiet Dawn') && screens.every((s) => s.every((n) => typeof n === 'string') && noTwo(s))
+      && seats.every(Boolean) && same(seats.map((s) => s.name), rows) && !seats[0].renamed && !seats[1].renamed && seats[2].renamed && seats[3].renamed)
+    ok(`L8: with the name read failing, the box names the leader by the chosen callsign their socket holds, the account that presented 'Iron Ridge' by it, the later guest as '${rows[2]}' and the account whose 'Quiet Dawn' is live elsewhere as '${rows[3]}', and the match seats exactly those`);
+  else fail('L8: failed read: ' + JSON.stringify({ you: box.you, rows, screens, seats }));
+}
+{
+  // L9. A ROW IS NEVER NAMED BY ANOTHER ACCOUNT'S CALLSIGN. server.js moves a
+  // socket to another account by taking it out of its squad first (onClose)
+  // and only then writing the new account on it. Were a snapshot ever built
+  // between those two, the old account's row must not show the chosen
+  // callsign the socket now carries for the new one (chosenOf asks that the
+  // socket is still the row's account): it is named as any row is.
+  const w = socialWorld({ live: true, door: true, chosen: ['marguerite vale', 'wren delacroix'] });
+  w.table.keysFail = new Error('sb GET 404');
+  await w.res.refresh();
+  const unwire = wire(w);
+  w.profiles.set(U1, { id: U1, callsign: 'Marguerite Vale', callsign_key: 'marguerite vale' });
+  w.profiles.set(U2, { id: U2, callsign: 'Iron Ridge', callsign_key: null });
+  const lead = Object.assign(ews(), mkws(U1, false), { chosenName: 'Marguerite Vale' }); w.social.onAuth(lead);
+  const acct = Object.assign(ews(), mkws(U2, false)); w.social.onAuth(acct);
+  await w.social.handle(lead, { type: 'squad', op: 'create', name: 'Marguerite Vale', skin: 'olive', id: 'c' });
+  const code = (lead._rx.find((m) => m.type === 'squad' && m.op === 'state') || {}).code;
+  await w.social.handle(acct, { type: 'squad', op: 'join', code, name: 'Iron Ridge', skin: 'desert', id: 'j1' });
+  const realRead = w.table.profilesByIds;
+  w.table.profilesByIds = async () => { throw new Error('sb GET 500'); };
+  Object.assign(acct, { userId: U3, chosenName: 'Wren Delacroix' });
+  await w.social.handle(Object.assign(ews(), mkws()), { type: 'squad', op: 'join', code, name: 'Basalt Rim', skin: 'gold', id: 'j2' });
+  const rows = ([...lead._rx].reverse().find((m) => m.type === 'squad' && m.op === 'state') || { members: [] }).members.map((m) => m.callsign);
+  Object.assign(acct, { userId: U2, chosenName: null });
+  w.table.profilesByIds = realRead;
+  unwire();
+  if (same(rows, ['Marguerite Vale', 'Iron Ridge', 'Basalt Rim']) && !JSON.stringify(lead._rx).includes('Wren Delacroix'))
+    ok('L9: a row whose socket carries another account\'s chosen callsign is never shown under it; it is named by the name its frame carried');
+  else fail('L9: another account\'s name: ' + JSON.stringify(rows));
+}
+{
+  // L10. A CHOSEN CALLSIGN THE TERM LIST NOW REFUSES IS NOT SHOWN FROM THE
+  // SOCKET EITHER. The list is read at start-up and can gain a term after a
+  // name was set. The box takes such a name off every screen when it comes
+  // from the profile (displayName), and must when the read fails and it comes
+  // from the socket (chosenOf). The name is built from the shipped list here,
+  // and no line below ever prints it.
+  const term = TERMS.find((t) => /^[a-z]{5,9}$/.test(t));
+  const bad = term[0].toUpperCase() + term.slice(1) + ' Tank';
+  const w = socialWorld({ live: true, door: true, chosen: [bad.toLowerCase()] });
+  w.table.keysFail = new Error('sb GET 404');
+  await w.res.refresh();
+  const unwire = wire(w);
+  w.profiles.set(U1, { id: U1, callsign: bad, callsign_key: bad.toLowerCase() });
+  const lead = Object.assign(ews(), mkws(U1, false), { chosenName: bad }); w.social.onAuth(lead);
+  const guest = Object.assign(ews(), mkws());
+  const realRead = w.table.profilesByIds;
+  w.table.profilesByIds = async () => { throw new Error('sb GET 500'); };
+  await w.social.handle(lead, { type: 'squad', op: 'create', name: bad, skin: 'olive', id: 'c' });
+  const code = (lead._rx.find((m) => m.type === 'squad' && m.op === 'state') || {}).code;
+  await w.social.handle(guest, { type: 'squad', op: 'join', code, name: 'Basalt Rim', skin: 'gold', id: 'j' });
+  const rows = ([...guest._rx].reverse().find((m) => m.type === 'squad' && m.op === 'state') || { members: [] }).members.map((m) => m.callsign);
+  const shown = JSON.stringify([lead._rx, guest._rx]).toLowerCase().includes(term);
+  w.table.profilesByIds = realRead;
+  unwire();
+  if (rows.length === 2 && typeof rows[0] === 'string' && rows[0] && rows[1] === 'Basalt Rim' && !shown)
+    ok('L10: with the name read failing, a chosen callsign the term list now refuses is not shown from the socket: the row shows the stand-in the box gives any name it cannot show');
+  else fail('L10: a refused chosen callsign: ' + JSON.stringify({ rows: rows.length, named: typeof rows[0] === 'string', shown }));
+}
 if (eng.rooms.size === 0) ok('J-L: every room these checks opened is gone, so no seat of theirs is live for the next');
 else fail('J-L: rooms left open: ' + [...eng.rooms.keys()].join(','));
 

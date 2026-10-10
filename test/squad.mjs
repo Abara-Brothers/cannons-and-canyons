@@ -30,7 +30,7 @@ import { createSquads } from '../server/squads.js';
 // container the squad minter's roomExists reads (the code frame reads it too,
 // but in server.js, where only test/code_frame.mjs can reach it).
 import { rooms, handleClientMessage, setCodeTaken, MODE_SEATS, TEE_IDS, validRackFor } from '../public/room-engine.js';
-import { LOADOUT_POOL, loadoutSizeFor } from '../public/game-core.js';
+import { LOADOUT_POOL, loadoutSizeFor, isGeneratedCallsign } from '../public/game-core.js';
 import { createSocial, createCooldown, SOCIAL_TYPES, SQUAD_ERRORS } from '../server/social.js';
 // Task 2: the one-byte hook the code minters are proved on. The same module
 // is loaded into a spawned server.js by test/code_frame.mjs with --import;
@@ -60,6 +60,15 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 // nothing else -- any other field a row carried would still fail the
 // comparison -- and (rid) holds the handle itself to its rules.
 const norid = (r) => { if (!r || typeof r !== 'object' || !('rid' in r)) return r; const { rid, ...rest } = r; return rest; };
+// A ROW NO ACCOUNT OR GUEST NAME COULD NAME IS SHOWN THE DOOR'S STAND-IN
+// (round 3 check fix, 2026-10-10: server/social.js boxNames names every row
+// but the sign-in door's by the name the match will seat it under). With no
+// room engine handed in, as in most worlds here, that stand-in is a rolled
+// pair from the engine's own walk. `unnamed` is the row with its name taken
+// out, for comparing the rest of it; `standIns` says every name given is such
+// a pair and no two rows share one.
+const unnamed = (r) => norid(r && typeof r === 'object' ? { ...r, callsign: null } : r);
+const standIns = (names) => names.every((n) => typeof n === 'string' && isGeneratedCallsign(n)) && new Set(names.map((n) => String(n).toLowerCase())).size === names.length;
 const RID32 = /^[0-9a-f]{32}$/;
 // THE HANDLE OF A ROW, read off the LAST roster `w` was sent -- the way the
 // leader's box reads it -- by account id, or by index for a guest row. It
@@ -885,12 +894,17 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
   const rows = seen && seen.members;
   if (rows && rows.length === 3 && rows.every((r) => RID32.test(r.rid))
     && JSON.stringify(norid(rows[0])) === JSON.stringify({ id: SQA, callsign: 'Anvil Six', guest: false, online: true, ready: false, dropped: false })
-    && JSON.stringify(norid(rows[1])) === JSON.stringify({ id: SQD, callsign: null, guest: false, online: true, ready: false, dropped: false })
+    && JSON.stringify(unnamed(rows[1])) === JSON.stringify({ id: SQD, callsign: null, guest: false, online: true, ready: false, dropped: false })
     // CHANGED (final audit, 2026-10-09): a guest row with no account behind
     // it carries `noacct: true`, the flag that keeps Block off its menu. Its
     // name is still null here: this world wires no name index (see below).
-    && JSON.stringify(norid(rows[2])) === JSON.stringify({ id: null, callsign: null, guest: true, online: true, ready: false, dropped: false, noacct: true }))
-    ok('(h1) a proved name is shown, an unprovable one keeps its row as null, and a guest row is null and flagged, with noacct for a guest with no account');
+    // CHANGED (round 3 check fix, 2026-10-10): neither row is null any more.
+    // D's profile proves no name and D's join presented none, and the guest's
+    // typed name is refused while no index is wired, so each row shows the
+    // stand-in the room's door would seat that member under (see standIns).
+    && JSON.stringify(unnamed(rows[2])) === JSON.stringify({ id: null, callsign: null, guest: true, online: true, ready: false, dropped: false, noacct: true })
+    && standIns([rows[1].callsign, rows[2].callsign]) && rows[1].callsign !== 'Anvil Six' && rows[2].callsign !== 'Anvil Six')
+    ok('(h1) a proved name is shown, an unprovable one keeps its row under the stand-in the match would seat it under, and so does a guest row whose name the door refuses, flagged with noacct for a guest with no account');
   else fail('(h1) rows: ' + JSON.stringify(rows));
   // THE NAME THE GUEST SENT LEAVES THE SERVER ONLY THROUGH THE DOOR'S RULES.
   // CHANGED (round 2, 2026-10-08): this read "never leaves the server". A
@@ -1306,7 +1320,10 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
   const arow = sqlast(anon, 'state');
   const seenBy = JSON.stringify(host.rx) + JSON.stringify(anon.rx);
   if (arow && arow.id === 'a' && arow.you === 1 && RID32.test(arow.members[1].rid)
-    && JSON.stringify(norid(arow.members[1])) === JSON.stringify({ id: null, callsign: null, guest: true, online: true, ready: false, dropped: false })
+    // CHANGED (round 3 check fix, 2026-10-10): 'G' is shorter than the
+    // guidelines allow, so the row shows the door's stand-in, not null.
+    && JSON.stringify(unnamed(arow.members[1])) === JSON.stringify({ id: null, callsign: null, guest: true, online: true, ready: false, dropped: false })
+    && standIns([arow.members[1].callsign])
     && !seenBy.includes('a00000000001'))
     ok('(h6) an anonymous account joins as a guest row — id null — and its account id reaches no screen');
   else fail('(h6) anonymous join: ' + JSON.stringify(arow));
@@ -1415,6 +1432,11 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
 // null, which is displayName's own answer for a name it cannot vouch for.
 {
   // CREATE: the creator gets the real frame, their row kept, their name null.
+  // CHANGED (round 3 check fix, 2026-10-10): every name in (h8) is the one
+  // the room's door would seat the member under, not null. These sockets
+  // hold no chosen callsign and these frames carry no name, so each row
+  // shows the door's stand-in (standIns); reserve.mjs L8 asks a failed read
+  // with a chosen callsign on the socket and a name in the frame.
   {
     const st = sqstore(); const S = sqSocial(st);
     st.boom.add(SQA);
@@ -1422,8 +1444,9 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
     await S.handle(wa, { type: 'squad', op: 'create', id: 'c' });
     const r = wa.rx[0] || {};
     if (wa.rx.length === 1 && r.op === 'state' && r.id === 'c' && SQCODE_RE.test(r.code) && r.you === 0
-      && JSON.stringify(r.members.map(norid)) === JSON.stringify([{ id: SQA, callsign: null, guest: false, online: true, ready: false, dropped: false }]))
-      ok('(h8) a create whose name read fails is answered with the real squad, the row kept and the name null');
+      && JSON.stringify(r.members.map(unnamed)) === JSON.stringify([{ id: SQA, callsign: null, guest: false, online: true, ready: false, dropped: false }])
+      && standIns(r.members.map((m) => m.callsign)))
+      ok('(h8) a create whose name read fails is answered with the real squad, the row kept and named as the match would seat it');
     else fail('(h8) create over a failing name read got ' + JSON.stringify(wa.rx));
   }
   // JOIN: the mover, EVERY member of the squad they joined, and the squad
@@ -1443,8 +1466,9 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
     const nulls = [{ id: SQC, callsign: null, guest: false, online: true, ready: false, dropped: false },
       { id: SQB, callsign: null, guest: false, online: true, ready: false, dropped: false }];
     if (wb.rx.length === 1 && mine.op === 'state' && mine.id === 'j' && mine.code === other && mine.you === 1
-      && JSON.stringify((mine.members || []).map(norid)) === JSON.stringify(nulls)
-      && host.code === other && host.you === 0 && JSON.stringify((host.members || []).map(norid)) === JSON.stringify(nulls)
+      && JSON.stringify((mine.members || []).map(unnamed)) === JSON.stringify(nulls)
+      && host.code === other && host.you === 0 && JSON.stringify((host.members || []).map(unnamed)) === JSON.stringify(nulls)
+      && standIns(mine.members.map((m) => m.callsign)) && same(mine.members.map((m) => m.callsign), host.members.map((m) => m.callsign))
       && same(host.fits, { duel: true, ffa: true, boss: true, aliens: true, golf: true })
       && left.code === code && left.members.length === 1 && left.members[0].callsign === 'Anvil Six')
       ok('(h8) a join whose name read fails tells the joiner, every member of the new squad and the squad left behind');
@@ -1464,14 +1488,14 @@ const noWs = (k, v) => (k === 'ws' || k === 'key' ? '<ref>' : v);
     await S.handle(wc, { type: 'squad', op: 'leave', id: 'l' });
     const seen = sqat(wb, 'state');
     if (wc.rx.length === 1 && wc.rx[0].op === 'left' && wc.rx[0].id === 'l'
-      && seen.members && seen.members.length === 2 && seen.members.every((m) => m.callsign === null) && seen.you === 1)
-      ok('(h8) a leave is answered once and the members left behind get their roster, rows kept, names null');
+      && seen.members && seen.members.length === 2 && standIns(seen.members.map((m) => m.callsign)) && seen.you === 1)
+      ok('(h8) a leave is answered once and the members left behind get their roster, rows kept, named as the match would seat them');
     else fail('(h8) leave over a failing name read: leaver ' + JSON.stringify(wc.rx) + ' seen ' + JSON.stringify(seen));
     const bRid = ridOf(wa, SQB);
     wa.rx.length = 0; wb.rx.length = 0;
     await S.handle(wa, { type: 'squad', op: 'kick', rid: bRid, id: 'k' });
     const k = wa.rx[0] || {};
-    if (wa.rx.length === 1 && k.op === 'state' && k.id === 'k' && k.members.length === 1 && k.members[0].callsign === null
+    if (wa.rx.length === 1 && k.op === 'state' && k.id === 'k' && k.members.length === 1 && standIns([k.members[0].callsign])
       && sqat(wb).op === 'ended' && sqat(wb).reason === 'kicked')
       ok('(h8) a kick whose name read fails is answered with the real roster, and the kicked member is told');
     else fail('(h8) kick over a failing name read: leader ' + JSON.stringify(wa.rx) + ' kicked ' + JSON.stringify(wb.rx));
@@ -5416,8 +5440,11 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
       ok('(blk-f) one answer, and it is the true one: a broken name read does not un-block anybody');
     else fail('(blk-f) block frames: ' + JSON.stringify(blocks));
     const roster = last6(w[C], 'squad', 'state');
-    if (same6(ids6(roster), [A, C]) && roster.members.every((m) => m.callsign === null))
-      ok('(blk-f) and the squad is still told: the same roster, its names null, every row kept');
+    // CHANGED (round 3 check fix, 2026-10-10): the names are no longer null
+    // but the door's stand-ins (standIns): these sockets hold no chosen
+    // callsign and their frames carried no name.
+    if (same6(ids6(roster), [A, C]) && standIns(roster.members.map((m) => m.callsign)))
+      ok('(blk-f) and the squad is still told: the same roster, every row kept and named as the match would seat it');
     else fail('(blk-f) roster with a failed name read: ' + JSON.stringify(roster));
   }
 
@@ -9944,17 +9971,23 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     await join6(S, g3, code, 'VIPER');
     const seen = (last6(wa, 'squad', 'state') || { members: [] }).members.map((m) => [m.callsign, m.guest]);
     const own = last6(g2, 'squad', 'state') || { members: [] };
-    if (same6(seen, [['Anvil Six', false], ['Iron Ridge', true], ['Tank Ace', true], [null, true]])
-        && own.you === 2 && own.members[2] && own.members[2].callsign === 'Tank Ace')
-      ok("(gn) a guest row shows a rolled pair and a typed name, normalised, to every member and to the guest's own seat; a name an account holds is null");
+    // CHANGED (round 3 check fix, 2026-10-10): a name an account holds is no
+    // longer null but the stand-in the room's door seats the guest under, and
+    // the guest's OWN frame names their own row with it, so their page never
+    // draws the device's name ('VIPER', the account's) in its place.
+    const own3 = last6(g3, 'squad', 'state') || { members: [] };
+    if (same6(seen.slice(0, 3), [['Anvil Six', false], ['Iron Ridge', true], ['Tank Ace', true]]) && seen[3] && seen[3][1] === true && standIns([seen[3][0]])
+        && own.you === 2 && own.members[2] && own.members[2].callsign === 'Tank Ace'
+        && own3.you === 3 && own3.members[3] && own3.members[3].callsign === seen[3][0])
+      ok("(gn) a guest row shows a rolled pair and a typed name, normalised, to every member and to the guest's own seat; a name an account holds is replaced by the door's stand-in, on every member's screen and the guest's own");
     else fail('(gn) guest names: ' + JSON.stringify({ seen, own: own.members && own.members[own.you] }));
     // A key taken after the guest joined: the next snapshot drops the name.
     index.add('tank ace');
     clear6(wa);
     await S.handle(wa, { type: 'squad', op: 'resume', id: 'r1' });
     const after = (ans6(wa, 'r1') || { members: [] }).members.map((m) => m.callsign);
-    if (same6(after, ['Anvil Six', 'Iron Ridge', null, null]))
-      ok('(gn) a typed name an account takes after the guest joined is gone from the next snapshot');
+    if (same6(after.slice(0, 2), ['Anvil Six', 'Iron Ridge']) && standIns(after.slice(2)) && !after.includes('Tank Ace'))
+      ok('(gn) a typed name an account takes after the guest joined is gone from the next snapshot, replaced by the door\'s stand-in');
     else fail('(gn) after the key was taken: ' + JSON.stringify(after));
     // A computer's name, and an index that has not loaded.
     const st2 = t6store(ROWS6);
@@ -9965,8 +9998,8 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     await join6(S2, t6ws(uid6(34), true), code2, 'Tank Ace');
     await join6(S2, t6ws(uid6(35), true), code2, 'Iron Ridge');
     const unloaded = (last6(wa2, 'squad', 'state') || { members: [] }).members.map((m) => m.callsign);
-    if (same6(unloaded, ['Anvil Six', null, null, 'Iron Ridge']))
-      ok("(gn) a computer's name is null, and while the index knows nothing a typed name is null too (a rolled pair needs no index)");
+    if (unloaded.length === 4 && unloaded[0] === 'Anvil Six' && unloaded[3] === 'Iron Ridge' && standIns(unloaded.slice(1)))
+      ok("(gn) a computer's name is replaced by the door's stand-in, and while the index knows nothing a typed name is too (a rolled pair needs no index)");
     else fail('(gn) system and unloaded: ' + JSON.stringify(unloaded));
     // THE SIGN-IN DOOR'S ROW STAYS NAMELESS, typed guest name and all.
     const st3 = t6store(ROWS6);
@@ -9990,6 +10023,35 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     if (before === 'Kestrel Bay' && inside && during && during.guest === true && during.callsign === null && done.id === B && done.callsign === 'Bunker Nine')
       ok("(gn) a guest row whose socket signs in shows no name at all while the door reads, not even the guest's own, and the account's proved name once admitted");
     else fail('(gn) the door\'s row: ' + JSON.stringify({ before, inside, during, done }));
+  }
+
+  // ---- (gn-own) THE GUEST'S OWN SCREEN NEVER SHOWS ANOTHER ROW'S NAME ------
+  // (round 3 check fix, 2026-10-10). A guest whose device name is the typed
+  // 'ANVIL SIX', typed before the account chose 'Anvil Six', joins that
+  // account's squad. The guidelines now refuse the name to the guest (an
+  // account holds it), and the row used to be null, so the guest's own page
+  // drew it with the device's name (public/bay.js sqRowParts): 'Anvil Six' and
+  // 'ANVIL SIX' in one box. Every frame now names the row with the door's
+  // stand-in, the guest's own included, and what each page draws for its own
+  // row (the frame's name, else the device's) never reads as another row's.
+  {
+    const { createNameIndex } = await import('../server/name-index.js');
+    const index = createNameIndex({ load: async (after) => (after === null ? ['anvil six'] : []) });
+    await index.refresh();
+    const S = mkSocial6(t6store(ROWS6), { names: index });
+    const wa = up6(S, A);
+    const code = await create6(S, wa);
+    const g = t6ws(null);
+    await join6(S, g, code, 'ANVIL SIX');
+    const drawn = (w, mine) => {
+      const f = last6(w, 'squad', 'state') || { members: [], you: -1 };
+      return f.members.map((m, i) => (typeof m.callsign === 'string' && m.callsign ? m.callsign : i === f.you ? mine : null));
+    };
+    const onLead = drawn(wa, 'Anvil Six'), onGuest = drawn(g, 'ANVIL SIX');
+    const apart = (names) => names.length === 2 && names.every((n) => typeof n === 'string') && names[0].toLowerCase() !== names[1].toLowerCase();
+    if (onLead[0] === 'Anvil Six' && standIns([onLead[1]]) && same6(onGuest, onLead) && apart(onGuest) && apart(onLead))
+      ok(`(gn-own) a guest who joins as an account's name in other capitals ('ANVIL SIX') is named '${onLead[1]}' on the leader's screen and on their own, never 'ANVIL SIX'`);
+    else fail('(gn-own) the guest\'s own screen: ' + JSON.stringify({ onLead, onGuest }));
   }
 
   // ---- (gr) A GUEST ROW'S NAME HAS A REPORT PATH (round 2 fix) -------------
@@ -10123,16 +10185,21 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
       await S.handle(wc, { type: 'report', rid: ridN, id: 'q1' });
       await S.handle(wc, { type: 'report', rid: ridN, id: 'q2' });
       await S.handle(wa, { type: 'report', rid: ridN, id: 'q3' });
-      await S.handle(wc, { type: 'report', rid: ridZ, id: 'q4' });   // nameless: nothing to report
+      await S.handle(wc, { type: 'report', rid: ridZ, id: 'q4' });   // shown the door's stand-in: reported by it
       CLOCK6 += 86400000 + 1;
       await S.handle(wc, { type: 'report', rid: ridN, id: 'q5' });
       CLOCK6 = clock0;
       const answers = ['q1', 'q2', 'q3', 'q5'].map((q) => { const f = ans6(q === 'q3' ? wa : wc, q); return f && (f.ok === true ? 'ok' : f.error); });
       const lineN = `[report] guest in squad ${code} seat 3 "Wren Hollow" by `;
-      if (same6(shape, [['Anvil Six', false], ['Crater Two', false], ['Wren Hollow', true], [null, true]])
-          && same6(answers, ['ok', 'already', 'ok', 'ok']) && same6(ans6(wc, 'q4'), { type: 'report', error: 'no_such_user', id: 'q4' })
-          && same6(logs, [lineN + C, lineN + A, lineN + C]) && !logs.some((l) => l.includes(ridN)) && reports.length === 0 && !UUID6.test(JSON.stringify(wc.rx)))
-        ok("(gq) a guest with no account is reported by the row's handle: the server's log takes the squad, the seat and the name it showed, never the handle, once per reporter per row per day; no name_reports row is written, and a nameless row has nothing to report");
+      // CHANGED (round 3 check fix, 2026-10-10): the row whose name the
+      // guidelines refuse ('CPU 2') is no longer nameless. It shows the
+      // door's stand-in, and a report on it records that name, the one the
+      // reporter saw (rowTarget reads the box's m.shown).
+      const lineZ = `[report] guest in squad ${code} seat 4 "${shape[3] && shape[3][0]}" by `;
+      if (same6(shape.slice(0, 3), [['Anvil Six', false], ['Crater Two', false], ['Wren Hollow', true]]) && shape[3] && shape[3][1] === true && standIns([shape[3][0]])
+          && same6(answers, ['ok', 'already', 'ok', 'ok']) && same6(ans6(wc, 'q4'), { type: 'report', ok: true, id: 'q4' })
+          && same6(logs, [lineN + C, lineN + A, lineZ + C, lineN + C]) && !logs.some((l) => l.includes(ridN) || l.includes(ridZ)) && reports.length === 0 && !UUID6.test(JSON.stringify(wc.rx)))
+        ok("(gq) a guest with no account is reported by the row's handle: the server's log takes the squad, the seat and the name it showed, never the handle, once per reporter per row per day; no name_reports row is written, and a row shown under the door's stand-in is reported by that name");
       else fail('(gq) report: ' + JSON.stringify({ shape, answers, q4: ans6(wc, 'q4'), logs, reports }));
       // BLOCK BY THE ROW FINDS NOBODY; THE LEADER STILL REMOVES IT.
       clear6(wa, wc);

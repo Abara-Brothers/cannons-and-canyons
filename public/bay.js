@@ -1122,6 +1122,19 @@ const sqAErr = (s) => '<p class="sqae' + (s ? '' : ' hidden') + '">' + esc(s || 
 // falls back to this device's name, the one the chip and every create and
 // join frame carry (myName). It is your own name on your own screen, so it
 // puts nothing in front of anybody else.
+// CHANGED (round 3 check fix, 2026-10-10): ONLY WHERE IT CANNOT BE ANOTHER
+// ROW'S NAME. The device's name could be the very name another member's row
+// showed (a guest whose typed name an account has since chosen, beside that
+// account), and the box then read one name twice on this screen. The server
+// now names every row but the sign-in door's (server/social.js boxNames), by
+// the name the match will seat it under, and the seat draws the server's
+// name whenever the frame carries one. It falls back to this device's name
+// only when no other row shows a name that could read as it (sqOwnName). Two
+// names written only in printable ASCII read as one exactly when they match
+// ignoring capitals and runs of spaces, because the server's look-alike
+// reading folds no ASCII character; a name with any other character could be
+// a look-alike this page has no table to read, so it counts as a match.
+// Otherwise the seat says 'No callsign', which names nobody.
 // TWO LINES (D-UI-5): the name has the first line (.sqm1) to itself, and the
 // status words (.sqms) and the controls share the second (.sqm2), so no status
 // word or button ever takes width from a name. The friend rows are built the
@@ -1144,9 +1157,22 @@ const sqMenuOn = (p, you) => !you && (p.id != null || (!!p.guest && named(p) && 
 function sqRow(p, i, sn, ctl) {
   return '<div class="sqm' + (sqMenuOn(p, i === sn.you) ? '' : ' sqnm') + '">' + sqRowParts(p, i, sn, ctl) + '</div>';
 }
+// A name's plain reading when it is written only in printable ASCII, else
+// null: a reading this page cannot be sure of.
+const sqPlain = (s) => (typeof s === 'string' && /^[\x20-\x7e]*$/.test(s) ? s.trim().replace(/ +/g, ' ').toLowerCase() : null);
+// This device's name for its own row, or '' when another row shows a name
+// that could read as it (see ONLY WHERE IT CANNOT BE ANOTHER ROW'S NAME). It
+// is asked only for an own row the server sent nameless, so that row never
+// counts against itself.
+function sqOwnName(sn) {
+  const mine = has('myName') ? String(myName() || '') : '';
+  const k = sqPlain(mine);
+  const apart = (q) => { const o = sqPlain(q.callsign); return k !== null && o !== null && o !== k; };
+  return (sn.members || []).every((q) => !named(q) || apart(q)) ? mine : '';
+}
 function sqRowParts(p, i, sn, ctl) {
   const you = i === sn.you, lead = sqIsLead(sn, p);
-  const name = you && !named(p) && has('myName') ? (myName() || nameOf(p)) : nameOf(p);
+  const name = you && !named(p) ? (sqOwnName(sn) || nameOf(p)) : nameOf(p);
   const lit = !!p.online && !p.dropped;
   // THE LEADER'S ROW SAYS READY OR NOT, LIKE EVERY ROW (U3; owner,
   // 2026-10-06). Fix wave E9 took it off when the leader had no Ready and

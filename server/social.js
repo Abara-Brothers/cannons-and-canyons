@@ -1509,7 +1509,8 @@ export function createSocial({
     guest: squadGuest(ws),
     // Kept for the seating path, which hands it to the engine's door. A guest
     // row's seat SHOWS what that door would (guestName, see squadSnapshot);
-    // a signed-in member's shows the proved profile name and never this.
+    // a signed-in member's shows the proved profile name, and this only when
+    // nothing the account holds can be shown (boxNames: what the door seats).
     name: typeof msg.name === 'string' ? msg.name : '',
     skin: skinOf(msg),
     ws,
@@ -1663,6 +1664,11 @@ export function createSocial({
   // failed read answers every name null — displayName's own answer for a name
   // it cannot vouch for — and keeps every row, the plan's rule for a null
   // name. The next snapshot that can read names shows them.
+  // CHANGED (round 3 check fix, 2026-10-10): a row the read could not name is
+  // no longer null. It is named as the room engine's door names it, the
+  // chosen callsign the account's socket holds first (boxNames, below, EVERY
+  // ROW BUT THE SIGN-IN DOOR'S IS NAMED), so a failed read still never fails
+  // the operation, and the box still says what the match will seat.
   //
   // A GUEST ROW SHOWS THE GUEST'S NAME (round 2, 2026-10-08), not 'No
   // callsign': the name its create or join frame carried, held to exactly what
@@ -1733,6 +1739,21 @@ export function createSocial({
   // A linked row: its chosen callsign when it has one, else its reserved name,
   // else what the profile proves, as before.
   const linkedRowName = (m, p) => (provenName(p) !== null ? displayName(p) : reservedOf(m) ?? displayName(p));
+  // THE CHOSEN CALLSIGN A LINKED ROW'S SOCKET HOLDS (ws.chosenName), for a
+  // row the profile read gave no name: the read failed, or answered nothing
+  // this account proves. server.js's sign-in sink reads it from the profile
+  // row once the token verifies, and the Set keeps it current, so it is the
+  // name the match seats the account under (room-engine.js allowedOf)
+  // whatever this read answered. It goes through displayName, the pass a
+  // chosen callsign read from the profile gets, with the key validateCallsign
+  // derives from it, which is the key the sink proved it against. Only the
+  // socket on the row, and only while that socket is still this account's: a
+  // socket a hello is moving to another account must not name this row.
+  const chosenOf = (m) => {
+    const w = m && m.ws;
+    const n = w && wireId(w.userId) === m.userId && typeof w.chosenName === 'string' ? w.chosenName : '';
+    return n ? displayName({ callsign: n, callsign_key: normaliseCallsign(n).toLowerCase() }) : null;
+  };
   const guestNoAcct = (m) => !!(m && m.guest && !doorRow(m) && !guestRowAccount(m));
 
   // TWO MEMBERS OF ONE SQUAD ARE NEVER SHOWN ONE NAME (round 3 fix,
@@ -1753,6 +1774,31 @@ export function createSocial({
   // liveNames, below, while the box is read, so the later member is the one
   // moved, as the room moves them. The names shown are kept on the rows
   // (m.shown) for liveNames.
+  //
+  // EVERY ROW BUT THE SIGN-IN DOOR'S IS NAMED, BY THE NAME THE MATCH WILL
+  // SEAT IT UNDER (round 3 check fix, 2026-10-10). A row whose name came out
+  // null used to stay null: a guest whose typed name an account has since
+  // chosen, a guest whose claim got no answer, an account whose name read
+  // failed. Its player's own page then drew that row with the device's own
+  // name, which could be the very name another member's row showed, and the
+  // match seated the player under a stand-in the box had never shown. A null
+  // row was also left out of the names the later rows were kept apart from,
+  // so a later member could keep a name the match then took from them. So a
+  // row the box cannot name the usual way is named the way the room engine's
+  // door names it (room-engine.js nameAtDoor), in its order: the chosen
+  // callsign the account's socket holds (chosenOf); else the name its frame
+  // carried, held to the door's own rules for a name the server does not
+  // hold (guestName: a rolled pair, or a typed name the guidelines pass and
+  // no account holds); else the door's stand-in for that name and place. It
+  // then meets the same three checks as every other row, and it counts as
+  // shown for the rows after it.
+  // A signed-in member's frame name is shown only this way, when nothing the
+  // account holds can be: it is what the match shows every player in it.
+  // THE SIGN-IN DOOR'S ROW STAYS NAMELESS, for the reason given with doorRow
+  // above, and is left out of the names the later rows are kept apart from,
+  // as before: a later row moved for a name nobody can see would tell a
+  // member something about the account behind it. The squad cannot start
+  // while that row is at the door (startRefusal), so no match disagrees.
   const readingsOf = (n) => {
     if (door && typeof door.nameReadingsOf === 'function') { try { return door.nameReadingsOf(n); } catch { /* below */ } }
     return [String(n ?? '').normalize('NFKC').toLowerCase().trim().replace(/\s+/g, ' '), ...nameReadings(n)];
@@ -1797,8 +1843,16 @@ export function createSocial({
     try {
       order.forEach((m, seat) => {
         let c = m.userId ? linkedRowName(m, profiles.get(m.userId)) : guestRowName(m);
+        let held = m.userId ? provenName(profiles.get(m.userId)) !== null || reservedOf(m) !== null : reservedOf(m) !== null;
+        // A row the usual way cannot name, named as the door names it (see
+        // EVERY ROW BUT THE SIGN-IN DOOR'S IS NAMED, above).
+        if (!(typeof c === 'string' && c) && !doorRow(m)) {
+          const own = m.userId ? chosenOf(m) : null;
+          c = own ?? (m.userId ? guestName(m.name) : null);
+          held = own !== null;
+          if (!(typeof c === 'string' && c)) c = standIn(m, seat, before);
+        }
         if (typeof c === 'string' && c) {
-          const held = m.userId ? provenName(profiles.get(m.userId)) !== null || reservedOf(m) !== null : reservedOf(m) !== null;
           const here = new Set();
           for (const n of before) for (const x of readingsOf(n)) here.add(x);
           if (readsAs(c, here) || (!held && (!freeName(c) || liveElsewhere(c, m.ws)))) c = standIn(m, seat, before) || c;
@@ -1815,7 +1869,7 @@ export function createSocial({
     let names = new Map();
     if (ids.length) {
       try { names = await store.profilesByIds(ids); }
-      catch { /* every name null; every row kept */ }
+      catch { /* no profile proves a name; every row kept, and named as the door names it (boxNames) */ }
     }
     const shown = boxNames(sq, names);
     const frame = {
@@ -3541,7 +3595,13 @@ export function createSocial({
     if (!own) return null;
     const i = own.squad.members.findIndex((x) => rowRid(x) === rid), m = i < 0 ? null : own.squad.members[i];
     if (!m || !m.guest || doorRow(m)) return null;
-    return { id: guestRowAccount(m), shown: guestRowName(m), row: m, code: own.squad.code, seat: i + 1 };
+    // THE NAME THE BOX LAST SHOWED FOR THE ROW (m.shown, boxNames), which is
+    // the name a reporter saw (round 3 check fix, 2026-10-10). It was the
+    // guest's own name (guestRowName), but since round 3 a row can be shown
+    // the door's stand-in instead, and since this fix a row with no name of
+    // its own is shown one too. A row no box has named has shown nothing.
+    const shown = typeof m.shown === 'string' && m.shown ? m.shown : null;
+    return { id: guestRowAccount(m), shown, row: m, code: own.squad.code, seat: i + 1 };
   }
 
   async function handleFriends(ws, msg) {

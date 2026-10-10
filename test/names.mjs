@@ -620,6 +620,37 @@ try {
         await squadDone(A, B);
       }
     }
+    // D2. A GUEST WHOSE DEVICE NAME AN ACCOUNT HAS SINCE CHOSEN (the round 3
+    // check, 2026-10-10, its scenario S3). The guest's device still carries
+    // the typed 'Marguerite Vale' from before the account chose it, and with
+    // the table missing nothing has moved it. In that account's squad the
+    // guidelines refuse the name to the guest, and the server sent the row no
+    // name, so the guest's own page drew its own row with the device's name:
+    // 'Marguerite Vale' twice in one box, while the match seated the guest
+    // under a stand-in the box had never shown. Now the server names the row
+    // with the stand-in the match seats the guest under, both pages draw it,
+    // and the match agrees and tells the guest.
+    {
+      const lead = await become(A, KINDS.chosen);
+      await B.nav();
+      await B.ev(`(() => { localStorage.clear(); sessionStorage.clear(); localStorage.setItem('pt_name', ${JSON.stringify(CHOSEN)}); localStorage.setItem('cc_name_own', ${JSON.stringify(CHOSEN)}); return true; })()`);
+      await B.nav();
+      const mem = await B.ev('myName()');
+      await A.nav();
+      await squadUp(A, B);
+      const ra = await rows(A), rb = await rows(B);
+      const s = await squadStart(A, B, 'duel');
+      const told = s.member ? await B.until(`(window.__toasts || []).some((t) => t.includes(S.names[S.you]) && /could not be used/.test(t))`, 3000) : false;
+      const apart = (r) => r.length === 2 && new Set(r.map((x) => String(x.name).toLowerCase())).size === 2;
+      const standIn = (rb.find((r) => r.you) || {}).name;
+      if (mem === CHOSEN && lead === CHOSEN && apart(ra) && apart(rb)
+          && ra.some((r) => r.you && r.name === CHOSEN) && rb.some((r) => !r.you && r.name === CHOSEN)
+          && typeof standIn === 'string' && standIn.toLowerCase() !== CHOSEN.toLowerCase() && ra.some((r) => !r.you && r.name === standIn)
+          && s.member && s.member.me === standIn && s.member.card === `${standIn} (you)` && seatOk(s.lead, CHOSEN, standIn) && told)
+        ok(`D2: a guest whose device still says the leader's chosen callsign ('${CHOSEN}') is '${standIn}' on both pages' squad rows, their own included, and is seated under it and told`);
+      else fail('D2: ' + JSON.stringify({ mem, lead, ra, rb, s, told }));
+      await squadDone(A, B);
+    }
   }
 
   // ==== E. RIGHT AFTER A RENAME ==========================================================

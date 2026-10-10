@@ -1896,6 +1896,33 @@ if (want('t9')) try {
     if (a7e && a7e.rows.length === 2 && a7e.rows[1].name === 'Desert Fox' && a7e.rows[1].you && !a7e.rows[1].menu)
       ok(`${V}: your own seat shows your own name when the server sent none, with no menu`);
     else fail(`${V}: own seat ${JSON.stringify(a7e && a7e.rows)}`);
+    // A7f. ...BUT NEVER ANOTHER ROW'S NAME (round 3 check fix, 2026-10-10).
+    //      The seat draws the server's name whenever the frame carries one,
+    //      and falls back to the device's name only when no other row shows a
+    //      name that could read as it: not in other capitals and spacing, not
+    //      beside a name in another script that could be a look-alike, and not
+    //      when the device's own name has a character this page cannot read.
+    //      With no other name on screen, any device name is safe.
+    const a7fWas = await ev(`(() => ({ v: $('nameInput').value, s: localStorage.getItem('pt_name') }))()`);
+    const a7fSeat = async (mine, other, own) => {
+      await ev(`($('nameInput').value = ${JSON.stringify(mine)}, true)`);
+      await t9state({ leader: T9_MULE, you: 1, members: [T9MULE({ ready: true, callsign: other }), T9M({ guest: true, rid: T9R('fa'), callsign: own, noacct: true })] });
+      const b = await t9box();
+      return b && b.rows.length === 2 && b.rows[1].you ? [b.rows[0].name, b.rows[1].name] : null;
+    };
+    const a7f = {
+      caps: await a7fSeat('steel  MULE', 'Steel Mule', null),
+      cyrillic: await a7fSeat('Coco Tank', '\u0421\u043e\u0441\u043e Tank', null),
+      accent: await a7fSeat('Zo\u00e9 Tank', 'Steel Mule', null),
+      server: await a7fSeat('Marguerite Vale', 'Marguerite Vale', 'Flint Bluff'),
+      alone: await a7fSeat('Zo\u00e9 Tank', null, null),
+    };
+    await ev(`(() => { $('nameInput').value = ${JSON.stringify(a7fWas.v)}; if (${JSON.stringify(a7fWas.s)} === null) localStorage.removeItem('pt_name'); else localStorage.setItem('pt_name', ${JSON.stringify(a7fWas.s)}); return true; })()`);
+    const a7fIs = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    if (a7fIs(a7f.caps, ['Steel Mule', 'No callsign']) && a7fIs(a7f.cyrillic, ['\u0421\u043e\u0441\u043e Tank', 'No callsign']) && a7fIs(a7f.accent, ['Steel Mule', 'No callsign'])
+        && a7fIs(a7f.server, ['Marguerite Vale', 'Flint Bluff']) && a7fIs(a7f.alone, ['No callsign', 'Zo\u00e9 Tank']))
+      ok(`${V}: your own seat draws the server's name when it sent one, and never falls back to a device name another row could read as (other capitals, a look-alike script, a character the page cannot read); with no other name shown it does`);
+    else fail(`${V}: own seat beside a clash ${JSON.stringify(a7f)}`);
     // A7b. A ROW THE SERVER GAVE NO HANDLE IS A ROW NO KICK CAN NAME (D-UI-3):
     //      it keeps its menu, and it has no Remove.
     await t9state({ members: [T9YOU({ ready: true }), T9MULE({ ready: true, rid: undefined })] });
