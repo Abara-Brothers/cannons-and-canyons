@@ -20,19 +20,19 @@
 // drops the old cache outright and a returning
 // player never runs the previous app.js under the new index.html (ISSUE-038).
 // House rule 7c fails the suite if this number and the stamp ever disagree.
-const VERSION = 'cc-v14';
+const VERSION = 'cc-v15';
 const SHELL = [
   './',
   'index.html',
-  'app.js?v=14',
-  'cloud.js?v=14',
-  'config.js?v=14',
-  'errors.js?v=14',
+  'app.js?v=15',
+  'cloud.js?v=15',
+  'config.js?v=15',
+  'errors.js?v=15',
   'game-core.js',        // the authoritative simulation — offline play needs it
   'room-engine.js',      // rooms/turns/bots — the other half of an offline match
-  'styles.css?v=14',
-  'bay.js?v=14',          // the Launch Bay front end
-  'intro.js?v=14',        // the cold-start intro: an offline launch plays it too
+  'styles.css?v=15',
+  'bay.js?v=15',          // the Launch Bay front end
+  'intro.js?v=15',        // the cold-start intro: an offline launch plays it too
   'fonts/barlow-500.woff2',
   'fonts/barlow-600.woff2',
   'fonts/barlow-700.woff2',
@@ -50,21 +50,21 @@ const SHELL = [
   // asks for them with its own ?v= and a cache answers only the exact URL it
   // holds; house rule 7e keeps these in step with the stamp in index.html.
   // (No apostrophes in this list: house-rules reads it by quoted string.)
-  'bay/card-duel-board.webp?v=14',
-  'bay/card-duel-tall.webp?v=14',
-  'bay/card-duel-wide.webp?v=14',
-  'bay/card-ffa-board.webp?v=14',
-  'bay/card-ffa-tall.webp?v=14',
-  'bay/card-ffa-wide.webp?v=14',
-  'bay/card-boss-board.webp?v=14',
-  'bay/card-boss-tall.webp?v=14',
-  'bay/card-boss-wide.webp?v=14',
-  'bay/card-aliens-board.webp?v=14',
-  'bay/card-aliens-tall.webp?v=14',
-  'bay/card-aliens-wide.webp?v=14',
-  'bay/card-golf-board.webp?v=14',
-  'bay/card-golf-tall.webp?v=14',
-  'bay/card-golf-wide.webp?v=14',
+  'bay/card-duel-board.webp?v=15',
+  'bay/card-duel-tall.webp?v=15',
+  'bay/card-duel-wide.webp?v=15',
+  'bay/card-ffa-board.webp?v=15',
+  'bay/card-ffa-tall.webp?v=15',
+  'bay/card-ffa-wide.webp?v=15',
+  'bay/card-boss-board.webp?v=15',
+  'bay/card-boss-tall.webp?v=15',
+  'bay/card-boss-wide.webp?v=15',
+  'bay/card-aliens-board.webp?v=15',
+  'bay/card-aliens-tall.webp?v=15',
+  'bay/card-aliens-wide.webp?v=15',
+  'bay/card-golf-board.webp?v=15',
+  'bay/card-golf-tall.webp?v=15',
+  'bay/card-golf-wide.webp?v=15',
   'manifest.webmanifest',
   'privacy.html',        // reachable offline: it is a store requirement (ISSUE-013)
   'delete-account.html', // the web deletion pathway Play requires (no apostrophes here:
