@@ -165,18 +165,19 @@ export const SECRET_RE = /^[A-Za-z0-9_-]{43}$/;
 // opens.
 export const ROWS_PER_SOCKET = 3;
 // PER CLIENT ADDRESS: at most ADDR_ROWS_PER_HOUR attempts at a new row an hour
-// from one address, a bucket that holds that many and refills one every two
-// minutes. Why 30. A new row is made by a device's FIRST claim (once a
+// from one address, a bucket that holds that many and refills one every 18
+// seconds. Why 200 (owner, 2026-10-10: "allow it but increase it to 200 per
+// hour"; the first draft had 30). A new row is made by a device's FIRST claim (once a
 // device, until it is unseen for 90 days) and by a sign-out, so the honest
 // rows from one address in an hour are the new players of this game behind
 // it in that hour. A mobile carrier puts many phones behind one address (and
-// an IPv6 carrier many behind one /48, which is how those are keyed), and 30
+// an IPv6 carrier many behind one /48, which is how those are keyed), and 200
 // newcomers an hour behind a single one is far past anything this game has
-// seen. If it is ever exceeded, the 31st newcomer still plays under a name
+// seen. If it is ever exceeded, the 201st newcomer still plays under a name
 // nobody else is shown under (the door), and their client asks again, backing
 // off to a minute, so the row comes within minutes as the bucket refills. A
 // claim refused by it answers 'unavailable', as the window below does.
-export const ADDR_ROWS_PER_HOUR = 30;
+export const ADDR_ROWS_PER_HOUR = 200;
 // At most ADDR_MAX addresses are remembered, the one used longest ago dropped
 // first (its next attempt starts from a full bucket again; pushing it out
 // takes ten thousand other addresses in under an hour, and a flood that has
@@ -190,15 +191,20 @@ export const ADDR_MAX = 10000;
 export const ADDR_SWEEP_MS = 5 * 60000;
 // PER HOUR, PER PROCESS: at most ROWS_PER_HOUR new rows in any 60 minutes, a
 // sliding window, not a bucket that refills in bursts. RAISED TO MATCH THE
-// ADDRESS BUDGET (round 3 fix, 2026-10-10): it was 600, which twenty
-// addresses' budgets fill; 3,000 an hour is a hundred addresses' worth, fifty
-// a minute, far past this game's newcomers on its busiest day so far. At that
+// ADDRESS BUDGET (round 3 fix, 2026-10-10): it was 600; 3,000 an hour is
+// fifteen addresses' budgets at the owner's 200 each (a hundred at the first
+// draft's 30), fifty a minute, far past this game's newcomers on its busiest day so far. At that
 // rate the ceiling below is reached after about 33 hours of a flood that never
 // stops, and the prune then frees its rows a thousand a minute, twenty times
 // faster than the window lets them in. Its writes are under one a second,
 // nothing to the database. A claim refused by it answers 'unavailable': the
 // player is still seated under a name nobody else is shown under (the door),
 // and the client asks again, backing off, until a row is made.
+// NOT RAISED WITH THE ADDRESS BUDGET to 20,000 (a hundred addresses at 200):
+// at that rate a flood would reach ROWS_MAX in five hours, before any of its
+// rows were a day old, and the prune only frees rows over a day old, so new
+// players would be refused for most of a day. At 3,000 the ceiling is 33
+// hours away, past the prune's day.
 export const ROWS_PER_HOUR = 3000;
 // THE TABLE'S CEILING: no new row once ROWS_MAX are held. Measured on this
 // Node (v26), the index below costs about 210 bytes a reservation with every

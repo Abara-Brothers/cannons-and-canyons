@@ -1165,13 +1165,13 @@ try {
       if (okA) ok('H15a: on the wire, a claim with no hello is "unavailable" and makes no row; after the guest\'s token-less hello the same claim makes it');
       else fail('H15a: ' + JSON.stringify({ a1, rowsBare, rows0, a2 }));
       const answers = [];
-      for (let i = 0; i < 31; i++) {
+      for (let i = 0; i < 201; i++) {
         const w = await edge('198.51.100.7');
         send15(w, { type: 'hello' }); send15(w, { type: 'name', name: `Edge Gulch ${i}` });
         answers.push(await wait(w, (m) => m.type === 'name', 4000));
         w.close();
       }
-      const before31 = RES.rows.length;
+      const before201 = RES.rows.length;
       const spoof = await edge('198.51.100.7', { 'x-forwarded-for': '203.0.113.200' });
       send15(spoof, { type: 'hello' }); send15(spoof, { type: 'name', name: 'Edge Spoof' });
       const sp = await wait(spoof, (m) => m.type === 'name', 4000);
@@ -1181,10 +1181,10 @@ try {
       const ot = await wait(other, (m) => m.type === 'name', 4000);
       other.close();
       const made = answers.filter((m) => m && m.ok).length;
-      if (made === 30 && answers[30] && answers[30].error === 'unavailable' && sp && sp.error === 'unavailable' && RES.rows.length === before31 + 1
-          && ot && ot.ok && ot.name === 'Edge Other' && !RES.rows.some((r) => r.name === 'Edge Spoof' || r.name === 'Edge Gulch 30'))
-        ok('H15b: one CF-Connecting-IP address makes 30 new names and the 31st is "unavailable"; a spoofed X-Forwarded-For on the same address is still refused, and another address is answered');
-      else fail('H15b: ' + JSON.stringify({ made, last: answers[30], sp, ot }));
+      if (made === 200 && answers[200] && answers[200].error === 'unavailable' && sp && sp.error === 'unavailable' && RES.rows.length === before201 + 1
+          && ot && ot.ok && ot.name === 'Edge Other' && !RES.rows.some((r) => r.name === 'Edge Spoof' || r.name === 'Edge Gulch 200'))
+        ok('H15b: one CF-Connecting-IP address makes 200 new names and the 201st is "unavailable"; a spoofed X-Forwarded-For on the same address is still refused, and another address is answered');
+      else fail('H15b: ' + JSON.stringify({ made, last: answers[200], sp, ot }));
       const acct = await sock();
       tx(acct, { type: 'hello', token: 'tok-anon2' });
       await sleep(USER_MS + 300);

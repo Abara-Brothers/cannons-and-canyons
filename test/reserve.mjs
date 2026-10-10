@@ -1141,10 +1141,10 @@ const sameName = (a, b) => nameReadings(a).some((x) => nameReadings(b).includes(
   else fail('J1: holder without hello: ' + JSON.stringify(last(back)));
 }
 {
-  // J2. THE PER-ADDRESS BUDGET. Thirty new rows an hour from one address
+  // J2. THE PER-ADDRESS BUDGET. Two hundred new rows an hour from one address
   // (each from a fresh socket, so the per-socket cap is not what stops it),
   // then 'unavailable' with nothing written; another address is answered; the
-  // bucket gives one back every two minutes.
+  // bucket gives one back every 18 seconds.
   const w = socialWorld();
   await w.res.refresh();
   const t0 = clock;
@@ -1155,15 +1155,15 @@ const sameName = (a, b) => nameReadings(a).some((x) => nameReadings(b).includes(
   const rowsA = w.table.rows.length;
   const b = from('addr-B');
   await w.social.handle(b, { type: 'name', name: 'Budget B0', id: 99 });
-  clock = t0 + 119000;
+  clock = t0 + 17000;
   const early = from('addr-A');
-  await w.social.handle(early, { type: 'name', name: 'Budget A90', id: 100 });
-  clock = t0 + 120001;
+  await w.social.handle(early, { type: 'name', name: 'Budget Early', id: 100 });
+  clock = t0 + 18001;
   const refilled = from('addr-A');
-  await w.social.handle(refilled, { type: 'name', name: 'Budget A91', id: 101 });
-  if (ADDR_ROWS_PER_HOUR === 30 && madeA === 30 && same(lastA, { type: 'name', error: 'unavailable', id: 30 }) && rowsA === 30
-      && last(b).ok && last(early).error === 'unavailable' && last(refilled).ok && last(refilled).name === 'Budget A91')
-    ok('J2: one address makes 30 new rows an hour and the 31st claim is "unavailable" with nothing written; another address is answered; one more comes back two minutes later');
+  await w.social.handle(refilled, { type: 'name', name: 'Budget Refill', id: 101 });
+  if (ADDR_ROWS_PER_HOUR === 200 && madeA === 200 && same(lastA, { type: 'name', error: 'unavailable', id: 200 }) && rowsA === 200
+      && last(b).ok && last(early).error === 'unavailable' && last(refilled).ok && last(refilled).name === 'Budget Refill' && !last(refilled).moved)
+    ok('J2: one address makes 200 new rows an hour and the 201st claim is "unavailable" with nothing written; another address is answered; one more comes back 18 seconds later');
   else fail('J2: address budget: ' + JSON.stringify({ madeA, lastA, rowsA, b: last(b), early: last(early), refilled: last(refilled) }));
   // A socket with no address key (the host could not tell its address) has
   // no budget: only the per-process bounds hold it.
@@ -1175,9 +1175,10 @@ const sameName = (a, b) => nameReadings(a).some((x) => nameReadings(b).includes(
 {
   // J3. AN ATTEMPT THE PROCESS-WIDE BOUNDS REFUSE STILL SPENDS THE ADDRESS'S
   // BUDGET, so a script holding sockets open cannot retry its way into the
-  // rows that free up. The window is filled by a hundred addresses at once
-  // (ROWS_PER_HOUR is a hundred budgets: raised to match); address C then
-  // spends its whole budget on refused attempts in the window's last minute;
+  // rows that free up. The window is filled by fifteen addresses at once
+  // (ROWS_PER_HOUR is fifteen budgets of 200); address C then spends its
+  // whole budget on refused attempts in the window's last ten seconds (one
+  // comes back every 18 s, so none has by the time it opens);
   // when the window opens, C is still refused and a fresh address is not.
   const w = world();
   await w.res.refresh();
@@ -1190,15 +1191,15 @@ const sameName = (a, b) => nameReadings(a).some((x) => nameReadings(b).includes(
   }
   clock = t0 + ROWS_PER_HOUR;
   const full = await w.res.claim({ name: 'Newcomer Zero', addr: 'fresh-0' });
-  clock = t0 + 59 * 60000;
+  clock = t0 + 60 * 60000 - 10000;
   const spent = [];
   for (let i = 0; i < ADDR_ROWS_PER_HOUR; i++) spent.push(await w.res.claim({ name: `Retry ${i}`, addr: 'addr-C' }));
   clock = t0 + 60 * 60000 + ROWS_PER_HOUR;
   const c = await w.res.claim({ name: 'Retry Late', addr: 'addr-C' });
   const d = await w.res.claim({ name: 'Newcomer One', addr: 'fresh-1' });
-  if (ROWS_PER_HOUR === 3000 && ROWS_PER_HOUR === 100 * ADDR_ROWS_PER_HOUR && made === ROWS_PER_HOUR && same(full, { ok: false, error: 'unavailable' })
+  if (ROWS_PER_HOUR === 3000 && ADDR_ROWS_PER_HOUR === 200 && made === ROWS_PER_HOUR && same(full, { ok: false, error: 'unavailable' })
       && spent.every((r) => same(r, { ok: false, error: 'unavailable' })) && same(c, { ok: false, error: 'unavailable' }) && d.ok && d.name === 'Newcomer One')
-    ok(`J3: the process-wide window is ${ROWS_PER_HOUR} an hour, a hundred addresses' budgets; an address that spent its budget on attempts the full window refused is still refused when it opens, and a fresh address is answered`);
+    ok(`J3: the process-wide window is ${ROWS_PER_HOUR} an hour, fifteen addresses' budgets; an address that spent its budget on attempts the full window refused is still refused when it opens, and a fresh address is answered`);
   else fail('J3: refused attempts: ' + JSON.stringify({ made, full, spent: spent.slice(-2), c, d }));
 }
 {
