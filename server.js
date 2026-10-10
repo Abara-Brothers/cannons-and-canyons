@@ -20,6 +20,7 @@ import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import {
   rooms, send, handleClientMessage, handleClose, resolveSeatHandle, resolveSeatName, setCodeTaken, setNameCheck, setNameFree,
+  setNameReadings, setNameLive, liveNameReadings, nameReadingsOf, standInFor,
   MODE_SEATS, TEE_IDS, validRackFor, abandonRoom,
 
   setPushNudge, setAuthSink, setPushSubSink, setFaultSink, setCapacitySink, setMatchSink,
@@ -42,7 +43,10 @@ import { createNameProofs } from './server/display-name.js';
 import { createNameIndex } from './server/name-index.js';
 // Every player's one name, held by the server (owner, 2026-10-10, item 28: no
 // two players with the same name). Off until its table answers; see the file.
-import { createReservations, combineStates } from './server/reservations.js';
+import { createReservations, combineStates, nameReadings } from './server/reservations.js';
+// The address a connection comes from, for the reservations' per-address
+// budget of new names and nothing else (round 3 fix, 2026-10-10).
+import { clientAddressOf } from './server/client-address.js';
 // Which hosts a web push may be sent to. See server/push-hosts.js for why a
 // client-supplied endpoint must never choose where this process connects.
 import { webPushHostAllowed } from './server/push-hosts.js';
@@ -238,6 +242,13 @@ try {
   // a rolled pair, or a stand-in name, that it does not hold itself? Not when
   // another player has reserved it or holds it as a chosen callsign.
   setNameFree((name) => (reserved ? reserved.free(name) : true));
+  // AND WHEN TWO NAMES ARE ONE (round 3 fix, 2026-10-10: room-engine.js
+  // setNameReadings). The door keeps two players in one room, one squad, or
+  // live anywhere from being shown one name, whatever the reservations can
+  // say, and it reads names apart by the reservations' own rule: capitals and
+  // look-alike letters. Installed here, with the check, so a deploy with no
+  // Supabase keeps names apart by the same rule.
+  setNameReadings(nameReadings);
   if (SB_URL && SB_SECRET) {
     store = createStore({ sbAdmin });
     // THE NAME INDEX (server/name-index.js): every chosen callsign's key, read
@@ -261,6 +272,9 @@ try {
     let missingSaid = false;
     reserved = createReservations({
       store, chosenState, checkName: proofs.checkPlayerName,
+      // A default is never a name a live player is shown under (round 3 fix):
+      // the engine's rooms and, through setNameLive below, the squads.
+      liveNames: () => liveNameReadings(null),
       onError: (e) => {
         const m = String(e && e.message);
         if (!/ 40[04]$/.test(m)) console.error(`[names] reservations: ${m}`);
@@ -311,7 +325,13 @@ try {
       // AND THE RESERVATIONS, for the claim, the guest's rename, the Set's
       // check and the names on squad rows.
       reservations: reserved,
+      // AND THE ENGINE'S NAME DOOR, so a squad's box never shows two members
+      // one name and shows a moved member the stand-in their seat will get.
+      door: { standInFor, liveNameReadings, nameReadingsOf },
     });
+    // THE OTHER WAY ROUND: the names live in squads, for the engine's door,
+    // so a stand-in or a name nobody holds is never one a squad's box shows.
+    setNameLive(() => social.liveNames());
     // ONE CODE NAMESPACE (plan R4). makeCode has always collided against
     // `rooms` alone, so a squad code drawn from the same 31-character
     // alphabet could equal a live room code and the Bay's single "Enter a
@@ -420,6 +440,16 @@ async function sbAdmin(method, path, body, prefer) {
 // generation cancel, and social.onAuth, whose sign-in door checks any squad
 // row the socket holds against the account's blocks.
 function helloSink(ws, token) {
+  // A HELLO WITH NO TOKEN AT ALL is a guest's (round 3 fix, 2026-10-10): a
+  // player with no account says hello before their name claim, because a
+  // claim that may reserve a new name must follow one (server/reservations.js,
+  // the first of its layers). It introduces nobody and changes nothing here:
+  // the message loop has already marked the socket (ws.saidHello). Without
+  // this line, on a socket that had sent a token before, it would have
+  // started a verification of no token: one of the socket's five hello
+  // tokens spent, and its generation bumped, so a claim in flight on it would
+  // have been answered 'unavailable'.
+  if (token === undefined) return;
   // An explicit null token means "this socket is nobody now" — the client
   // sends it on sign-out. Without it the socket kept the PREVIOUS account's
   // identity for its whole life, so a device that signed out carried on
@@ -1977,7 +2007,33 @@ function engineFrame(ws, msg) {
   Promise.allSettled(waits).then(drain);
 }
 
-wss.on('connection', (ws) => {
+// WHICH ADDRESS A CONNECTION COMES FROM, for the reservations' per-address
+// budget of new names (server/client-address.js says how, and why
+// X-Forwarded-For is never read). The key is a keyed hash, never the address,
+// and it lives on the socket alone. BEING BLIND MUST NOT LOOK LIKE BEING
+// HEALTHY (ISSUE-035's lesson): the first connection that came through a
+// proxy naming no client this server can trust (no usable CF-Connecting-IP,
+// so the edge is not the one this was written for) is said once in the log,
+// because every such connection then has no address budget; the per-process
+// bounds still hold them. Never the address itself.
+//
+// AND NOTHING HERE MAY THROW: this runs in the connection handler, ahead of
+// every listener the socket needs, and a throw there would reach the process
+// as an uncaught exception. A connection whose address cannot be read is one
+// with no address.
+let addrUnknownSaid = false;
+function addressOf(ws, req) {
+  let a = { key: null };
+  try { a = clientAddressOf(req); } catch { a = { key: null }; }
+  ws.clientAddr = a.key;
+  if (!a.key && !addrUnknownSaid) {
+    addrUnknownSaid = true;
+    console.error('[names] a connection came through a proxy with no usable CF-Connecting-IP: new names from it have no per-address budget (the per-process bounds still apply)');
+  }
+}
+
+wss.on('connection', (ws, req) => {
+  addressOf(ws, req);
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
   ws.tokens = MSG_BURST;
@@ -2000,6 +2056,13 @@ wss.on('connection', (ws) => {
     //   * try/catch here, so NO future throw in 1,600 lines of engine can
     //     take the process — and every live match — down with it
     if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
+    // A HELLO OF ANY KIND MARKS THE SOCKET, here, as it arrives (round 3 fix,
+    // 2026-10-10): a claim that may reserve a new name must follow one
+    // (server/social.js claimName passes it on as `helloed`). Marked before
+    // the frame goes on, because the engine may hold it behind a seat's frame
+    // (engineFrame) while the claim behind it, a social frame, runs at once.
+    // A token's verification is still waited for by every social frame.
+    if (msg.type === 'hello') ws.saidHello = true;
     try {
       if (SOCIAL_TYPES.has(msg.type)) {
         // Social frames never enter the engine: the offline page imports the

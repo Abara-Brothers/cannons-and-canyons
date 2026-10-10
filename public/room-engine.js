@@ -30,7 +30,7 @@ import {
   LOADOUT_POOL, validLoadout, loadoutAmmo, loadoutSizeFor, GOLF_BAG,
   fireDamage, FIRE_TICK,
   BIOMES, BIOME_IDS, biomeLavaY, generateProps, generateRuins, prepareGolfHole,
-  isGeneratedCallsign, callsignFromSeed, isProfane,
+  isGeneratedCallsign, callsignFromSeed, isProfane, standInWalk, STAND_IN_SEEDS,
 } from './game-core.js';
 
 // Every tunable below is read through here. `process` exists in Node and nowhere
@@ -233,22 +233,95 @@ export function setNameCheck(fn) { nameCheck = typeof fn === 'function' ? fn : n
 let nameFree = null;
 export function setNameFree(fn) { nameFree = typeof fn === 'function' ? fn : null; }
 const isFree = (name) => { if (!nameFree) return true; try { return nameFree(name) === true; } catch { return false; } };
+// NO TWO PLAYERS SHOWN ONE NAME, WHATEVER THE RESERVATIONS CAN SAY (round 3
+// fix, 2026-10-10). The reservations keep a name to one holder only while
+// their table answers and a player's claim has been answered: with the table
+// missing, the store down, or a newcomer's claim refused by a bound on new
+// names, two players presenting one name were both seated under it, in one
+// room and in one squad. So the door itself keeps names apart, two ways:
+//   * IN THE ROOM: a seat is never given a name another human seat in that
+//     room has, however it got it. The later player is moved to a stand-in
+//     and told (`renamed`), even when the name is one the server holds for
+//     them, because two of the same name on one screen is the thing the owner
+//     ruled out. Computers keep their own names: the guidelines refuse those
+//     to every player.
+//   * LIVE ANYWHERE: a name the socket does not hold (a rolled pair it
+//     presented, a name it typed, a stand-in) is never one a live player
+//     anywhere else is being shown under right now, in a room or in a squad.
+//     A name the server holds for the socket is not asked this: it is the
+//     player's, and the same player may be in two places at once.
+// Two names are one when their READINGS meet: setNameReadings is the host's
+// (server.js installs reservations.js nameReadings, the rule the reservations
+// use: capitals and look-alike letters), and every name is also read in
+// compatibility form and lower case here, which is all the offline page, with
+// one human in its matches, ever needs. setNameLive is the host's list of the
+// names live outside this module's rooms (server.js: the squads' rows), as
+// { name, ws } entries.
+let nameReadings = null;
+export function setNameReadings(fn) { nameReadings = typeof fn === 'function' ? fn : null; readingsCache.clear(); }
+let nameLive = null;
+export function setNameLive(fn) { nameLive = typeof fn === 'function' ? fn : null; }
+const readingsCache = new Map();
+export function nameReadingsOf(name) {
+  const s = String(name ?? '');
+  let r = readingsCache.get(s);
+  if (r) return r;
+  const out = new Set([s.normalize('NFKC').toLowerCase().trim().replace(/\s+/g, ' ')]);
+  if (nameReadings) {
+    try { const v = nameReadings(s); if (Array.isArray(v)) for (const x of v) if (typeof x === 'string' && x) out.add(x); } catch { /* the plain reading stands */ }
+  }
+  r = [...out];
+  // Bounded: a name is a seat's, and a busy server has a few thousand.
+  if (readingsCache.size >= 4096) readingsCache.clear();
+  readingsCache.set(s, r);
+  return r;
+}
+const readsAs = (name, set) => nameReadingsOf(name).some((x) => set.has(x));
+// Every reading of every name a live player other than `except` is shown
+// under right now: each human seat whose socket is open, in every room, the
+// socket waiting for a quick match, and the host's own (the squads). A list
+// the host cannot give is no list: the rooms still count.
+export function liveNameReadings(except = null) {
+  const set = new Set();
+  const add = (name, ws) => {
+    if (typeof name !== 'string' || !name || !ws || ws === except || ws.readyState !== 1) return;
+    for (const x of nameReadingsOf(name)) set.add(x);
+  };
+  for (const room of rooms.values()) for (const p of room.players) if (p && !p.bot && p.connected) add(p.name, p.ws);
+  if (waiting && typeof waiting._qname === 'string') add(waiting._qname, waiting);
+  if (nameLive) { try { for (const e of nameLive() || []) if (e) add(e.name, e.ws); } catch { /* the rooms still count */ } }
+  return set;
+}
 // The name the SERVER holds for this socket: a signed-in account's chosen
 // callsign first, then the name reserved for the player (both written by the
 // host, never by a frame). The offline page puts its own player's name in
 // chosenName (app.js startLocal).
 const allowedOf = (ws) => (ws && ((typeof ws.chosenName === 'string' && ws.chosenName) || (typeof ws.reservedName === 'string' && ws.reservedName))) || null;
 // THE NAME A SEAT IS GIVEN, and whether the one presented was REFUSED: the
-// seat object, which createRoom and join build from this, carries
-// `renamed: true` only when the name the player presented could not be used
-// and the fallback below stands in for it, and snapshot tells that seat's own
-// socket so in every match frame (owner, 2026-10-10: the player is told
-// plainly and sees what they are called). Every other seat carries no such
-// key, so every other frame is exactly what it was. sanitizeName below is the same
-// answer without the flag, for the one path no current client takes (quick).
-function sanitizeName(raw, seat = 0, allowed = null) { return nameAtDoor(raw, seat, allowed).name; }
-function nameAtDoor(raw, seat = 0, allowed = null) {
+// seat object, which createRoom, join and a quick match's second seat build
+// from this, carries `renamed: true` only when the name the player presented
+// could not be used and the fallback below stands in for it, and snapshot
+// tells that seat's own socket so in every match frame (owner, 2026-10-10:
+// the player is told plainly and sees what they are called). Every other seat
+// carries no such key, so every other frame is exactly what it was.
+// sanitizeName below is the same answer without the flag, for the name a
+// socket waits in the quick-match queue under (its seat is made later by
+// createRoom, which puts that name through this door again).
+//
+// `at` is where the seat is going: { room, ws }, the room (null for a room
+// being created) and the socket being seated. Every caller here passes it;
+// without it the door asks only what it asked before round 3's fix.
+function sanitizeName(raw, seat = 0, allowed = null, at = null) { return nameAtDoor(raw, seat, allowed, at).name; }
+function nameAtDoor(raw, seat = 0, allowed = null, at = null) {
   const name = String(raw ?? '');
+  // THE ROOM'S OTHER HUMAN SEATS, and the live names, read once a door.
+  const room = at && at.room ? at.room : null;
+  const ws = at && at.ws ? at.ws : null;
+  const here = new Set();
+  if (room) room.players.forEach((p, i) => { if (p && !p.bot && i !== seat) for (const x of nameReadingsOf(p.name)) here.add(x); });
+  const inRoom = (n) => readsAs(n, here);
+  let live = null;
+  const isLive = (n) => { if (!at) return false; if (!live) live = liveNameReadings(ws); return readsAs(n, live); };
   // THE ONE EXEMPTION (design 4.5). `allowed` is the display form of a CHOSEN
   // callsign that this socket's signed-in account already owns: server.js reads
   // it from the profile row after the account's token verifies and hangs it on
@@ -286,10 +359,23 @@ function nameAtDoor(raw, seat = 0, allowed = null) {
   // in depth that makes the ordering safe whatever the server's term list
   // contains — including a stored name from before a term was added to it.
   // It is checked against `allowed`, the SERVER's string, not the client's.
-  if (typeof allowed === 'string' && allowed && !isProfane(allowed)) return { name: allowed };
+  //
+  // UNLESS ANOTHER PLAYER IN THE ROOM IS SHOWN UNDER IT (round 3 fix,
+  // 2026-10-10: see liveNameReadings above). The server holds a name for one
+  // player, but while its table cannot answer, a holder vouched for from
+  // memory and a look-alike another instance wrote can still meet in a room.
+  // Then the later seat is moved to the stand-in below and told, and the
+  // name its frame carried is not tried: the stand-in is what a squad's box
+  // showed for this seat (server/social.js squadSnapshot asks standInFor,
+  // below, with the same name and place), so the two agree.
+  if (typeof allowed === 'string' && allowed && !isProfane(allowed)) {
+    if (!inRoom(allowed)) return { name: allowed };
+    return { name: pickStandIn(seedOf(name, seat), inRoom, isLive), renamed: true };
+  }
   // A ROLLED PAIR IS NO LONGER ANYBODY'S (round 3): one another player has
-  // reserved, or holds as a chosen callsign, is theirs, and falls through.
-  if (isGeneratedCallsign(name) && !isProfane(name) && isFree(name)) return { name };
+  // reserved, or holds as a chosen callsign, is theirs, and falls through. So
+  // is one another player in this room, or anywhere live, is shown under.
+  if (isGeneratedCallsign(name) && !isProfane(name) && isFree(name) && !inRoom(name) && !isLive(name)) return { name };
   // THE THIRD DOOR: a name the player typed, held to the guidelines HERE, at
   // the moment it is presented, whatever the client claims it was told. What
   // is returned is the CHECK's string, never the client's copy — the same rule
@@ -298,20 +384,62 @@ function nameAtDoor(raw, seat = 0, allowed = null) {
   if (nameCheck) {
     let shown = null;
     try { shown = nameCheck(name); } catch { shown = null; }
-    if (typeof shown === 'string' && shown && !isProfane(shown)) return { name: shown };
+    if (typeof shown === 'string' && shown && !isProfane(shown) && !inRoom(shown) && !isLive(shown)) return { name: shown };
   }
-  const h = [...name].reduce((a, c) => (a * 31 + c.charCodeAt(0)) | 0, 7) + seat * 2654435761;
-  // THE STAND-IN IS AN UNUSED NAME TOO (owner: "New default names are always
-  // picked from unused ones"). Still deterministic on the refused input, for
-  // the reason above: the seeds are walked in a fixed order and the first one
-  // nobody holds is taken. Offline, and on a host with no reservations, the
-  // first seed is free and the name is exactly what it always was. If every
-  // seed tried is held, the first stands, as before.
-  for (let k = 0; k < 64; k++) {
-    const stand = callsignFromSeed(h + k * 7919);
-    if (isFree(stand)) return { name: stand, renamed: true };
+  return { name: pickStandIn(seedOf(name, seat), inRoom, isLive), renamed: true };
+}
+// The stand-in's seed: the refused input and the seat, as it always was.
+const seedOf = (name, seat) => [...String(name ?? '')].reduce((a, c) => (a * 31 + c.charCodeAt(0)) | 0, 7) + seat * 2654435761;
+// THE STAND-IN IS AN UNUSED NAME TOO (owner: "New default names are always
+// picked from unused ones"). Still deterministic on the refused input, for
+// the reason above. The rolled pairs the door has always walked come first,
+// so offline, and on a host with no reservations, the first seed is free and
+// the name is exactly what it always was.
+//
+// FROM EVERY DEFAULT NAME, NOT ONLY THE PAIRS (round 3 fix, 2026-10-10). Once
+// the 1,454 pairs were all reserved (a flood takes three hours to reserve
+// them, and so do about 1,454 players holding defaults), no seed was free and
+// the first one stood, which was another player's reserved name. So after the
+// pairs the walk goes on through the whole default pool (game-core.js
+// standInWalk), and a stand-in is a name nobody holds (isFree), that meets
+// the guidelines (a name past the pairs must pass the host's own check, the
+// one every typed name meets), that no other human in the room has, and that
+// no live player anywhere is shown under. If the host's check cannot answer
+// (it refuses everything while the chosen callsigns are unknown) and every
+// pair is held, nothing passes: then the first seed no other human in the
+// room has stands, so a room still never shows one name twice.
+function pickStandIn(h, inRoom, isLive) {
+  const passes = (c) => {
+    if (!c || isProfane(c) || inRoom(c) || isLive(c)) return false;
+    if (!isGeneratedCallsign(c)) {
+      if (!nameCheck) return false;
+      let shown = null;
+      try { shown = nameCheck(c); } catch { shown = null; }
+      if (shown !== c) return false;
+    }
+    return isFree(c);
+  };
+  const c = standInWalk(h, passes);
+  if (c) return c;
+  for (let k = 0; k < STAND_IN_SEEDS; k++) {
+    const s = callsignFromSeed(h + k * 7919);
+    if (!inRoom(s)) return s;
   }
-  return { name: callsignFromSeed(h), renamed: true };
+  return callsignFromSeed(h);
+}
+// THE SAME STAND-IN, FOR A SQUAD'S BOX (server/social.js squadSnapshot). A
+// squad's start seats its members in the order the box lists them, leader
+// first, through this door; the box shows a member who clashes with one
+// before them under the stand-in this answers for their name and place, and
+// the door, seating them in that place after the same members, draws the
+// same one. `names` are the names already shown before them; `ws` their
+// socket, whose own live names do not count against them.
+export function standInFor(raw, seat, names, ws = null) {
+  const before = new Set();
+  for (const n of Array.isArray(names) ? names : []) if (typeof n === 'string' && n) for (const x of nameReadingsOf(n)) before.add(x);
+  let live = null;
+  const isLive = (n) => { if (!live) live = liveNameReadings(ws); return readsAs(n, live); };
+  return pickStandIn(seedOf(raw, seat), (n) => readsAs(n, before), isLive);
 }
 
 // ---- Teams ----------------------------------------------------------------------
@@ -836,7 +964,7 @@ function createRoom(hostWs, name, skin, opts = {}) {
   const room = {
     code, mode, max, hostSeat: 0,
     players: [
-      { ws: hostWs, ...nameAtDoor(name, 0, allowedOf(hostWs)), token: makeToken(), connected: true, dropTimer: null, skin: sanitizeSkin(skin, 0) },
+      { ws: hostWs, ...nameAtDoor(name, 0, allowedOf(hostWs), { room: null, ws: hostWs }), token: makeToken(), connected: true, dropTimer: null, skin: sanitizeSkin(skin, 0) },
     ],
     state: 'waiting',
     terrain: null, tanks: null,
@@ -2237,7 +2365,7 @@ export function handleClientMessage(ws, msg) {
       let seat = r.players.indexOf(null);                 // reuse a lobby hole first
       if (seat < 0) { seat = r.players.length; r.players.push(null); }
       r.players[seat] = {
-        ws, ...nameAtDoor(msg.name, seat, allowedOf(ws)), token: makeToken(), loadout: sanitizeLoadoutFor(r.mode, msg.loadout),
+        ws, ...nameAtDoor(msg.name, seat, allowedOf(ws), { room: r, ws }), token: makeToken(), loadout: sanitizeLoadoutFor(r.mode, msg.loadout),
         connected: true, dropTimer: null, skin: sanitizeSkin(msg.skin, seat),
       };
       ws.roomCode = code; ws.seat = seat;
@@ -2257,11 +2385,13 @@ export function handleClientMessage(ws, msg) {
         }
         r.players[0].loadout = host._qloadout || null;
         releasePriorRoom(ws);            // the joiner may have been sitting in a lobby
-        r.players.push({ ws, name: sanitizeName(msg.name, 1, allowedOf(ws)), token: makeToken(), connected: true, dropTimer: null, skin: sanitizeSkin(msg.skin, 1), loadout: sanitizeLoadout(msg.loadout) });
+        // The second seat meets the door with the room in hand, so it is
+        // never the first seat's name, and is told when it was moved.
+        r.players.push({ ws, ...nameAtDoor(msg.name, 1, allowedOf(ws), { room: r, ws }), token: makeToken(), connected: true, dropTimer: null, skin: sanitizeSkin(msg.skin, 1), loadout: sanitizeLoadout(msg.loadout) });
         ws.roomCode = r.code; ws.seat = 1;
         startGame(r);
       } else {
-        waiting = ws; ws._qname = sanitizeName(msg.name, 0, allowedOf(ws)); ws._qskin = msg.skin; ws._qloadout = sanitizeLoadout(msg.loadout);
+        waiting = ws; ws._qname = sanitizeName(msg.name, 0, allowedOf(ws), { room: null, ws }); ws._qskin = msg.skin; ws._qloadout = sanitizeLoadout(msg.loadout);
         send(ws, { type: 'queued' });
       }
       break;

@@ -66,6 +66,8 @@ import { existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// A socket with headers of its own (H15: the edge's CF-Connecting-IP).
+import NodeWS from 'ws';
 
 const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 if (!existsSync(CHROME)) { console.log(`SKIP  names tests — no Chrome at ${CHROME}`); process.exit(3); }
@@ -118,7 +120,9 @@ const TOKENS = { 'tok-chosen': CHOSEN_ID, 'tok-other': OTHER_ID, 'tok-late': OTH
 // applied) until part H turns it on.
 // `failFor` makes that many reads by one secret's hash answer 503, as a store
 // that is down does (H13), and `readsFor` keeps when each read by a hash came.
-const RES = { on: false, rows: [], seq: 0, refused: 0, failFor: {}, readsFor: {} };
+// `slowUser` holds the read of that account's row for 600 ms (H15c), so a
+// frame can land while a claim is out.
+const RES = { on: false, rows: [], seq: 0, refused: 0, failFor: {}, readsFor: {}, slowUser: null };
 const resClash = (r, self) => RES.rows.some((o) => o !== self && (o.name_key === r.name_key || (r.secret_hash && o.secret_hash === r.secret_hash) || (r.user_id && o.user_id === r.user_id)));
 // Two hellos slower than the rest, for G6: one that settles after the server's
 // hold has given up on it, and one that settles a little after that.
@@ -160,7 +164,7 @@ mock = http.createServer((req, res) => {
       for (const k of ['id', 'user_id', 'secret_hash', 'name_key']) if (eqv(k) !== null) rows = rows.filter((r) => String(r[k]) === eqv(k));
       if (q('user_id') === 'is.null') rows = rows.filter((r) => !r.user_id);
       if (q('secret_hash') === 'is.null') rows = rows.filter((r) => !r.secret_hash);
-      if (req.method === 'GET') return json(200, rows.slice(0, 1));
+      if (req.method === 'GET') return json(200, rows.slice(0, 1), RES.slowUser && eqv('user_id') === RES.slowUser ? 600 : 0);
       if (req.method === 'POST') {
         const r = { id: ++RES.seq, secret_hash: null, user_id: null, linked: false, reused: false, ...b, created_at: at, last_seen_at: at };
         if (resClash(r)) return json(409, { code: '23505' });
@@ -957,10 +961,12 @@ try {
     const wait = async (w, pred, ms) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { const m = w.rx.find(pred); if (m) return m; await sleep(20); } return null; };
     const AI = (name) => ({ type: 'ai', difficulty: 'easy', name, skin: 'olive' });
     const seatOf = (st) => st && { me: st.names[st.you], renamed: st.renamed === true };
-    // H6. A seat sent straight behind its claim waits for the claim.
+    // H6. A seat sent straight behind its claim waits for the claim. The
+    // claim follows a guest's hello, as the page sends it (round 3 fix: a
+    // claim with no hello makes no row, H15).
     {
       const w = await sock();
-      tx(w, { type: 'name', name: 'Grim Raven' }); tx(w, AI('Steady Hammer'));
+      tx(w, { type: 'hello' }); tx(w, { type: 'name', name: 'Grim Raven' }); tx(w, AI('Steady Hammer'));
       const st = seatOf(await wait(w, (m) => m.type === 'start', 5000));
       const ans = w.rx.find((m) => m.type === 'name');
       if (ans && ans.ok && ans.name === 'Grim Raven' && st && st.me === 'Grim Raven' && !st.renamed) ok('H6: a seat sent straight behind its claim waits for it, and is the reserved name (\'Grim Raven\'), not the name the frame carried');
@@ -1101,6 +1107,68 @@ try {
         && !after14.includes('name') && me14 === 'Quiet Dawn' && !said14.length && RES.rows.length === rows14)
       ok('H14: a signed-in player whose token is late sends no claim (it would be the device\'s); when the token comes, the hello goes and the account\'s claim straight after it, and the player stays \'Quiet Dawn\' with nothing said and no row made');
     else fail('H14: ' + JSON.stringify({ before14, came, after14, me14, said14, rows: RES.rows.length - rows14 }));
+    // H15. NEW NAMES HANDED OUT FAIRLY, ON THE WIRE (round 3 fix, 2026-10-10;
+    // server/reservations.js, server/client-address.js). (a) A claim from a
+    // socket that has said no hello makes no row; the token-less hello a
+    // guest's page sends, and the same claim makes it. (b) Thirty new names an
+    // hour from one address, the address read from CF-Connecting-IP: the 31st
+    // makes nothing, another address is answered, and an X-Forwarded-For the
+    // client wrote changes nothing. (c) A token-less hello on a socket that
+    // has an account changes nothing: a claim in flight on it is answered.
+    {
+      const edge = (ip, extra = {}) => new Promise((res, rej) => {
+        const w = new NodeWS(WS_URL, { headers: { 'cf-connecting-ip': ip, ...extra } });
+        w.rx = []; w.on('message', (d) => { try { w.rx.push(JSON.parse(String(d))); } catch {} });
+        w.on('open', () => res(w)); w.on('error', rej);
+      });
+      const send15 = (w, m) => w.send(JSON.stringify(m));
+      const rows0 = RES.rows.length;
+      const bare = await sock();
+      tx(bare, { type: 'name', name: 'Hollow Spire' });
+      const a1 = await wait(bare, (m) => m.type === 'name', 4000);
+      const rowsBare = RES.rows.length;
+      tx(bare, { type: 'hello' }); tx(bare, { type: 'name', name: 'Hollow Spire' });
+      const a2 = await wait(bare, (m) => m.type === 'name' && m.ok, 4000);
+      bare.close();
+      const okA = a1 && a1.error === 'unavailable' && rowsBare === rows0 && a2 && a2.name === 'Hollow Spire' && /^[A-Za-z0-9_-]{43}$/.test(a2.secret || '') && RES.rows.some((r) => r.name === 'Hollow Spire');
+      if (okA) ok('H15a: on the wire, a claim with no hello is "unavailable" and makes no row; after the guest\'s token-less hello the same claim makes it');
+      else fail('H15a: ' + JSON.stringify({ a1, rowsBare, rows0, a2 }));
+      const answers = [];
+      for (let i = 0; i < 31; i++) {
+        const w = await edge('198.51.100.7');
+        send15(w, { type: 'hello' }); send15(w, { type: 'name', name: `Edge Gulch ${i}` });
+        answers.push(await wait(w, (m) => m.type === 'name', 4000));
+        w.close();
+      }
+      const before31 = RES.rows.length;
+      const spoof = await edge('198.51.100.7', { 'x-forwarded-for': '203.0.113.200' });
+      send15(spoof, { type: 'hello' }); send15(spoof, { type: 'name', name: 'Edge Spoof' });
+      const sp = await wait(spoof, (m) => m.type === 'name', 4000);
+      spoof.close();
+      const other = await edge('198.51.100.8');
+      send15(other, { type: 'hello' }); send15(other, { type: 'name', name: 'Edge Other' });
+      const ot = await wait(other, (m) => m.type === 'name', 4000);
+      other.close();
+      const made = answers.filter((m) => m && m.ok).length;
+      if (made === 30 && answers[30] && answers[30].error === 'unavailable' && sp && sp.error === 'unavailable' && RES.rows.length === before31 + 1
+          && ot && ot.ok && ot.name === 'Edge Other' && !RES.rows.some((r) => r.name === 'Edge Spoof' || r.name === 'Edge Gulch 30'))
+        ok('H15b: one CF-Connecting-IP address makes 30 new names and the 31st is "unavailable"; a spoofed X-Forwarded-For on the same address is still refused, and another address is answered');
+      else fail('H15b: ' + JSON.stringify({ made, last: answers[30], sp, ot }));
+      const acct = await sock();
+      tx(acct, { type: 'hello', token: 'tok-anon2' });
+      await sleep(USER_MS + 300);
+      // The claim's read of the account's row is held, and the token-less
+      // hello lands while it is out.
+      RES.slowUser = ANON2_ID;
+      tx(acct, { type: 'name', name: 'Ashen Spire', account: true });
+      await sleep(200);
+      tx(acct, { type: 'hello' });
+      const a3 = await wait(acct, (m) => m.type === 'name', 4000);
+      RES.slowUser = null;
+      acct.close();
+      if (a3 && a3.ok && a3.linked !== true && a3.name === 'Ashen Spire') ok('H15c: a token-less hello on a socket that has an account changes nothing: the claim in flight on it is answered (\'Ashen Spire\')');
+      else fail('H15c: ' + JSON.stringify(a3));
+    }
   }
 
   // ==== W. EVERY NAME WHOLE =====================================================================

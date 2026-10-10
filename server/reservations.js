@@ -107,10 +107,10 @@
 // row lasts as long as the account; deleting the account deletes the row
 // (the foreign key cascades).
 import { createHash, randomBytes, randomInt } from 'node:crypto';
-import { CALLSIGN_MAX, keyReadings, normaliseCallsign, shownSpelling } from './callsign.js';
+import { keyReadings, normaliseCallsign, shownSpelling } from './callsign.js';
 import { createNameIndex, PAGE } from './name-index.js';
 import { RES_KEY_MAX } from './store.js';
-import { CALL_ADJ, CALL_NOUN, NAME_MAX } from '../public/game-core.js';
+import { defaultPairs, defaultNameAt, defaultNameCount } from '../public/game-core.js';
 
 const DAY = 86400000;
 const HOUR = 3600000;
@@ -130,9 +130,30 @@ export const SECRET_RE = /^[A-Za-z0-9_-]{43}$/;
 // A claim is open to any socket, and each one that finds no row writes one,
 // so without bounds a flood of sockets each sending a new name grows the table
 // and this process's memory of it without end, and spends whatever stands
-// between real newcomers and their names. None of these bounds is per IP
-// address: a mobile carrier puts many phones behind one, and a cap on it would
-// refuse a whole carrier's newcomers for one abuser.
+// between real newcomers and their names.
+//
+// AND FAIRLY, NOT ONLY BOUNDED (round 3 fix, 2026-10-10). The bounds below
+// used to be the only ones, and the hourly window is one for the whole
+// process: one script with no hello and no secret filled it, and every real
+// newcomer for as long as it ran was answered 'unavailable', their name
+// reserved by nobody. So a new row now passes four layers, in this order:
+//   1. A HELLO. Only a socket that has said hello may make one (social.js
+//      passes `helloed`): a bare claim frame, the cheapest flood there is,
+//      makes nothing. A guest's hello carries no token (it has no account,
+//      and depends on none), so this orders the protocol rather than proving
+//      anything; the layers after it are the bounds.
+//   2. PER SOCKET: ROWS_PER_SOCKET, below.
+//   3. PER CLIENT ADDRESS: ADDR_ROWS_PER_HOUR, below, keyed by the address
+//      the host's edge reports for the connection (server/client-address.js).
+//      Every attempt that gets this far spends from it, the attempts the
+//      layers after it refuse included, so a script holding sockets open
+//      cannot retry its way into the rows others are waiting for.
+//   4. PER PROCESS: the ceiling and the hourly window, below, now the bounds
+//      on the table and on memory, sized so that only a flood from a hundred
+//      addresses at once can reach the window.
+// A newcomer who still gets no row is still never shown under another
+// player's name: the door gives them a name nobody holds and no live player
+// is using (room-engine.js nameAtDoor), and the client asks again.
 //
 // PER SOCKET: ROWS_PER_SOCKET new rows a connection may make. An honest
 // connection makes one when its device first claims, and one more each time a
@@ -143,14 +164,42 @@ export const SECRET_RE = /^[A-Za-z0-9_-]{43}$/;
 // new connection for every three rows, and the bounds below hold whatever it
 // opens.
 export const ROWS_PER_SOCKET = 3;
+// PER CLIENT ADDRESS: at most ADDR_ROWS_PER_HOUR attempts at a new row an hour
+// from one address, a bucket that holds that many and refills one every two
+// minutes. Why 30. A new row is made by a device's FIRST claim (once a
+// device, until it is unseen for 90 days) and by a sign-out, so the honest
+// rows from one address in an hour are the new players of this game behind
+// it in that hour. A mobile carrier puts many phones behind one address (and
+// an IPv6 carrier many behind one /48, which is how those are keyed), and 30
+// newcomers an hour behind a single one is far past anything this game has
+// seen. If it is ever exceeded, the 31st newcomer still plays under a name
+// nobody else is shown under (the door), and their client asks again, backing
+// off to a minute, so the row comes within minutes as the bucket refills. A
+// claim refused by it answers 'unavailable', as the window below does.
+export const ADDR_ROWS_PER_HOUR = 30;
+// At most ADDR_MAX addresses are remembered, the one used longest ago dropped
+// first (its next attempt starts from a full bucket again; pushing it out
+// takes ten thousand other addresses in under an hour, and a flood that has
+// those has their budgets anyway), and an address is forgotten an hour after
+// its last attempt, when its bucket is full again and remembering it changes
+// nothing. The sweep that forgets runs every ADDR_SWEEP_MS, and every attempt
+// forgets the ones an hour old first. An entry is a short keyed hash and two
+// numbers, never the address (server/client-address.js): ten thousand of them
+// measured 1.6 MB on this Node.
+export const ADDR_MAX = 10000;
+export const ADDR_SWEEP_MS = 5 * 60000;
 // PER HOUR, PER PROCESS: at most ROWS_PER_HOUR new rows in any 60 minutes, a
-// sliding window, not a bucket that refills in bursts. 600 an hour is ten a
-// minute, well past this game's newcomers on its busiest day so far, and at
-// that rate the ceiling below is reached only after a week of a flood that
-// never stops. A claim refused by it answers 'unavailable': the player keeps
-// their own name by the old rules (the door seats it while nobody else holds
-// it), and the client asks again, backing off, until a row is made.
-export const ROWS_PER_HOUR = 600;
+// sliding window, not a bucket that refills in bursts. RAISED TO MATCH THE
+// ADDRESS BUDGET (round 3 fix, 2026-10-10): it was 600, which twenty
+// addresses' budgets fill; 3,000 an hour is a hundred addresses' worth, fifty
+// a minute, far past this game's newcomers on its busiest day so far. At that
+// rate the ceiling below is reached after about 33 hours of a flood that never
+// stops, and the prune then frees its rows a thousand a minute, twenty times
+// faster than the window lets them in. Its writes are under one a second,
+// nothing to the database. A claim refused by it answers 'unavailable': the
+// player is still seated under a name nobody else is shown under (the door),
+// and the client asks again, backing off, until a row is made.
+export const ROWS_PER_HOUR = 3000;
 // THE TABLE'S CEILING: no new row once ROWS_MAX are held. Measured on this
 // Node (v26), the index below costs about 210 bytes a reservation with every
 // reading kept, so 100,000 rows are about 20 MB, and twice that for the
@@ -171,7 +220,7 @@ export const INDEX_MAX_PAGES = Math.ceil((ROWS_MAX * 1.5) / PAGE) + 1;
 // one run a PRUNE_GAP_MS, and only rows that have never been reused (no claim
 // found them on a later day), are held by nobody linked, and are older than
 // PRUNE_MIN_AGE_MS, so a newcomer playing right now is never pruned. A flood's
-// rows are exactly these. A thousand a minute outruns the ten a minute the
+// rows are exactly these. A thousand a minute outruns the fifty a minute the
 // window above lets in.
 export const PRUNE_BATCH = 1000;
 export const PRUNE_GAP_MS = 60000;
@@ -192,6 +241,15 @@ export const DEFAULT_DRAWS = 64;
 // exactly checkPlayerName's key (validateCallsign) and so exactly the key a
 // chosen callsign has in profiles.callsign_key.
 export const nameKeyOf = (name) => normaliseCallsign(name).toLowerCase();
+// EVERY WAY A NAME READS: its key and the key's readings (keyReadings), the
+// strings two names share exactly when they are one name ignoring capitals and
+// look-alike letters. The room engine is handed this (server.js
+// setNameReadings), so the names it keeps apart in a room, a squad and the
+// stand-ins it draws are kept apart by the rule the reservations use.
+export function nameReadings(name) {
+  const k = nameKeyOf(name);
+  return k ? [...new Set([k, ...keyReadings(k)])] : [];
+}
 export const hashSecret = (s) => createHash('sha256').update(String(s)).digest('hex');
 export const newSecret = () => randomBytes(32).toString('base64url');
 
@@ -219,33 +277,35 @@ export function combineStates(a, b) {
 // more than ten times ROWS_MAX, so however the table fills, nine in ten of
 // them are unused. They are drawn at random (WIDE_DEFAULTS.at), not walked,
 // and never listed in memory: a name is worked out from its number.
+//
+// ONE LIST, THE ENGINE'S TOO (round 3 fix, 2026-10-10). The pool is
+// public/game-core.js's (defaultNameAt), the one the room engine's door draws
+// its stand-ins from, so a stand-in and a default are the same kind of name
+// and neither can be a name the other side does not know. These are its first
+// two tiers and its wide tier, read from it in its order.
 export const DEFAULT_TIERS = (() => {
-  const pairs = [];
-  for (const noun of CALL_NOUN) for (const adj of CALL_ADJ) if (adj.length + 1 + noun.length <= NAME_MAX) pairs.push(`${adj} ${noun}`);
+  const pairs = [...defaultPairs()];
   const numbered = [];
-  for (const d of ['2', '3', '4', '5', '6', '7', '8', '9']) for (const p of pairs) numbered.push(`${p} ${d}`);
+  for (let i = pairs.length; i < pairs.length * 9; i++) numbered.push(defaultNameAt(i));
   return [pairs, numbered];
 })();
 export const WIDE_DEFAULTS = (() => {
-  const two = DEFAULT_TIERS[0].filter((p) => p.length + 3 <= CALLSIGN_MAX);
-  const three = DEFAULT_TIERS[0].filter((p) => p.length + 4 <= CALLSIGN_MAX);
-  const twoN = two.length * 90;
+  const base = DEFAULT_TIERS[0].length + DEFAULT_TIERS[1].length;
   return Object.freeze({
-    size: twoN + three.length * 900,
-    at(i) {
-      if (i < twoN) return `${two[Math.floor(i / 90)]} ${10 + (i % 90)}`;
-      const j = i - twoN;
-      return `${three[Math.floor(j / 900)]} ${100 + (j % 900)}`;
-    },
+    size: defaultNameCount() - base,
+    at(i) { return defaultNameAt(base + i); },
   });
 })();
 
 // `store` is server/store.js. `chosenState(key)` answers for the chosen
 // callsigns ('free', 'taken' or 'unknown': server/name-index.js). `checkName`
-// is display-name.js's checkPlayerName, the guidelines every name meets. The
-// clock, the secret and the random pick are injected so a suite can drive them.
+// is display-name.js's checkPlayerName, the guidelines every name meets.
+// `liveNames()` is the room engine's liveNameReadings (server.js): every
+// reading of every name a live player is shown under right now, in a room or a
+// squad, or null when it cannot say. The clock, the secret and the random
+// pick are injected so a suite can drive them.
 export function createReservations({
-  store, chosenState = () => 'unknown', checkName,
+  store, chosenState = () => 'unknown', checkName, liveNames = () => null,
   now = Date.now, mint = newSecret, pick = (n) => randomInt(n),
   schedule = (fn, ms) => { const t = setTimeout(fn, ms); if (typeof t.unref === 'function') t.unref(); return () => clearTimeout(t); },
   refreshMs, retryMs, onError = () => {},
@@ -278,6 +338,36 @@ export function createReservations({
     stamps[slot] = t;
     slot = (slot + 1) % ROWS_PER_HOUR;
     return true;
+  }
+
+  // THE ADDRESS BUDGETS (ADDR_ROWS_PER_HOUR): an address key to its bucket,
+  // `tokens` as of `at`. The Map's order is the order the addresses were last
+  // used (an entry is taken out and put back on every use), so the one used
+  // longest ago is first, for the bound and for forgetting. An address with
+  // no key (a connection whose address the host could not tell) has no
+  // budget: the per-process bounds still hold it. A clock that jumps
+  // backwards refills nothing until it has caught up, and empties nothing.
+  const budgets = new Map();
+  function forgetAddresses(t) {
+    for (const [k, b] of budgets) { if (t - b.at < HOUR) break; budgets.delete(k); }
+  }
+  function addrOk(addr) {
+    if (typeof addr !== 'string' || !addr) return true;
+    const t = now();
+    forgetAddresses(t);
+    const b = budgets.get(addr);
+    budgets.delete(addr);
+    const tokens = b ? Math.min(ADDR_ROWS_PER_HOUR, b.tokens + (Math.max(0, t - b.at) * ADDR_ROWS_PER_HOUR) / HOUR) : ADDR_ROWS_PER_HOUR;
+    const ok = tokens >= 1;
+    budgets.set(addr, { tokens: ok ? tokens - 1 : tokens, at: t });
+    while (budgets.size > ADDR_MAX) budgets.delete(budgets.keys().next().value);
+    return ok;
+  }
+  // The timer's sweep reads every entry, so an address the order above has
+  // put behind a newer one (a clock that jumped) is forgotten too.
+  function sweepAddresses() {
+    const t = now();
+    for (const [k, b] of budgets) if (t - b.at >= HOUR) budgets.delete(k);
   }
 
   // THE HOLDERS THIS PROCESS HAS SEEN, for the moment a claim cannot be
@@ -336,13 +426,24 @@ export function createReservations({
   // the full guidelines. Then the wide tier, drawn at random. A name that has
   // just lost on the table was added to the memory, so it is not offered
   // again. null when nothing is free or the chosen callsigns cannot be asked.
+  //
+  // NOR ONE A LIVE PLAYER IS SHOWN UNDER (round 3 fix, 2026-10-10). A player
+  // whose claim was never answered plays under a name nobody reserved, and a
+  // stand-in the door gave a seat is reserved by nobody either; a default
+  // handed out by name alone could be either, and two players would then be
+  // shown one name. So the names live in rooms and squads right now are asked
+  // too, read once for the pick. When they cannot be read the pick goes on
+  // without them: the door still keeps two players in one room apart.
   function pickDefault() {
+    let busy = null;
+    try { busy = liveNames(); } catch { busy = null; }
+    const live = (c) => !!(busy && typeof busy.has === 'function') && readingsOf(c.toLowerCase()).some((r) => busy.has(r));
     for (const tier of DEFAULT_TIERS) {
       const n = tier.length;
       const at = pick(n);
       for (let i = 0; i < n; i++) {
         const c = tier[(at + i) % n];
-        if (index.state(c.toLowerCase()) !== 'free') continue;
+        if (index.state(c.toLowerCase()) !== 'free' || live(c)) continue;
         const v = vet(c);
         if (v.ok) return v;
         if (v.error === 'unavailable') return null;
@@ -350,7 +451,7 @@ export function createReservations({
     }
     for (let d = 0; d < DEFAULT_DRAWS; d++) {
       const c = WIDE_DEFAULTS.at(pick(WIDE_DEFAULTS.size));
-      if (index.state(c.toLowerCase()) !== 'free') continue;
+      if (index.state(c.toLowerCase()) !== 'free' || live(c)) continue;
       const v = vet(c);
       if (v.ok) return v;
       if (v.error === 'unavailable') return null;
@@ -382,8 +483,11 @@ export function createReservations({
   // player (the device rolled that name a moment ago, or has just signed out
   // and was told it starts again as a guest); `mayInsert` whether this socket
   // may still make a new row (ROWS_PER_SOCKET, counted by the social layer
-  // from `made` on the answer).
-  async function claim({ userId = null, linked = false, chosen = null, secret = null, name = '', fresh = false, mayInsert = true } = {}) {
+  // from `made` on the answer); `helloed` whether the socket has said hello,
+  // and `addr` its address key (server/client-address.js, or null), for the
+  // first and third layers above. Every default here is the permissive one,
+  // for a caller with no socket; the social layer passes all three.
+  async function claim({ userId = null, linked = false, chosen = null, secret = null, name = '', fresh = false, mayInsert = true, helloed = true, addr = null } = {}) {
     if (!index.ready) return { ok: false, error: 'unavailable' };
     linked = !!(userId && linked);
     if (linked && typeof chosen === 'string' && chosen) {
@@ -414,7 +518,12 @@ export function createReservations({
     let v = presented ? vet(presented) : { ok: false, error: 'length' };
     if (!v.ok && v.error === 'unavailable') return { ok: false, error: 'unavailable' };
     let why = v.ok ? null : v.error === 'taken' ? 'taken' : 'refused';
+    // THE LAYERS, in the order the note on the bounds gives them. Nothing
+    // has been written or spent for a claim the first two refuse; from the
+    // address budget on, the attempt is spent whatever refuses it after.
+    if (!helloed) return { ok: false, error: 'unavailable' };
     if (!mayInsert) return { ok: false, error: 'slow_down' };
+    if (!addrOk(addr)) return { ok: false, error: 'unavailable' };
     if (index.size >= ROWS_MAX) { prune().catch(() => {}); return { ok: false, error: 'unavailable' }; }
     if (!hourOk()) return { ok: false, error: 'unavailable' };
     // A device's row needs a holder, so a device always gets a new secret
@@ -569,20 +678,25 @@ export function createReservations({
     return e.name;
   }
 
-  let stopSweep = null, stopped = true;
+  let stopSweep = null, stopForget = null, stopped = true;
   function armSweep(ms) {
     if (stopped) return;
     stopSweep = schedule(() => { sweep().catch((e) => onError(e)).finally(() => armSweep(SWEEP_MS)); }, ms);
   }
+  function armForget() {
+    if (stopped) return;
+    stopForget = schedule(() => { try { sweepAddresses(); } finally { armForget(); } }, ADDR_SWEEP_MS);
+  }
 
   return {
-    claim, rename, release, takenFor, sweep, prune, state, free, vouch, pickDefault, vet,
-    start() { if (!stopped) return; stopped = false; index.start(); armSweep(SWEEP_FIRST_MS); },
-    stop() { stopped = true; index.stop(); if (stopSweep) stopSweep(); stopSweep = null; },
+    claim, rename, release, takenFor, sweep, prune, state, free, vouch, pickDefault, vet, sweepAddresses,
+    start() { if (!stopped) return; stopped = false; index.start(); armSweep(SWEEP_FIRST_MS); armForget(); },
+    stop() { stopped = true; index.stop(); if (stopSweep) stopSweep(); if (stopForget) stopForget(); stopSweep = null; stopForget = null; },
     refresh: () => index.refresh(),
     get ready() { return index.ready; },
     get size() { return index.size; },
     get holders() { return byKey.size; },
+    get addresses() { return budgets.size; },
   };
 }
 

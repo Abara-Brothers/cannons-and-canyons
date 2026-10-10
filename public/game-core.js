@@ -125,7 +125,84 @@ export function callsignFromSeed(seed) {
   return `${fit[(s / CALL_NOUN.length | 0) % fit.length]} ${noun}`;
 }
 
-const GRAVITY = 900;          // world units / s^2  (no wind, per spec)
+// ---- Every default name, in one list (round 3 fix, 2026-10-10) ---------------
+// The server hands a player a default name when the one they had cannot be
+// theirs (server/reservations.js pickDefault), and the room engine's door
+// gives a seat a stand-in when the name it presented cannot be shown
+// (room-engine.js nameAtDoor). Both must come from the same names: a stand-in
+// drawn only from the 1,454 rolled pairs runs out once a flood has reserved
+// them all, and then the door fell back to a name somebody else held. So the
+// whole pool lives here, in the one module both sides import, and nowhere
+// else: the rolled pairs, then each pair with a digit from 2 to 9, then each
+// pair with a number from 10 to 999 that fits in DEFAULT_NAME_MAX characters.
+// That is 1,088,136 names, more than ten times the most the server will ever
+// reserve, so most of them are always unused. Nothing is listed but the
+// pairs: every other name is worked out from its place in the pool, so a page
+// that never needs the pool pays nothing for it.
+//
+// DEFAULT_NAME_MAX is the length a typed name may have (server/callsign.js
+// CALLSIGN_MAX, which this browser-safe module cannot import). test/reserve.mjs
+// fails if the two disagree, or if this pool and the server's tiers differ by
+// one name.
+export const DEFAULT_NAME_MAX = 16;
+let namePool = null;
+function defaultPool() {
+  if (namePool) return namePool;
+  const pairs = [];
+  for (const noun of CALL_NOUN) for (const adj of CALL_ADJ) if (adj.length + 1 + noun.length <= NAME_MAX) pairs.push(`${adj} ${noun}`);
+  const two = pairs.filter((p) => p.length + 3 <= DEFAULT_NAME_MAX);
+  const three = pairs.filter((p) => p.length + 4 <= DEFAULT_NAME_MAX);
+  const P = pairs.length;
+  namePool = Object.freeze({ pairs: Object.freeze(pairs), two, three, P, N: P * 8, W2: two.length * 90, size: P * 9 + two.length * 90 + three.length * 900 });
+  return namePool;
+}
+// The rolled pairs, in the pool's order (nouns outer, adjectives inner).
+export function defaultPairs() { return defaultPool().pairs; }
+export function defaultNameCount() { return defaultPool().size; }
+// The name at place `i` of the pool, or null for a place outside it.
+export function defaultNameAt(i) {
+  const p = defaultPool();
+  if (!Number.isInteger(i) || i < 0 || i >= p.size) return null;
+  if (i < p.P) return p.pairs[i];
+  let j = i - p.P;
+  if (j < p.N) return `${p.pairs[j % p.P]} ${2 + Math.floor(j / p.P)}`;
+  j -= p.N;
+  if (j < p.W2) return `${p.two[Math.floor(j / 90)]} ${10 + (j % 90)}`;
+  j -= p.W2;
+  return `${p.three[Math.floor(j / 900)]} ${100 + (j % 900)}`;
+}
+
+// A STAND-IN NAME, DETERMINISTIC ON ITS SEED (callsignFromSeed's reason: a
+// griefer must not be able to reroll one, and a player who reconnects must
+// keep theirs). The first STAND_IN_SEEDS tries are the rolled pairs the door
+// has always walked, in the same order, so wherever the first of them is
+// usable the stand-in is exactly what it always was (offline, every time).
+// Then STAND_IN_DRAWS places in the whole pool, in a fixed sequence the seed
+// starts. `ok` says whether a name may be used. When nine names in ten of the
+// pool may be, as they may however full the server's table is, all 256 draws
+// failing is a chance below one in 10^250. null when nothing passed: the
+// caller says what stands then.
+export const STAND_IN_SEEDS = 64;
+export const STAND_IN_DRAWS = 256;
+export function standInWalk(seed, ok) {
+  for (let k = 0; k < STAND_IN_SEEDS; k++) {
+    const c = callsignFromSeed(seed + k * 7919);
+    if (ok(c)) return c;
+  }
+  const n = defaultNameCount();
+  let x = Number(seed) >>> 0;
+  for (let d = 0; d < STAND_IN_DRAWS; d++) {
+    // mulberry32: one step of a small, well-mixed 32-bit sequence.
+    x = (x + 0x6D2B79F5) >>> 0;
+    let t = Math.imul(x ^ (x >>> 15), x | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    const c = defaultNameAt(((t ^ (t >>> 14)) >>> 0) % n);
+    if (ok(c)) return c;
+  }
+  return null;
+}
+
+const GRAVITY = 900;         // world units / s^2  (no wind, per spec)
 const SPEED_PER_POWER = 52;   // power 0..100 -> speed 0..5200 u/s. Max 45° range = 5200^2/900 ≈ 30,044 —
                               // ~0.63× the 48,000-wide map: you can NO LONGER snipe border to
                               // border; pickSpawns caps a duel gap at 26,000 so opponents always

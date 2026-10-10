@@ -1482,6 +1482,7 @@ $('accSignOutBtn').onclick = async () => {
   // Tell the server this socket is nobody now, or it keeps the old identity
   // and this device carries on getting that account's turn nudges.
   sendMsg({ type: 'hello', token: null });
+  if (S.ws) S.ws.ccHello = true;
   // And this device is a guest again, under its own name (round 3).
   //
   // THE ACCOUNT'S NAME STAYS WITH THE ACCOUNT (round 3 fix, 2026-10-10). When
@@ -2363,6 +2364,7 @@ async function sendHello(ws) {
     const token = await Cloud.token(false);
     if (token && S.ws === ws && ws.readyState === 1 && !S.local) {
       sendMsg({ type: 'hello', token });
+      ws.ccHello = true;
       introduced = true;
     } else if (!token && typeof Cloud.hasSession === 'function' && Cloud.hasSession()) late = true;
   } finally {
@@ -2448,6 +2450,13 @@ function sendClaim(ws, account) {
     clearTimeout(claimTimer);
     if (ws !== claimWs) claimTries = 0;
     claimWs = ws; claimAccount = !!account;
+    // A GUEST SAYS HELLO TOO (round 3 fix, 2026-10-10). The server reserves
+    // a new name only for a socket that has said hello (server/reservations.js),
+    // and a player with no account had nothing to say it with. This hello
+    // carries no token, introduces nobody and needs no account; it is sent
+    // once a socket, ahead of its first claim, unless the socket has already
+    // said one.
+    if (!account && ws.ccHello !== true) { sendMsg({ type: 'hello' }); ws.ccHello = true; }
     const secret = nameSecret();
     const frame = { type: 'name', name: account ? myName() : (ownName() || myName()) };
     if (account) frame.account = true;
@@ -2481,7 +2490,7 @@ function claimLater(ws, account = claimAccount) {
     try {
       const token = window.Cloud && Cloud.enabled() ? await Cloud.token(false) : null;
       if (S.ws !== ws || ws.readyState !== 1 || S.local) return;
-      if (token) { sendMsg({ type: 'hello', token }); sendClaim(ws, true); }
+      if (token) { sendMsg({ type: 'hello', token }); ws.ccHello = true; sendClaim(ws, true); }
       else if (window.Cloud && typeof Cloud.hasSession === 'function' && Cloud.hasSession()) claimLater(ws, null);
       else sendClaim(ws, false);
     } catch { claimLater(ws, null); }

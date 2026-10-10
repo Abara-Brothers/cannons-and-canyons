@@ -34,7 +34,8 @@ import { createNameProofs } from './display-name.js';
 // THE NAME RESERVATIONS (round 3): every player's one name, held by the server.
 // The default is the host with no table, which answers every question the old
 // way, so a layer built without it behaves exactly as it did.
-import { RESERVATIONS_OFF, ROWS_PER_SOCKET, combineStates } from './reservations.js';
+import { RESERVATIONS_OFF, ROWS_PER_SOCKET, combineStates, nameReadings } from './reservations.js';
+import { isGeneratedCallsign, isProfane, standInWalk } from '../public/game-core.js';
 // THE SQUAD STATE MACHINE. Built and held HERE rather than in server.js (plan
 // R1): every squad op needs the per-socket queue, the rate buckets, `reply`,
 // presence and the block reads, and all five are trapped inside
@@ -354,6 +355,18 @@ const BLOCK_KEY_RE = /^[0-9a-f]{32}$/;
 // profile row can prove (display-name.js seatName). The default resolves
 // nothing, and a report then records what seenName proves, as before.
 //
+// door — the room engine's own name door, for the squad's box (round 3 fix,
+// 2026-10-10): { standInFor, liveNameReadings, nameReadingsOf }, exported by
+// public/room-engine.js and handed in by server.js, for the reason seatSquad
+// is. Two members of one squad are never shown one name: a member whose name
+// reads as one shown before them in the order the squad is seated is shown
+// under the stand-in the engine's door will seat them under (standInFor),
+// and one whose name the server does not hold is not shown under a name a
+// live player elsewhere is (liveNameReadings). THE DEFAULT still keeps two
+// members of one squad apart, with this module's own reading of a name and a
+// stand-in drawn the engine's way from the same pool; it only knows nothing
+// of live names outside the squads.
+//
 // THIS LIST ACCUMULATES (plan X2). A later task adds its option after these;
 // it never restates the line.
 export function createSocial({
@@ -367,6 +380,7 @@ export function createSocial({
   names = { state: () => 'unknown', lookalikes: () => null, add() {}, remove() {} },
   seatName = () => null,
   reservations = RESERVATIONS_OFF,
+  door = null,
 }) {
 
   // userId -> that account's live sockets. "Online" is "the set is non-empty".
@@ -912,6 +926,12 @@ export function createSocial({
         name: typeof msg.name === 'string' ? msg.name : '',
         fresh: msg.fresh === true,
         mayInsert: (ws.nameRowsMade || 0) < ROWS_PER_SOCKET,
+        // THE FAIRNESS LAYERS (round 3 fix, 2026-10-10; server/reservations.js
+        // says why). A socket has said hello when it is an account (only a
+        // hello makes one) or when server.js saw a hello frame on it; its
+        // address key is the one server.js took from the connection.
+        helloed: !!ws.userId || ws.saidHello === true,
+        addr: typeof ws.clientAddr === 'string' && ws.clientAddr ? ws.clientAddr : null,
       });
     } catch { r = null; }
     // A HELLO LANDED WHILE THE CLAIM WAS OUT: the answer is for an account this
@@ -1714,6 +1734,82 @@ export function createSocial({
   // else what the profile proves, as before.
   const linkedRowName = (m, p) => (provenName(p) !== null ? displayName(p) : reservedOf(m) ?? displayName(p));
   const guestNoAcct = (m) => !!(m && m.guest && !doorRow(m) && !guestRowAccount(m));
+
+  // TWO MEMBERS OF ONE SQUAD ARE NEVER SHOWN ONE NAME (round 3 fix,
+  // 2026-10-10). The names above come from four places (a chosen callsign, a
+  // reservation, a profile's default, the name a guest's frame carried), and
+  // with the reservations' table missing, their store down, or a newcomer's
+  // claim refused by a bound on new names, two of them could be one name,
+  // ignoring capitals and look-alike letters. So the box reads its rows in the
+  // order the squad's start seats them (the leader, then the roster: launchSquad)
+  // and shows a member whose name reads as one shown before them under the
+  // stand-in the room engine's door will seat them under, for the same name
+  // and the same place (door.standInFor). And a member whose name the server
+  // does not hold (no chosen callsign, no reservation) is not shown under a
+  // name another player has reserved, nor one a live player elsewhere is
+  // shown under, which is the door's rule for that name (a rolled pair's
+  // proof, guestName, asks neither).
+  // This squad's own rows are not "elsewhere": `liveSkip` holds them out of
+  // liveNames, below, while the box is read, so the later member is the one
+  // moved, as the room moves them. The names shown are kept on the rows
+  // (m.shown) for liveNames.
+  const readingsOf = (n) => {
+    if (door && typeof door.nameReadingsOf === 'function') { try { return door.nameReadingsOf(n); } catch { /* below */ } }
+    return [String(n ?? '').normalize('NFKC').toLowerCase().trim().replace(/\s+/g, ' '), ...nameReadings(n)];
+  };
+  const readsAs = (n, set) => readingsOf(n).some((x) => set.has(x));
+  const seedOf = (name, seat) => [...String(name ?? '')].reduce((a, c) => (a * 31 + c.charCodeAt(0)) | 0, 7) + seat * 2654435761;
+  function standIn(m, seat, before) {
+    if (door && typeof door.standInFor === 'function') {
+      try { const c = door.standInFor(m.name, seat, before, m.ws || null); if (typeof c === 'string' && c) return c; } catch { /* below */ }
+    }
+    // No engine handed in: the engine's walk with what this module can ask.
+    const shown = new Set();
+    for (const n of before) for (const x of readingsOf(n)) shown.add(x);
+    const c = standInWalk(seedOf(m.name, seat), (n) => !!n && !isProfane(n) && !readsAs(n, shown) && freeName(n)
+      && (isGeneratedCallsign(n) || (() => { const v = typedName(n); return v.ok && v.name === n; })()));
+    return c || null;
+  }
+  const freeName = (name) => { try { return reservations.free(name) === true; } catch { return false; } };
+  const liveElsewhere = (name, ws) => {
+    if (!door || typeof door.liveNameReadings !== 'function') return false;
+    try { return readsAs(name, door.liveNameReadings(ws || null)); } catch { return false; }
+  };
+  let liveSkip = null;
+  // THE NAMES LIVE IN SQUADS RIGHT NOW, for the room engine's door
+  // (server.js setNameLive): every row with an open socket, under the name its
+  // box last showed. The squad whose box is being read (liveSkip) is left out.
+  function liveNames() {
+    const out = [];
+    for (const sq of squads.all()) {
+      if (sq === liveSkip) continue;
+      for (const m of sq.members) if (m.ws && m.ws.readyState === 1 && typeof m.shown === 'string' && m.shown) out.push({ name: m.shown, ws: m.ws });
+    }
+    return out;
+  }
+  function boxNames(sq, profiles) {
+    const lead = sq.members.find((m) => m.key === sq.leader);
+    const order = lead ? [lead, ...sq.members.filter((m) => m !== lead)] : sq.members.slice();
+    const out = new Map();
+    const before = [];
+    const was = liveSkip;
+    liveSkip = sq;
+    try {
+      order.forEach((m, seat) => {
+        let c = m.userId ? linkedRowName(m, profiles.get(m.userId)) : guestRowName(m);
+        if (typeof c === 'string' && c) {
+          const held = m.userId ? provenName(profiles.get(m.userId)) !== null || reservedOf(m) !== null : reservedOf(m) !== null;
+          const here = new Set();
+          for (const n of before) for (const x of readingsOf(n)) here.add(x);
+          if (readsAs(c, here) || (!held && (!freeName(c) || liveElsewhere(c, m.ws)))) c = standIn(m, seat, before) || c;
+          before.push(c);
+        }
+        out.set(m, c);
+      });
+    } finally { liveSkip = was; }
+    for (const [m, c] of out) m.shown = typeof c === 'string' && c ? c : null;
+    return out;
+  }
   async function squadSnapshot(sq) {
     const ids = sq.members.filter((m) => m.userId).map((m) => m.userId);
     let names = new Map();
@@ -1721,13 +1817,14 @@ export function createSocial({
       try { names = await store.profilesByIds(ids); }
       catch { /* every name null; every row kept */ }
     }
+    const shown = boxNames(sq, names);
     const frame = {
       type: 'squad', op: 'state', code: sq.code, leader: sq.leader,
       mode: sq.mode, tees: sq.tees, max: sq.max,
       members: sq.members.map((m) => ({
         id: m.userId,
         rid: rowRid(m),
-        callsign: m.userId ? linkedRowName(m, names.get(m.userId)) : guestRowName(m),
+        callsign: shown.get(m) ?? null,
         guest: m.guest,
         online: m.userId ? isOnline(m.userId) : !!(m.ws && m.ws.readyState === 1),
         ready: m.ready,
@@ -2260,6 +2357,11 @@ export function createSocial({
     // the create makes them the host seat; everyone else in roster order, and
     // the match begins as the last one lands. Each seat is handed a COPY of
     // its rack, like every rack this layer passes on.
+    // THE BOX'S ORDER (boxNames, above): each member meets the room's door
+    // after the same members the box read before them, so a member the box
+    // moved is moved here to the same stand-in. This squad's rows count as
+    // live names here, which the box did not ask: they are the names the box
+    // has just settled, each of which a member before it does not have.
     const ordered = [lead, ...sq.members.filter((m) => m !== lead)];
     const seated = seatSquad(
       ordered.map((m) => ({ ws: m.ws, name: m.name, skin: m.skin, loadout: rackOf(m).slice() })),
@@ -4204,5 +4306,5 @@ export function createSocial({
   // nothing more — no squad, no member and no name leaves through it, and
   // there is no setter beside it. The same footing as `online` and
   // `presenceLast` above: a reader, never a door.
-  return { handle, online, onAuth, onClose, presenceLast, hasSquad: (code) => squads.has(code) };
+  return { handle, online, onAuth, onClose, presenceLast, hasSquad: (code) => squads.has(code), liveNames };
 }

@@ -29,11 +29,26 @@
 //      and a claim that failed still seats the player's own name
 //   I. one name ignoring capitals in every script: a Greek name in other
 //      capitals, a name whose capitals read as another's, the Set and the door
-import { createReservations, RESERVATIONS_OFF, DEFAULT_TIERS, WIDE_DEFAULTS, SECRET_RE, hashSecret, nameKeyOf, combineStates, RESERVE_TTL_MS, TOUCH_MS, ROWS_PER_SOCKET, ROWS_PER_HOUR, ROWS_MAX, PRUNE_BATCH, PRUNE_GAP_MS, HOLDERS_MAX } from '../server/reservations.js';
+//   J. new names handed out fairly (round 3 fix, 2026-10-10): a claim with no
+//      hello makes no row, a budget per client address that the attempts the
+//      process-wide bounds refuse also spend, the window raised to match, the
+//      address read from the edge's header and never from X-Forwarded-For,
+//      and the starvation the check reproduced, which no longer starves
+//   K. a stand-in is never anybody's (round 3 fix): drawn from every default
+//      name, never a reserved one once all 1,454 pairs are, never one a live
+//      player is shown under; a server-assigned default never one either
+//   L. no two humans in one room or one squad are ever shown one name
+//      (round 3 fix), whatever the reservations can say: the table missing,
+//      the store down, the budget spent; the later player moved and told
+import { createReservations, RESERVATIONS_OFF, DEFAULT_TIERS, WIDE_DEFAULTS, SECRET_RE, hashSecret, nameKeyOf, combineStates, RESERVE_TTL_MS, TOUCH_MS, ROWS_PER_SOCKET, ROWS_PER_HOUR, ROWS_MAX, PRUNE_BATCH, PRUNE_GAP_MS, HOLDERS_MAX, ADDR_ROWS_PER_HOUR, ADDR_MAX, ADDR_SWEEP_MS, nameReadings } from '../server/reservations.js';
 import { createNameProofs } from '../server/display-name.js';
 import { loadBlocklist, keyReadings } from '../server/callsign.js';
 import { createSocial } from '../server/social.js';
-import { isGeneratedCallsign, callsignFromSeed } from '../public/game-core.js';
+import { createSeatSquad } from '../server/seat-squad.js';
+import { clientAddressOf, addressGroup } from '../server/client-address.js';
+import { CALLSIGN_MAX } from '../server/callsign.js';
+import { isGeneratedCallsign, callsignFromSeed, defaultNameAt, defaultNameCount, defaultPairs, DEFAULT_NAME_MAX, CALL_ADJ, CALL_NOUN, NAME_MAX, standInWalk, isProfane } from '../public/game-core.js';
+import * as eng from '../public/room-engine.js';
 import { fileURLToPath } from 'node:url';
 
 const out = { errors: [] };
@@ -146,7 +161,9 @@ function mkChosen(keys = []) {
 
 // ONE WORLD, built as server.js builds it: the proofs over the shipped list,
 // keyState over both namespaces, the reservations over the table.
-function world({ chosen = [], table = mkTable(), sweeps = [] } = {}) {
+// `live`: the names live in the engine's rooms and squads are asked by the
+// default pick, as server.js wires it (liveNameReadings).
+function world({ chosen = [], table = mkTable(), sweeps = [], live = false } = {}) {
   const ci = mkChosen(chosen);
   let res = null;
   const keyState = (k) => combineStates(ci.state(k), res ? res.state(k) : 'free');
@@ -154,7 +171,8 @@ function world({ chosen = [], table = mkTable(), sweeps = [] } = {}) {
   // How many names met the full guidelines (D asks it of the default pick).
   const counted = { n: 0 };
   const checkName = (raw) => { counted.n++; return proofs.checkPlayerName(raw); };
-  res = createReservations({ store: table, chosenState: ci.state, checkName, now, pick, schedule: (fn, ms) => { sweeps.push({ fn, ms }); return () => {}; } });
+  res = createReservations({ store: table, chosenState: ci.state, checkName, now, pick, schedule: (fn, ms) => { sweeps.push({ fn, ms }); return () => {}; },
+    ...(live ? { liveNames: () => eng.liveNameReadings(null) } : {}) });
   return { table, ci, res, proofs, sweeps, counted };
 }
 const secretOf = (r) => (r && typeof r.secret === 'string' ? r.secret : null);
@@ -490,16 +508,20 @@ const secretOf = (r) => (r && typeof r.secret === 'string' ? r.secret : null);
   if (noTouch && touched && L.ok && n === 3 && same(left, ['SLY bandit', 'Steady Hawk']) && again.ok && again.name === 'Grim Gulch' && !again.moved)
     ok('F: last_seen_at is written at most once a day; the sweep deletes every unlinked row unseen for 90 days (3 here), keeps a linked one and one seen today, and their names are free again');
   else fail('F: sweep: ' + JSON.stringify({ noTouch, touched, n, left, again }));
-  // The sweep runs a minute after start and then daily, on an unref'd timer of the host's.
+  // The sweep runs a minute after start and then daily, on an unref'd timer
+  // of the host's; beside it, the address budgets are forgotten every five
+  // minutes (round 3 fix, 2026-10-10).
   const w3 = world();
   w3.res.start();
   const armed = w3.sweeps.map((s) => s.ms);
   await w3.res.refresh();
   w3.sweeps[0].fn();
+  w3.sweeps[1].fn();
   await new Promise((r) => setTimeout(r, 10));
   w3.res.stop();
-  if (armed[0] === 60000 && w3.sweeps[1] && w3.sweeps[1].ms === 86400000 && w3.table.calls.some(([c]) => c === 'sweep'))
-    ok('F: start() arms the sweep a minute after boot and then every 24 hours');
+  const later = w3.sweeps.slice(2).map((s) => s.ms).sort((a, b) => a - b);
+  if (same(armed, [60000, ADDR_SWEEP_MS]) && ADDR_SWEEP_MS === 300000 && same(later, [ADDR_SWEEP_MS, 86400000]) && w3.table.calls.some(([c]) => c === 'sweep'))
+    ok('F: start() arms the sweep a minute after boot and then every 24 hours, and the address budgets\' forgetting every five minutes');
   else fail('F: sweep timer: ' + JSON.stringify(w3.sweeps.map((s) => s.ms)));
 }
 {
@@ -639,7 +661,9 @@ const secretOf = (r) => (r && typeof r.secret === 'string' ? r.secret : null);
 
 // ==== G. the social layer =========================================================
 const send = (ws, m) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); };
-const mkws = (userId = null, isGuest = false) => ({ readyState: 1, userId, isGuest, chosenName: null, authGen: 1, _rx: [], send(s) { this._rx.push(JSON.parse(s)); } });
+// A socket as server.js leaves it once it has said hello (saidHello: the
+// message loop's mark; round 3 fix, 2026-10-10), with no address key.
+const mkws = (userId = null, isGuest = false) => ({ readyState: 1, userId, isGuest, chosenName: null, authGen: 1, saidHello: true, _rx: [], send(s) { this._rx.push(JSON.parse(s)); } });
 const last = (ws) => ws._rx[ws._rx.length - 1];
 function socialWorld(opts = {}) {
   const w = world(opts);
@@ -651,8 +675,25 @@ function socialWorld(opts = {}) {
     async blockIdsOf() { return { blocked: [], blockedBy: [] }; },
   });
   w.profiles = new Map();
-  w.social = createSocial({ store, terms: TERMS, send, now, names: w.ci, reservations: w.res });
+  // `door`: the engine's own name door and the real seating, as server.js
+  // hands them in (round 3 fix, 2026-10-10).
+  const doorOpts = opts.door ? {
+    door: { standInFor: eng.standInFor, liveNameReadings: eng.liveNameReadings, nameReadingsOf: eng.nameReadingsOf },
+    seats: eng.MODE_SEATS, teeIds: eng.TEE_IDS, validRack: eng.validRackFor, schedule: () => () => {},
+    seatSquad: createSeatSquad({ rooms: eng.rooms, handleClientMessage: eng.handleClientMessage, abandonRoom: eng.abandonRoom }),
+  } : {};
+  w.social = createSocial({ store, terms: TERMS, send, now, names: w.ci, reservations: w.res, ...doorOpts });
   return w;
+}
+// THE ENGINE'S DOOR AS server.js WIRES IT: the guidelines, the reservations,
+// the reservations' reading of a name, and the squads' live names. Returns the
+// unwiring, which every block that wires runs.
+function wire(w) {
+  eng.setNameCheck(w.proofs.playerName);
+  eng.setNameFree((n) => w.res.free(n));
+  eng.setNameReadings(nameReadings);
+  eng.setNameLive(() => (w.social ? w.social.liveNames() : []));
+  return () => { eng.setNameCheck(null); eng.setNameFree(null); eng.setNameReadings(null); eng.setNameLive(null); };
 }
 {
   const w = socialWorld();
@@ -1060,6 +1101,565 @@ function socialWorld(opts = {}) {
     ok('I: a write that fails gives back the name it had taken in memory (a claim\'s and a rename\'s)');
   else fail('I: give back: ' + JSON.stringify({ threw: String(threw), threw2: String(threw2), a: w5.res.state('rapid dune'), b: w5.res.state('lucky dune') }));
 }
+
+// ---- the engine's rooms, for J, K and L ---------------------------------------
+// A socket the engine can seat, a free-for-all lobby for four (it waits for
+// its host, so seats can be read one by one), and the seat a socket was given.
+const ews = (over = {}) => Object.assign({ readyState: 1, roomCode: null, seat: null, _rx: [], send(s) { this._rx.push(JSON.parse(s)); } }, over);
+const FIVE = ['mortar', 'cluster', 'napalm', 'airstrike', 'volley'];
+const seatOfWs = (ws) => { const r = ws.roomCode ? eng.rooms.get(ws.roomCode) : null; const p = r ? r.players[ws.seat] : null; return p && p.ws === ws ? { name: p.name, renamed: p.renamed === true } : null; };
+const openRoom = (host, name) => { eng.handleClientMessage(host, { type: 'create', name, skin: 'olive', mode: 'ffa', max: 4, loadout: FIVE }); return host.roomCode; };
+const joinRoom = (ws, code, name) => { eng.handleClientMessage(ws, { type: 'join', code, name, skin: 'desert', loadout: FIVE }); return seatOfWs(ws); };
+// Everyone out, the host last, so the room is gone and no seat stays live.
+const shut = (...sockets) => { for (const s of [...sockets].reverse()) if (s.roomCode) eng.handleClientMessage(s, { type: 'leave' }); };
+const sameName = (a, b) => nameReadings(a).some((x) => nameReadings(b).includes(x)) || String(a).toLowerCase() === String(b).toLowerCase();
+
+// ==== J. new names, handed out fairly =========================================
+{
+  // J1. A CLAIM WITH NO HELLO MAKES NO ROW. A socket that never said hello
+  // is answered 'unavailable' and nothing is written; once it has said hello
+  // its claim makes its row; an account's socket has said one by being one.
+  const w = socialWorld();
+  await w.res.refresh();
+  const bare = mkws(); bare.saidHello = false;
+  await w.social.handle(bare, { type: 'name', name: 'Copper Mesa', id: 1 });
+  const r1 = last(bare), rows1 = w.table.rows.length, made1 = bare.nameRowsMade || 0;
+  bare.saidHello = true;
+  await w.social.handle(bare, { type: 'name', name: 'Copper Mesa', id: 2 });
+  const r2 = last(bare);
+  const acct = mkws(U2, true); acct.saidHello = false;
+  await w.social.handle(acct, { type: 'name', name: 'Copper Ridge', account: true, id: 3 });
+  const r3 = last(acct);
+  if (same(r1, { type: 'name', error: 'unavailable', id: 1 }) && rows1 === 0 && made1 === 0
+      && r2.ok && r2.name === 'Copper Mesa' && SECRET_RE.test(r2.secret || '') && r3.ok && r3.name === 'Copper Ridge' && w.table.rows.length === 2)
+    ok('J1: a claim from a socket that has not said hello makes no row ("unavailable", nothing written); after its hello the same claim makes its row, and an account\'s socket counts as having said one');
+  else fail('J1: hello: ' + JSON.stringify({ r1, rows1, r2, r3 }));
+  // A holder is answered its own name with or without a hello: only a NEW row needs one.
+  const back = mkws(); back.saidHello = false;
+  await w.social.handle(back, { type: 'name', name: 'x', secret: r2.secret, id: 4 });
+  if (last(back).ok && last(back).name === 'Copper Mesa' && w.table.rows.length === 2) ok('J1: a holder is answered its own name before any hello: only a new row needs one');
+  else fail('J1: holder without hello: ' + JSON.stringify(last(back)));
+}
+{
+  // J2. THE PER-ADDRESS BUDGET. Thirty new rows an hour from one address
+  // (each from a fresh socket, so the per-socket cap is not what stops it),
+  // then 'unavailable' with nothing written; another address is answered; the
+  // bucket gives one back every two minutes.
+  const w = socialWorld();
+  await w.res.refresh();
+  const t0 = clock;
+  const from = (addr) => { const s = mkws(); s.clientAddr = addr; return s; };
+  const answers = [];
+  for (let i = 0; i < ADDR_ROWS_PER_HOUR + 1; i++) { const s = from('addr-A'); await w.social.handle(s, { type: 'name', name: `Budget A${i}`, id: i }); answers.push(last(s)); }
+  const madeA = answers.filter((a) => a.ok).length, lastA = answers[answers.length - 1];
+  const rowsA = w.table.rows.length;
+  const b = from('addr-B');
+  await w.social.handle(b, { type: 'name', name: 'Budget B0', id: 99 });
+  clock = t0 + 119000;
+  const early = from('addr-A');
+  await w.social.handle(early, { type: 'name', name: 'Budget A90', id: 100 });
+  clock = t0 + 120001;
+  const refilled = from('addr-A');
+  await w.social.handle(refilled, { type: 'name', name: 'Budget A91', id: 101 });
+  if (ADDR_ROWS_PER_HOUR === 30 && madeA === 30 && same(lastA, { type: 'name', error: 'unavailable', id: 30 }) && rowsA === 30
+      && last(b).ok && last(early).error === 'unavailable' && last(refilled).ok && last(refilled).name === 'Budget A91')
+    ok('J2: one address makes 30 new rows an hour and the 31st claim is "unavailable" with nothing written; another address is answered; one more comes back two minutes later');
+  else fail('J2: address budget: ' + JSON.stringify({ madeA, lastA, rowsA, b: last(b), early: last(early), refilled: last(refilled) }));
+  // A socket with no address key (the host could not tell its address) has
+  // no budget: only the per-process bounds hold it.
+  let free = 0;
+  for (let i = 0; i < ADDR_ROWS_PER_HOUR + 5; i++) { const s = mkws(); await w.social.handle(s, { type: 'name', name: `Budget N${i}`, id: i }); if (last(s).ok) free++; }
+  if (free === ADDR_ROWS_PER_HOUR + 5) ok('J2: a socket whose address could not be told is held by the per-process bounds alone, never by another\'s budget');
+  else fail('J2: no address: ' + free);
+}
+{
+  // J3. AN ATTEMPT THE PROCESS-WIDE BOUNDS REFUSE STILL SPENDS THE ADDRESS'S
+  // BUDGET, so a script holding sockets open cannot retry its way into the
+  // rows that free up. The window is filled by a hundred addresses at once
+  // (ROWS_PER_HOUR is a hundred budgets: raised to match); address C then
+  // spends its whole budget on refused attempts in the window's last minute;
+  // when the window opens, C is still refused and a fresh address is not.
+  const w = world();
+  await w.res.refresh();
+  const t0 = clock;
+  let made = 0;
+  for (let i = 0; i < ROWS_PER_HOUR; i++) {
+    clock = t0 + i;
+    const r = await w.res.claim({ name: `Wave ${i}`, addr: `flood-${Math.floor(i / ADDR_ROWS_PER_HOUR)}` });
+    if (r.ok) made++;
+  }
+  clock = t0 + ROWS_PER_HOUR;
+  const full = await w.res.claim({ name: 'Newcomer Zero', addr: 'fresh-0' });
+  clock = t0 + 59 * 60000;
+  const spent = [];
+  for (let i = 0; i < ADDR_ROWS_PER_HOUR; i++) spent.push(await w.res.claim({ name: `Retry ${i}`, addr: 'addr-C' }));
+  clock = t0 + 60 * 60000 + ROWS_PER_HOUR;
+  const c = await w.res.claim({ name: 'Retry Late', addr: 'addr-C' });
+  const d = await w.res.claim({ name: 'Newcomer One', addr: 'fresh-1' });
+  if (ROWS_PER_HOUR === 3000 && ROWS_PER_HOUR === 100 * ADDR_ROWS_PER_HOUR && made === ROWS_PER_HOUR && same(full, { ok: false, error: 'unavailable' })
+      && spent.every((r) => same(r, { ok: false, error: 'unavailable' })) && same(c, { ok: false, error: 'unavailable' }) && d.ok && d.name === 'Newcomer One')
+    ok(`J3: the process-wide window is ${ROWS_PER_HOUR} an hour, a hundred addresses' budgets; an address that spent its budget on attempts the full window refused is still refused when it opens, and a fresh address is answered`);
+  else fail('J3: refused attempts: ' + JSON.stringify({ made, full, spent: spent.slice(-2), c, d }));
+}
+{
+  // J4. THE CLIENT'S ADDRESS (server/client-address.js): CF-Connecting-IP,
+  // never X-Forwarded-For; a connection with no proxy is its socket's; one
+  // through a proxy that names no client is nobody's; IPv6 by its /48, an
+  // IPv4 written as IPv6 as itself; and the key is a hash, never the address.
+  const req = (headers, remote = '10.1.2.3') => ({ headers, socket: { remoteAddress: remote } });
+  const a1 = clientAddressOf(req({ 'cf-connecting-ip': '203.0.113.9', 'x-forwarded-for': '198.51.100.1, 203.0.113.9, 172.71.0.1, 10.0.0.1' }));
+  const a2 = clientAddressOf(req({ 'cf-connecting-ip': '203.0.113.9', 'x-forwarded-for': '198.51.100.77, 203.0.113.9, 172.71.0.1' }));
+  const a3 = clientAddressOf(req({ 'cf-connecting-ip': '203.0.113.10' }));
+  const xffOnly = clientAddressOf(req({ 'x-forwarded-for': '198.51.100.1' }));
+  const direct = clientAddressOf(req({}, '::ffff:127.0.0.1'));
+  const direct4 = clientAddressOf(req({}, '127.0.0.1'));
+  const forged = clientAddressOf(req({ 'cf-connecting-ip': 'not an address', 'x-forwarded-for': '1.2.3.4' }));
+  const v6a = clientAddressOf(req({ 'cf-connecting-ip': '2001:db8:abcd:1::1' }));
+  const v6b = clientAddressOf(req({ 'cf-connecting-ip': '2001:DB8:ABCD:ffff:1:2:3:4' }));
+  const v6c = clientAddressOf(req({ 'cf-connecting-ip': '2001:db8:abce::1' }));
+  const keys = [a1, a3, direct, v6a, v6c].map((a) => a.key);
+  if (a1.source === 'edge' && a1.key === a2.key && a1.key !== a3.key && xffOnly.key === null && xffOnly.source === null
+      && direct.source === 'socket' && direct.key === direct4.key && forged.key === null
+      && v6a.key === v6b.key && v6a.key !== v6c.key && new Set(keys).size === keys.length
+      && keys.every((k) => typeof k === 'string' && /^[A-Za-z0-9_-]{22}$/.test(k) && !/203|113|127|2001|db8/.test(k))
+      && addressGroup('::ffff:203.0.113.9') === '203.0.113.9' && addressGroup('2001:db8:abcd:12::1') === '2001:db8:abcd::/48' && addressGroup('1.2.3.4, 5.6.7.8') === null)
+    ok('J4: the address is CF-Connecting-IP (a spoofed X-Forwarded-For changes nothing), the socket\'s own with no proxy, nobody\'s through a proxy that names no client; IPv6 by its /48, IPv4-in-IPv6 as IPv4; the key a 22-character hash, never the address');
+  else fail('J4: address: ' + JSON.stringify({ a1, a2, a3, xffOnly, direct, direct4, forged, v6a, v6b, v6c }));
+  // Nothing a connection can carry makes it throw (server.js calls it in the
+  // connection handler): no request, a repeated header, a header of another
+  // type, an address too long to be one.
+  let threw = null;
+  const odd = [];
+  try {
+    for (const r of [undefined, null, {}, { headers: null }, { headers: { 'cf-connecting-ip': ['203.0.113.9', '198.51.100.1'] } }, { headers: { 'cf-connecting-ip': 7 } },
+      { headers: { 'cf-connecting-ip': '1'.repeat(5000) } }, { headers: { 'cf-connecting-ip': '::ffff:999.1.1.1' } }, { headers: {}, socket: null }, { headers: {}, socket: { remoteAddress: 12 } }])
+      odd.push(clientAddressOf(r).key);
+  } catch (e) { threw = e; }
+  if (!threw && odd.every((k) => k === null)) ok('J4: no request, a repeated or malformed CF-Connecting-IP, or a socket with no address throws; each is a connection with no address');
+  else fail('J4: odd requests: ' + JSON.stringify({ threw: threw && String(threw), odd }));
+  // Forgotten an hour after the last attempt, by the sweep, and at most ADDR_MAX remembered.
+  const w = world();
+  await w.res.refresh();
+  for (let i = 0; i < 3; i++) await w.res.claim({ name: `Forget ${i}`, addr: `fa-${i}` });
+  const held = w.res.addresses;
+  clock += 3600000 - 1; w.res.sweepAddresses(); const still = w.res.addresses;
+  clock += 1; w.res.sweepAddresses(); const gone = w.res.addresses;
+  // And between sweeps, an attempt from any address forgets the ones an hour old.
+  for (let i = 0; i < 3; i++) await w.res.claim({ name: `Forget ${i + 3}`, addr: `fb-${i}` });
+  clock += 3600000;
+  await w.res.claim({ name: 'Forget Late', addr: 'fb-new' });
+  const between = w.res.addresses;
+  for (let i = 0; i < ADDR_MAX + 3; i++) await w.res.claim({ name: 'Iron Ridge', addr: `cap-${i}` });
+  if (held === 3 && still === 3 && gone === 0 && between === 1 && w.res.addresses === ADDR_MAX) ok(`J4: an address is forgotten an hour after its last attempt (by the sweep, or by the next attempt from anywhere), and at most ${ADDR_MAX} are remembered`);
+  else fail('J4: forgetting: ' + JSON.stringify({ held, still, gone, between, cap: w.res.addresses }));
+}
+{
+  // J5. THE CHECK'S REPRODUCTION, NOW LAYERED. The check flooded one process
+  // from 200 fresh sockets, three claims each, no hello and no secret: the
+  // hourly window filled and two newcomers claiming 'Iron Ridge' were both
+  // answered 'unavailable' and both seated as 'Iron Ridge'. Now: the bare
+  // flood makes no row at all; the same flood saying hello from one address
+  // makes thirty; two newcomers from their own addresses are answered, the
+  // second moved to an unused default and told, and the door seats each under
+  // their own name.
+  const w = socialWorld({ live: true, door: true });
+  await w.res.refresh();
+  const unwire = wire(w);
+  const t0 = clock;
+  let bareRows = 0;
+  for (let i = 0; i < 200; i++) {
+    const s = mkws(); s.saidHello = false; s.clientAddr = 'script';
+    for (let k = 0; k < 3; k++) { clock = t0 + i * 3 + k; await w.social.handle(s, { type: 'name', name: `Squat ${i} ${k}`.slice(0, 16), id: k }); }
+  }
+  bareRows = w.table.rows.length;
+  for (let i = 0; i < 200; i++) {
+    const s = mkws(); s.clientAddr = 'script';
+    for (let k = 0; k < 3; k++) { clock = t0 + 1000 + i * 3 + k; await w.social.handle(s, { type: 'name', name: `Squat ${i} ${k}`.slice(0, 16), id: k }); }
+  }
+  const helloRows = w.table.rows.length;
+  clock = t0 + 5 * 60000;
+  const n1 = mkws(), n2 = mkws(); n1.clientAddr = 'phone-1'; n2.clientAddr = 'phone-2';
+  await w.social.handle(n1, { type: 'name', name: 'Iron Ridge', id: 1 });
+  await w.social.handle(n2, { type: 'name', name: 'Iron Ridge', id: 1 });
+  const s1 = ews({ reservedName: n1.reservedName }), s2 = ews({ reservedName: n2.reservedName });
+  const code = openRoom(s1, 'Iron Ridge');
+  const seat2 = joinRoom(s2, code, 'Iron Ridge');
+  const seat1 = seatOfWs(s1);
+  shut(s1, s2);
+  unwire();
+  if (bareRows === 0 && helloRows === ADDR_ROWS_PER_HOUR && last(n1).ok && last(n1).name === 'Iron Ridge' && !last(n1).moved
+      && last(n2).ok && last(n2).moved === 'taken' && last(n2).name !== 'Iron Ridge' && seat1.name === 'Iron Ridge' && !seat1.renamed
+      && seat2.name === last(n2).name && !seat2.renamed)
+    ok(`J5: the check's flood (200 sockets, 3 claims each) makes no row with no hello and ${ADDR_ROWS_PER_HOUR} from one address with one; two newcomers then claim 'Iron Ridge': the first holds it, the second is moved to '${last(n2).name}' and told, and a room seats each under their own`);
+  else fail('J5: layered: ' + JSON.stringify({ bareRows, helloRows, n1: last(n1), n2: last(n2), seat1, seat2 }));
+}
+{
+  // J6. STARVED ANYWAY, STILL NEVER ONE NAME. A hundred addresses fill the
+  // process-wide window (the most this layer cannot stop); two newcomers
+  // claiming 'Iron Ridge' are both 'unavailable'. In one room the second is
+  // moved to a stand-in and told; in two rooms at once the second is too
+  // (the first is live), and so is one typing it in other capitals.
+  const w = socialWorld({ live: true, door: true });
+  await w.res.refresh();
+  const unwire = wire(w);
+  const t0 = clock;
+  for (let i = 0; i < ROWS_PER_HOUR; i++) { clock = t0 + i; await w.res.claim({ name: `Wave ${i}`, addr: `flood-${Math.floor(i / ADDR_ROWS_PER_HOUR)}` }); }
+  clock = t0 + ROWS_PER_HOUR;
+  const n1 = mkws(), n2 = mkws(), n3 = mkws(), n4 = mkws();
+  for (const [s, a] of [[n1, 'p1'], [n2, 'p2'], [n3, 'p3'], [n4, 'p4']]) { s.clientAddr = a; await w.social.handle(s, { type: 'name', name: 'Iron Ridge', id: 1 }); }
+  const starved = [n1, n2, n3, n4].every((s) => last(s).error === 'unavailable' && !s.reservedName);
+  const a = ews(), b = ews(), c = ews(), d = ews();
+  const code = openRoom(a, 'Iron Ridge');
+  const sb = joinRoom(b, code, 'Iron Ridge');
+  const code2 = openRoom(c, 'Iron Ridge');
+  const sc = seatOfWs(c);
+  const sd = joinRoom(d, code2, 'IRON RIDGE');
+  const sa = seatOfWs(a);
+  const names = [sa, sb, sc, sd].map((x) => x && x.name);
+  const distinct = names.every((n, i) => names.every((m, j) => i === j || !sameName(n, m)));
+  const free = [sb, sc, sd].every((x) => x && w.res.free(x.name));
+  shut(a, b); shut(c, d);
+  unwire();
+  if (starved && sa.name === 'Iron Ridge' && !sa.renamed && sb.renamed && sc.renamed && sd.renamed && distinct && free)
+    ok(`J6: with the window full, newcomers are unreserved, yet nobody is shown another's name: in one room the second 'Iron Ridge' is '${sb.name}', in another room at the same time '${sc.name}' (the first is live), and 'IRON RIDGE' there '${sd.name}', each told`);
+  else fail('J6: starved: ' + JSON.stringify({ starved, sa, sb, sc, sd }));
+}
+
+// ==== K. a stand-in is never anybody's ========================================
+{
+  // K1. THE POOL: game-core's default names are, name for name, the tiers
+  // the reservations have always handed out, written out here on their own
+  // (4737039's derivation) rather than read back from the module, and a
+  // default may be as long as a typed name. The server's tiers are read from
+  // the pool, so they match it too.
+  const pairs = [];
+  for (const noun of CALL_NOUN) for (const adj of CALL_ADJ) if (adj.length + 1 + noun.length <= NAME_MAX) pairs.push(`${adj} ${noun}`);
+  const numbered = [];
+  for (const d of ['2', '3', '4', '5', '6', '7', '8', '9']) for (const p of pairs) numbered.push(`${p} ${d}`);
+  const two = pairs.filter((p) => p.length + 3 <= CALLSIGN_MAX), three = pairs.filter((p) => p.length + 4 <= CALLSIGN_MAX);
+  const wideAt = (i) => (i < two.length * 90 ? `${two[Math.floor(i / 90)]} ${10 + (i % 90)}` : `${three[Math.floor((i - two.length * 90) / 900)]} ${100 + ((i - two.length * 90) % 900)}`);
+  const want = pairs.length + numbered.length + two.length * 90 + three.length * 900;
+  let sameAll = defaultNameCount() === want && same(defaultPairs(), pairs) && same(DEFAULT_TIERS[0], pairs) && same(DEFAULT_TIERS[1], numbered) && WIDE_DEFAULTS.size === want - pairs.length - numbered.length;
+  for (let i = 0; sameAll && i < want; i++) {
+    const n = i < pairs.length ? pairs[i] : i < pairs.length + numbered.length ? numbered[i - pairs.length] : wideAt(i - pairs.length - numbered.length);
+    if (defaultNameAt(i) !== n) sameAll = false;
+    else if (i >= pairs.length + numbered.length && WIDE_DEFAULTS.at(i - pairs.length - numbered.length) !== n) sameAll = false;
+  }
+  if (sameAll && DEFAULT_NAME_MAX === CALLSIGN_MAX && want === 1088136 && defaultNameAt(-1) === null && defaultNameAt(want) === null)
+    ok('K1: game-core\'s pool is the 1,088,136 default names the reservations have always handed out, name for name, the server\'s tiers read from it, and its length limit is a typed name\'s (16)');
+  else fail('K1: pool: ' + JSON.stringify({ n: defaultNameCount(), max: DEFAULT_NAME_MAX }));
+}
+{
+  // K2. EVERY PAIR RESERVED (the check: three hours of a flood, or about
+  // 1,454 players holding defaults). A socket presenting a pair someone holds,
+  // or a name the guidelines refuse, is given a stand-in nobody holds, that
+  // meets the guidelines; before, every seed was held and the first stood.
+  const w = world();
+  for (const p of DEFAULT_TIERS[0]) rowFor(w.table, p);
+  await w.res.refresh();
+  const unwire = wire(w);
+  const a = ews(), b = ews(), c = ews();
+  const code = openRoom(a, 'Iron Ridge');
+  const sa = seatOfWs(a);
+  const sb = joinRoom(b, code, 'Steel Gunner');
+  const sc = joinRoom(c, code, 'x');
+  shut(a, b, c);
+  unwire();
+  const ok3 = [sa, sb, sc].every((s) => s && s.renamed && w.res.free(s.name) && w.proofs.checkPlayerName(s.name).ok && !isGeneratedCallsign(s.name));
+  const names = [sa, sb, sc].map((s) => s && s.name);
+  if (ok3 && new Set(names.map((n) => nameKeyOf(n))).size === 3)
+    ok(`K2: with all 1,454 pairs reserved, the stand-ins are names nobody holds that meet the guidelines ('${names.join("', '")}'), never a held pair`);
+  else fail('K2: all pairs held: ' + JSON.stringify({ sa, sb, sc, free: names.map((n) => n && w.res.free(n)) }));
+}
+{
+  // K2b. A STAND-IN PAST THE PAIRS MEETS THE GUIDELINES. Some numbered
+  // defaults fail them (2,787 of the pool, a number a term is spelt with; 70
+  // of those only by the server's term list, not the engine's own filter). A
+  // refused name whose walk's first name past the pairs is one of those is
+  // found (a name the guidelines refuse, so the door stands one in), and
+  // seated with every pair held: its stand-in is a later one.
+  const w = world();
+  for (const p of DEFAULT_TIERS[0]) rowFor(w.table, p);
+  await w.res.refresh();
+  const unwire = wire(w);
+  const seed = (n) => [...n].reduce((a, c) => (a * 31 + c.charCodeAt(0)) | 0, 7);
+  let raw = null, first = null;
+  for (let i = 0; i < 400000 && !raw; i++) {
+    const n = `#${i}`;
+    const f = standInWalk(seed(n), (c) => !isGeneratedCallsign(c));
+    // One the engine's own word filter passes, so only the host's check
+    // (the server's term list) stands between it and the seat.
+    if (f && !isProfane(f) && !w.proofs.checkPlayerName(f).ok) { raw = n; first = f; }
+  }
+  const a = ews();
+  if (raw) openRoom(a, raw);
+  const sa = raw ? seatOfWs(a) : null;
+  shut(a);
+  unwire();
+  if (raw && sa && sa.renamed && sa.name !== first && w.proofs.checkPlayerName(sa.name).ok && w.res.free(sa.name))
+    ok(`K2b: '${raw}' would have stood in as '${first}', which the guidelines refuse; it is seated as '${sa.name}', which they pass`);
+  else fail('K2b: guidelines: ' + JSON.stringify({ raw, first, sa }));
+}
+{
+  // K3. NEVER A LIVE PLAYER'S NAME. Two sockets refused the same name, each
+  // in a room of their own at the same time, are given two stand-ins; and the
+  // first stand-in is deterministic: the same refusal in the same state is
+  // the same name.
+  const w = world();
+  await w.res.refresh();
+  await w.res.claim({ name: 'Steel Gunner' });
+  const unwire = wire(w);
+  const a = ews(), b = ews();
+  openRoom(a, 'Steel Gunner');
+  const sa = seatOfWs(a);
+  openRoom(b, 'Steel Gunner');
+  const sb = seatOfWs(b);
+  shut(a); shut(b);
+  const c = ews();
+  openRoom(c, 'Steel Gunner');
+  const sc = seatOfWs(c);
+  shut(c);
+  unwire();
+  if (sa.renamed && sb.renamed && !sameName(sa.name, sb.name) && sc.name === sa.name && w.res.free(sa.name) && w.res.free(sb.name))
+    ok(`K3: two players refused 'Steel Gunner' at once, in two rooms, are '${sa.name}' and '${sb.name}': a stand-in is never a live player's name, and is still the same name for the same refusal`);
+  else fail('K3: live stand-ins: ' + JSON.stringify({ sa, sb, sc }));
+}
+{
+  // K4. A SERVER-ASSIGNED DEFAULT IS NEVER A LIVE PLAYER'S NAME. Every pair
+  // but one is reserved, and that one is live: a player whose claim was not
+  // answered is seated under it. The next player moved to a default is given
+  // a numbered name, not that pair.
+  const w = socialWorld({ live: true, door: true });
+  const keep = DEFAULT_TIERS[0][700];
+  for (const p of DEFAULT_TIERS[0]) if (p !== keep) rowFor(w.table, p);
+  await w.res.refresh();
+  const unwire = wire(w);
+  const liveWs = ews();
+  openRoom(liveWs, keep);
+  const seen = seatOfWs(liveWs);
+  const n = mkws();
+  await w.social.handle(n, { type: 'name', name: DEFAULT_TIERS[0][0], id: 1 });
+  shut(liveWs);
+  const after = mkws();
+  await w.social.handle(after, { type: 'name', name: DEFAULT_TIERS[0][1], id: 2 });
+  unwire();
+  if (seen.name === keep && !seen.renamed && last(n).ok && last(n).moved === 'taken' && last(n).name !== keep && !isGeneratedCallsign(last(n).name)
+      && last(after).ok && last(after).name === keep)
+    ok(`K4: with '${keep}' the only free pair and a live player shown under it, a moved player is given '${last(n).name}', not it; once that player has gone, the pair is handed out again`);
+  else fail('K4: live default: ' + JSON.stringify({ keep, seen, n: last(n), after: last(after) }));
+}
+
+// ==== L. no two humans in one room or one squad are shown one name ==============
+{
+  // L1. THE TABLE MISSING (the state the server ships into): nothing is
+  // reserved, and still a room never shows one name twice: the same pair, the
+  // same name in other capitals, a look-alike in another script. Computers
+  // keep their own names, and a quick match's second seat is kept apart too.
+  const w = world();
+  w.table.keysFail = new Error('sb GET 404');
+  await w.res.refresh();
+  const unwire = wire(w);
+  const a = ews(), b = ews(), c = ews(), d = ews();
+  const code = openRoom(a, 'Iron Ridge');
+  const sb = joinRoom(b, code, 'Iron Ridge');
+  const sc = joinRoom(c, code, 'iron ridge');
+  const sd = joinRoom(d, code, 'Basalt Rim');
+  const sa = seatOfWs(a);
+  shut(a, b, c, d);
+  // A seat whose socket is closing (its close not yet handled) is still in
+  // the room, and still shown there: nobody may join under its name.
+  const h = ews(), g = ews();
+  const code3 = openRoom(h, 'Basalt Rim');
+  h.readyState = 2;
+  const sg = joinRoom(g, code3, 'Basalt Rim');
+  h.readyState = 1;
+  shut(h, g);
+  const e = ews(), f = ews();
+  const code2 = openRoom(e, 'Coco');
+  const sf = joinRoom(f, code2, 'Сосо');
+  const se = seatOfWs(e);
+  shut(e, f);
+  const q1 = ews(), q2 = ews();
+  eng.handleClientMessage(q1, { type: 'quick', name: 'Dusty Mule', skin: 'olive' });
+  eng.handleClientMessage(q2, { type: 'quick', name: 'Dusty Mule', skin: 'olive' });
+  const qa = seatOfWs(q1), qb = seatOfWs(q2);
+  const qStart = q2._rx.find((m) => m.type === 'start');
+  shut(q1, q2);
+  const cpu = ews();
+  eng.handleClientMessage(cpu, { type: 'ai', difficulty: 'easy', mode: 'ffa', max: 4, name: 'Iron Ridge', skin: 'olive', loadout: FIVE });
+  const cr = eng.rooms.get(cpu.roomCode);
+  const cpuNames = cr ? cr.players.map((p) => p.name) : [];
+  shut(cpu);
+  unwire();
+  if (!w.res.ready && sa.name === 'Iron Ridge' && !sa.renamed && sb.renamed && sc.renamed && !sameName(sb.name, 'Iron Ridge') && !sameName(sc.name, 'Iron Ridge') && !sameName(sb.name, sc.name)
+      && sd.name === 'Basalt Rim' && !sd.renamed && sg && sg.renamed && !sameName(sg.name, 'Basalt Rim') && se.name === 'Coco' && sf.renamed && !sameName(sf.name, 'Coco')
+      && qa.name === 'Dusty Mule' && qb.renamed && qb.name !== 'Dusty Mule' && qStart && qStart.renamed === true
+      && cpuNames[0] === 'Iron Ridge' && cpuNames.length === 4 && new Set(cpuNames).size === 4)
+    ok(`L1: with the table missing, a room never shows one name twice: the second 'Iron Ridge' is '${sb.name}', 'iron ridge' is '${sc.name}', 'Basalt Rim' beside a seat whose socket is closing is '${sg.name}', Cyrillic 'Сосо' beside 'Coco' is '${sf.name}', each told; a quick match's second 'Dusty Mule' is '${qb.name}' and its start frame says so; computers keep their names`);
+  else fail('L1: table missing: ' + JSON.stringify({ sa, sb, sc, sd, sg, se, sf, qa, qb, renamed: qStart && qStart.renamed, cpuNames }));
+}
+{
+  // L2. THE STORE DOWN, AND A NAME TWO SOCKETS ARE BOTH ALLOWED. With the
+  // store failing, two newcomers' claims fail and both present one name: the
+  // second in the room is moved. And two sockets carrying one server-held
+  // name (a vouch, or a look-alike written by another instance in a deploy's
+  // overlap) in one room: the later is moved and told, even though the name
+  // is one the server holds for it.
+  const w = socialWorld({ live: true, door: true });
+  await w.res.refresh();
+  const unwire = wire(w);
+  w.table.secretFail = new Error('sb 503');
+  const realInsert = w.table.insertReservation;
+  w.table.insertReservation = async () => { throw new Error('sb 503'); };
+  const n1 = mkws(), n2 = mkws();
+  await w.social.handle(n1, { type: 'name', name: 'Quiet Dawn', secret: 'R'.repeat(43), id: 1 });
+  await w.social.handle(n2, { type: 'name', name: 'Quiet Dawn', secret: 'S'.repeat(43), id: 1 });
+  w.table.secretFail = null; w.table.insertReservation = realInsert;
+  const a = ews({ reservedName: n1.reservedName }), b = ews({ reservedName: n2.reservedName });
+  const code = openRoom(a, 'Quiet Dawn');
+  const sb = joinRoom(b, code, 'Quiet Dawn');
+  const sa = seatOfWs(a);
+  shut(a, b);
+  const c = ews({ reservedName: 'Marguerite Vale' }), d = ews({ chosenName: 'MARGUERITE VALE' });
+  const code2 = openRoom(c, 'x');
+  const sd = joinRoom(d, code2, 'y');
+  const sc = seatOfWs(c);
+  const snap = (() => { eng.handleClientMessage(c, { type: 'startMatch' }); return d._rx.find((m) => m.type === 'start'); })();
+  shut(c, d);
+  unwire();
+  if (last(n1).error === 'unavailable' && last(n2).error === 'unavailable' && sa.name === 'Quiet Dawn' && !sa.renamed && sb.renamed && !sameName(sb.name, 'Quiet Dawn')
+      && sc.name === 'Marguerite Vale' && !sc.renamed && sd.renamed && !sameName(sd.name, 'Marguerite Vale') && snap && snap.renamed === true && snap.names[snap.you] === sd.name)
+    ok(`L2: with the store down two unreserved 'Quiet Dawn's in one room are 'Quiet Dawn' and '${sb.name}'; two sockets both allowed 'Marguerite Vale' are it and '${sd.name}', the later told in its start frame`);
+  else fail('L2: store down / allowed clash: ' + JSON.stringify({ n1: last(n1), n2: last(n2), sa, sb, sc, sd, snap: snap && { renamed: snap.renamed, names: snap.names } }));
+}
+{
+  // L3. A SQUAD. The table missing; a signed-in leader whose profile name is
+  // 'Iron Ridge' and a guest who joined as 'Iron Ridge'. The box never shows
+  // the two one name: the guest's row is the stand-in the room will seat them
+  // under. The squad starts: the leader is seated 'Iron Ridge', the guest
+  // under that same stand-in, told; and no row is ever shown twice.
+  const w = socialWorld({ live: true, door: true });
+  w.table.keysFail = new Error('sb GET 404');
+  await w.res.refresh();
+  const unwire = wire(w);
+  w.profiles.set(U1, { id: U1, callsign: 'Iron Ridge', callsign_key: null });
+  const lead = Object.assign(ews(), mkws(U1, false)); w.social.onAuth(lead);
+  const guest = Object.assign(ews(), mkws());
+  await w.social.handle(lead, { type: 'squad', op: 'create', name: 'Iron Ridge', skin: 'olive', id: 'c' });
+  const code = (lead._rx.find((m) => m.type === 'squad' && m.op === 'state') || {}).code;
+  await w.social.handle(guest, { type: 'squad', op: 'join', code, name: 'Iron Ridge', skin: 'gold', id: 'j' });
+  const box = [...guest._rx].reverse().find((m) => m.type === 'squad' && m.op === 'state');
+  const rows = box ? box.members.map((m) => m.callsign) : [];
+  const live = w.social.liveNames().map((e) => e.name).sort();
+  // The box's names are live: a stranger opening a room as the leader's name
+  // is moved while the squad stands.
+  const stranger = ews();
+  openRoom(stranger, 'Iron Ridge');
+  const ss = seatOfWs(stranger);
+  shut(stranger);
+  await w.social.handle(lead, { type: 'squad', op: 'ready', ready: true, loadout: FIVE, id: 'r1' });
+  await w.social.handle(guest, { type: 'squad', op: 'ready', ready: true, loadout: FIVE, id: 'r2' });
+  await w.social.handle(lead, { type: 'squad', op: 'start', id: 's' });
+  const sl = seatOfWs(lead), sg = seatOfWs(guest);
+  const st = guest._rx.find((m) => m.type === 'start');
+  shut(lead, guest);
+  unwire();
+  if (rows.length === 2 && rows[0] === 'Iron Ridge' && typeof rows[1] === 'string' && !sameName(rows[1], 'Iron Ridge') && same(live, [...rows].sort())
+      && ss && ss.renamed && !sameName(ss.name, 'Iron Ridge') && !sameName(ss.name, rows[1])
+      && sl && sl.name === 'Iron Ridge' && !sl.renamed && sg && sg.name === rows[1] && sg.renamed && st && st.renamed === true && st.names[st.you] === rows[1])
+    ok(`L3: a squad's box shows its leader 'Iron Ridge' and the guest who joined as 'Iron Ridge' as '${rows[1]}', and a stranger opening a room as 'Iron Ridge' meanwhile is '${ss.name}'; its start seats them so, the guest told in the match`);
+  else fail('L3: squad: ' + JSON.stringify({ code, rows, live, ss, sl, sg, st: st && { renamed: st.renamed, names: st.names }, rx: guest._rx.filter((m) => m.type === 'squad').map((m) => m.op + ':' + (m.error || '')) }));
+}
+{
+  // L4. THE LATER MEMBER IS THE ONE MOVED, IN THE BOX AS IN THE ROOM. Two
+  // guests in a squad with a signed-in leader, the table missing: the first
+  // joined as 'Quiet Dawn', the second as 'Brass Hawk'. The first then
+  // changes their name to 'Brass Hawk': the box keeps it for the first (they
+  // come first) and moves the second, rather than taking the second's shown
+  // name as a live name elsewhere and moving the first; the start agrees.
+  const w = socialWorld({ live: true, door: true });
+  w.table.keysFail = new Error('sb GET 404');
+  await w.res.refresh();
+  const unwire = wire(w);
+  w.profiles.set(U1, { id: U1, callsign: 'Iron Ridge', callsign_key: null });
+  const lead = Object.assign(ews(), mkws(U1, false)); w.social.onAuth(lead);
+  const g1 = Object.assign(ews(), mkws()), g2 = Object.assign(ews(), mkws());
+  await w.social.handle(lead, { type: 'squad', op: 'create', name: 'Iron Ridge', skin: 'olive', id: 'c' });
+  const code = (lead._rx.find((m) => m.type === 'squad' && m.op === 'state') || {}).code;
+  await w.social.handle(g1, { type: 'squad', op: 'join', code, name: 'Quiet Dawn', skin: 'gold', id: 'j1' });
+  await w.social.handle(g2, { type: 'squad', op: 'join', code, name: 'Brass Hawk', skin: 'gold', id: 'j2' });
+  await w.social.handle(g1, { type: 'callsign', op: 'check', name: 'Brass Hawk', id: 'k' });
+  const box = [...lead._rx].reverse().find((m) => m.type === 'squad' && m.op === 'state');
+  const rows = box ? box.members.map((m) => m.callsign) : [];
+  await w.social.handle(lead, { type: 'squad', op: 'mode', mode: 'ffa', id: 'm' });
+  for (const [s, k] of [[lead, 'r0'], [g1, 'r1'], [g2, 'r2']]) await w.social.handle(s, { type: 'squad', op: 'ready', ready: true, loadout: FIVE, id: k });
+  await w.social.handle(lead, { type: 'squad', op: 'start', id: 's' });
+  const seats = [lead, g1, g2].map(seatOfWs);
+  shut(lead, g1, g2);
+  unwire();
+  if (rows.length === 3 && rows[0] === 'Iron Ridge' && rows[1] === 'Brass Hawk' && typeof rows[2] === 'string' && !sameName(rows[2], 'Brass Hawk') && !sameName(rows[2], 'Iron Ridge')
+      && seats.every(Boolean) && seats[0].name === 'Iron Ridge' && seats[1].name === 'Brass Hawk' && !seats[1].renamed && seats[2].name === rows[2] && seats[2].renamed)
+    ok(`L4: a guest who changes their name to a later member's ('Brass Hawk') keeps it, and the later member is moved, to '${rows[2]}', in the box and in the room`);
+  else fail('L4: later moves: ' + JSON.stringify({ rows, seats, rx: lead._rx.filter((m) => m.type === 'squad').map((m) => m.op + ':' + (m.error || '')) }));
+}
+{
+  // L5. A NAME THE SERVER DOES NOT HOLD IS NOT SHOWN IN A BOX WHILE A LIVE
+  // PLAYER ELSEWHERE IS SHOWN UNDER IT, as the room's door would not seat it;
+  // one the server holds for the member is, even while the same player's other
+  // device is in a room under it.
+  const w = socialWorld({ live: true, door: true });
+  w.table.keysFail = new Error('sb GET 404');
+  await w.res.refresh();
+  const unwire = wire(w);
+  w.profiles.set(U1, { id: U1, callsign: 'Iron Ridge', callsign_key: null });
+  const lead = Object.assign(ews(), mkws(U1, false)); w.social.onAuth(lead);
+  const elsewhere = ews(), otherDevice = ews({ reservedName: 'Copper Mesa' });
+  openRoom(elsewhere, 'Quiet Dawn');
+  openRoom(otherDevice, 'x');
+  const sOther = seatOfWs(otherDevice);
+  const g1 = Object.assign(ews(), mkws()), g2 = Object.assign(ews(), mkws(), { reservedName: 'Copper Mesa' });
+  await w.social.handle(lead, { type: 'squad', op: 'create', name: 'Iron Ridge', skin: 'olive', id: 'c' });
+  const code = (lead._rx.find((m) => m.type === 'squad' && m.op === 'state') || {}).code;
+  await w.social.handle(g1, { type: 'squad', op: 'join', code, name: 'Quiet Dawn', skin: 'gold', id: 'j1' });
+  await w.social.handle(g2, { type: 'squad', op: 'join', code, name: 'Copper Mesa', skin: 'gold', id: 'j2' });
+  const box = [...lead._rx].reverse().find((m) => m.type === 'squad' && m.op === 'state');
+  const rows = box ? box.members.map((m) => m.callsign) : [];
+  shut(elsewhere); shut(otherDevice);
+  unwire();
+  if (sOther && sOther.name === 'Copper Mesa' && rows.length === 3 && rows[0] === 'Iron Ridge' && typeof rows[1] === 'string' && !sameName(rows[1], 'Quiet Dawn') && rows[2] === 'Copper Mesa')
+    ok(`L5: a guest who joins a squad as 'Quiet Dawn' while a player elsewhere is shown under it is shown '${rows[1]}'; a member whose reserved 'Copper Mesa' is also on their other device in a room keeps it`);
+  else fail('L5: box live: ' + JSON.stringify({ sOther, rows }));
+}
+{
+  // L6. A SOCIAL LAYER HANDED NO ENGINE (a host, or a suite, that wires no
+  // door) still never shows two members one name: the later one is shown a
+  // stand-in drawn from the same pool, that nobody holds and that meets the
+  // guidelines.
+  const w = socialWorld();
+  await w.res.refresh();
+  await w.res.claim({ name: 'Steel Gunner' });
+  // The first name each guest's stand-in walk tries is held by somebody, so
+  // the box must skip it.
+  const seed = (n, seat) => [...n].reduce((a, c) => (a * 31 + c.charCodeAt(0)) | 0, 7) + seat * 2654435761;
+  const firstTried = [callsignFromSeed(seed('IRON RIDGE', 1)), callsignFromSeed(seed('Steel Gunner', 2))];
+  for (const n of firstTried) await w.res.claim({ name: n });
+  w.profiles.set(U1, { id: U1, callsign: 'Iron Ridge', callsign_key: null });
+  const lead = mkws(U1, false); w.social.onAuth(lead);
+  const g1 = mkws(), g2 = mkws();
+  await w.social.handle(lead, { type: 'squad', op: 'create', name: 'Iron Ridge', skin: 'olive', id: 'c' });
+  const code = (lead._rx.find((m) => m.type === 'squad' && m.op === 'state') || {}).code;
+  await w.social.handle(g1, { type: 'squad', op: 'join', code, name: 'IRON RIDGE', skin: 'gold', id: 'j1' });
+  await w.social.handle(g2, { type: 'squad', op: 'join', code, name: 'Steel Gunner', skin: 'gold', id: 'j2' });
+  const box = [...lead._rx].reverse().find((m) => m.type === 'squad' && m.op === 'state');
+  const rows = box ? box.members.map((m) => m.callsign) : [];
+  const distinct = rows.every((n, i) => rows.every((x, j) => i === j || !sameName(n, x)));
+  if (rows.length === 3 && rows[0] === 'Iron Ridge' && rows[1] && !sameName(rows[1], 'Iron Ridge') && w.res.free(rows[1]) && w.proofs.checkPlayerName(rows[1]).ok
+      && rows[2] && rows[2] !== 'Steel Gunner' && w.res.free(rows[2]) && distinct && !firstTried.includes(rows[1]) && !firstTried.includes(rows[2]))
+    ok(`L6: with no engine handed in, a squad's box still shows the guest who joined as 'IRON RIDGE' beside its leader 'Iron Ridge' as '${rows[1]}', and one who joined as another player's reserved 'Steel Gunner' as '${rows[2]}'`);
+  else fail('L6: no door: ' + JSON.stringify({ rows, firstTried }));
+}
+if (eng.rooms.size === 0) ok('J-L: every room these checks opened is gone, so no seat of theirs is live for the next');
+else fail('J-L: rooms left open: ' + [...eng.rooms.keys()].join(','));
 
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall reserve checks passed');
 process.exit(out.errors.length ? 1 : 0);

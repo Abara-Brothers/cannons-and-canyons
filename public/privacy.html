@@ -143,7 +143,11 @@
   unique, ignoring capitals and letters that look alike: the first time you connect, our server
   reserves your callsign for you, whether you are signed in or not, and nobody else can then use it.
   Whoever reserved a name first keeps it. If the name you had was already taken, the game gives you a
-  new one that nobody is using and tells you so, and you can change it in Bay controls. We check
+  new one that nobody is using and tells you so, and you can change it in Bay controls. So that no
+  one source can reserve names in bulk, our server counts how many new names are asked for from each
+  network address in an hour. It keeps that count only in its memory, under a scrambled form of the
+  address (never the address itself, never written down and never linked to your account), and
+  forgets it about an hour after the last new name was asked for from that address. We check
   every name a player sets on our server against a list of banned terms before another player can
   see it, so a name that fails the check is never shown to anyone. Your callsign and your
   6-character friend code are the only things
