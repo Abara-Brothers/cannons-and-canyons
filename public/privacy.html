@@ -74,7 +74,7 @@
     <tr><td>Google account id, name and profile picture (only if you link Google)</td><td>Returned by Google with the sign-in and kept by our sign-in provider as part of that record</td><td>Our database</td></tr>
     <tr><td>Apple account identifier (only if you link Apple, in the iOS app)</td><td>Carried in Apple's identity token with the sign-in and kept by our sign-in provider as part of that record</td><td>Our database</td></tr>
     <tr><td>Callsign — the default one the game gave you from its word lists, or one you choose — and, if you are signed in, when you last set it</td><td>Shown on your profile, in matches and squads, and to your friends and anyone you invite; the time holds a name to one change a day</td><td>Our database</td></tr>
-    <tr><td>Your reserved callsign: the callsign, a scrambled copy (a SHA-256 hash) of a random key our server gave your device, your account identifier once you have one, whether that account is linked, and when you last connected</td><td>So no two players can have the same callsign: whoever reserved a name first keeps it, guests included</td><td>Our database — see <a href="#keep">How long we keep it</a></td></tr>
+    <tr><td>Your reserved callsign: the callsign, a scrambled copy (a SHA-256 hash) of a random key our server gave your device, your account identifier once you have one, whether that account is linked, and when you last connected, and whether you have come back since the day it was reserved (once you have an account, the reservation is held by your account alone and the scrambled copy is removed from it)</td><td>So no two players can have the same callsign: whoever reserved a name first keeps it, guests included</td><td>Our database — see <a href="#keep">How long we keep it</a></td></tr>
     <tr><td>Friend code (6 characters, generated for you)</td><td>So someone can add you without searching for your name</td><td>Our database</td></tr>
     <tr><td>Friends and friend requests (which accounts, and when)</td><td>Your friends list, and adding or accepting a friend</td><td>Our database</td></tr>
     <tr><td>Blocks (which accounts you blocked, and when)</td><td>Keeping a blocked player away from you, both ways</td><td>Our database</td></tr>
@@ -236,7 +236,9 @@
   account (below) removes the account, cloud save, sign-in identity, push subscriptions, reserved
   callsign, friend code, friends, friend requests, blocks and name reports immediately, in one
   action. A callsign reserved for a player who has not linked an account is deleted when they have not
-  connected for 90 days, and the name is then free for anyone to use. A
+  connected for 90 days, and the name is then free for anyone to use. If a very large number of
+  callsigns are reserved, one reserved by a player who has not linked an account and who has not
+  come back since the day it was reserved may be deleted sooner, once it is more than a day old. A
   friendship, a friend request or a block lasts until you remove it or delete your account,
   whichever comes first; a friend request nobody answers stops counting after 30 days and is
   deleted. A name report is kept while we may still need to act on it, and is erased when either

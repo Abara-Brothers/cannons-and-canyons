@@ -559,7 +559,7 @@ function mkSb(routes = []) {
 // holds a name, so a refusal is an answer); and the shape gates in front of
 // every value: a row id, a SHA-256 hex, a uuid and a time this store wrote.
 {
-  const RCOLS = 'id,name,name_key,secret_hash,user_id,linked,last_seen_at';
+  const RCOLS = 'id,name,name_key,secret_hash,user_id,linked,created_at,last_seen_at,reused';
   const H = 'ab'.repeat(32);
   const T = Date.parse('2026-10-10T01:02:03.004Z');
   const row = { id: 7, name: 'Dune Viper', name_key: 'dune viper', secret_hash: H, user_id: null, linked: false, last_seen_at: '2026-10-10T01:02:03.004Z' };
@@ -609,38 +609,51 @@ function mkSb(routes = []) {
   const h5 = mkSb([[/^POST/, new Error('sb POST 503')]]);
   let down = null;
   try { await h5.store.insertReservation({ name: 'Dune Viper', key: 'dune viper', secretHash: H }); } catch (e) { down = e; }
-  let noHolder = null;
+  let noHolder = null, twoHolders = null;
   try { await hi.store.insertReservation({ name: 'X Y Z', key: 'x y z' }); } catch (e) { noHolder = e; }
+  // ROUND 3 FIX: exactly one holder, as the table's check has it.
+  try { await hi.store.insertReservation({ name: 'X Y Z', key: 'x y z', secretHash: H, userId: B }); } catch (e) { twoHolders = e; }
   if (ins.ok === true && ins.row === row && same(lost, { ok: false }) && down && down.message === 'sb POST 503' && noHolder
+      && twoHolders && twoHolders.message === 'reservation with two holders'
       && hi.calls.length === 1 && hi.calls[0].path === `/name_reservations?select=${RCOLS}` && hi.calls[0].prefer === 'return=representation'
       && same(hi.calls[0].body, { name: 'Dune Viper', name_key: 'dune viper', linked: false, secret_hash: H })
       && same(hc.calls[0].body, { name: 'Dune Viper', name_key: 'dune viper', linked: true, user_id: B }))
-    ok('(p) insertReservation: the row with its holder, returned in full; a 409 answers { ok:false }, any other failure throws, and a row with no holder is never sent');
-  else fail('(p) insertReservation: ' + JSON.stringify({ ins, lost, down: String(down), noHolder: String(noHolder), calls: hi.calls, c2: hc.calls }));
+    ok('(p) insertReservation: the row with its holder, returned in full; a 409 answers { ok:false }, any other failure throws, and a row with no holder or with two is never sent');
+  else fail('(p) insertReservation: ' + JSON.stringify({ ins, lost, down: String(down), noHolder: String(noHolder), twoHolders: String(twoHolders), calls: hi.calls, c2: hc.calls }));
 
-  // Move, attach, rename, touch: by row id, each guarded where it must be.
-  const hm = mkSb([[/^PATCH \/name_reservations\?id=eq\.7&user_id=is\.null/, [{ ...row, user_id: B }]], [/^PATCH \/name_reservations\?id=eq\.8&user_id/, new Error('sb PATCH 409')],
-    [/^PATCH \/name_reservations\?id=eq\.7&secret_hash=is\.null/, [row]], [/^PATCH \/name_reservations\?id=eq\.9&select/, new Error('sb PATCH 409')],
-    [/^PATCH \/name_reservations\?id=eq\.10&select/, []], [/^PATCH/, [row]]]);
+  // Move, rename, touch: by row id, each guarded where it must be. ROUND 3
+  // FIX: the move takes the device's secret off in the same write (and marks
+  // the row reused), there is no attach (an account's row never takes a
+  // device secret, so the store has no way to write one onto it), a rename
+  // matches its holder as well as its id, and a touch may write reused true.
+  const hm = mkSb([[/^PATCH \/name_reservations\?id=eq\.7&user_id=is\.null/, [{ ...row, user_id: B, secret_hash: null }]], [/^PATCH \/name_reservations\?id=eq\.8&user_id/, new Error('sb PATCH 409')],
+    [/^PATCH \/name_reservations\?id=eq\.9&/, new Error('sb PATCH 409')],
+    [/^PATCH \/name_reservations\?id=eq\.10&/, []], [/^PATCH/, [row]]]);
   const mv = await hm.store.moveReservation(7, B, true, T);
   const mv409 = await hm.store.moveReservation(8, B, false, T);
-  const at = await hm.store.attachSecret(7, H);
-  const rn409 = await hm.store.renameReservation(9, 'Iron Hawk', 'iron hawk', T);
-  const rnGone = await hm.store.renameReservation(10, 'Iron Hawk', 'iron hawk', T);
-  const rn = await hm.store.renameReservation(7, 'Iron Hawk', 'iron hawk', T);
+  const rn409 = await hm.store.renameReservation(9, 'Iron Hawk', 'iron hawk', T, { secretHash: H });
+  const rnGone = await hm.store.renameReservation(10, 'Iron Hawk', 'iron hawk', T, { secretHash: H });
+  const rnDev = await hm.store.renameReservation(7, 'Iron Hawk', 'iron hawk', T, { secretHash: H });
+  const rnAcct = await hm.store.renameReservation(7, 'Iron Hawk', 'iron hawk', T, { userId: B.toUpperCase() });
   await hm.store.touchReservation(7, true, T);
+  await hm.store.touchReservation(7, false, T, true);
   const P = hm.calls.map((c) => c.path);
-  let badId = null, badT = null;
-  try { await hm.store.renameReservation('7&x=1', 'A b c', 'a b c', T); } catch (e) { badId = e; }
+  let badId = null, badT = null, noWho = null, badWho = null;
+  try { await hm.store.renameReservation('7&x=1', 'A b c', 'a b c', T, { secretHash: H }); } catch (e) { badId = e; }
   try { await hm.store.touchReservation(7, true, 'yesterday'); } catch (e) { badT = e; }
-  if (mv && mv.user_id === B && mv409 === null && at === row && same(rn409, { ok: false, error: 'taken' }) && same(rnGone, { ok: false, error: 'gone' }) && rn.ok === true
-      && P[0] === `/name_reservations?id=eq.7&user_id=is.null&select=${RCOLS}` && same(hm.calls[0].body, { user_id: B, linked: true, last_seen_at: '2026-10-10T01:02:03.004Z' })
-      && P[2] === `/name_reservations?id=eq.7&secret_hash=is.null&select=${RCOLS}` && same(hm.calls[2].body, { secret_hash: H })
-      && P[5] === `/name_reservations?id=eq.7&select=${RCOLS}` && same(hm.calls[5].body, { name: 'Iron Hawk', name_key: 'iron hawk', last_seen_at: '2026-10-10T01:02:03.004Z' })
+  try { await hm.store.renameReservation(7, 'A b c', 'a b c', T); } catch (e) { noWho = e; }
+  try { await hm.store.renameReservation(7, 'A b c', 'a b c', T, { secretHash: 'zz&x=1' }); } catch (e) { badWho = e; }
+  if (mv && mv.user_id === B && mv.secret_hash === null && mv409 === null && same(rn409, { ok: false, error: 'taken' }) && same(rnGone, { ok: false, error: 'gone' }) && rnDev.ok === true && rnAcct.ok === true
+      && P[0] === `/name_reservations?id=eq.7&user_id=is.null&select=${RCOLS}` && same(hm.calls[0].body, { user_id: B, linked: true, secret_hash: null, reused: true, last_seen_at: '2026-10-10T01:02:03.004Z' })
+      && P[2] === `/name_reservations?id=eq.9&secret_hash=eq.${H}&user_id=is.null&select=${RCOLS}`
+      && P[4] === `/name_reservations?id=eq.7&secret_hash=eq.${H}&user_id=is.null&select=${RCOLS}` && same(hm.calls[4].body, { name: 'Iron Hawk', name_key: 'iron hawk', last_seen_at: '2026-10-10T01:02:03.004Z' })
+      && P[5] === `/name_reservations?id=eq.7&user_id=eq.${B}&select=${RCOLS}`
       && P[6] === '/name_reservations?id=eq.7' && hm.calls[6].prefer === 'return=minimal' && same(hm.calls[6].body, { last_seen_at: '2026-10-10T01:02:03.004Z', linked: true })
-      && badId && badId.message === 'bad row id' && badT && badT.message === 'bad time' && hm.calls.length === 7)
-    ok('(p) move (only where user_id is null), attach (only where secret_hash is null), rename and touch: by row id, the time written as ISO; a 409 is null or "taken", no row is "gone", and a bad id or time throws before any call');
-  else fail('(p) move/attach/rename/touch: ' + JSON.stringify({ mv, mv409, at, rn409, rnGone, rn, P, badId: String(badId), badT: String(badT), bodies: hm.calls.map((c) => c.body) }));
+      && same(hm.calls[7].body, { last_seen_at: '2026-10-10T01:02:03.004Z', linked: false, reused: true })
+      && badId && badId.message === 'bad row id' && badT && badT.message === 'bad time' && noWho && noWho.message === 'rename without a holder'
+      && badWho && badWho.message === 'rename without a holder' && hm.calls.length === 8 && typeof hm.store.attachSecret === 'undefined')
+    ok('(p) move (only where user_id is null, the secret off and reused on in the same write), rename (by id AND holder: a device\'s hash with no account, or the account) and touch (reused written only true): the time as ISO; a 409 is null or "taken", no row is "gone", a bad id, time or holder throws before any call, and there is no attach');
+  else fail('(p) move/rename/touch: ' + JSON.stringify({ mv, mv409, rn409, rnGone, rnDev, rnAcct, P, badId: String(badId), badT: String(badT), noWho: String(noWho), badWho: String(badWho), bodies: hm.calls.map((c) => c.body) }));
 
   // The two deletes answer the keys they freed.
   const hd = mkSb([[/^DELETE/, [{ name_key: 'dune viper' }, { name_key: 'iron hawk' }]]]);
@@ -651,6 +664,24 @@ function mkSb(routes = []) {
       && hd.calls[1].path === '/name_reservations?linked=is.false&last_seen_at=lt.2026-10-10T01%3A02%3A03.004Z&select=name_key' && hd.calls[1].prefer === 'return=representation')
     ok('(p) deleteReservationOfUser and sweepReservations: by account, and every unlinked row last seen before the cutoff, each answering the names it freed');
   else fail('(p) deletes: ' + JSON.stringify({ freed, swept, calls: hd.calls }));
+
+  // THE PRUNE (round 3 fix): the ids of the oldest unlinked, never-reused rows
+  // made before the cutoff, then one DELETE of every such row up to the last
+  // of them, the three conditions repeated; nothing to prune is one read.
+  const hp = mkSb([[/^GET \/name_reservations\?select=id&/, [{ id: 3 }, { id: 11 }]], [/^DELETE/, [{ name_key: 'flood 1' }, { name_key: 'flood 2' }]]]);
+  const pr = await hp.store.pruneReservations(T, 2);
+  const hp0 = mkSb([[/^GET/, []]]);
+  const pr0 = await hp0.store.pruneReservations(T, 5000);
+  const cond = 'linked=is.false&reused=is.false&created_at=lt.2026-10-10T01%3A02%3A03.004Z';
+  const hpj = mkSb([[/^GET/, { not: 'a list' }]]);
+  let pj = null;
+  try { await hpj.store.pruneReservations(T, 5); } catch (e) { pj = e; }
+  if (same(pr, ['flood 1', 'flood 2']) && same(pr0, []) && hp0.calls.length === 1 && pj && /not a list/.test(pj.message)
+      && hp.calls[0].path === `/name_reservations?select=id&${cond}&order=id.asc&limit=2`
+      && hp.calls[1].method === 'DELETE' && hp.calls[1].path === `/name_reservations?${cond}&id=lte.11&select=name_key` && hp.calls[1].prefer === 'return=representation'
+      && hp0.calls[0].path === `/name_reservations?select=id&${cond}&order=id.asc&limit=1000`)
+    ok('(p) pruneReservations: the oldest unlinked never-reused ids before the cutoff (1000 a run at most), then one DELETE up to the last id with the same three conditions, answering the keys freed; nothing to prune is one read, a body that is not a list fails');
+  else fail('(p) prune: ' + JSON.stringify({ pr, pr0, pj: String(pj), calls: hp.calls.map((c) => [c.method, c.path]), c0: hp0.calls.map((c) => c.path) }));
 }
 
 // ---- (l) the standing guard: nothing raw ever lands in a query value ---------
@@ -690,7 +721,7 @@ function mkSb(routes = []) {
   const KEYS = new Set([
     'id', 'friend_code', 'callsign_key', 'or', 'user_a', 'user_b', 'from_user',
     'to_user', 'created_at', 'blocker', 'blocked', 'reporter', 'reported',
-    'name_key', 'user_id', 'secret_hash', 'linked', 'last_seen_at',
+    'name_key', 'user_id', 'secret_hash', 'linked', 'last_seen_at', 'reused',
     ...Object.keys(CONST_SHAPE),
   ]);
   const RAW = /[\s"'<>#\\&=,()]/;

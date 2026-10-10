@@ -1711,6 +1711,11 @@ for (const file of ['public/game-core.js', 'public/room-engine.js']) {
     [/the random key our server gave your device so it knows the callsign it keeps for you \(our server stores only a scrambled copy of that key, never the key itself\)/, 'On your device: the reservation key, and that only its hash leaves'],
     [/removes the account, cloud save, sign-in identity, push subscriptions, reserved callsign, friend code,/, 'How long we keep it: deleting the account deletes its reservation'],
     [/A callsign reserved for a player who has not linked an account is deleted when they have not connected for 90 days, and the name is then free for anyone to use\./, 'How long we keep it: an unlinked reservation goes after 90 days unused'],
+    // ROUND 3 FIX (2026-10-10): a reservation also records whether its holder
+    // came back, and an account's holds no device key; past the server's
+    // ceiling, a never-reused unlinked reservation may go sooner (the prune).
+    [/and when you last connected, and whether you have come back since the day it was reserved \(once you have an account, the reservation is held by your account alone and the scrambled copy is removed from it\)/, 'the data table: whether the holder came back, and an account\'s reservation holds no device key'],
+    [/If a very large number of\s+callsigns are reserved, one reserved by a player who has not linked an account and who has not\s+come back since the day it was reserved may be deleted sooner, once it is more than a day old\./, 'How long we keep it: the prune at the ceiling'],
     [/erases the account, cloud save, sign-in identity, push subscriptions, reserved callsign, friend code,/, 'Delete my account: it erases the reservation'],
     [/The game gives you a callsign, which you can change once a day,/, 'the short version: a callsign is given, and changed once a day'],
     [/and — if they are a friend or in a squad with you — whether you are online\./, 'the short version: a squad\'s members see whether you are online'],

@@ -97,10 +97,15 @@ const SINCE_FLOOR_MS = Date.UTC(2025, 0, 1);            // 2025-01-01T00:00:00.0
 // reads, and the shapes a value must have before it is spliced into a path.
 // A secret is only ever held as its SHA-256, 64 lower-case hex. A row id is
 // the table's identity column, a positive integer. RES_KEY_MAX is the
-// table's own CHECK on name_key, measured, not guessed: a name is at most 16
-// code points and the longest look-alike skeleton of one code point is 18
-// (U+FDFA, which NFKD spells out as a phrase), so no key can pass 288.
-const RES_COLS = 'id,name,name_key,secret_hash,user_id,linked,last_seen_at';
+// table's own CHECK on name_key, measured, not guessed. The key was a
+// look-alike skeleton when the cap was set: a name is at most 16 code points
+// and the longest skeleton of one code point is 18 (U+FDFA, which NFKD spells
+// out as a phrase), so 16 x 18 = 288. Since the round 3 fix the key is the
+// name in lower case, and a sweep of every code point finds the longest lower
+// case of one to be 2 (U+0130), so a key is at most 32 and the cap still
+// holds every key with room to spare. created_at and reused are what the
+// prune and the touch read.
+const RES_COLS = 'id,name,name_key,secret_hash,user_id,linked,created_at,last_seen_at,reused';
 const HASH_RE = /^[0-9a-f]{64}$/;
 export const RES_KEY_MAX = 288;
 function mustId(v) {
@@ -512,9 +517,10 @@ export function createStore({ sbAdmin } = {}) {
   // server/reservations.js decides; these only read and write the rows, one
   // shape each, and every value spliced into a path goes through enc() after a
   // shape check of its own. A row is one player's one name: `name` as shown,
-  // `name_key` its look-alike skeleton (the uniqueness key, UNIQUE in the
-  // table), and the holder, a device (secret_hash) or an account (user_id),
-  // or both once a device's row has moved to the account it got.
+  // `name_key` the name in lower case (the uniqueness key, UNIQUE in the
+  // table, the normalisation of profiles.callsign_key), and exactly one
+  // holder, a device (secret_hash) or an account (user_id): a device's row
+  // that moves to the account it got gives its secret up in the same write.
   //
   // A 409 IS AN ANSWER HERE, as it is in setChosenCallsign: the table's unique
   // constraints are the authority on who holds a name, so a write that loses
@@ -564,6 +570,9 @@ export function createStore({ sbAdmin } = {}) {
     if (secretHash !== null) { if (!HASH_RE.test(String(secretHash))) throw new Error('bad hash'); body.secret_hash = String(secretHash); }
     if (userId !== null) body.user_id = mustUuid(userId);
     if (!body.secret_hash && !body.user_id) throw new Error('reservation without a holder');
+    // Exactly one holder (round 3 fix): an account's row never carries a
+    // device's secret, and the table's check refuses one that does.
+    if (body.secret_hash && body.user_id) throw new Error('reservation with two holders');
     let rows;
     try {
       rows = await sbAdmin('POST', `/name_reservations?select=${RES_COLS}`, body, 'return=representation');
@@ -580,9 +589,15 @@ export function createStore({ sbAdmin } = {}) {
   // still null, so of two sockets moving it the second matches nothing. null
   // when nothing moved (that race, or the account already holding a row,
   // which the unique user_id refuses with a 409).
+  //
+  // AND THE DEVICE'S SECRET COMES OFF IT IN THE SAME WRITE (round 3 fix,
+  // 2026-10-10): the row is the account's now, and a device's secret must
+  // never name an account (server/reservations.js). One PATCH, so the row is
+  // never held by both, which the table's check refuses anyway. The move is
+  // its holder coming back, so it is marked reused, and the prune spares it.
   async function moveReservation(id, userId, linked, at) {
     const n = mustId(id);
-    const body = { user_id: mustUuid(userId), linked: linked === true, last_seen_at: isoOf(at) };
+    const body = { user_id: mustUuid(userId), linked: linked === true, secret_hash: null, reused: true, last_seen_at: isoOf(at) };
     try {
       return one(await sbAdmin('PATCH', `/name_reservations?id=eq.${n}&user_id=is.null&select=${RES_COLS}`, body, 'return=representation'));
     } catch (e) {
@@ -591,28 +606,26 @@ export function createStore({ sbAdmin } = {}) {
     }
   }
 
-  // The device's secret onto an ACCOUNT's row that has none yet (an account
-  // that reserved before this device ever had one). null when the row already
-  // carries one, or another row holds this secret.
-  async function attachSecret(id, hash) {
-    const n = mustId(id);
-    if (!HASH_RE.test(String(hash ?? ''))) throw new Error('bad hash');
-    try {
-      return one(await sbAdmin('PATCH', `/name_reservations?id=eq.${n}&secret_hash=is.null&select=${RES_COLS}`, { secret_hash: String(hash) }, 'return=representation'));
-    } catch (e) {
-      if (isConflict(e)) return null;
-      throw e;
-    }
-  }
-
   // A RENAME: { ok:true, row }, { ok:false, error:'taken' } when another row
   // holds the new key, or { ok:false, error:'gone' } when the row is no longer
-  // there (swept, or deleted with its account).
-  async function renameReservation(id, name, key, at) {
+  // there (swept, or deleted with its account) or no longer this holder's.
+  //
+  // BY ITS HOLDER, NOT BY ITS ID ALONE (round 3 fix, 2026-10-10). `holder` is
+  // the account ({ userId }) or the device ({ secretHash }) the claim found
+  // the row for, and the write matches it as well as the id: an account's row
+  // only for that account, a device's row only while it still has that
+  // secret and no account. A socket that kept a row id after the row moved to
+  // an account, or after a sign-out, matches nothing.
+  async function renameReservation(id, name, key, at, holder) {
     const n = mustId(id);
+    const h = holder || {};
+    let who;
+    if (h.userId) who = `user_id=eq.${enc(mustUuid(h.userId))}`;
+    else if (HASH_RE.test(String(h.secretHash ?? ''))) who = `secret_hash=eq.${enc(String(h.secretHash))}&user_id=is.null`;
+    else throw new Error('rename without a holder');
     let rows;
     try {
-      rows = await sbAdmin('PATCH', `/name_reservations?id=eq.${n}&select=${RES_COLS}`,
+      rows = await sbAdmin('PATCH', `/name_reservations?id=eq.${n}&${who}&select=${RES_COLS}`,
         { name: String(name), name_key: String(key), last_seen_at: isoOf(at) }, 'return=representation');
     } catch (e) {
       if (isConflict(e)) return { ok: false, error: 'taken' };
@@ -622,9 +635,13 @@ export function createStore({ sbAdmin } = {}) {
     return row ? { ok: true, row } : { ok: false, error: 'gone' };
   }
 
-  async function touchReservation(id, linked, at) {
+  // `reused` is written only true: once a holder has come back, nothing
+  // makes it a row nobody came back to again.
+  async function touchReservation(id, linked, at, reused = false) {
     const n = mustId(id);
-    await sbAdmin('PATCH', `/name_reservations?id=eq.${n}`, { last_seen_at: isoOf(at), linked: linked === true }, 'return=minimal');
+    const body = { last_seen_at: isoOf(at), linked: linked === true };
+    if (reused === true) body.reused = true;
+    await sbAdmin('PATCH', `/name_reservations?id=eq.${n}`, body, 'return=minimal');
   }
 
   // Both deletes answer the keys they freed, so the in-memory index can let
@@ -640,10 +657,29 @@ export function createStore({ sbAdmin } = {}) {
     return (Array.isArray(rows) ? rows : []).map((r) => (r && typeof r.name_key === 'string' ? r.name_key : '')).filter(Boolean);
   }
 
+  // THE PRUNE (round 3 fix, 2026-10-10; server/reservations.js says when it
+  // runs): the oldest `limit` rows that no linked account holds, that nobody
+  // ever came back to (reused is false) and that were made before `before`.
+  // Two requests and no list of ids in a URL: the ids of those rows, oldest
+  // first, and then one DELETE of every such row up to the last of them. The
+  // DELETE repeats the three conditions, so a row its holder came back to
+  // between the two requests is not deleted. Answers the keys freed.
+  async function pruneReservations(before, limit) {
+    const n = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 1000) : 1000;
+    const cond = `linked=is.false&reused=is.false&created_at=lt.${enc(isoOf(before))}`;
+    const ids = await sbAdmin('GET', `/name_reservations?select=id&${cond}&order=id.asc&limit=${n}`);
+    if (!Array.isArray(ids)) throw new Error('sb GET name_reservations: not a list');
+    const last = ids.length ? ids[ids.length - 1] : null;
+    if (!last) return [];
+    const top = mustId(last.id);
+    const rows = await sbAdmin('DELETE', `/name_reservations?${cond}&id=lte.${top}&select=name_key`, undefined, 'return=representation');
+    return (Array.isArray(rows) ? rows : []).map((r) => (r && typeof r.name_key === 'string' ? r.name_key : '')).filter(Boolean);
+  }
+
   return {
     reservationKeys, reservationByUser, reservationBySecret, reservationsByKeys,
-    insertReservation, moveReservation, attachSecret, renameReservation, touchReservation,
-    deleteReservationOfUser, sweepReservations,
+    insertReservation, moveReservation, renameReservation, touchReservation,
+    deleteReservationOfUser, sweepReservations, pruneReservations,
     ensureFriendCode, profileById, profileByFriendCode, profileByCallsignKey, profilesByIds,
     chosenCallsignKeys, setChosenCallsign, clearCallsignKey,
     friendIdsOf, addFriendship, removeFriendship,

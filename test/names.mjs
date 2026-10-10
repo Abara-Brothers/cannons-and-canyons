@@ -104,7 +104,9 @@ const TOKENS = { 'tok-chosen': CHOSEN_ID, 'tok-other': OTHER_ID, 'tok-late': OTH
 // secret_hash and user_id each unique (a 409 on a clash), answered the way
 // PostgREST answers server/store.js's paths. OFF (a 404, the migration not
 // applied) until part H turns it on.
-const RES = { on: false, rows: [], seq: 0, refused: 0 };
+// `failFor` makes that many reads by one secret's hash answer 503, as a store
+// that is down does (H13), and `readsFor` keeps when each read by a hash came.
+const RES = { on: false, rows: [], seq: 0, refused: 0, failFor: {}, readsFor: {} };
 const resClash = (r, self) => RES.rows.some((o) => o !== self && (o.name_key === r.name_key || (r.secret_hash && o.secret_hash === r.secret_hash) || (r.user_id && o.user_id === r.user_id)));
 // Two hellos slower than the rest, for G6: one that settles after the server's
 // hold has given up on it, and one that settles a little after that.
@@ -133,6 +135,11 @@ mock = http.createServer((req, res) => {
       const eqv = (k) => (q(k).startsWith('eq.') ? q(k).slice(3) : null);
       const at = new Date().toISOString();
       let b = {}; try { b = body ? JSON.parse(body) : {}; } catch {}
+      if (req.method === 'GET' && eqv('secret_hash') !== null) {
+        const h = eqv('secret_hash');
+        (RES.readsFor[h] = RES.readsFor[h] || []).push(Date.now());
+        if (RES.failFor[h] > 0) { RES.failFor[h]--; return json(503, { message: 'upstream down' }); }
+      }
       if (req.method === 'GET' && q('select') === 'name_key' && eqv('name_key') === null) {
         const after = q('name_key').startsWith('gt.') ? q('name_key').slice(3) : '';
         return json(200, RES.rows.map((r) => r.name_key).sort().filter((k) => !after || k > after).slice(0, +q('limit') || 1000).map((k) => ({ name_key: k })));
@@ -143,7 +150,7 @@ mock = http.createServer((req, res) => {
       if (q('secret_hash') === 'is.null') rows = rows.filter((r) => !r.secret_hash);
       if (req.method === 'GET') return json(200, rows.slice(0, 1));
       if (req.method === 'POST') {
-        const r = { id: ++RES.seq, secret_hash: null, user_id: null, linked: false, ...b, created_at: at, last_seen_at: at };
+        const r = { id: ++RES.seq, secret_hash: null, user_id: null, linked: false, reused: false, ...b, created_at: at, last_seen_at: at };
         if (resClash(r)) return json(409, { code: '23505' });
         RES.rows.push(r);
         return json(201, [r]);
@@ -892,8 +899,8 @@ try {
     for (let i = 0; i < 40 && !rowAcct; i++) { rowAcct = RES.rows.find((r) => r.id === rowIdB && r.user_id === ANON_ID) || null; if (!rowAcct) await sleep(100); }
     const meAcct = await B.ev('myName()');
     const saidAcct = (await B.ev('(window.__toastsDom || []).slice()')).filter((t) => /your name/i.test(t));
-    if (rowAcct && rowAcct.name === nameB && meAcct === nameB && !saidAcct.length && RES.rows.filter((r) => r.user_id === ANON_ID).length === 1)
-      ok(`H4: a guest who gets an account keeps '${nameB}': the same row moved to the account, and nothing was said`);
+    if (rowAcct && rowAcct.name === nameB && meAcct === nameB && !saidAcct.length && RES.rows.filter((r) => r.user_id === ANON_ID).length === 1 && rowAcct.secret_hash === null)
+      ok(`H4: a guest who gets an account keeps '${nameB}': the same row moved to the account, the device's secret came off it, and nothing was said`);
     else fail('H4: ' + JSON.stringify({ rowAcct, meAcct, saidAcct, rows: RES.rows }));
     // H5. A RENAME frees the old name and holds the new one, for everyone.
     const r1 = await typeName(B, 'Quiet Dawn');
@@ -983,17 +990,87 @@ try {
     if (s10 && s10.me === 'Quiet Dawn' && !s10.toasts.some((t) => /could not be used/.test(t)) && order.claim >= 0 && order.ai > order.claim)
       ok('H10: a tap made while the socket reopened is sent behind the socket\'s claim and seated as \'Quiet Dawn\', with nothing said');
     else fail('H10: ' + JSON.stringify({ s10, order }));
-    // H11. Signing out claims again, as this device: the name follows the
-    // device's secret, so the next match still seats it.
-    await B.ev(`(window.__toasts = [], window.confirm = () => true, document.getElementById('accSignOutBtn').onclick(), true)`);
+    // H11. Signing out claims again, as this device, straight after the hello
+    // that drops the account. CHANGED (round 3 fix, 2026-10-10: a device's
+    // secret never confers an account's name): the device's row went to the
+    // account in H4 and gave up its secret, so 'Quiet Dawn' stays with the
+    // account, and the signed-out device is given a new unused default of its
+    // own, silently (the sign-out said it starts a fresh guest), which the
+    // next match seats.
+    const secOld = await B.ev(`localStorage.getItem('cc_name_secret')`);
+    await B.ev(`(window.__toasts = [], window.__toastsDom = [], window.confirm = () => true, document.getElementById('accSignOutBtn').onclick(), true)`);
     await B.until(`(window.__sent || []).some((f) => f.type === 'hello' && f.token === null)`, 4000, 20);
+    await B.until(`localStorage.getItem('cc_name_secret') !== ${JSON.stringify(secOld)}`, 5000, 20);
     await B.ev(LAUNCH('duel'));
     const s11 = (await B.until(PLAYING('duel'), 10000)) ? await B.ev(SEEN) : null;
     const after = await B.ev(`(() => { const f = (window.__sent || []); const out = f.findIndex((x) => x.type === 'hello' && x.token === null); return f.slice(out).map((x) => x.type); })()`);
+    const claim11 = await B.ev(`(() => { const f = (window.__sent || []); const out = f.findIndex((x) => x.type === 'hello' && x.token === null); return f.slice(out).find((x) => x.type === 'name') || null; })()`);
+    const me11 = await B.ev('myName()');
+    const sec11 = await B.ev(`localStorage.getItem('cc_name_secret')`);
+    const said11 = (await B.ev('(window.__toastsDom || []).slice()')).filter((t) => /your name/i.test(t));
+    // Signed out stays signed out: the stand-in's session goes too, so the
+    // reload below is this device's guest.
+    await B.ev(`(localStorage.removeItem('__ccTestTok'), localStorage.removeItem('__ccTestWho'), true)`);
     await leave(B, { settle: false });
-    if (s11 && s11.me === 'Quiet Dawn' && !s11.toasts.some((t) => /could not be used/.test(t)) && after[1] === 'name')
-      ok('H11: signing out sends the device\'s claim straight after the hello that drops the account, and the next match still seats \'Quiet Dawn\'');
-    else fail('H11: ' + JSON.stringify({ s11, after }));
+    const row11 = RES.rows.find((r) => r.name === me11);
+    if (s11 && s11.me === me11 && me11 !== 'Quiet Dawn' && !s11.toasts.some((t) => /could not be used/.test(t)) && after[1] === 'name'
+        && claim11 && claim11.fresh === true && !claim11.account && !said11.length && row11 && row11.user_id === null && row11.secret_hash === sha(sec11)
+        && RES.rows.find((r) => r.name === 'Quiet Dawn' && r.user_id === ANON_ID && r.secret_hash === null))
+      ok(`H11: signing out claims as the device straight after the hello that drops the account; 'Quiet Dawn' stays with the account, and the device is given its own name ('${me11}') on a row of its own, silently, which the next match seats`);
+    else fail('H11: ' + JSON.stringify({ s11, after, claim11, me11, said11, row11, rows: RES.rows.map((r) => [r.name, r.user_id, !!r.secret_hash]) }));
+    // H13. A CLAIM THAT FAILS IS ASKED AGAIN ON THE SAME SOCKET, and until it
+    // is answered the player is seated under their own name (round 3 fix,
+    // 2026-10-10). The store answers this device's next two reads by its
+    // secret with a 503: the page's claim and its first retry fail, the
+    // second retry is answered, and a match started in between seats the
+    // device's own reserved name, not a stand-in.
+    const own13 = await B.ev('myName()');
+    const h13 = sha(sec11);
+    RES.failFor[h13] = 2;
+    RES.readsFor[h13] = [];
+    await B.nav({ settle: false });
+    await B.ev(`(window.__ws13 = S.ws, window.__toastsDom = [], true)`);
+    await B.ev(LAUNCH('duel'));
+    const s13 = (await B.until(PLAYING('duel'), 10000)) ? await B.ev(SEEN) : null;
+    // The retries go on the socket the match is on: it is not left (which
+    // reloads the page) until they are answered.
+    const answered = await B.until(`S.ws === window.__ws13 && claimTries === 0 && (window.__sent || []).filter((f) => f.type === 'name').length >= 3`, 15000, 100);
+    const claims13 = await B.ev(`(window.__sent || []).filter((f) => f.type === 'name')`);
+    const me13 = await B.ev('myName()');
+    await leave(B, { settle: false });
+    const reads = RES.readsFor[h13];
+    const gaps = reads.slice(1).map((t, i) => t - reads[i]);
+    if (s13 && s13.me === own13 && !s13.toasts.some((t) => /could not be used/.test(t)) && answered && RES.failFor[h13] === 0
+        && claims13.length === 3 && claims13.every((f) => f.secret === sec11 && f.name === own13) && me13 === own13
+        && reads.length >= 3 && gaps[0] >= 1400 && gaps[1] >= 2900)
+      ok(`H13: a claim the store failed is asked again on the same socket, backing off (${gaps.slice(0, 2).map((g) => (g / 1000).toFixed(1) + ' s').join(', then ')}), until it is answered (3 claims); a match started meanwhile seats the player's own '${own13}', not a stand-in`);
+    else fail('H13: ' + JSON.stringify({ s13, answered, left: RES.failFor[h13], claims13, me13, gaps }));
+    // H14. A SIGNED-IN PLAYER WHOSE TOKEN IS LATE IS NOT CLAIMED FOR AS THE
+    // DEVICE (round 3 fix, 2026-10-10). The anonymous account holding 'Quiet
+    // Dawn' is signed in on B again; its socket reopens while the session's
+    // refresh cannot reach the server (a session kept, no token). No claim
+    // goes then (a guest claim would answer the device's own name, or refuse
+    // the account's as 'taken'); when the token comes, the hello goes and the
+    // account's claim after it, and the page is 'Quiet Dawn' throughout.
+    await B.ev(`(() => { localStorage.setItem('__ccTestTok', 'tok-anon'); localStorage.setItem('__ccTestWho', ${JSON.stringify(JSON.stringify({ id: ANON_ID, anonymous: true, google: false, apple: false, email: null, accounts: [] }))}); return true; })()`);
+    await B.nav({ settle: false });
+    await B.until(`myName() === 'Quiet Dawn'`, 5000);
+    const rows14 = RES.rows.length;
+    await B.ev(`(() => { window.__late = true; const real = Cloud.token; window.__realToken = real; Cloud.token = async () => (window.__late ? null : real()); Cloud.hasSession = () => true;
+      window.__sent = []; window.__toastsDom = []; S.ws.close(); return true; })()`);
+    await B.until(`S.connected === true && socialIntro() > 0`, 8000, 50);
+    await sleep(900);
+    const before14 = await B.ev(`(window.__sent || []).map((f) => f.type)`);
+    await B.ev(`(window.__late = false, true)`);
+    const came = await B.until(`(window.__sent || []).some((f) => f.type === 'name')`, 8000, 50);
+    const after14 = await B.ev(`(window.__sent || []).map((f) => f.type === 'name' ? 'name' + (f.account ? '+account' : '') : f.type)`);
+    await sleep(400);
+    const me14 = await B.ev('myName()');
+    const said14 = (await B.ev('(window.__toastsDom || []).slice()')).filter((t) => /your name/i.test(t));
+    if (!before14.includes('name') && !before14.includes('hello') && came && after14.indexOf('hello') >= 0 && after14.indexOf('name+account') === after14.indexOf('hello') + 1
+        && !after14.includes('name') && me14 === 'Quiet Dawn' && !said14.length && RES.rows.length === rows14)
+      ok('H14: a signed-in player whose token is late sends no claim (it would be the device\'s); when the token comes, the hello goes and the account\'s claim straight after it, and the player stays \'Quiet Dawn\' with nothing said and no row made');
+    else fail('H14: ' + JSON.stringify({ before14, came, after14, me14, said14, rows: RES.rows.length - rows14 }));
   }
 } catch (e) {
   fail('threw: ' + (e && e.stack || e));

@@ -11,18 +11,25 @@
 //   B. the first to reserve keeps a name; anyone else gets a new unused default
 //      and `moved: 'taken'`, once; capitals and look-alike letters collide
 //   C. the holder: a device by its secret (only the hash is stored), the move
-//      to an account keeps the name, an account's own row, a chosen callsign
+//      to an account keeps the name and takes the device's secret off the row,
+//      a signed-out or shared device gets a name of its own, an account's own
+//      row, a chosen callsign
 //   D. defaults are always unused, the numbered tier when the pairs run out,
-//      never a computer's name, never a chosen callsign
+//      then the wide tier no flood can use up, never a computer's name, never
+//      a chosen callsign
 //   E. the two namespaces never overlap: a claim refuses a chosen callsign,
 //      the Set refuses a reserved name, an unknown chosen index fails closed
-//   F. renames, the 90-day sweep, last_seen_at, the process-wide bucket, a
-//      unique conflict the memory did not know about, two sockets racing
+//   F. renames, the 90-day sweep, last_seen_at, the bounds on new rows (per
+//      socket, per hour, the ceiling and its prune), a unique conflict the
+//      memory did not know about, two sockets racing
 //   G. the social layer: the claim frame, the guest's rename, the Set, the
 //      squad row, a hello landing mid-claim
 //   H. the engine's door: a socket seats its reserved name whatever it sends,
-//      nobody else's name is shown, the stand-in is unused, offline unchanged
-import { createReservations, RESERVATIONS_OFF, DEFAULT_TIERS, SECRET_RE, hashSecret, nameKeyOf, combineStates, RESERVE_TTL_MS, TOUCH_MS, MINT_BURST } from '../server/reservations.js';
+//      nobody else's name is shown, the stand-in is unused, offline unchanged,
+//      and a claim that failed still seats the player's own name
+//   I. one name ignoring capitals in every script: a Greek name in other
+//      capitals, a name whose capitals read as another's, the Set and the door
+import { createReservations, RESERVATIONS_OFF, DEFAULT_TIERS, WIDE_DEFAULTS, SECRET_RE, hashSecret, nameKeyOf, combineStates, RESERVE_TTL_MS, TOUCH_MS, ROWS_PER_SOCKET, ROWS_PER_HOUR, ROWS_MAX, PRUNE_BATCH, PRUNE_GAP_MS, HOLDERS_MAX } from '../server/reservations.js';
 import { createNameProofs } from '../server/display-name.js';
 import { loadBlocklist, keyReadings } from '../server/callsign.js';
 import { createSocial } from '../server/social.js';
@@ -51,13 +58,19 @@ const U3 = '33333333-3333-4333-8333-333333333333';
 
 // ---- the fake table ------------------------------------------------------------
 // name_reservations as the migration makes it: name_key, secret_hash and
-// user_id each UNIQUE (two nulls never clash), and every write answering as
-// server/store.js answers. `before` runs ahead of an insert, which is how
-// another instance's write lands between this process's read and its write.
+// user_id each UNIQUE (two nulls never clash), EXACTLY ONE holder per row (a
+// write that would leave a row with both, or neither, throws, as the table's
+// check makes PostgREST answer 400), `reused` false until written true, and
+// every write answering as server/store.js answers: the move takes the
+// secret off in the same write, a rename matches its holder as well as its
+// id. `before` runs ahead of an insert, which is how another instance's write
+// lands between this process's read and its write. `secretFail` makes the
+// read by secret throw, as a store that is down does.
 function mkTable() {
-  const t = { rows: [], seq: 0, calls: [], keysFail: null, before: null };
+  const t = { rows: [], seq: 0, calls: [], keysFail: null, before: null, secretFail: null };
   const pub = (r) => (r ? { ...r } : null);
-  const clash = (r) => t.rows.some((o) => o.name_key === r.name_key || (r.secret_hash && o.secret_hash === r.secret_hash) || (r.user_id && o.user_id === r.user_id));
+  const clash = (r) => t.rows.some((o) => o !== r && (o.name_key === r.name_key || (r.secret_hash && o.secret_hash === r.secret_hash) || (r.user_id && o.user_id === r.user_id)));
+  const oneHolder = (r) => { if (!r.secret_hash === !r.user_id) throw new Error('sb 400: name_reservations_check'); };
   Object.assign(t, {
     async reservationKeys(after, limit) {
       t.calls.push(['keys']);
@@ -65,12 +78,13 @@ function mkTable() {
       return t.rows.map((r) => r.name_key).sort().filter((k) => !after || k > after).slice(0, limit);
     },
     async reservationByUser(id) { t.calls.push(['byUser']); return pub(t.rows.find((r) => r.user_id === id)); },
-    async reservationBySecret(h) { t.calls.push(['bySecret']); return /^[0-9a-f]{64}$/.test(h) ? pub(t.rows.find((r) => r.secret_hash === h)) : null; },
-    async reservationsByKeys(keys) { t.calls.push(['byKeys']); return [...new Set(keys)].map((k) => t.rows.find((r) => r.name_key === k)).filter(Boolean).map((r) => ({ name_key: r.name_key, user_id: r.user_id || null })); },
+    async reservationBySecret(h) { t.calls.push(['bySecret']); if (t.secretFail) throw t.secretFail; return /^[0-9a-f]{64}$/.test(h) ? pub(t.rows.find((r) => r.secret_hash === h)) : null; },
+    async reservationsByKeys(keys) { t.calls.push(['byKeys', [...new Set(keys)].sort()]); return [...new Set(keys)].map((k) => t.rows.find((r) => r.name_key === k)).filter(Boolean).map((r) => ({ name_key: r.name_key, user_id: r.user_id || null })); },
     async insertReservation({ name, key, secretHash = null, userId = null, linked = false }) {
       t.calls.push(['insert', name]);
       if (t.before) { const f = t.before; t.before = null; f(); }
-      const r = { id: ++t.seq, name, name_key: key, secret_hash: secretHash, user_id: userId, linked: !!linked, created_at: iso(clock), last_seen_at: iso(clock) };
+      const r = { id: ++t.seq, name, name_key: key, secret_hash: secretHash, user_id: userId, linked: !!linked, created_at: iso(clock), last_seen_at: iso(clock), reused: false };
+      oneHolder(r);
       if (clash(r)) return { ok: false };
       t.rows.push(r);
       return { ok: true, row: pub(r) };
@@ -79,30 +93,42 @@ function mkTable() {
       t.calls.push(['move']);
       const r = t.rows.find((x) => x.id === id && !x.user_id);
       if (!r || t.rows.some((o) => o.user_id === userId)) return null;
-      Object.assign(r, { user_id: userId, linked: !!linked, last_seen_at: iso(at) });
+      Object.assign(r, { user_id: userId, linked: !!linked, secret_hash: null, reused: true, last_seen_at: iso(at) });
+      oneHolder(r);
       return pub(r);
     },
-    async attachSecret(id, h) {
-      t.calls.push(['attach']);
-      const r = t.rows.find((x) => x.id === id && !x.secret_hash);
-      if (!r || t.rows.some((o) => o.secret_hash === h)) return null;
-      r.secret_hash = h;
-      return pub(r);
-    },
-    async renameReservation(id, name, key, at) {
+    async renameReservation(id, name, key, at, holder) {
       t.calls.push(['rename', name]);
-      const r = t.rows.find((x) => x.id === id);
+      const h = holder || {};
+      if (!h.userId && !h.secretHash) throw new Error('rename without a holder');
+      const r = t.rows.find((x) => x.id === id && (h.userId ? x.user_id === h.userId : x.secret_hash === h.secretHash && !x.user_id));
       if (!r) return { ok: false, error: 'gone' };
       if (t.rows.some((o) => o !== r && o.name_key === key)) return { ok: false, error: 'taken' };
       Object.assign(r, { name, name_key: key, last_seen_at: iso(at) });
       return { ok: true, row: pub(r) };
     },
-    async touchReservation(id, linked, at) { t.calls.push(['touch']); const r = t.rows.find((x) => x.id === id); if (r) Object.assign(r, { last_seen_at: iso(at), linked: !!linked }); },
+    async touchReservation(id, linked, at, reused = false) { t.calls.push(['touch', reused === true]); const r = t.rows.find((x) => x.id === id); if (r) Object.assign(r, { last_seen_at: iso(at), linked: !!linked }, reused === true ? { reused: true } : {}); },
     async deleteReservationOfUser(uid) { t.calls.push(['release']); const gone = t.rows.filter((r) => r.user_id === uid); t.rows = t.rows.filter((r) => r.user_id !== uid); return gone.map((r) => r.name_key); },
     async sweepReservations(before) { t.calls.push(['sweep']); const gone = t.rows.filter((r) => !r.linked && Date.parse(r.last_seen_at) < before); t.rows = t.rows.filter((r) => !gone.includes(r)); return gone.map((r) => r.name_key); },
+    async pruneReservations(before, limit) {
+      t.calls.push(['prune', limit]);
+      const can = (r) => !r.linked && r.reused !== true && Date.parse(r.created_at) < before;
+      const ids = t.rows.filter(can).map((r) => r.id).sort((a, b) => a - b).slice(0, limit);
+      if (!ids.length) return [];
+      const top = ids[ids.length - 1];
+      const gone = t.rows.filter((r) => can(r) && r.id <= top);
+      t.rows = t.rows.filter((r) => !gone.includes(r));
+      return gone.map((r) => r.name_key);
+    },
   });
   return t;
 }
+// A row as another holder left it, pushed straight into the fake table.
+const rowFor = (t, name, holder = {}) => {
+  const r = { id: ++t.seq, name, name_key: nameKeyOf(name), secret_hash: holder.user_id ? null : holder.secret_hash || ('f'.repeat(48) + String(t.seq).padStart(16, '0')), user_id: holder.user_id || null, linked: !!holder.linked, created_at: iso(holder.at ?? clock), last_seen_at: iso(holder.at ?? clock), reused: !!holder.reused };
+  t.rows.push(r);
+  return r;
+};
 const byName = (t, n) => t.rows.find((r) => r.name === n);
 
 // THE CHOSEN CALLSIGNS: an index that has loaded, answering as
@@ -221,41 +247,81 @@ const secretOf = (r) => (r && typeof r.secret === 'string' ? r.secret : null);
   const g = await w.res.claim({ name: 'Iron Hawk' });
   const sec = secretOf(g);
   const rowId = byName(w.table, 'Iron Hawk').id;
-  // First save: an anonymous account. The device's row MOVES, name and all.
+  // First save: an anonymous account. The device's row MOVES, name and all,
+  // and the device's secret comes off it in the same write.
   const m = await w.res.claim({ userId: U1, linked: false, secret: sec, name: 'Iron Hawk' });
   const moved = w.table.rows.find((r) => r.id === rowId);
-  if (m.ok && m.name === 'Iron Hawk' && !m.moved && moved.user_id === U1 && moved.secret_hash === hashSecret(sec) && w.table.rows.length === 1 && !w.table.calls.some(([c]) => c === 'release'))
-    ok('C: a guest who gets an account keeps the name: the same row moves to the account, still carrying the device\'s secret, and nothing is released or re-reserved');
+  if (m.ok && m.name === 'Iron Hawk' && !m.moved && !m.secret && moved.user_id === U1 && moved.secret_hash === null && moved.reused === true
+      && w.table.rows.length === 1 && !w.table.calls.some(([c]) => c === 'release'))
+    ok('C: a guest who gets an account keeps the name: the same row moves to the account, the device\'s secret comes off it in the same write, and nothing is released or re-reserved');
   else fail('C: move: ' + JSON.stringify({ m, rows: w.table.rows }));
-  // Another player cannot slip in: the name is held throughout.
+  // Another player cannot slip in, and the account is answered from any device.
   const other = await w.res.claim({ name: 'Iron Hawk' });
-  // The account from a device with no secret, and the device with its secret but no session.
   const acct = await w.res.claim({ userId: U1, linked: false, name: 'Whatever Else' });
-  const dev = await w.res.claim({ secret: sec, name: 'Whatever Else' });
-  if (other.moved === 'taken' && acct.name === 'Iron Hawk' && dev.name === 'Iron Hawk' && !acct.secret)
-    ok('C: after the move the account (from any device) and the device (signed out, or its session lost) are both answered "Iron Hawk", and nobody else can take it');
-  else fail('C: after move: ' + JSON.stringify({ other, acct, dev }));
+  if (other.moved === 'taken' && acct.name === 'Iron Hawk' && !acct.secret)
+    ok('C: after the move the account is answered "Iron Hawk" from any device, and nobody else can take it');
+  else fail('C: after move: ' + JSON.stringify({ other, acct }));
+  // THE DEVICE SIGNED OUT (or another person on it): its secret names no
+  // account. It presents its own name, which went with the account, and is
+  // given a new unused default of its own, on a row of its own, with a new
+  // secret; marked fresh (the sign-out said a fresh guest starts) it is told
+  // nothing. The account's row is untouched.
+  const before = w.table.rows.length;
+  const out = await w.res.claim({ secret: sec, name: 'Iron Hawk', fresh: true });
+  const outRow = out.ok && byName(w.table, out.name);
+  const acctRow = w.table.rows.find((r) => r.id === rowId);
+  if (out.ok && out.name !== 'Iron Hawk' && isGeneratedCallsign(out.name) && !out.moved && SECRET_RE.test(secretOf(out) || '') && secretOf(out) !== sec
+      && outRow && outRow.user_id === null && outRow.secret_hash === hashSecret(secretOf(out)) && w.table.rows.length === before + 1
+      && acctRow.name === 'Iron Hawk' && acctRow.user_id === U1)
+    ok(`C: the signed-out device's old secret is no longer believed: it gets a name of its own ('${out.name}'), a new row and a new secret, silently when marked fresh, and the account keeps "Iron Hawk"`);
+  else fail('C: signed out: ' + JSON.stringify({ out, outRow, acctRow }));
+  // And not marked fresh (another person on a shared device): the same, told 'taken'.
+  const out2 = await w.res.claim({ secret: sec, name: 'Iron Hawk' });
+  // The device's own row from then on answers its new secret, never the account's name.
+  const again = await w.res.claim({ secret: secretOf(out), name: 'Iron Hawk' });
+  if (out2.ok && out2.moved === 'taken' && out2.name !== 'Iron Hawk' && again.ok && again.name === out.name && !again.secret)
+    ok('C: unmarked, a device presenting the account\'s name is moved to a default and told \'taken\'; the device\'s new secret answers its own name, never the account\'s');
+  else fail('C: shared device: ' + JSON.stringify({ out2, again }));
+  // ITS PREVIOUS OWN NAME WHEN NOBODY HOLDS IT. A device's row moves to an
+  // account, which then sets a chosen callsign and lets the name go; the
+  // device signing out gets its own old name back.
+  const d2 = await w.res.claim({ name: 'Mad Rim' });
+  await w.res.claim({ userId: U3, linked: true, secret: secretOf(d2), name: 'Mad Rim' });
+  await w.res.claim({ userId: U3, linked: true, chosen: 'Marguerite Vale', name: 'Mad Rim' });
+  const back = await w.res.claim({ secret: secretOf(d2), name: 'Mad Rim', fresh: true });
+  if (back.ok && back.name === 'Mad Rim' && !back.moved && secretOf(back) && byName(w.table, 'Mad Rim').user_id === null)
+    ok('C: a signed-out device whose old name the account has since let go gets that name back, on a row of its own');
+  else fail('C: previous own name: ' + JSON.stringify({ back, rows: w.table.rows }));
   // Linking the anonymous account (the same id): the row is marked linked.
   clock += 2 * TOUCH_MS;
-  await w.res.claim({ userId: U1, linked: true, secret: sec, name: 'Iron Hawk' });
+  await w.res.claim({ userId: U1, linked: true, name: 'Iron Hawk' });
   if (w.table.rows.find((r) => r.id === rowId).linked === true) ok('C: when the account is linked the row is marked linked (and so is never swept)');
   else fail('C: linked flag: ' + JSON.stringify(w.table.rows));
-  // An account with no row and a device with none: a new row, carrying a new secret.
+  // An account with no row and a device with none: a new row, held by the account alone.
   const n2 = await w.res.claim({ userId: U2, linked: true, name: 'Rusty Mule' });
   const r2 = byName(w.table, 'Rusty Mule');
-  if (n2.ok && SECRET_RE.test(secretOf(n2) || '') && r2.user_id === U2 && r2.linked === true && r2.secret_hash === hashSecret(secretOf(n2)))
-    ok('C: an account with no row reserves its name, and the device it claimed from gets a secret on that row');
+  if (n2.ok && !n2.secret && r2.user_id === U2 && r2.linked === true && r2.secret_hash === null)
+    ok('C: an account with no row reserves its name on a row the account alone holds: no device secret is issued for it');
   else fail('C: new account row: ' + JSON.stringify({ n2, r2 }));
-  // An account row reserved before this device had a secret gets this device's secret.
-  w.table.rows.push({ id: ++w.table.seq, name: 'Bold Coyote', name_key: 'bold coyote', secret_hash: null, user_id: U3, linked: true, created_at: iso(clock), last_seen_at: iso(clock) });
+  // An account's row reserved elsewhere never takes this device's secret.
+  rowFor(w.table, 'Bold Coyote', { user_id: '44444444-4444-4444-8444-444444444444', linked: true });
   await w.res.refresh();
-  const n3 = await w.res.claim({ userId: U3, linked: true, name: 'Bold Coyote' });
-  if (n3.name === 'Bold Coyote' && SECRET_RE.test(secretOf(n3) || '') && byName(w.table, 'Bold Coyote').secret_hash === hashSecret(secretOf(n3)))
-    ok('C: an account\'s row with no device on it takes this device\'s new secret, so a sign-out later keeps the name here too');
-  else fail('C: attach: ' + JSON.stringify({ n3, row: byName(w.table, 'Bold Coyote') }));
+  const n3 = await w.res.claim({ userId: '44444444-4444-4444-8444-444444444444', linked: true, name: 'Bold Coyote' });
+  if (n3.name === 'Bold Coyote' && !n3.secret && byName(w.table, 'Bold Coyote').secret_hash === null && !w.table.calls.some(([c]) => c === 'attach'))
+    ok('C: an account\'s row from another device is answered as it is, and no device secret is ever written onto it');
+  else fail('C: no attach: ' + JSON.stringify({ n3, row: byName(w.table, 'Bold Coyote') }));
+  // A row that still carries both (a table from before the check): its
+  // secret is not believed for it.
+  const both = 'B'.repeat(43);
+  w.table.rows.push({ id: ++w.table.seq, name: 'Lone Fuse', name_key: 'lone fuse', secret_hash: hashSecret(both), user_id: '55555555-5555-4555-8555-555555555555', linked: true, created_at: iso(clock), last_seen_at: iso(clock), reused: true });
+  await w.res.refresh();
+  const nb = await w.res.claim({ secret: both, name: 'Lone Fuse' });
+  if (nb.ok && nb.name !== 'Lone Fuse' && nb.moved === 'taken' && secretOf(nb) && secretOf(nb) !== both)
+    ok('C: a secret on a row an account holds is never answered with that row: the device is given a name of its own');
+  else fail('C: both holders: ' + JSON.stringify(nb));
   // A secret the server never issued (or one whose row went) is no secret: a new one is issued.
   const forged = 'A'.repeat(43);
-  const f = await w.res.claim({ secret: forged, name: 'Mad Rim' });
+  const f = await w.res.claim({ secret: forged, name: 'Steady Spire' });
   if (f.ok && secretOf(f) && secretOf(f) !== forged && byName(w.table, f.name).secret_hash === hashSecret(secretOf(f)))
     ok('C: a well-formed secret no row holds is not believed: the device gets a new one with its new row');
   else fail('C: forged secret: ' + JSON.stringify(f));
@@ -265,8 +331,8 @@ const secretOf = (r) => (r && typeof r.secret === 'string' ? r.secret : null);
     ok('C: a linked account holding a chosen callsign is answered with it, and the row it had is released: one name per player');
   else fail('C: chosen: ' + JSON.stringify({ n4, rows: w.table.rows.map((r) => r.name) }));
   // An anonymous account is never answered "chosen", whatever the socket says.
-  const n5 = await w.res.claim({ userId: U3, linked: false, chosen: 'Marguerite Vale', name: 'Bold Coyote' });
-  if (n5.name === 'Bold Coyote' && !n5.chosen) ok('C: a chosen name on a guest\'s socket is ignored: only a linked account holds one');
+  const n5 = await w.res.claim({ userId: '66666666-6666-4666-8666-666666666666', linked: false, chosen: 'Marguerite Vale', name: 'Quiet Gunner' });
+  if (n5.name === 'Quiet Gunner' && !n5.chosen) ok('C: a chosen name on a guest\'s socket is ignored: only a linked account holds one');
   else fail('C: guest chosen: ' + JSON.stringify(n5));
 }
 
@@ -302,6 +368,60 @@ const secretOf = (r) => (r && typeof r.secret === 'string' ? r.secret : null);
   const c2 = await w2.res.claim({ name: 'Not Mine' });
   if (only.name === 'Not Mine' && c2.moved === 'taken' && c2.name === pairs[0]) ok('D: with every pair but one held as chosen callsigns, a moved player gets that one pair');
   else fail('D: chosen-aware default: ' + JSON.stringify({ only, c2 }));
+}
+{
+  // THE WIDE TIER (round 3 fix, 2026-10-10): every pair with a number from 10
+  // to 999 that fits in 16 characters, drawn at random, so a flood that holds
+  // all 13,086 walked defaults still leaves newcomers an unused one.
+  const [pairs, numbered] = DEFAULT_TIERS;
+  let longest = 0, shape = true;
+  for (let i = 0; i < WIDE_DEFAULTS.size; i++) {
+    const n = WIDE_DEFAULTS.at(i), len = [...n].length;
+    if (len > longest) longest = len;
+    const m = /^(.+) (\d{2,3})$/.exec(n);
+    if (!m || !pairs.includes(m[1]) || +m[2] < 10 || +m[2] > 999) { shape = false; break; }
+  }
+  if (WIDE_DEFAULTS.size === 1075050 && WIDE_DEFAULTS.size >= 10 * ROWS_MAX && longest === 16 && shape
+      && WIDE_DEFAULTS.at(0).endsWith(' 10') && WIDE_DEFAULTS.at(WIDE_DEFAULTS.size - 1).endsWith(' 999'))
+    ok(`D: the wide tier is ${WIDE_DEFAULTS.size.toLocaleString('en')} names (a pair and 10 to 999, never past 16 characters), more than ten times the ${ROWS_MAX.toLocaleString('en')}-row ceiling`);
+  else fail('D: wide tier shape: ' + JSON.stringify({ size: WIDE_DEFAULTS.size, longest, shape }));
+  // Every walked default held: moved players are drawn from the wide tier,
+  // each one unused, and the guidelines run only on names drawn free.
+  const draws = [];
+  const t = mkTable();
+  for (const n of [...pairs, ...numbered]) rowFor(t, n);
+  const ci = mkChosen();
+  let res = null;
+  const proofs = createNameProofs({ terms: TERMS, keyState: (k) => combineStates(ci.state(k), res ? res.state(k) : 'free') });
+  let checks = 0;
+  const checkName = (raw) => { checks++; return proofs.checkPlayerName(raw); };
+  // The walked tiers start at 0; the wide tier's draws come from `draws`.
+  const queue = [];
+  res = createReservations({ store: t, chosenState: ci.state, checkName, now, pick: (n) => (n === WIDE_DEFAULTS.size ? (draws.push(queue[0] ?? 0), queue.shift() ?? 0) : 0) });
+  await res.refresh();
+  // The first draw is a held wide name, the second one the guidelines refuse
+  // ('Iron Wash 17' reads as a term on the shipped list), the third is free.
+  const heldWide = WIDE_DEFAULTS.at(500);
+  rowFor(t, heldWide);
+  await res.refresh();
+  const refusedAt = 31687;
+  queue.push(500, refusedAt, 777);
+  checks = 0;
+  const r = await res.claim({ name: pairs[0] });
+  const want = WIDE_DEFAULTS.at(777);
+  if (r.ok && r.moved === 'taken' && r.name === want && WIDE_DEFAULTS.at(refusedAt) === 'Iron Wash 17' && !proofs.checkPlayerName('Iron Wash 17').ok
+      && same(draws, [500, refusedAt, 777]) && checks === 3)
+    ok(`D: with all 13,086 walked defaults held, a moved player is drawn from the wide tier: a held draw is skipped by a lookup, one the guidelines refuse is skipped, and the next free one is given ('${want}'); the guidelines ran 3 times, never on the 13,086 held names`);
+  else fail('D: wide draw: ' + JSON.stringify({ r, draws, checks, want }));
+  // Many moves, all different and all unused.
+  queue.length = 0;
+  const res2 = createReservations({ store: t, chosenState: ci.state, checkName: proofs.checkPlayerName, now, pick });
+  await res2.refresh();
+  const got = [];
+  for (let i = 0; i < 40; i++) { const x = await res2.claim({ name: pairs[1] }); got.push(x.ok ? x.name : null); }
+  if (got.every((n) => n && /^.+ \d{2,3}$/.test(n)) && new Set(got).size === 40 && got.every((n) => t.rows.filter((q) => q.name === n).length === 1))
+    ok('D: forty players moved with every walked default held each get a different, unused name from the wide tier');
+  else fail('D: wide moves: ' + JSON.stringify(got));
 }
 
 // ==== E. two namespaces, never overlapping ========================================
@@ -383,21 +503,122 @@ const secretOf = (r) => (r && typeof r.secret === 'string' ? r.secret : null);
   else fail('F: sweep timer: ' + JSON.stringify(w3.sweeps.map((s) => s.ms)));
 }
 {
-  // THE PROCESS-WIDE BUCKET on new rows.
+  // THE HOURLY WINDOW on new rows, per process (round 3 fix, 2026-10-10): at
+  // most ROWS_PER_HOUR in any 60 minutes, answered 'unavailable' past it.
   const w = world();
   await w.res.refresh();
+  const t0 = clock;
   const first = await w.res.claim({ name: 'Ashen Mesa' });
   let made = 1, refused = null;
-  for (let i = 0; i < MINT_BURST + 5 && !refused; i++) {
+  for (let i = 0; i < ROWS_PER_HOUR + 5 && !refused; i++) {
+    clock = t0 + 1 + i;      // one a millisecond after the first, so the window's order is plain
     const r = await w.res.claim({ name: `Ashen Mesa ${i}`.slice(0, 16) });
     if (r.ok) made++; else refused = r;
   }
   const holder = await w.res.claim({ secret: secretOf(first), name: 'x' });
-  clock += 60000;
-  const later = await w.res.claim({ name: 'Brass Butte' });
-  if (made === MINT_BURST && same(refused, { ok: false, error: 'slow_down' }) && holder.ok && holder.name === 'Ashen Mesa' && later.ok)
-    ok(`F: ${MINT_BURST} new rows in an instant and the next new-row claim is "slow_down"; a holder is still answered, and a minute later new rows are made again`);
-  else fail('F: bucket: ' + JSON.stringify({ made, refused, holder, later }));
+  clock = t0 + 59 * 60000;
+  const stillShut = await w.res.claim({ name: 'Brass Butte' });
+  clock = t0 + 60 * 60000;
+  const one = await w.res.claim({ name: 'Brass Butte' });
+  const two = await w.res.claim({ name: 'Brass Rider' });
+  clock = t0 + 60 * 60000 + 1;
+  const three = await w.res.claim({ name: 'Brass Hawk' });
+  if (made === ROWS_PER_HOUR && same(refused, { ok: false, error: 'unavailable' }) && holder.ok && holder.name === 'Ashen Mesa'
+      && same(stillShut, { ok: false, error: 'unavailable' }) && one.ok && same(two, { ok: false, error: 'unavailable' }) && three.ok)
+    ok(`F: ${ROWS_PER_HOUR} new rows in an hour and the next new-row claim is "unavailable"; a holder is still answered; 59 minutes on it is still shut, and from the hour each new row waits for the oldest of the ${ROWS_PER_HOUR} to be an hour old`);
+  else fail('F: hourly window: ' + JSON.stringify({ made, refused, holder, stillShut, one, two, three }));
+  // A clock that jumps back a day does not shut new rows out for that day.
+  clock = t0 - 86400000;
+  const back = await w.res.claim({ name: 'Brass Mule' });
+  clock = t0 + 2 * 3600000;
+  if (back.ok) ok('F: a clock that jumps backwards does not shut new rows out (a stamp from the future is not counted)');
+  else fail('F: clock back: ' + JSON.stringify(back));
+}
+{
+  // THE CEILING AND THE PRUNE (round 3 fix, 2026-10-10). A table holding
+  // ROWS_MAX rows makes no new row: the claim is 'unavailable' and the prune
+  // starts, which deletes the oldest rows nobody linked holds, nobody came
+  // back to and that are over a day old, PRUNE_BATCH at most, then the next
+  // claim is answered.
+  const t = mkTable();
+  const old = clock - 2 * 86400000;
+  for (let i = 0; i < ROWS_MAX; i++) {
+    const kind = i < 1000 ? 'linked' : i < 2000 ? 'reused' : i < ROWS_MAX - 1000 ? 'old' : 'young';
+    t.rows.push({ id: ++t.seq, name: `Flood ${i}`, name_key: `flood ${i}`, secret_hash: kind === 'linked' ? null : String(i).padStart(64, '0'), user_id: kind === 'linked' ? `${String(i).padStart(8, '0')}-0000-4000-8000-000000000000` : null, linked: kind === 'linked', created_at: iso(kind === 'young' ? clock : old), last_seen_at: iso(kind === 'young' ? clock : old), reused: kind === 'reused', kind });
+  }
+  // The table's key read, sorted once per change rather than once a page.
+  let sorted = null, at = -1;
+  t.reservationKeys = async (after, limit) => {
+    if (at !== t.rows.length) { sorted = t.rows.map((r) => r.name_key).sort(); at = t.rows.length; }
+    let lo = 0, hi = sorted.length;
+    if (after) { while (lo < hi) { const m = (lo + hi) >> 1; if (sorted[m] <= after) lo = m + 1; else hi = m; } }
+    return sorted.slice(lo, lo + limit);
+  };
+  const res = createReservations({ store: t, chosenState: () => 'free', checkName: createNameProofs({ terms: TERMS, keyState: () => 'free' }).checkPlayerName, now, pick });
+  await res.refresh();
+  const full = await res.claim({ name: 'Newcomer One' });
+  // The prune the claim started, not one this test starts.
+  await new Promise((r) => setTimeout(r, 20));
+  const started = t.calls.filter(([c]) => c === 'prune').length;
+  const gone = new Set(t.rows.map((r) => r.id));
+  const removed = [];
+  for (let id = 1; id <= ROWS_MAX; id++) if (!gone.has(id)) removed.push(id);
+  const kinds = new Set(t.rows.map((r) => r.kind));
+  const after = await res.claim({ name: 'Newcomer One' });
+  const sizeAfter = res.size;
+  const prunes = t.calls.filter(([c]) => c === 'prune').length;
+  const soon = await res.prune();
+  const prunesSoon = t.calls.filter(([c]) => c === 'prune').length;
+  clock += PRUNE_GAP_MS;
+  await res.prune();
+  const prunesLater = t.calls.filter(([c]) => c === 'prune').length;
+  if (sizeAfter === ROWS_MAX - PRUNE_BATCH + 1 && same(full, { ok: false, error: 'unavailable' }) && started === 1 && removed.length === PRUNE_BATCH
+      && removed[0] === 2001 && removed[removed.length - 1] === 2000 + PRUNE_BATCH && kinds.has('linked') && kinds.has('reused') && kinds.has('young')
+      && t.rows.filter((r) => r.kind && r.kind !== 'old').length === 3000 && after.ok && after.name === 'Newcomer One'
+      && prunes === 1 && soon === 0 && prunesSoon === 1 && prunesLater === 2)
+    ok(`F: at the ${ROWS_MAX.toLocaleString('en')}-row ceiling a new name is "unavailable" and the prune frees the ${PRUNE_BATCH} oldest rows nobody came back to (never a linked, reused or day-old-or-younger one), the next claim is answered, and the prune runs at most once a minute`);
+  else fail('F: ceiling: ' + JSON.stringify({ size: sizeAfter, full, started, removed: [removed[0], removed[removed.length - 1], removed.length], after, prunes, soon, prunesSoon, prunesLater }));
+}
+{
+  // REUSED: a claim that finds the row a day or more after it was made marks
+  // it, once, with the touch it writes anyway.
+  const w = world();
+  await w.res.refresh();
+  const a = await w.res.claim({ name: 'Ochre Ridge' });
+  clock += TOUCH_MS / 2;
+  await w.res.claim({ secret: secretOf(a), name: 'x' });
+  const early = byName(w.table, 'Ochre Ridge').reused;
+  clock += TOUCH_MS / 2;
+  await w.res.claim({ secret: secretOf(a), name: 'x' });
+  const late = byName(w.table, 'Ochre Ridge').reused;
+  if (early === false && late === true && w.table.calls.filter(([c, r]) => c === 'touch' && r === true).length === 1)
+    ok('F: a row is marked reused the first time its holder comes back a day or more after it was made, never before');
+  else fail('F: reused: ' + JSON.stringify({ early, late, calls: w.table.calls.filter(([c]) => c === 'touch') }));
+}
+{
+  // THE INDEX'S OWN LIMIT: a table past it fails the read (the feature stays
+  // off), starts the prune, and the next read turns the feature on.
+  const t = mkTable();
+  const old = clock - 2 * 86400000;
+  const over = ROWS_MAX * 1.5 + 10;
+  for (let i = 0; i < over; i++) t.rows.push({ id: ++t.seq, name: `Flood ${i}`, name_key: `flood ${i}`, secret_hash: String(i).padStart(64, '0'), user_id: null, linked: false, created_at: iso(old), last_seen_at: iso(old), reused: false });
+  let sorted = null, at = -1;
+  t.reservationKeys = async (after, limit) => {
+    if (at !== t.rows.length) { sorted = t.rows.map((r) => r.name_key).sort(); at = t.rows.length; }
+    let lo = 0, hi = sorted.length;
+    if (after) { while (lo < hi) { const m = (lo + hi) >> 1; if (sorted[m] <= after) lo = m + 1; else hi = m; } }
+    return sorted.slice(lo, lo + limit);
+  };
+  const errs = [];
+  const res = createReservations({ store: t, chosenState: () => 'free', checkName: createNameProofs({ terms: TERMS, keyState: () => 'free' }).checkPlayerName, now, pick, onError: (e) => errs.push(e && e.code) });
+  const first = await res.refresh();
+  const wasReady = res.ready;
+  // The prune the failed read started, not one this test starts.
+  await new Promise((r) => setTimeout(r, 20));
+  const second = await res.refresh();
+  if (first === false && !wasReady && errs.includes('NAME_INDEX_FULL') && t.rows.length === over - PRUNE_BATCH && second === true && res.ready)
+    ok(`F: a table past the index's limit (${over.toLocaleString('en')} rows) fails the read and leaves the feature off, the prune it starts frees ${PRUNE_BATCH} never-used rows, and the next read turns the feature on`);
+  else fail('F: index limit: ' + JSON.stringify({ first, wasReady, errs, rows: t.rows.length, second, ready: res.ready }));
 }
 {
   // A UNIQUE CONFLICT MEMORY DID NOT KNOW ABOUT (another instance reserved it a
@@ -504,11 +725,81 @@ function socialWorld(opts = {}) {
   await w.social.handle(h, { type: 'name', name: 'Rapid Volley', id: 13 });
   if (last(h).error === 'unavailable' && !h.reservedName) ok('G: a claim whose socket said hello again while it was out is answered "unavailable" and leaves nothing on the socket (the client claims again after every hello)');
   else fail('G: generation: ' + JSON.stringify(last(h)));
-  // The bucket: six claims a minute per socket.
+  // The bucket: six claims a minute per socket (each carrying the device's
+  // secret, as the client sends it).
   const z = mkws();
-  for (let i = 0; i < 7; i++) await w.social.handle(z, { type: 'name', name: 'Blunt Wash', id: 20 + i });
-  if (z._rx.slice(0, 6).every((m) => m.ok) && z._rx[6].error === 'slow_down') ok('G: six claims a minute per socket, then "slow_down"');
+  await w.social.handle(z, { type: 'name', name: 'Blunt Wash', id: 20 });
+  for (let i = 1; i < 7; i++) await w.social.handle(z, { type: 'name', name: 'Blunt Wash', secret: z._rx[0].secret, id: 20 + i });
+  if (z._rx.slice(0, 6).every((m) => m.ok && m.name === 'Blunt Wash') && z._rx[6].error === 'slow_down') ok('G: six claims a minute per socket, then "slow_down"');
   else fail('G: claim bucket: ' + JSON.stringify(z._rx.map((m) => m.error || m.name)));
+  // NEW ROWS PER SOCKET (round 3 fix, 2026-10-10): a connection that claims
+  // with no secret every time makes a new row each time, ROWS_PER_SOCKET at
+  // most; then 'slow_down', with nothing written. A holder's claim on it is
+  // still answered, and a new connection may make its own.
+  const y = mkws();
+  for (let i = 0; i < ROWS_PER_SOCKET; i++) { clock += 10001; await w.social.handle(y, { type: 'name', name: `Fresh Name ${i}`, id: 30 + i }); }
+  const rowsNow = w.table.rows.length;
+  clock += 10001;
+  await w.social.handle(y, { type: 'name', name: `Fresh Name ${ROWS_PER_SOCKET}`, id: 30 + ROWS_PER_SOCKET });
+  const rowsAfter = w.table.rows.length;
+  clock += 10001;
+  await w.social.handle(y, { type: 'name', name: 'x', secret: y._rx[0].secret, id: 35 });
+  const y2 = mkws();
+  await w.social.handle(y2, { type: 'name', name: 'Fresh Name 9', id: 36 });
+  if (y._rx.slice(0, ROWS_PER_SOCKET).every((m) => m.ok && m.secret) && y._rx[ROWS_PER_SOCKET].error === 'slow_down' && rowsAfter === rowsNow
+      && y._rx[ROWS_PER_SOCKET + 1].ok && y._rx[ROWS_PER_SOCKET + 1].name === 'Fresh Name 0' && last(y2).ok && last(y2).name === 'Fresh Name 9')
+    ok(`G: one connection makes at most ${ROWS_PER_SOCKET} new rows, then "slow_down" with nothing written; a claim with its secret is still answered, and another connection makes its own`);
+  else fail('G: rows per socket: ' + JSON.stringify({ y: y._rx.map((m) => m.error || m.name), y2: last(y2) }));
+  // A CLAIM MADE AS AN ACCOUNT IS NEVER ANSWERED AS A DEVICE: the hello ahead
+  // of it did not make the socket an account (GoTrue refused it), so the
+  // claim is 'unavailable', with nothing read or written.
+  const nobody = mkws();
+  const callsBefore = w.table.calls.length;
+  await w.social.handle(nobody, { type: 'name', name: 'Dune Viper', account: true, secret: ra.secret, id: 37 });
+  if (same(last(nobody), { type: 'name', error: 'unavailable', id: 37 }) && w.table.calls.length === callsBefore && !nobody.reservedName)
+    ok('G: a claim marked as an account\'s on a socket that is no account is "unavailable", with nothing read or written (never answered as the device)');
+  else fail('G: account claim without an account: ' + JSON.stringify(last(nobody)));
+}
+{
+  // THE GUEST CHECK OP NEVER RENAMES AN ACCOUNT'S ROW (round 3 fix,
+  // 2026-10-10). A tablet's guest reserves 'Dune Viper'; a parent's account
+  // signs in on it and the row moves to the account. The tablet's guest
+  // socket that still remembers the row, and a new guest socket with the
+  // tablet's secret, both try to rename it: neither can, and the parent keeps
+  // 'Dune Viper' on every device.
+  const w = socialWorld();
+  await w.res.refresh();
+  const kid = mkws();
+  await w.social.handle(kid, { type: 'name', name: 'Dune Viper', id: 1 });
+  const S1 = last(kid).secret;
+  const parent = mkws(U2, false);
+  await w.social.handle(parent, { type: 'name', name: 'Dune Viper', secret: S1, account: true, id: 2 });
+  const row = byName(w.table, 'Dune Viper');
+  await w.social.handle(kid, { type: 'callsign', op: 'check', name: 'Kid Renamed', id: 3 });
+  const r1 = last(kid);
+  const kid2 = mkws();
+  await w.social.handle(kid2, { type: 'name', name: 'Dune Viper', secret: S1, fresh: true, id: 4 });
+  const c2 = last(kid2);
+  await w.social.handle(kid2, { type: 'callsign', op: 'check', name: 'Kid Renamed', id: 5 });
+  const r2 = last(kid2);
+  const parentAgain = mkws(U2, false);
+  await w.social.handle(parentAgain, { type: 'name', name: 'Whatever', account: true, id: 6 });
+  if (last(parent).ok && last(parent).name === 'Dune Viper' && last(parent).linked && row.user_id === U2 && row.secret_hash === null
+      && r1.error === 'unavailable' && kid.nameRow === null && byName(w.table, 'Dune Viper') && byName(w.table, 'Dune Viper').user_id === U2
+      && c2.ok && c2.name !== 'Dune Viper' && !c2.moved && kid2.nameRow && kid2.nameRow.user_id === null
+      && r2.ok && r2.name === 'Kid Renamed' && byName(w.table, 'Kid Renamed').user_id === null
+      && last(parentAgain).name === 'Dune Viper')
+    ok('G: after a device\'s row moves to an account, the device\'s old socket cannot rename it ("unavailable", and it lets the row go), the device\'s next guest claim gets a name of its own, its renames move only that, and the account keeps "Dune Viper"');
+  else fail('G: check op vs account row: ' + JSON.stringify({ parent: last(parent), row, r1, c2, r2, parentAgain: last(parentAgain), rows: w.table.rows.map((r) => [r.name, r.user_id]) }));
+  // And a socket whose remembered account row is not its account's any more
+  // (an identity change it was not told about) lets the row go, renaming nothing.
+  const odd = mkws(U3, false);
+  odd.nameRow = { ...row, name: 'Dune Viper' };
+  odd.reservedName = 'Dune Viper';
+  await w.social.handle(odd, { type: 'callsign', op: 'check', name: 'Odd Rename', id: 7 });
+  if (odd.nameRow === null && odd.reservedName === null && !byName(w.table, 'Odd Rename') && byName(w.table, 'Dune Viper').user_id === U2)
+    ok('G: a socket holding another account\'s row lets it go at the check op and renames nothing');
+  else fail('G: foreign row: ' + JSON.stringify({ row: odd.nameRow, rows: w.table.rows.map((r) => r.name) }));
 }
 {
   // THE SQUAD ROW SHOWS THE RESERVED NAME: a guest's in place of what its join
@@ -609,6 +900,165 @@ function socialWorld(opts = {}) {
   if (thr && thr.renamed && thr.name === callsignFromSeed([...'Rapid Fuse'].reduce((a, c) => (a * 31 + c.charCodeAt(0)) | 0, 7)) && offAgain && offAgain.name === 'Steel Gunner' && !offAgain.renamed)
     ok('H: a nameFree that throws refuses (fail closed), and the first seed stands in; with the reservations off every rolled pair is seated as before');
   else fail('H: hook faults: ' + JSON.stringify({ thr, offAgain }));
+  // A CLAIM THAT FAILED STILL SEATS THE PLAYER'S OWN NAME (round 3 fix,
+  // 2026-10-10). 'Steel Gunner' is reserved; the store then stops answering.
+  // The holder reconnects: its claim fails, but the socket is vouched for its
+  // own name, and the door seats it. A socket presenting a secret this
+  // process never saw is vouched for nothing, and is refused the name; and a
+  // player with no row at all is seated under their own name because nobody
+  // holds it. When the store answers again, the claim is answered.
+  const sw = socialWorld();
+  await sw.res.refresh();
+  eng.setNameCheck(sw.proofs.playerName);
+  eng.setNameFree((n) => sw.res.free(n));
+  const g1 = mkws();
+  await sw.social.handle(g1, { type: 'name', name: 'Steel Gunner', id: 1 });
+  const S = last(g1).secret;
+  const acct = mkws(U1, false);
+  await sw.social.handle(acct, { type: 'name', name: 'Cinder Hawk', account: true, id: 2 });
+  sw.table.secretFail = new Error('sb 503');
+  const realByUser = sw.table.reservationByUser;
+  sw.table.reservationByUser = async () => { throw new Error('sb 503'); };
+  const g2 = mkws(), forger = mkws(), acct2 = mkws(U1, false), nobodyHeld = mkws();
+  await sw.social.handle(g2, { type: 'name', name: 'Something Else', secret: S, id: 3 });
+  await sw.social.handle(forger, { type: 'name', name: 'Steel Gunner', secret: 'Q'.repeat(43), id: 4 });
+  await sw.social.handle(acct2, { type: 'name', name: 'Old Name', account: true, id: 5 });
+  await sw.social.handle(nobodyHeld, { type: 'name', name: 'Quiet Dawn', secret: 'R'.repeat(43), id: 6 });
+  const seatG2 = seat(mkew({ reservedName: g2.reservedName }), 'Something Else');
+  const seatForger = seat(mkew({ reservedName: forger.reservedName }), 'Steel Gunner');
+  const seatAcct2 = seat(mkew({ reservedName: acct2.reservedName }), 'Old Name');
+  const seatFree = seat(mkew({ reservedName: nobodyHeld.reservedName }), 'Quiet Dawn');
+  sw.table.secretFail = null;
+  sw.table.reservationByUser = realByUser;
+  await sw.social.handle(g2, { type: 'name', name: 'Something Else', secret: S, id: 7 });
+  eng.setNameCheck(null);
+  eng.setNameFree(null);
+  if (last(g2).id === 7 && last(g2).ok && last(g2).name === 'Steel Gunner' && g2.nameRow && g2.nameRow.name === 'Steel Gunner'
+      && g2._rx[0].error === 'unavailable' && seatG2 && seatG2.name === 'Steel Gunner' && !seatG2.renamed
+      && last(forger).error === 'unavailable' && forger.reservedName == null && seatForger && seatForger.name !== 'Steel Gunner' && seatForger.renamed
+      && last(acct2).error === 'unavailable' && acct2.reservedName === 'Cinder Hawk' && seatAcct2 && seatAcct2.name === 'Cinder Hawk'
+      && last(nobodyHeld).error === 'unavailable' && nobodyHeld.reservedName == null && seatFree && seatFree.name === 'Quiet Dawn' && !seatFree.renamed)
+    ok('H: with the store down, a holder\'s failed claim still seats its own name (a device by its secret, an account by its id), a stranger presenting it is refused, a player nobody holds a name against keeps theirs, and the next claim is answered');
+  else fail('H: vouch: ' + JSON.stringify({ g2: g2._rx, seatG2, forger: last(forger), seatForger, acct2: [last(acct2), acct2.reservedName], seatAcct2, free: [last(nobodyHeld), seatFree] }));
+  // The vouch follows the holder: once a device's row moves to an account,
+  // the device's secret is vouched for nothing, and the account for the name.
+  const vw = world();
+  await vw.res.refresh();
+  // An account id with letters in it, so its capitals differ.
+  const UA = 'abcdef01-abcd-4abc-8abc-abcdefabcdef';
+  const d = await vw.res.claim({ name: 'Grim Gulch' });
+  const devBefore = vw.res.vouch({ secret: secretOf(d) });
+  await vw.res.claim({ userId: UA, linked: true, secret: secretOf(d), name: 'Grim Gulch' });
+  const devAfter = vw.res.vouch({ secret: secretOf(d) });
+  const acctAfter = vw.res.vouch({ userId: UA });
+  const acctUpper = vw.res.vouch({ userId: UA.toUpperCase() });
+  await vw.res.claim({ userId: UA, linked: true, chosen: 'Marguerite Vale', name: 'Grim Gulch' });
+  const released = vw.res.vouch({ userId: UA });
+  if (devBefore === 'Grim Gulch' && devAfter === null && acctAfter === 'Grim Gulch' && acctUpper === 'Grim Gulch' && released === null && vw.res.vouch({}) === null)
+    ok('H: the vouch follows the holder: the device until its row moves, the account after (its id case-blind), nobody once the name is released');
+  else fail('H: vouch holder: ' + JSON.stringify({ devBefore, devAfter, acctAfter, acctUpper, released }));
+  // Bounded: the most recent HOLDERS_MAX holders, never more.
+  const bw = world();
+  await bw.res.refresh();
+  const first = await bw.res.claim({ name: 'Zero Holder' });
+  const uid = (i) => `${String(i).padStart(8, '0')}-0000-4000-8000-000000000000`;
+  for (let i = 0; i < HOLDERS_MAX; i++) rowFor(bw.table, `Held ${i}`, { user_id: uid(i) });
+  await bw.res.refresh();
+  for (let i = 0; i < HOLDERS_MAX; i++) await bw.res.claim({ userId: uid(i), name: 'x' });
+  const holders = bw.res.holders;
+  if (holders === HOLDERS_MAX && bw.res.vouch({ secret: secretOf(first) }) === null)
+    ok(`H: the holders kept for the vouch are bounded at ${HOLDERS_MAX.toLocaleString('en')}, the oldest dropped first`);
+  else fail('H: holders bound: ' + JSON.stringify({ holders }));
+}
+
+// ==== I. one name ignoring capitals, in every script ===============================
+// (round 3 fix, 2026-10-10). A Greek capital reads as a different letter from
+// its lower case (capital nu reads N, small nu v), so the look-alike skeleton
+// of 'Αννα' is 'avva' and of 'ΑΝΝΑ' is 'anna': the key was the skeleton of the
+// spelling presented, and both were reserved. The key is the name in lower
+// case now, and every reading of it is compared, as chosen callsigns are.
+{
+  const w = world();
+  await w.res.refresh();
+  const a = await w.res.claim({ name: 'Αννα' });
+  const b = await w.res.claim({ name: 'ΑΝΝΑ' });
+  const c = await w.res.claim({ name: 'αννα' });
+  if (a.ok && a.name === 'Αννα' && !a.moved && byName(w.table, 'Αννα').name_key === 'αννα'
+      && b.ok && b.moved === 'taken' && b.name !== 'ΑΝΝΑ' && c.ok && c.moved === 'taken' && w.table.rows.filter((r) => r.name_key === 'αννα').length === 1)
+    ok('I: \'Αννα\' is reserved under the key \'αννα\', and \'ΑΝΝΑ\' and \'αννα\' after it are each moved to a default and told \'taken\'');
+  else fail('I: Greek capitals: ' + JSON.stringify({ a, b, c, rows: w.table.rows.map((r) => [r.name, r.name_key]) }));
+  // A NAME WHOSE CAPITALS READ AS ANOTHER'S: 'ΗΙΤ' (Greek) reads 'HIT'. Held
+  // either way round, the other is refused.
+  const h1 = await w.res.claim({ name: 'Hit' });
+  const h2 = await w.res.claim({ name: 'ΗΙΤ' });
+  const h3 = await w.res.claim({ name: 'ηιτ' });
+  const w2 = world();
+  await w2.res.refresh();
+  const g1 = await w2.res.claim({ name: 'ηιτ' });
+  const g2 = await w2.res.claim({ name: 'Hit' });
+  if (h1.ok && h1.name === 'Hit' && h2.moved === 'taken' && h3.moved === 'taken' && g1.ok && g1.name === 'ηιτ' && !g1.moved && g2.moved === 'taken' && g2.name !== 'Hit')
+    ok('I: a Greek name whose capitals read as a Latin one (\'ΗΙΤ\' and \'Hit\') is one name: whichever is reserved first, the other is moved and told \'taken\'');
+  else fail('I: cross-script readings: ' + JSON.stringify({ h1, h2, h3, g1, g2 }));
+  // A RENAME: into another holder's name in other capitals is 'taken'; into
+  // the holder's own in other capitals is theirs.
+  const other = await w.res.claim({ name: 'Iron Gulch' });
+  const r1 = await w.res.rename(other.row, 'ΑΝΝΑ');
+  const r2 = await w.res.rename(a.row, 'ΑΝΝΑ');
+  if (same(r1, { ok: false, error: 'taken' }) && r2.ok && r2.name === 'ΑΝΝΑ' && byName(w.table, 'ΑΝΝΑ') && byName(w.table, 'ΑΝΝΑ').name_key === 'αννα')
+    ok('I: a rename into another player\'s Greek name in other capitals is \'taken\'; the holder may re-case their own');
+  else fail('I: rename: ' + JSON.stringify({ r1, r2 }));
+  // THE SET: a chosen callsign that any reading of meets a reservation is
+  // refused, whoever's capitals.
+  const setA = await w.res.takenFor('αννα', U1);
+  const setH = await w.res.takenFor('ηιτ', U1);
+  const setFree = await w.res.takenFor('ωμεγα', U1);
+  const keysAsked = w.table.calls.filter(([c0]) => c0 === 'byKeys').map(([, k]) => k);
+  if (setA === true && setH === true && setFree === false && keysAsked.some((k) => k.includes('hit')))
+    ok('I: the Set\'s check (takenFor) reads the table for every reservation any reading of the key meets: \'αννα\' and \'ηιτ\' are taken, a free Greek name is not');
+  else fail('I: takenFor: ' + JSON.stringify({ setA, setH, setFree, keysAsked }));
+  // THE DOOR: a socket that does not hold it is refused the name in other capitals too.
+  const t1 = w.proofs.typedName('ΑΝΝΑ'), t2 = w.proofs.typedName('ΗΙΤ');
+  if (t1.error === 'taken' && t2.error === 'taken' && w.res.free('ΑΝΝΑ') === false && w.res.free('Ωμεγα') === true)
+    ok('I: the door refuses \'ΑΝΝΑ\' and \'ΗΙΤ\' to a socket that does not hold them');
+  else fail('I: door: ' + JSON.stringify({ t1, t2 }));
+  // WHAT IS STORED IS WHAT WILL BE SHOWN: a spelling whose capitals read as
+  // none of its key's readings is reserved as the key itself.
+  const w3 = world();
+  await w3.res.refresh();
+  const odd = await w3.res.claim({ name: 'αΝνα' });
+  if (odd.ok && odd.name === 'αννα' && byName(w3.table, 'αννα'))
+    ok('I: \'αΝνα\' (a capital that reads as no reading of its key) is reserved as shown to everyone else, \'αννα\'');
+  else fail('I: shown spelling: ' + JSON.stringify(odd));
+  // TWO AT ONCE IN THIS PROCESS: look-alikes are two keys, so the table's
+  // unique key cannot refuse the second; the name is taken in memory before
+  // the first write goes out, so the second claim, or rename, is refused.
+  const w4 = world();
+  await w4.res.refresh();
+  const [x1, x2] = await Promise.all([w4.res.claim({ name: 'Coco' }), w4.res.claim({ name: '\u0421\u043e\u0441\u043e' })]);
+  const [y1, y2] = await Promise.all([w4.res.claim({ name: 'Hit' }), w4.res.claim({ name: 'ΗΙΤ' })]);
+  const p1 = await w4.res.claim({ name: 'Grey Mesa' }), p2 = await w4.res.claim({ name: 'Grey Ridge' });
+  const [z1, z2] = await Promise.all([w4.res.rename(p1.row, 'Kayak'), w4.res.rename(p2.row, '\u041a\u0430\u0443\u0430\u043a')]);
+  if (x1.ok && x1.name === 'Coco' && x2.moved === 'taken' && y1.ok && y1.name === 'Hit' && y2.moved === 'taken' && z1.ok && same(z2, { ok: false, error: 'taken' })
+      && w4.table.rows.filter((r) => ['coco', 'сосо', 'hit', 'ηιτ', 'kayak', '\u043a\u0430\u0443\u0430\u043a'].includes(r.name_key)).length === 3)
+    ok('I: two claims (or renames) at once in this process for look-alike names in two scripts: the first holds it, the second is refused \'taken\'');
+  else fail('I: race: ' + JSON.stringify({ x1, x2, y1, y2, z1, z2 }));
+  // A write that fails gives the name back.
+  const w5 = world();
+  await w5.res.refresh();
+  const realInsert = w5.table.insertReservation;
+  w5.table.insertReservation = async () => { throw new Error('sb 503'); };
+  let threw = null;
+  try { await w5.res.claim({ name: 'Rapid Dune' }); } catch (e) { threw = e; }
+  w5.table.insertReservation = realInsert;
+  const p3 = await w5.res.claim({ name: 'Grey Spire' });
+  const realRename = w5.table.renameReservation;
+  w5.table.renameReservation = async () => { throw new Error('sb 503'); };
+  let threw2 = null;
+  try { await w5.res.rename(p3.row, 'Lucky Dune'); } catch (e) { threw2 = e; }
+  w5.table.renameReservation = realRename;
+  if (threw && threw2 && w5.res.state('rapid dune') === 'free' && w5.res.state('lucky dune') === 'free' && w5.res.state('grey spire') === 'taken')
+    ok('I: a write that fails gives back the name it had taken in memory (a claim\'s and a rename\'s)');
+  else fail('I: give back: ' + JSON.stringify({ threw: String(threw), threw2: String(threw2), a: w5.res.state('rapid dune'), b: w5.res.state('lucky dune') }));
 }
 
 console.log(out.errors.length ? `\n${out.errors.length} FAILED` : '\nall reserve checks passed');

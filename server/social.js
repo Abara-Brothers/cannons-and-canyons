@@ -34,7 +34,7 @@ import { createNameProofs } from './display-name.js';
 // THE NAME RESERVATIONS (round 3): every player's one name, held by the server.
 // The default is the host with no table, which answers every question the old
 // way, so a layer built without it behaves exactly as it did.
-import { RESERVATIONS_OFF, combineStates } from './reservations.js';
+import { RESERVATIONS_OFF, ROWS_PER_SOCKET, combineStates } from './reservations.js';
 // THE SQUAD STATE MACHINE. Built and held HERE rather than in server.js (plan
 // R1): every squad op needs the per-socket queue, the rate buckets, `reply`,
 // presence and the block reads, and all five are trapped inside
@@ -111,7 +111,9 @@ export const SOCIAL_TYPES = new Set(['friends', 'friend', 'block', 'callsign', '
 // `name`, the claim, has a bucket of its own rather than the callsign one: a
 // page load, a first save and a sign-in each send one, and three in a minute
 // is ordinary, while a rename spends the callsign bucket as before. A claim
-// that WRITES a new row also spends a process-wide bucket (reservations.js).
+// that WRITES a new row is held by reservations.js's own bounds as well: at
+// most ROWS_PER_SOCKET new rows a connection, and a process-wide hourly window
+// and ceiling.
 const LIMITS = { callsign: 3, friend: 10, friends: 20, report: 5, squad: 20, name: 6 };
 
 // The chosen-callsign cooling-off period: a rolling 24 hours since the last
@@ -715,7 +717,10 @@ export function createSocial({
     // any other player, a guest's device included, refuses 'taken'. The
     // account's own reservation is not a collision: a player may make the name
     // they already hold their chosen callsign. With no table this says no.
-    if (await reservations.takenFor(keyReadings(v.key), ws.userId)) return reply(ws, msg, { type: 'callsign', error: 'taken' });
+    // The key itself is asked (round 3 fix, 2026-10-10): the reservations'
+    // key is the name in lower case now, and takenFor reads every reservation
+    // any reading of it meets, as the index keeps them.
+    if (await reservations.takenFor(v.key, ws.userId)) return reply(ws, msg, { type: 'callsign', error: 'taken' });
     // WHAT IS STORED IS WHAT WILL BE SHOWN. A spelling whose capitals read as
     // none of the key's readings (an odd mixture of Greek capitals) would be
     // shown as the key itself by every reader (shownSpelling), so it is stored
@@ -826,9 +831,18 @@ export function createSocial({
   // name is free the moment the new one lands. A socket with no row (an old
   // build, or a host with no table) is answered as before, and the reserved
   // names are part of what 'taken' means for it too (keyState above).
+  //
+  // ONLY THE ROW THIS SOCKET'S HOLDER HOLDS (round 3 fix, 2026-10-10: a
+  // device's secret never confers an account's name). An account's row is
+  // renamed only by a socket that is that account now; a device's row by the
+  // socket that claimed it with the device's secret. Anything else (a row kept
+  // across a change of account this socket was not told about) is let go
+  // here, and the store's write matches the holder too, so a row that moved
+  // to an account since the claim matches nothing and answers 'gone'.
   async function checkName(ws, msg) {
     if (!rateOk(ws, 'callsign', LIMITS.callsign)) return reply(ws, msg, { type: 'callsign', op: 'check', error: 'slow_down' });
     let v;
+    if (ws.nameRow && ws.nameRow.user_id && ws.nameRow.user_id !== ws.userId) { ws.nameRow = null; ws.reservedName = null; }
     if (ws.nameRow && reservations.ready) {
       const gen = ws.authGen;
       const r = await reservations.rename(ws.nameRow, msg.name);
@@ -866,24 +880,59 @@ export function createSocial({
   // callsign, which is its name and needs no row, and `linked` an answer that
   // belongs to a linked account rather than to this device.
   //
-  // A failed claim ('unavailable': no table yet, a store fault, an index that
-  // has not loaded) leaves the socket as it was, and the old rules name it.
+  // A FAILED CLAIM ('unavailable': no table yet, a store fault, an index that
+  // has not loaded, a bound on new rows; 'slow_down') leaves the socket's name
+  // as it was, and the client asks again, backing off, on this connection and
+  // the next (app.js claimLater). Until a claim is answered the player is
+  // still seated under their own name whenever nobody else holds it (round 3
+  // fix, 2026-10-10): a name nobody has reserved is free at the door by the
+  // old rules, and a name this process has seen this holder hold is vouched
+  // for (reservations.vouch) and carried on the socket, so a store fault
+  // cannot seat a player under a stand-in for their own reserved name.
+  //
+  // A CLAIM MADE AS AN ACCOUNT IS NEVER ANSWERED AS A DEVICE. The client marks
+  // a claim `account` when it sent the hello ahead of it; when that hello did
+  // not make this socket the account (GoTrue refused or did not answer), the
+  // claim would otherwise be answered for the device's secret, with the
+  // account's name presented as the device's own: a new row, or the account's
+  // own name refused 'taken'. It is answered 'unavailable' instead, and the
+  // client asks again.
   async function claimName(ws, msg) {
     if (!rateOk(ws, 'name', LIMITS.name)) return reply(ws, msg, { type: 'name', error: 'slow_down' });
+    if (msg.account === true && !ws.userId) return reply(ws, msg, { type: 'name', error: 'unavailable' });
     const gen = ws.authGen;
     const linked = !!(ws.userId && !ws.isGuest);
-    const r = await reservations.claim({
-      userId: ws.userId || null, linked,
-      chosen: linked && typeof ws.chosenName === 'string' ? ws.chosenName : null,
-      secret: typeof msg.secret === 'string' ? msg.secret : null,
-      name: typeof msg.name === 'string' ? msg.name : '',
-      fresh: msg.fresh === true,
-    });
+    const secret = typeof msg.secret === 'string' ? msg.secret : null;
+    let r;
+    try {
+      r = await reservations.claim({
+        userId: ws.userId || null, linked,
+        chosen: linked && typeof ws.chosenName === 'string' ? ws.chosenName : null,
+        secret,
+        name: typeof msg.name === 'string' ? msg.name : '',
+        fresh: msg.fresh === true,
+        mayInsert: (ws.nameRowsMade || 0) < ROWS_PER_SOCKET,
+      });
+    } catch { r = null; }
     // A HELLO LANDED WHILE THE CLAIM WAS OUT: the answer is for an account this
     // socket no longer is, so it is not kept and not sent. The client claims
     // again after every hello.
     if (ws.authGen !== gen) return reply(ws, msg, { type: 'name', error: 'unavailable' });
-    if (!r || !r.ok) return reply(ws, msg, { type: 'name', error: r && r.error === 'slow_down' ? 'slow_down' : 'unavailable' });
+    if (!r || !r.ok) {
+      let held = null;
+      if (!ws.reservedName) {
+        try { held = typeof reservations.vouch === 'function' ? reservations.vouch({ userId: ws.userId || null, secret }) : null; } catch { held = null; }
+        // Carried without its row: a rename waits for a claim that answers.
+        if (typeof held === 'string' && held) { ws.reservedName = held; ws.nameRow = null; } else held = null;
+      }
+      reply(ws, msg, { type: 'name', error: r && r.error === 'slow_down' ? 'slow_down' : 'unavailable' });
+      // The squad row shows the name the socket now carries.
+      const own = held ? squadOf(ws) : null;
+      if (own) await pushSquad(own.squad, null, null).catch(() => {});
+      return;
+    }
+    // Every new row this connection makes counts against ROWS_PER_SOCKET.
+    if (r.made) ws.nameRowsMade = (ws.nameRowsMade || 0) + 1;
     const was = ws.reservedName || null;
     ws.reservedName = r.chosen ? null : r.name;
     ws.nameRow = r.row || null;

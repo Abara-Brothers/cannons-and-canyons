@@ -1476,11 +1476,23 @@ $('accSignOutBtn').onclick = async () => {
   // confirm() over a bespoke modal on purpose: matches the prompt() fallback
   // precedent in copyLinkBtn, and a sign-out deserves a beat.
   if (!confirm('Sign out? Progress saved to this account stays with it; this device starts a fresh guest.')) return;
+  // The name the account was shown under, read before anything hands it back.
+  const accountName = ($('nameInput').value || '').trim();
   await Cloud.signOut();
   // Tell the server this socket is nobody now, or it keeps the old identity
   // and this device carries on getting that account's turn nudges.
   sendMsg({ type: 'hello', token: null });
   // And this device is a guest again, under its own name (round 3).
+  //
+  // THE ACCOUNT'S NAME STAYS WITH THE ACCOUNT (round 3 fix, 2026-10-10). When
+  // this device's own name went to the account (the device's row moved to it
+  // at sign-in), the server gives the device a new unused default of its own
+  // now, and the player has just been told this device starts a fresh guest,
+  // so that is no news: the claim is marked fresh and nothing is said. A
+  // device whose own name was a different one (kept for it while the account
+  // was signed in) gets it back when nobody holds it, and is told if somebody
+  // took it meanwhile.
+  if (ownName() && ownName() === accountName) nameFresh = true;
   if (S.ws) sendClaim(S.ws, false);
   $('accountModal').classList.add('hidden');
   refreshAccountChip();
@@ -2345,14 +2357,14 @@ function helloLate() { return !!(S.ws && S.ws.openedAt && Date.now() - S.ws.open
 // async, so re-check that THIS socket is still the live transport before
 // sending; a swap to offline play or a reconnect may have happened meanwhile.
 async function sendHello(ws) {
-  let introduced = false;
+  let introduced = false, late = false;
   try {
     if (!window.Cloud || !Cloud.enabled()) return;
     const token = await Cloud.token(false);
     if (token && S.ws === ws && ws.readyState === 1 && !S.local) {
       sendMsg({ type: 'hello', token });
       introduced = true;
-    }
+    } else if (!token && typeof Cloud.hasSession === 'function' && Cloud.hasSession()) late = true;
   } finally {
     // The mark goes on whether or not a hello was sent: a socket with no
     // session to introduce, or whose token read failed, gets no better hello
@@ -2373,7 +2385,18 @@ async function sendHello(ws) {
     // player has, and the server answers with the name it holds for them
     // (sendClaim, below). It is sent BEFORE the parked tap, so the server,
     // which holds a seat's frame while a claim is out, seats the reserved name.
-    if (S.ws === ws && ws.readyState === 1) { sendClaim(ws, introduced); helloWs = ws; helloN++; flushIntent(); document.dispatchEvent(new Event('cc:squad')); }
+    //
+    // UNLESS THE PLAYER IS SIGNED IN AND THEIR TOKEN IS LATE (round 3 fix,
+    // 2026-10-10). A session kept on this device whose refresh could not reach
+    // the server gives no token, and a claim sent now would be the device's
+    // guest claim: the account's own name, which the account holds, would be
+    // refused as the device's ('taken'), and the player told so. So no claim
+    // goes; the hello and its claim are tried again on this socket, backing
+    // off (claimLater), the way a claim that failed is.
+    if (S.ws === ws && ws.readyState === 1) {
+      if (late) claimLater(ws, null); else sendClaim(ws, introduced);
+      helloWs = ws; helloN++; flushIntent(); document.dispatchEvent(new Event('cc:squad'));
+    }
   }
 }
 
@@ -2394,12 +2417,14 @@ async function sendHello(ws) {
 //     it: a guest's as the device's own name, an account's as the name on show,
 //     handed back on sign-out exactly as a chosen callsign is.
 // A refused or unanswered claim changes nothing (a server whose table is not
-// there yet answers 'unavailable'), and the name stays what it was.
+// there yet answers 'unavailable'), and the name stays what it was; it is
+// asked again (claimLater, below).
 const NAME_SECRET_KEY = 'cc_name_secret';
 const NAME_SECRET_RE = /^[A-Za-z0-9_-]{43}$/;
 // THIS LOAD ROLLED THE DEVICE'S FIRST NAME (boot), and no claim has been
 // answered: a default nobody has seen yet, so if the server swaps it for an
-// unused one there is nothing to tell the player.
+// unused one there is nothing to tell the player. A sign-out that leaves the
+// account's name with the account sets it too (accSignOutBtn).
 let nameFresh = false;
 function nameSecret() {
   let v = '';
@@ -2411,18 +2436,61 @@ function nameSecret() {
 // handled where it lands, in socialReply, like a push. It is CAUGHT, because
 // it is sent from sendHello's finally, whose bookkeeping (the hello mark and
 // the parked tap) must run whatever this does.
+//
+// `account` MARKS A CLAIM MADE FOR THE SIGNED-IN ACCOUNT (round 3 fix,
+// 2026-10-10): the server answers it only once the hello ahead of it has made
+// the socket that account, and never as this device's guest claim.
 function sendClaim(ws, account) {
   try {
     if (S.local || !ws || S.ws !== ws || ws.readyState !== 1) return;
+    // A claim sent now stands in for any retry still waiting, and a new
+    // socket starts its waits from the beginning.
+    clearTimeout(claimTimer);
+    if (ws !== claimWs) claimTries = 0;
+    claimWs = ws; claimAccount = !!account;
     const secret = nameSecret();
     const frame = { type: 'name', name: account ? myName() : (ownName() || myName()) };
+    if (account) frame.account = true;
     if (secret) frame.secret = secret;
-    else if (nameFresh) frame.fresh = true;
+    if (nameFresh) frame.fresh = true;
     sendMsg(frame);
   } catch { /* the next hello claims again */ }
 }
+// A CLAIM THAT FAILED IS ASKED AGAIN (round 3 fix, 2026-10-10). A store fault,
+// a server that has just started and not read its table yet, or a bound on new
+// names answers 'unavailable' or 'slow_down', and the player's name is not
+// reserved until a claim is answered. So it is asked again on the same
+// socket, after CLAIM_RETRY_MS doubling to CLAIM_RETRY_MAX_MS, each wait
+// varied by a quarter either way so the players a deploy reconnected at once
+// do not all ask at once again; and a new socket's hello claims afresh, with
+// the waits from the start. A server with no table yet answers at once from
+// memory, so a page left open costs it one frame a minute. `account` is how
+// to claim: true or false as sendClaim takes it, or null to try the hello
+// first (a signed-in player whose token was late).
+const CLAIM_RETRY_MS = 2000, CLAIM_RETRY_MAX_MS = 60000;
+let claimWs = null, claimAccount = false, claimTries = 0, claimTimer = null;
+function claimLater(ws, account = claimAccount) {
+  clearTimeout(claimTimer);
+  if (ws !== claimWs) { claimWs = ws; claimTries = 0; }
+  if (S.local || !ws || S.ws !== ws || ws.readyState !== 1) return;
+  const wait = Math.min(CLAIM_RETRY_MAX_MS, CLAIM_RETRY_MS * 2 ** Math.min(claimTries, 5)) * (0.75 + Math.random() * 0.5);
+  claimTries++;
+  claimTimer = setTimeout(async () => {
+    if (S.ws !== ws || ws.readyState !== 1) return;
+    if (account !== null) { sendClaim(ws, account); return; }
+    try {
+      const token = window.Cloud && Cloud.enabled() ? await Cloud.token(false) : null;
+      if (S.ws !== ws || ws.readyState !== 1 || S.local) return;
+      if (token) { sendMsg({ type: 'hello', token }); sendClaim(ws, true); }
+      else if (window.Cloud && typeof Cloud.hasSession === 'function' && Cloud.hasSession()) claimLater(ws, null);
+      else sendClaim(ws, false);
+    } catch { claimLater(ws, null); }
+  }, wait);
+}
 function nameClaimed(m) {
+  if (m && m.type === 'name' && m.ok !== true && m.error) { if (claimWs && claimWs === S.ws) claimLater(claimWs); return; }
   if (!m || m.type !== 'name' || m.ok !== true || typeof m.name !== 'string' || !m.name) return;
+  clearTimeout(claimTimer); claimTries = 0;
   nameFresh = false;
   if (typeof m.secret === 'string' && NAME_SECRET_RE.test(m.secret)) { try { localStorage.setItem(NAME_SECRET_KEY, m.secret); } catch {} }
   const shown = ($('nameInput').value || '').trim();

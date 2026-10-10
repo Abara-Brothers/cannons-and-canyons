@@ -73,11 +73,11 @@ export const MAX_PAGES = 2000;
 // THE READINGS ARE INJECTABLE (round 3, 2026-10-10), and keyReadings stays the
 // default. A chosen callsign's key may be SHOWN in more than one casing,
 // because the spelling beside it is the account's to PATCH, so the index keeps
-// every way it can look. A name RESERVATION (server/reservations.js) is
-// different: its key is the look-alike skeleton of the one spelling the
-// server stored, and no client can write that spelling, so it can only ever
-// look one way. Its index is built with `readings: (k) => [k]`, and a name
-// that merely looks like the reservation in capitals is not refused for it.
+// every way it can look. A name RESERVATION (server/reservations.js) keeps
+// the same readings (round 3 fix, 2026-10-10): its key is the name in lower
+// case, like a chosen callsign's, because names are one name ignoring
+// capitals in every script, and a Greek name in capitals reads as different
+// letters from the same name in lower case.
 export function createNameIndex({ load, readings = keyReadings, refreshMs = REFRESH_MS, retryMs = RETRY_MS, page = PAGE, maxPages = MAX_PAGES, onError = () => {} } = {}) {
   let keys = null;          // the loaded set; null until the first load lands
   let looks = null;         // reading -> Set of keys that read that way, beside `keys`
@@ -100,7 +100,11 @@ export function createNameIndex({ load, readings = keyReadings, refreshMs = REFR
       if (last === null || last === after) throw new Error('name index: a page that did not advance');
       after = last;
     }
-    throw new Error('name index: more pages than MAX_PAGES');
+    // NAMED, so an owner of the index can tell an overgrown table from a
+    // failed read (server/reservations.js prunes on it).
+    const full = new Error('name index: more pages than MAX_PAGES');
+    full.code = 'NAME_INDEX_FULL';
+    throw full;
   }
 
   const link = (map, k) => { for (const r of readings(k)) { let s = map.get(r); if (!s) map.set(r, (s = new Set())); s.add(k); } };

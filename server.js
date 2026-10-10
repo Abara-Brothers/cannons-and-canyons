@@ -1487,7 +1487,9 @@ async function checkSupabase() {
     // is a state to report, not a fault in any key. Every column is named, so
     // a table that exists with the wrong shape is a 400 and reads
     // 'migration_missing' too. A zero-row read: no player's row is returned.
-    const r = await fetch(`${SB_URL}/rest/v1/name_reservations?select=id,name,name_key,secret_hash,user_id,linked,created_at,last_seen_at&limit=0`, {
+    // `reused` (the prune's column, round 3 fix) is named with the rest, so a
+    // table made from an earlier draft of the migration reads as missing.
+    const r = await fetch(`${SB_URL}/rest/v1/name_reservations?select=id,name,name_key,secret_hash,user_id,linked,created_at,last_seen_at,reused&limit=0`, {
       headers: { apikey: SB_SECRET, Authorization: `Bearer ${SB_SECRET}` },
       signal: AbortSignal.timeout(8000),
     });

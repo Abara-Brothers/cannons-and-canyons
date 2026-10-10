@@ -495,6 +495,13 @@ window.Cloud = (() => {
       } catch { return null; }
     },
 
+    // WHETHER A SESSION IS KEPT ON THIS DEVICE, without any request (round 3
+    // fix, 2026-10-10). token() answers null both for "nobody is signed in"
+    // and for "signed in, but the refresh could not reach the server", and
+    // the name claim must tell those apart: a signed-in player whose token is
+    // late must not be claimed for as this device's guest (app.js sendHello).
+    hasSession() { return !!(loadSession() && session.refresh_token); },
+
     // A valid access token for the game server to verify (the ws 'hello' and
     // 'pushSub' messages carry it). create:true may mint the account first —
     // right for enabling nudges, an explicit act worth an account; wrong for
