@@ -40,6 +40,18 @@
 //      Bay controls and the home chip show the new name, a match seats it
 //      whatever name a frame carries, the move to an account keeps it, and a
 //      rename frees the old one.
+//   W. EVERY NAME WHOLE (round 3 fix, 2026-10-10). The right name, cut, is
+//      not the name: in the compact in-match HUD the player's own name and
+//      "(you)" ended in an ellipsis past 84px (62px on a four-player card),
+//      and the server's numbered default names were cut in the home Squad box
+//      and on a Friends card. At the owner's two phone shapes (667x375, and
+//      874x402 with the iPhone 17's safe areas), every surface that draws a
+//      name is drawn with the widest default names the server can hand out,
+//      measured in that surface's own face, and every letter of each must be
+//      on the screen: no ellipsis, nothing clipped by a box, nothing off the
+//      screen. The HUD's cards are read for every seat of a duel, a
+//      three-player and a four-player match and a raid, with "(you)" on the
+//      player's own.
 //
 // A local stand-in answers for Supabase (GoTrue and PostgREST), and the
 // browser resolves no host but this machine, so nothing here can reach the
@@ -58,7 +70,7 @@ import { fileURLToPath } from 'node:url';
 const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 if (!existsSync(CHROME)) { console.log(`SKIP  names tests — no Chrome at ${CHROME}`); process.exit(3); }
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const ONLY = new Set(String(process.env.NAMES_ONLY || 'A,B,C,D,E,F,G,H').split(',').map((s) => s.trim()));
+const ONLY = new Set(String(process.env.NAMES_ONLY || 'A,B,C,D,E,F,G,H,W').split(',').map((s) => s.trim()));
 const errors = [];
 const ok = (m) => console.log('  ok — ' + m);
 const fail = (m) => { errors.push(m); console.error('FAIL ' + m); };
@@ -288,7 +300,7 @@ async function openChrome(tag) {
   await metrics(874, 402);
   const READY = `typeof intent === 'function' && !!window.Bay && S.connected === true && !S.local && !!document.querySelector('#bay .lbar') && socialIntro() > 0`;
   const page = {
-    tag, ev, until, metrics,
+    tag, ev, until, metrics, send,
     // SETTLED, unless asked otherwise: a signed-in page is ready once its
     // account's friends snapshot is in, which the server answers only after
     // the socket's hello has been verified. Part C asks for the moment before.
@@ -832,7 +844,10 @@ try {
     // H2. A DUPLICATE FROM BEFORE THIS SHIPPED: a device that has carried the
     // same default for weeks, with no secret. The first to reserve keeps it.
     await B.nav();
-    await B.ev(`(() => { localStorage.clear(); sessionStorage.clear(); localStorage.setItem('pt_name', ${JSON.stringify(nameA)}); localStorage.setItem('cc_name_own', ${JSON.stringify(nameA)}); return true; })()`);
+    // And it changed its name an hour ago, so its day is still running (H2's
+    // day check, below).
+    await B.ev(`(() => { localStorage.clear(); sessionStorage.clear(); localStorage.setItem('pt_name', ${JSON.stringify(nameA)}); localStorage.setItem('cc_name_own', ${JSON.stringify(nameA)});
+      localStorage.setItem('cc_name_at', String(Date.now() - 3600000)); return true; })()`);
     await B.nav();
     const moved = await B.until(`myName() !== ${JSON.stringify(nameA)} && !!localStorage.getItem('cc_name_secret')`, 6000);
     const nameB = await B.ev('myName()');
@@ -849,6 +864,21 @@ try {
         && scrB.chip === nameB && scrB.controls.includes(nameB) && RES.rows.filter((r) => r.name === nameA).length === 1)
       ok(`H2: a second device carrying '${nameA}' from before is moved to an unused default ('${nameB}') and told, in the owner's words: "${want}"; the home chip and Bay controls show '${nameB}'`);
     else fail('H2: ' + JSON.stringify({ moved, nameB, toldB, saidB, ownB, rowB, chip: scrB.chip, controls: scrB.controls.includes(nameB) }));
+    // THE MOVE IS NOT THE PLAYER'S CHANGE (round 3 fix, 2026-10-10). The
+    // device had changed its name an hour before, so its day was running; the
+    // notice says "You can change it in Bay controls", and it can: the move
+    // cleared the day, the Callsign row names the new name (not "Change it
+    // again in 23 hours"), and Change opens on the rules with Save live.
+    const dayB = await B.ev(`new Promise((r) => { Bay.show('settings');
+      const row = [...document.querySelectorAll('#bay .row')].find((x) => x.querySelector('.rn2') && x.querySelector('.rn2').textContent === 'Callsign');
+      const desc = row ? row.querySelector('.rd').textContent : null;
+      document.querySelector('#bay [data-cs="open"]').click();
+      setTimeout(() => { const save = document.querySelector('#bay [data-cs="save"]'), line = document.querySelector('#bay .csr');
+        const o = { at: localStorage.getItem('cc_name_at'), wait: nameWait(), desc, save: save ? !save.disabled : null, line: line ? line.textContent : null };
+        const c = document.querySelector('#bay [data-cs="cancel"]'); if (c) c.click(); Bay.show('home'); r(o); }, 150); })`);
+    if (dayB.at === null && dayB.wait === 0 && dayB.desc === nameB && dayB.save === true && /^3.16 letters/.test(dayB.line || ''))
+      ok(`H2: the move does not spend the player's change: a day that was running is cleared, Bay controls names '${nameB}', and Change opens on the rules with Save live`);
+    else fail('H2 day: ' + JSON.stringify(dayB));
     // Told once: a reload says nothing more, and the name stays.
     await B.nav();
     await sleep(800);
@@ -1071,6 +1101,221 @@ try {
         && !after14.includes('name') && me14 === 'Quiet Dawn' && !said14.length && RES.rows.length === rows14)
       ok('H14: a signed-in player whose token is late sends no claim (it would be the device\'s); when the token comes, the hello goes and the account\'s claim straight after it, and the player stays \'Quiet Dawn\' with nothing said and no row made');
     else fail('H14: ' + JSON.stringify({ before14, came, after14, me14, said14, rows: RES.rows.length - rows14 }));
+  }
+
+  // ==== W. EVERY NAME WHOLE =====================================================================
+  if (ONLY.has('W')) {
+    // THE PAGE'S HALF. pool(): every default name the server can hand out, by
+    // its own rule (server/reservations.js DEFAULT_TIERS and WIDE_DEFAULTS,
+    // from the same word lists), with the pairs. widest(face, k): the k
+    // widest of them in one face (font, capitals, letter spacing), by a
+    // canvas's measure. whole(root, text): every place `text` is drawn under
+    // `root`, and what cuts it: an ellipsis (a box narrower than its text), a
+    // box with its overflow hidden that a line of it stands past (on the
+    // other axis, past by more than the face's own room over a tight line),
+    // or the edge of the screen. A box that scrolls on its own hides nothing
+    // on its axis: what it holds there is a scroll away.
+    const W_JS = `(() => {
+      const pool = () => {
+        const pairs = []; for (const nn of CALL_NOUN) for (const a of CALL_ADJ) if (a.length + 1 + nn.length <= NAME_MAX) pairs.push(a + ' ' + nn);
+        const out = pairs.slice(); for (const d of ['2', '3', '4', '5', '6', '7', '8', '9']) for (const q of pairs) out.push(q + ' ' + d);
+        for (const q of pairs.filter((x) => x.length + 3 <= CALLSIGN_MAX)) for (let i = 10; i < 100; i++) out.push(q + ' ' + i);
+        for (const q of pairs.filter((x) => x.length + 4 <= CALLSIGN_MAX)) for (let i = 100; i < 1000; i++) out.push(q + ' ' + i);
+        return out;
+      };
+      const all = pool();
+      const widest = (face, k) => {
+        const cv = document.createElement('canvas').getContext('2d'); cv.font = face.font; try { cv.letterSpacing = face.ls; } catch (e) {}
+        const best = [];
+        for (const s of all) { const w = cv.measureText(face.upper ? s.toUpperCase() : s).width; if (best.length < k || w > best[best.length - 1][1]) { best.push([s, w]); best.sort((a, b) => b[1] - a[1]); if (best.length > k) best.length = k; } }
+        return best.map((x) => x[0]);
+      };
+      const faceOf = (e) => { const cs = getComputedStyle(e); return { font: cs.fontStyle + ' ' + cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily, upper: cs.textTransform === 'uppercase', ls: cs.letterSpacing === 'normal' ? '0px' : cs.letterSpacing }; };
+      const nodesWith = (root, text) => { const out = [], tw = document.createTreeWalker(root, NodeFilter.SHOW_TEXT); for (let n = tw.nextNode(); n; n = tw.nextNode()) { let i = n.data.indexOf(text); while (i >= 0) { out.push([n, i]); i = n.data.indexOf(text, i + 1); } } return out; };
+      const whole = (root, text) => {
+        const bad = []; let drawn = 0;
+        for (const [n, i] of nodesWith(root, text)) {
+          const e0 = n.parentElement, st0 = getComputedStyle(e0);
+          // Not drawn: no box, hidden, or see-through (a card put away fades out).
+          if (!e0.getClientRects().length || !e0.checkVisibility({ opacityProperty: true, visibilityProperty: true })) continue;
+          drawn++;
+          const g = document.createRange(); g.setStart(n, i); g.setEnd(n, i + text.length);
+          const rects = [...g.getClientRects()].filter((q) => q.width > 0.5);
+          const slack = 0.5 + 0.3 * (parseFloat(st0.fontSize) || 10);
+          let freeX = false, freeY = false;
+          for (let e = e0; e && e !== document.documentElement; e = e.parentElement) {
+            const cs = getComputedStyle(e), b = e.getBoundingClientRect();
+            if (cs.textOverflow === 'ellipsis' && e.scrollWidth > e.clientWidth + 0.5) bad.push('ellipsis on ' + (e.id || e.className));
+            const L = b.left + e.clientLeft, T = b.top + e.clientTop, R = L + e.clientWidth, Bo = T + e.clientHeight;
+            const hx = cs.overflowX === 'hidden' || cs.overflowX === 'clip', hy = cs.overflowY === 'hidden' || cs.overflowY === 'clip';
+            for (const q of rects) {
+              if (hx && !freeX && (q.left < L - 0.5 || q.right > R + 0.5)) bad.push('clipped across by ' + (e.id || e.className));
+              if (hy && !freeY && (q.top < T - slack || q.bottom > Bo + slack)) bad.push('clipped down by ' + (e.id || e.className));
+            }
+            if (cs.overflowX === 'auto' || cs.overflowX === 'scroll') freeX = true;
+            if (cs.overflowY === 'auto' || cs.overflowY === 'scroll') freeY = true;
+          }
+          for (const q of rects) if (q.left < -0.5 || q.right > innerWidth + 0.5 || (!freeY && (q.top < -0.5 || q.bottom > innerHeight + 0.5))) bad.push('off the screen');
+          // Which drawing of the name it was, for the report.
+          if (bad.length && !bad.some((x) => x.startsWith('in '))) bad.push('in ' + (e0.id || e0.className || e0.tagName) + ' at ' + rects.map((q) => Math.round(q.top) + '-' + Math.round(q.bottom)).join(','));
+        }
+        return { drawn, bad: [...new Set(bad)] };
+      };
+      window.__W = { all, widest, faceOf, nodesWith, whole };
+      return all.length;
+    })()`;
+    const ME_W = '00000000-0000-4000-8000-0000000000aa';
+    const LINKED_W = { id: ME_W, anonymous: false, google: true, apple: false, email: 'me@example.test', accounts: [{ provider: 'google', email: 'me@example.test' }] };
+    // Every surface, drawn with `C` (a list of names), checked for each name
+    // it should carry. `own` is the device's name. Returns what was cut.
+    const W_SURFACES = (C) => `(async () => {
+      const C = ${JSON.stringify(C)}, out = [], seen = {};
+      const chk = (where, root, names) => { for (const N of names) { const r = __W.whole(root, N); seen[where] = (seen[where] || 0) + r.drawn; if (r.bad.length || !r.drawn) out.push({ where, N, bad: r.bad.length ? r.bad : ['not drawn'] }); } };
+      const pause = () => new Promise((r) => setTimeout(r, 30));
+      const ID = (n) => '00000000-0000-4000-8000-' + String(n).padStart(12, '0');
+      // ---- outside a match: the device's own name, then other players' ----
+      for (let k = 0; k < C.length; k++) {
+        const names = [0, 1, 2, 3].map((i) => C[(k + i) % C.length]);
+        $('nameInput').value = names[0]; localStorage.setItem('pt_name', names[0]);
+        for (const scr of ['home', 'career', 'paint', 'settings', 'setup']) { Bay.show(scr); await pause(); chk('screen ' + scr, document.getElementById('bay'), [names[0]]); }
+        window.CC_SOCIAL = { friends: [{ id: ID(101), callsign: names[1], online: true }, { id: ID(102), callsign: names[2], online: false }],
+          requests: { in: [{ id: ID(200), callsign: names[3] }], out: [{ id: ID(201), callsign: names[1] }] }, blocked: [{ id: 'bk0000000000000000000000000000000', callsign: names[2] }], friendCode: 'AB12CD', callsign: null };
+        document.dispatchEvent(new Event('cc:social'));
+        Bay.show('friends'); await pause(); chk('Friends cards', document.getElementById('bay'), names.slice(1));
+        handle({ type: 'squad', op: 'state', code: 'QK7T', leader: '${ME_W}', mode: 'ffa', tees: null, max: null, you: 0, held: true,
+          members: names.map((nm, i) => ({ id: i ? ID(100 + i) : '${ME_W}', rid: ('r' + i + '0'.repeat(32)).slice(0, 32), callsign: nm, guest: false, online: true, ready: i % 2 === 1, dropped: false })),
+          fits: { duel: false, ffa: true, boss: false, aliens: false, golf: true } });
+        await pause();
+        Bay.show('home'); await pause(); chk('home Squad box', document.querySelector('#bay .sqx'), names);
+        Bay.show('squad'); await pause(); chk('Your squad seats', document.getElementById('bay'), names);
+        // Two of four, so a seat is open: its "+ Invite" opens the sheet of
+        // friends and requests over the page.
+        handle({ type: 'squad', op: 'state', code: 'QK7T', leader: '${ME_W}', mode: 'ffa', tees: null, max: null, you: 0, held: true,
+          members: [{ id: '${ME_W}', rid: 'r'.repeat(32), callsign: names[0], guest: false, online: true, ready: false, dropped: false }],
+          fits: { duel: false, ffa: false, boss: true, aliens: true, golf: true } });
+        await pause(); Bay.show('squad'); await pause();
+        const sheet = document.querySelector('#bay .sqseat.sqopen [data-sq^="sheet:"]'); if (sheet) sheet.click(); await pause();
+        chk('invite sheet', document.querySelector('#bay .sqsh') || document.createElement('i'), names.slice(1));
+        const shut = document.querySelector('#bay .sqshx'); if (shut) shut.click();
+        handle({ type: 'squad', op: 'ended', reason: 'left' });
+        squadInviteSet({ code: 'ZZ9Q', from: { callsign: names[2] }, size: 2, max: 4 }, Date.now(), 60000);
+        Bay.show('home'); await pause(); chk('invite card', document.getElementById('bay'), [names[2]]);
+        window.CC_SQUAD_INVITE = null;
+        renderLobby({ code: 'ABCD', mode: 'ffa', max: 4, you: 0, host: 0, players: names.map((nm, i) => ({ name: nm, handle: i ? 'h' + i : null })) });
+        Bay.show('lobby'); await pause(); chk('lobby seats', document.getElementById('bay'), names);
+        Bay.show('home');
+      }
+      // ---- in a match: every seat's card, "(you)" on the player's own -------
+      showScreen('game');
+      for (const [mode, n] of [['duel', 2], ['ffa', 3], ['ffa', 4], ['boss', 3]]) for (let you = 0; you < n; you++) for (let k = 0; k < C.length; k++) {
+        const names = Array.from({ length: n }, (_, i) => C[(k + i) % C.length]);
+        S.mode = mode; S.n = n; S.you = you; S.names = names; S.hp = Array(n).fill(100); S.alive = Array(n).fill(true);
+        S.handles = names.map((_, i) => (i % 2 ? 'h' + i : null)); S.boss = mode === 'boss' ? n - 1 : -1; S.turn = (you + 1) % n; S.playing = true; S.golf = null;
+        buildScoreboard(); updateHud();
+        const hud = document.getElementById('hud-top');
+        chk('HUD ' + mode + ' ' + n + ' (own card)', hud, [names[you] + ' (you)']);
+        chk('HUD ' + mode + ' ' + n, hud, names.filter((_, i) => i !== you && i !== S.boss));
+        // A NAME WRAPS ONLY ONCE THE BAR HAS GIVEN WAY, and its lines end
+        // clear of the acting player's 2px underline at the card's foot.
+        for (const card of document.querySelectorAll('#scoreRow .pscore')) {
+          const nm = card.querySelector('.pnm'), bar = card.querySelector('.hpbar'), g = document.createRange(); g.selectNodeContents(nm);
+          const lines = new Set([...g.getClientRects()].map((q) => Math.round(q.top))).size;
+          const foot = nm.getBoundingClientRect().bottom - (parseFloat(getComputedStyle(nm).paddingBottom) || 0), cb = card.getBoundingClientRect().bottom;
+          if (lines > 1 && bar.getBoundingClientRect().width > 24.5) out.push({ where: 'HUD ' + mode + ' ' + n, N: nm.textContent, bad: ['wrapped while its bar had room: ' + bar.getBoundingClientRect().width] });
+          if (lines > 1 && foot > cb - 2 + 0.25) out.push({ where: 'HUD ' + mode + ' ' + n, N: nm.textContent, bad: ['its lines run into the underline: ' + (cb - foot)] });
+          if (lines > 1) seen['HUD names on two lines'] = (seen['HUD names on two lines'] || 0) + 1;
+          // And the card holds what it draws: a name too long for its card
+          // must not run past it into the next player's.
+          const cr = card.getBoundingClientRect();
+          for (const part of card.querySelectorAll('.pname, .pval, .hpbar, .pmb')) { const b = part.getBoundingClientRect(); if (b.width && (b.left < cr.left - 0.5 || b.right > cr.right + 0.5)) out.push({ where: 'HUD ' + mode + ' ' + n, N: nm.textContent, bad: ['runs out of its card: ' + part.className] }); }
+          const g2 = document.createRange(); g2.selectNodeContents(nm);
+          if ([...g2.getClientRects()].some((q) => q.right > cr.right + 0.5)) out.push({ where: 'HUD ' + mode + ' ' + n, N: nm.textContent, bad: ['its letters run out of its card'] });
+        }
+      }
+      // ---- the ends, the turn line, golf's cards ----------------------------
+      for (const mode of ['duel', 'ffa', 'golf', 'boss']) for (let k = 0; k < C.length; k++) {
+        const n = mode === 'duel' ? 2 : 4, names = Array.from({ length: n }, (_, i) => C[(k + i) % C.length]);
+        showScreen('game');
+        S.mode = mode; S.n = n; S.you = 0; S.names = names; S.hp = Array(n).fill(100); S.alive = Array(n).fill(true); S.handles = Array(n).fill(null);
+        S.boss = mode === 'boss' ? n - 1 : -1; S.turn = 1; S.playing = true;
+        S.golf = mode === 'golf' ? { hole: 2, holes: 9, par: 4, pars: [4, 4, 4, 4, 4, 4, 4, 4, 4], cup: { x: 10000 }, strokes: names.map(() => 1), totals: names.map(() => 4), done: names.map(() => false), grid: names.map(() => [4, 0, 0, 0, 0, 0, 0, 0, 0]) } : null;
+        buildScoreboard(); updateHud(); updateDock();
+        if (mode !== 'boss') chk('turn line', document.getElementById('turnLabel'), [names[1]]);
+        if (mode === 'golf') {
+          // Each card is put away once read, as its own timer would, so none
+          // stands over the next surface.
+          showHoleScore({ hole: 2, holes: 9, par: 4, pars: [4], grid: names.map(() => [4]) }); chk('hole card', document.getElementById('holeScore'), names);
+          clearTimeout(holeScoreTimer); document.getElementById('holeScore').classList.remove('show');
+          openGolfCard(); chk('scorecard', document.getElementById('golfCard'), names); document.getElementById('golfCard').classList.add('hidden');
+          showOBBanner('OUT OF BOUNDS', 1, false); chk('out-of-bounds banner', document.getElementById('obBanner'), [names[1]]);
+          clearTimeout(obBannerTimer); document.getElementById('obBanner').classList.remove('show');
+          onGameOver({ type: 'gameover', winner: 1, golf: { totals: names.map(() => 36), parTotal: 36, strokes: names.map(() => [4, 4, 4, 4, 4, 4, 4, 4, 4]), pars: [4, 4, 4, 4, 4, 4, 4, 4, 4] } });
+        } else if (mode === 'boss') onGameOver({ type: 'gameover', team: 'players', hp: S.hp.slice(), stats: { dealt: names.map(() => 10), received: names.map(() => 2) } });
+        else onGameOver({ type: 'gameover', winner: 1, hp: S.hp.slice() });
+        await pause();
+        chk(mode + ' end screen', document.getElementById('game'), mode === 'boss' ? names.slice(0, n - 1) : names);
+        const rep = document.getElementById('battleReport'); if (rep) rep.remove();
+      }
+      S.playing = false; showScreen('lobby'); Bay.show('home');
+      return { out, seen };
+    })()`;
+    const shapes = [['667x375', 667, 375, { top: 0, left: 0, bottom: 0, right: 0 }], ['874x402 iPhone 17', 874, 402, { top: 0, left: 62, bottom: 21, right: 62 }]];
+    const cut = [], seenAll = {}, cands = {};
+    for (const [V, w, h, insets] of shapes) {
+      await A.send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: true });
+      await A.send('Emulation.setSafeAreaInsetsOverride', { insets });
+      await A.nav();
+      await A.ev(`(localStorage.clear(), sessionStorage.clear(), true)`);
+      await A.nav();
+      await A.ev(`document.fonts && document.fonts.ready ? document.fonts.ready.then(() => true) : true`);
+      // A signed-in page whose socket is a recorder: nothing the screens send
+      // reaches the server, and nothing it answers repaints them under a read.
+      await A.ev(`(() => {
+        const real = S.ws; if (real) { try { real.onclose = null; real.onmessage = null; real.onerror = null; real.close(); } catch {} }
+        window.connect = () => {}; S.ws = { readyState: 1, send() {} }; S.connected = true; S.local = false;
+        window.showToast = () => {};
+        const b = $('accountBtn'); b.classList.remove('hidden'); b.dataset.state = 'in';
+        window.CC_ACCOUNT = ${JSON.stringify(LINKED_W)}; document.dispatchEvent(new CustomEvent('cc:account'));
+        const s = document.createElement('style'); s.textContent = '*,*::before,*::after{transition:none !important;animation:none !important;}'; document.head.appendChild(s);
+        return true; })()`);
+      const poolN = await A.ev(W_JS);
+      // THE NAMES: the widest of the whole pool in every face a name is drawn
+      // in on these surfaces (read off a first drawing with a marker name),
+      // three a face, and the widest rolled pair the S8 check started from.
+      const faceList = await A.ev(`(async () => {
+        const f = {}, M = 'Qzx Marker';
+        const note = () => { for (const [n] of __W.nodesWith(document.body, M)) { const x = __W.faceOf(n.parentElement); f[JSON.stringify(x)] = x; } };
+        $('nameInput').value = M; localStorage.setItem('pt_name', M);
+        for (const scr of ['home', 'career', 'paint', 'settings', 'setup']) { Bay.show(scr); note(); }
+        window.CC_SOCIAL = { friends: [{ id: '00000000-0000-4000-8000-000000000101', callsign: M, online: true }], requests: { in: [{ id: '00000000-0000-4000-8000-000000000200', callsign: M }], out: [] }, blocked: [], friendCode: 'AB12CD', callsign: null };
+        document.dispatchEvent(new Event('cc:social')); Bay.show('friends'); note();
+        handle({ type: 'squad', op: 'state', code: 'QK7T', leader: '${ME_W}', mode: 'ffa', tees: null, max: null, you: 0, held: true,
+          members: [{ id: '${ME_W}', rid: 'r'.repeat(32), callsign: M, guest: false, online: true, ready: false, dropped: false }, { id: '00000000-0000-4000-8000-000000000101', rid: 's'.repeat(32), callsign: M, guest: false, online: true, ready: true, dropped: false }],
+          fits: { duel: true, ffa: true, boss: true, aliens: true, golf: true } });
+        Bay.show('home'); note(); Bay.show('squad'); note(); handle({ type: 'squad', op: 'ended', reason: 'left' });
+        renderLobby({ code: 'ABCD', mode: 'ffa', max: 2, you: 0, host: 0, players: [{ name: M, handle: null }, { name: M, handle: 'h1' }] }); Bay.show('lobby'); note();
+        showScreen('game'); S.mode = 'ffa'; S.n = 4; S.you = 0; S.names = [M, M, M, M]; S.hp = [100, 100, 100, 100]; S.alive = [true, true, true, true]; S.handles = [null, 'h1', null, 'h3']; S.boss = -1; S.turn = 1; S.playing = true; S.golf = null;
+        buildScoreboard(); updateHud(); note();
+        S.playing = false; showScreen('lobby'); Bay.show('home');
+        return Object.values(f);
+      })()`);
+      const set = new Set(['Steel Howitzer']);
+      for (const face of faceList) for (const s of await A.ev(`__W.widest(${JSON.stringify(face)}, 3)`)) set.add(s);
+      cands[V] = { pool: poolN, faces: faceList.length, names: [...set] };
+      const r = await A.ev(W_SURFACES([...set]));
+      for (const x of r.out) cut.push({ V, ...x });
+      for (const [k, v] of Object.entries(r.seen)) seenAll[k] = (seenAll[k] || 0) + v;
+    }
+    await A.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 0, left: 0, bottom: 0, right: 0 } });
+    await A.metrics(874, 402);
+    const SURF = ['screen home', 'screen career', 'screen paint', 'screen settings', 'screen setup', 'Friends cards', 'home Squad box', 'Your squad seats', 'invite sheet', 'invite card', 'lobby seats',
+      'HUD duel 2 (own card)', 'HUD ffa 3 (own card)', 'HUD ffa 4 (own card)', 'HUD boss 3 (own card)', 'HUD duel 2', 'HUD ffa 4', 'turn line', 'hole card', 'scorecard', 'out-of-bounds banner',
+      'duel end screen', 'ffa end screen', 'golf end screen', 'boss end screen', 'HUD names on two lines'];
+    const missing = SURF.filter((k) => !seenAll[k]);
+    const poolOk = Object.values(cands).every((c) => c.pool === 1454 + 1086682 && c.faces >= 4 && c.names.length >= 6);
+    if (!cut.length && !missing.length && poolOk)
+      ok(`W: every name is whole wherever it is drawn: the widest of the ${(1454 + 1086682).toLocaleString('en')} default names in each face a name is drawn in (${cands['667x375'].names.join(', ')}), on ${SURF.length} surfaces (${SURF.join('; ')}), at 667x375 and at 874x402 with the iPhone 17's safe areas: no ellipsis, nothing clipped, nothing off the screen, "(you)" whole on the player's own HUD card in every seat; and a HUD name goes on to a second line (${seenAll['HUD names on two lines']} times here) only once its card's bar is down to its 24px, its lines ending clear of the acting player's underline, every card holding all it draws`);
+    else fail('W: names cut ' + JSON.stringify({ cut: cut.slice(0, 16), more: Math.max(0, cut.length - 16), missing, cands }));
   }
 } catch (e) {
   fail('threw: ' + (e && e.stack || e));

@@ -991,6 +991,132 @@ const mk = (over) => { const store = mkstore(over); return { store, social: crea
     else fail('(a) store calls: ' + JSON.stringify(st.calls));
   }
 
+  // ---- (ar) AN ACCOUNT WITH NO CHOSEN CALLSIGN IS NAMED BY ITS RESERVATION ----
+  // Round 3 fix, 2026-10-10 (the owner's item 27: the player's name shown
+  // right everywhere, friends, search and invites named). The server reserves
+  // every player's name (server/reservations.js), and an account with no
+  // chosen callsign plays under that name, so every list names it so: its
+  // friends' panel, both request directions, the blocked list (in the panel
+  // and the block op's own list) and the add-by-code answer. Before this fix
+  // they read its profile's copy of a name: a typed or numbered name read as
+  // null ('No callsign'), and a rolled pair the account was moved off (now
+  // another player's) was shown as its name.
+  //   * the reservations are read ONCE for the whole panel, for exactly the
+  //     accounts with no chosen callsign, and never for one that has one;
+  //   * a reserved name the guidelines now refuse is not shown (the blocklist
+  //     pass every name here gets), and the profile's proof stands in;
+  //   * no table yet (the reservations not ready): no read, the old names;
+  //   * a failed read costs the names, never the panel.
+  {
+    const [AQ, AT, AN, AR, AB] = [31, 32, 33, 34, 35].map(uid);
+    const rolled = (i) => CALL_ADJ[i] + ' ' + CALL_NOUN[i];
+    const PAIR_Q = rolled(0), PAIR_N = rolled(1), PAIR_R = rolled(2);
+    const RROWS = [
+      { id: A,  callsign: 'Anvil Six',   friend_code: 'ABC234', callsign_key: 'anvil six',   callsign_set_at: null },
+      { id: AB, callsign: 'Bunker Nine', friend_code: 'BDF345', callsign_key: 'bunker nine', callsign_set_at: null },
+      // Moved off its rolled pair: the profile still says the pair.
+      { id: AQ, callsign: PAIR_Q,        friend_code: 'QRS234', callsign_key: null, callsign_set_at: null },
+      // A typed name: no proof at all, so 'No callsign' before the fix.
+      { id: AT, callsign: 'Quiet Dawn',  friend_code: 'TUV234', callsign_key: null, callsign_set_at: null },
+      // No reservation row: named as before.
+      { id: AN, callsign: PAIR_N,        friend_code: 'NPQ234', callsign_key: null, callsign_set_at: null },
+      // A reservation the blocklist now refuses.
+      { id: AR, callsign: PAIR_R,        friend_code: 'RST234', callsign_key: null, callsign_set_at: null },
+    ];
+    const HELD = new Map([[AQ, PAIR_Q + ' 12'], [AT, 'Quiet Dawn'], [AR, 'Zorg Tank'], [AB, 'Never Shown']]);
+    const world = async ({ ready = true, boom = false } = {}) => {
+      const st = memStore(RROWS);
+      st.reservedCalls = [];
+      st.reservedNamesOf = async (ids) => {
+        st._hit('reservedNamesOf'); st.reservedCalls.push(ids.slice());
+        if (boom) throw new Error('sb GET 503');
+        const m = new Map(); for (const id of ids) if (HELD.has(id)) m.set(id, HELD.get(id)); return m;
+      };
+      await st.addFriendship(A, AQ); await st.addFriendship(A, AB);
+      await st.addRequest(AT, A); await st.addRequest(A, AN); await st.addBlock(A, AR);
+      const S = createSocial({ store: st, terms: ['zorg'], send: (ws, frame) => ws.rx.push(frame), now: () => CLOCK,
+        reservations: { ready, state: () => 'free' } });
+      const wa = mkws(A); S.onAuth(wa);
+      st.calls.length = 0;
+      await S.handle(wa, { type: 'friends', id: 1 });
+      const f = last(wa, 'friends');
+      const snapCalls = st.reservedCalls.slice();
+      await S.handle(wa, { type: 'block', op: 'list', id: 2 });
+      const bl = wa.rx.find((x) => x.type === 'block' && x.op === 'list') || null;
+      return { st, S, wa, f, bl, snapCalls };
+    };
+    const names = (f) => f && {
+      friends: Object.fromEntries((f.friends || []).map((r) => [r.id, r.callsign])),
+      inn: ((f.requests && f.requests.in) || []).map((r) => r.callsign), out: ((f.requests && f.requests.out) || []).map((r) => r.callsign),
+      blocked: (f.blocked || []).map((r) => r.callsign),
+    };
+    {
+      const { f, bl, snapCalls } = await world();
+      const n = names(f);
+      if (n && n.friends[AQ] === PAIR_Q + ' 12' && n.friends[AB] === 'Bunker Nine' && same(n.inn, ['Quiet Dawn']) && same(n.out, [PAIR_N]) && same(n.blocked, [PAIR_R]))
+        ok(`(ar) friends: an account with no chosen callsign is named by its reservation ('${PAIR_Q} 12', not the pair '${PAIR_Q}' its profile still says; 'Quiet Dawn', not 'No callsign', on an incoming request), a chosen callsign stays the name, an account with no reservation keeps its proved pair, and a reserved name the blocklist refuses is not shown`);
+      else fail('(ar) friends names: ' + JSON.stringify(n));
+      const asked = snapCalls[0] ? snapCalls[0].slice().sort() : null;
+      if (snapCalls.length === 1 && same(asked, [AQ, AT, AN, AR].sort()))
+        ok('(ar) friends: ONE reservation read for the whole panel, for exactly the four accounts with no chosen callsign, never for one that has one');
+      else fail('(ar) reservation reads for the panel: ' + JSON.stringify(snapCalls));
+      if (bl && same(bl.blocked.map((r) => r.callsign), n && n.blocked) && keysOpaque(bl.blocked))
+        ok('(ar) the block op\'s own list names the blocked account exactly as the panel does');
+      else fail('(ar) block list: ' + JSON.stringify(bl));
+    }
+    {
+      // The block op's list, for an account whose reservation is shown.
+      const st = memStore(RROWS);
+      st.reservedNamesOf = async (ids) => { st._hit('reservedNamesOf'); const m = new Map(); for (const id of ids) if (HELD.has(id)) m.set(id, HELD.get(id)); return m; };
+      await st.addBlock(A, AT);
+      const S = createSocial({ store: st, terms: ['zorg'], send: (ws, frame) => ws.rx.push(frame), now: () => CLOCK, reservations: { ready: true, state: () => 'free' } });
+      const wa = mkws(A); S.onAuth(wa);
+      st.calls.length = 0;
+      await S.handle(wa, { type: 'block', op: 'list', id: 3 });
+      const bl = wa.rx.find((x) => x.type === 'block' && x.op === 'list') || null;
+      if (bl && same(bl.blocked.map((r) => r.callsign), ['Quiet Dawn']) && st.calls.filter((c) => c === 'reservedNamesOf').length === 1)
+        ok('(ar) block list: a blocked account with no chosen callsign is named by its reservation, in one read');
+      else fail('(ar) block list reserved: ' + JSON.stringify({ bl, calls: st.calls }));
+    }
+    {
+      // ADD BY CODE answers the new friend's reserved name; SEARCH finds an
+      // account by its chosen callsign, which is then its name, and reads no
+      // reservation for it.
+      const { st, S, wa } = await world();
+      wa.rx.length = 0; st.calls.length = 0;
+      await S.handle(wa, { type: 'friend', op: 'add', code: 'TUV234', id: 4 });
+      const add = wa.rx.find((x) => x.type === 'friend' && x.op === 'add') || null;
+      // The answer's own reads end where the fan-out's snapshot starts (its
+      // second friendIdsOf), which reads the reservations once more for itself.
+      const own = st.calls.slice(0, st.calls.indexOf('friendIdsOf', st.calls.indexOf('friendIdsOf') + 1));
+      if (add && add.ok && add.friend && add.friend.id === AT && add.friend.callsign === 'Quiet Dawn' && own.filter((c) => c === 'reservedNamesOf').length === 1)
+        ok('(ar) add by code: the answer names the new friend by their reservation (\'Quiet Dawn\'), in one read');
+      else fail('(ar) add by code: ' + JSON.stringify({ add, calls: st.calls }));
+      wa.rx.length = 0; st.calls.length = 0;
+      await S.handle(wa, { type: 'friend', op: 'search', q: 'Bunker Nine', id: 5 });
+      const se = wa.rx.find((x) => x.type === 'friend' && x.op === 'search') || null;
+      if (se && same(se.results.map((r) => r.callsign), ['Bunker Nine']) && !st.calls.includes('reservedNamesOf'))
+        ok('(ar) search: a found account is named by its chosen callsign, with no reservation read');
+      else fail('(ar) search: ' + JSON.stringify({ se, calls: st.calls }));
+    }
+    {
+      // NO TABLE YET: nothing is read and every name is what it was.
+      const { f, snapCalls } = await world({ ready: false });
+      const n = names(f);
+      if (n && n.friends[AQ] === PAIR_Q && n.friends[AB] === 'Bunker Nine' && same(n.inn, [null]) && same(n.out, [PAIR_N]) && snapCalls.length === 0)
+        ok('(ar) with the reservations off (no table yet) nothing is read and every account is named as before');
+      else fail('(ar) reservations off: ' + JSON.stringify({ n, snapCalls }));
+    }
+    {
+      // A FAILED READ costs the names, never the panel.
+      const { f, wa } = await world({ boom: true });
+      const n = names(f);
+      if (f && f.id === 1 && !wa.rx.some((x) => x.type === 'friends' && x.error) && n && n.friends[AQ] === PAIR_Q && same(n.inn, [null]) && n.friends[AB] === 'Bunker Nine')
+        ok('(ar) a reservation read that fails still answers the panel, each account named as before');
+      else fail('(ar) failed read: ' + JSON.stringify({ f, rx: wa.rx }));
+    }
+  }
+
   // ---- (a2) the own callsign is PROVEN against callsign_key ------------------
   // profiles.callsign is a column the account PATCHes itself on every cloud
   // save (profiles_update_own, public/cloud.js save()). callsign_key beside it

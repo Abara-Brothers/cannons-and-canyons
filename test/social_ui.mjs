@@ -103,7 +103,10 @@ await send('Page.addScriptToEvaluateOnNewDocument', { source: 'window.__ccNoIntr
 // to have say what a name may be: letters, numbers or spaces, nothing
 // offensive, one change a day.
 const RULE = '3–16 letters, numbers or spaces. Nothing offensive. One change a day.';
-const HINT = 'Friends find you by code until you choose a callsign';
+// THE HINT IS GONE (round 3 fix, 2026-10-10): a signed-in account with no
+// chosen callsign read 'Friends find you by code until you choose a callsign'
+// and no name, though the server holds a reserved name for it. Its row shows
+// that name now (check 3).
 const WAIT = 'Not loaded yet — reopen this screen to retry';
 const OUT = 'Sign in to choose a callsign.';
 const CASES = [
@@ -367,12 +370,15 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
   await ev(`(() => { csHeldAt = Date.now() - 60000; return true; })()`);
 
   // 3. a snapshot that SAYS null is believed, and that is the difference: the
-  //    row then says how friends find you, and Set is available.
-  await ev(`(() => { handle(${SNAP({ callsign: null })}); return true; })()`);
+  //    row then shows the name the account plays under, the one the server
+  //    reserved for it (the claim's answer put it on #nameInput), and Change
+  //    is available. CHANGED (round 3 fix, 2026-10-10): it said 'Friends find
+  //    you by code until you choose a callsign' and named nobody.
+  await ev(`(() => { $('nameInput').value = 'Iron Ridge 12'; localStorage.setItem('pt_name', 'Iron Ridge 12'); handle(${SNAP({ callsign: null })}); return true; })()`);
   await sleep(60);
   r = await rowInfo();
-  if (r && r.desc === HINT && r.dis.join('|') === 'false') ok(`${V}: a rolled name shows "${HINT}", with Change offered`);
-  else fail(`${V}: rolled hint ${JSON.stringify(r)}`);
+  if (r && r.desc === 'Iron Ridge 12' && r.dis.join('|') === 'false') ok(`${V}: a signed-in account with no chosen callsign shows its reserved name ('Iron Ridge 12'), with Change offered`);
+  else fail(`${V}: no chosen callsign ${JSON.stringify(r)}`);
 
   // 4. Set opens the field with the rules under it
   await openEditor();
@@ -1001,9 +1007,10 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
         && gk.at >= t0 && gk.at <= gk.now)
       ok(`${V}: an ok check keeps the server's 'Tank Ace' as the device's own name, on #nameInput, pt_name and the home chip, and stamps the day`);
     else fail(`${V}: guest kept ${JSON.stringify(gk)}`);
-    // 23e. ONCE A DAY: the row and the field say when, Save stands down, the
-    //      field opens on the name they chose, and nothing at all is sent --
-    //      not by Save, not by Enter, not by calling the wire directly.
+    // 23e. ONCE A DAY: the field says when (the row goes on naming the
+    //      player), Save stands down, the field opens on the name they chose,
+    //      and nothing at all is sent -- not by Save, not by Enter, not by
+    //      calling the wire directly.
     r = await rowInfo();
     await clearTx();
     await openEditor();
@@ -1017,12 +1024,12 @@ for (const [w, h] of [[932, 430], [667, 375]]) {
     const enter = await editor();
     const direct = await ev(`new Promise((res) => sendGuestName('Other Name', res))`);
     t = await calls('callsign');
-    if (r && r.desc === 'Change it again in 24 hours' && r.dis.join('|') === 'false'
+    if (r && r.desc === 'Tank Ace' && r.dis.join('|') === 'false'
         && e && e.rule === 'You can change your name again in 24 hours.' && !e.bad && g1.dis
         && g1.v === 'Tank Ace' && !g1.focused && !g1.kbd
         && enter && enter.rule === 'You can change your name again in 24 hours.'
         && direct && direct.ok === false && direct.error === 'too_soon' && direct.wait > 0 && t.length === 0)
-      ok(`${V}: inside the day the row says "Change it again in 24 hours", the field says when, Save stands down, the field shows 'Tank Ace' with no keyboard raised, and Save, Enter and the wire itself send nothing`);
+      ok(`${V}: inside the day the row still names the player ('Tank Ace', round 3 fix: it said "Change it again in 24 hours" in its place), the field says when, Save stands down, the field shows 'Tank Ace' with no keyboard raised, and Save, Enter and the wire itself send nothing`);
     else fail(`${V}: guest day ${JSON.stringify({ r, e, g1, enter: enter && enter.rule, direct, t })}`);
     await closeCallsign();
     // 23f. COUNTED DOWN FROM THE STAMP, rounded up; and the day ENDS.

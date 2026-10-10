@@ -112,16 +112,23 @@ const modeOf = (id) => MODES.find((m) => m.id === id) || MODES[0];
 // blocklist, and the day between changes. Uniqueness is a signed-in account's
 // alone, and the one time it matters the 'taken' sentence says so.
 const CS_RULE = '3&ndash;16 letters, numbers or spaces. Nothing offensive. One change a day.';
-const CS_HINT = 'Friends find you by code until you choose a callsign';
 // THE ROW NAMES THE PLAYER (round 3, 2026-10-10). A guest's row used to say
 // what the name was for ('Your name in every match') and name nobody, but the
 // server now holds every player's name and may give them a new one ("Your name
 // was taken, so you're now X. You can change it in Bay controls."), so the
 // row the sentence sends them to shows the name it means: the one this device
-// plays under (myName). A signed-in account's row says something about the
-// account instead -- its chosen name, or how friends find it -- as it always
-// has. A name is at most 16 characters, shorter than the sentence it
-// replaces, so the row still stays on one line beside Change at 667x375.
+// plays under (myName). A name is at most 16 characters, shorter than the
+// sentence it replaces, so the row still stays on one line beside Change at
+// 667x375.
+// FOR EVERY KIND OF PLAYER (round 3 fix, 2026-10-10). A signed-in account with
+// no chosen callsign used to read 'Friends find you by code until you choose a
+// callsign' and no name at all, though the server holds a reserved name for
+// it, every match seats that name, and a moved account is sent here to change
+// it. Its row now shows that name (myName, which the claim's answer set), as
+// a chosen callsign's row shows the callsign. And a guest whose day is still
+// running sees their name too, not 'Change it again in N hours' in its place:
+// the time is said where it matters, under the field once Change is open
+// (csWaitLine), where Save stands down.
 // WHEN, IN WORDS (owner, 2026-10-07: "You can change your name again in 7
 // hours"). Rounded UP, so the time it names has always passed when it says it
 // will: a player told "in 7 hours" who comes back in seven finds the gate open.
@@ -133,7 +140,8 @@ const waitWords = (ms) => {
 };
 const csWaitLine = (ms) => 'You can change your name again in ' + waitWords(ms) + '.';
 // THE THIRD STATE. `CC_SOCIAL === null` means the snapshot has NOT ARRIVED, not
-// that the account holds no name -- and rendering it as CS_HINT told every
+// that the account holds no name -- and rendering it as the old hint that
+// friends find you by code until you choose a callsign told every
 // returning player who holds a callsign that they hold none, on first paint and,
 // while the migration is unapplied and every social frame answers unavailable,
 // for their whole visit. This sentence claims nothing about the name; it says
@@ -822,6 +830,14 @@ function sqBox() {
 // paragraph.
 // (A row's lamp and "(you)" stand on its name's line, so the name speaks for
 // them; the menu, also on that line, is a button.)
+// A NAME IS TAKEN A LINE AT A TIME (round 3 fix, 2026-10-10). A name too long
+// for its row now goes on to a second line (styles.css, the rows in the home
+// box), and taken whole it would lift the foot past both lines when only the
+// second was in the way. So every box is read as the lines it is drawn on
+// (getClientRects: one box for a button, a status word or a paragraph, one
+// per line for the name), and the foot stops at the top of the line it would
+// cut: the name's first line stays in view, whole, and its second is out of
+// view, whole, under the fade that says there is more.
 const SQ_DRAWN = '.sqmt, .sql, .sqr, .sqy, p, button';
 function sqRest() {
   const host = $('bay'), l = $('sqBox');
@@ -832,7 +848,7 @@ function sqRest() {
   const at = (r) => (rot ? [lr.right - r.right, r.width] : [r.top - lr.top, r.height]);
   const was = parseFloat(host.style.getPropertyValue('--sqrest')) || 0, H = at(lr)[1] + was;
   // (A node that is not drawn has an empty box, which can cut nothing.)
-  const drawn = [...l.querySelectorAll(SQ_DRAWN)].map((e) => { const [y, h] = at(e.getBoundingClientRect()), t = y + l.scrollTop; return [t, t + h]; });
+  const drawn = [...l.querySelectorAll(SQ_DRAWN)].flatMap((e) => [...e.getClientRects()].map((r) => { const [y, h] = at(r), t = y + l.scrollTop; return [t, t + h]; }));
   let foot = H;
   for (let moved = true; moved;) {
     moved = false;
@@ -2226,10 +2242,10 @@ SCREENS.settings = function () {
   // kept on this device, checked by the server first and held to the same
   // guidelines at every lobby door, once a day on this device.
   //
-  // The DESCRIPTION is the fact that matters. For a signed-in account that is
-  // the account's own: its chosen name, or that friends find it by code until
-  // it has one. For a guest it is what the row is FOR -- the name every other
-  // player sees -- and, while the day is still running, when it opens again.
+  // The DESCRIPTION is the fact that matters: the name every other player sees.
+  // For a signed-in account that is its chosen name, or, with none, the name
+  // the server reserved for it; for a guest, the device's own name, whether or
+  // not their day is still running (the field says when, once it is open).
   // Putting the sentence in the existing .rd rather than in a new paragraph is
   // deliberate: the closed row keeps its 52u height, so the settings screen is
   // geometrically identical to the baseline test/layout.mjs holds.
@@ -2252,8 +2268,7 @@ SCREENS.settings = function () {
     // the only validator, and it answers 'length' for anything longer.
     const max = (has('CALLSIGN_MAX') ? CALLSIGN_MAX : 16) * 2;
     const wait = st.nameWait > 0 ? st.nameWait : 0;
-    const desc = st.linked ? (!known ? CS_WAIT : held ? esc(held) : CS_HINT)
-      : wait ? 'Change it again in ' + waitWords(wait) : esc(st.name);
+    const desc = st.linked ? (!known ? CS_WAIT : esc(held || st.name)) : esc(st.name);
     // SAVE STANDS DOWN WHILE A GUEST'S DAY RUNS, and the line under the field
     // says until when instead of the rules: a Save that can only be refused is
     // a control that reads as broken. An error from a try still outranks it.

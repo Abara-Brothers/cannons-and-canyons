@@ -1127,6 +1127,22 @@ for (const [label, age] of [['V9 10 min 10 s after last use: the full intro agai
     // boot message still shows at once, as intro.js's z-order intends.
     const shown = await p.ev("(showToast('A boot message'), { cv: !!document.getElementById('intro'), running: window.__ccIntro.state === 'running', items: [...document.querySelectorAll('.toast-item')].map((t) => t.textContent) })");
     check('V9 over the full intro a toast still shows at once', shown.cv && shown.running && shown.items.includes('A boot message'), JSON.stringify(shown));
+    // EXCEPT THE ONE-TIME NAME NOTICE (round 3 fix, 2026-10-10). "Your name was
+    // taken, so you're now X." is said once and never again, and the claim
+    // that earns it is answered during the full intro of the first launch
+    // after an update; drawn there it was gone before the menu came up. It is
+    // held while the doors (either kind) are up and shown once they have gone,
+    // on the live menu, exactly once. Every toast that reaches the screen from
+    // here on is recorded with whether the intro's canvas was still up.
+    const nm = await p.ev(`(() => {
+      window.__nm = [];
+      new MutationObserver((ms) => { for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1 && n.classList.contains('toast-item') && n.textContent.startsWith('Your name'))
+        window.__nm.push({ text: n.textContent, cv: !!document.getElementById('intro'), up: window.CC_DOORS_UP === true }); }).observe(document.getElementById('app'), { childList: true, subtree: true });
+      nameMovedTold = ''; tellNameMoved('taken', 'Amber Hammer 444'); tellNameMoved('taken', 'Amber Hammer 444');
+      return { running: window.__ccIntro.state === 'running', cv: !!document.getElementById('intro'), up: window.CC_DOORS_UP === true,
+        items: [...document.querySelectorAll('.toast-item')].map((t) => t.textContent).filter((t) => t.startsWith('Your name')) };
+    })()`);
+    check('R3 the one-time "Your name was taken" notice is not drawn over the full intro', nm.running && nm.cv && nm.up && nm.items.length === 0, JSON.stringify(nm));
   }
   // ROUND 3 (owner, 2026-10-10: "AFTER 10 MIN (no match): the full intro ends
   // on the MAIN MENU"): played to its end, it lands on home with nothing of
@@ -1135,6 +1151,12 @@ for (const [label, age] of [['V9 10 min 10 s after last use: the full intro agai
   await settled(p);
   const at = await p.ev(`({ scr: ${SCR}, mode: ccMode, game: document.getElementById('game').classList.contains('active'), cv: !!document.getElementById('intro') })`);
   check(`R3 ${label.slice(3)}: played to its end, onto the main menu`, !!end && end.reason === 'done' && at.scr === 'home' && at.mode === 'duel' && !at.game && !at.cv, JSON.stringify({ end, at }));
+  if (age > 0) {
+    const want = "Your name was taken, so you're now Amber Hammer 444. You can change it in Bay controls.";
+    const seen = await p.ev(`({ nm: window.__nm, scr: ${SCR}, on: [...document.querySelectorAll('.toast-item')].map((t) => t.textContent).filter((t) => t.startsWith('Your name')) })`);
+    check('R3 and it is shown once the doors have gone, once, on the main menu', seen.nm.length === 1 && seen.nm[0].text === want && !seen.nm[0].cv && !seen.nm[0].up
+      && seen.scr === 'home' && seen.on.length === 1, JSON.stringify(seen));
+  }
   await p.close();
 }
 await quickCase('V9 a last view naming a screen that cannot come back (a lobby)', { extra: [LAST(60000, { scr: 'lobby', path: ['home'], mode: 'duel' })] }, BASE, { dest: 'home' });

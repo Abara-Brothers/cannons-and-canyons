@@ -628,18 +628,36 @@ body.golf .golf-only { display: flex; }
   .pval { gap: 3px; }
   .score-row .score, .score-row.n3 .score, .score-row.n4 .score { font-size: 15px; }
   .shots, .score-row.n3 .shots, .score-row.n4 .shots { display: none; }
-  .pname, .score-row.n3 .pname, .score-row.n4 .pname { font-size: 10px; max-width: 84px; }
-  .score-row.n4 .pname { max-width: 62px; }
-  /* A card that carries the report/block handle gets the handle's WIDTH BACK,
-     so the name keeps exactly the budget it had before the control existed.
-     Without this a four-player landscape HUD truncated "Bunker Nine" to
-     "Bunke..." to make room for a 19px button, which is the feature taking the
-     evidence off the screen it exists to act on. */
-  .pname.rep, .score-row.n3 .pname.rep, .score-row.n4 .pname.rep { max-width: 103px; gap: 3px; }
-  .score-row.n4 .pname.rep { max-width: 81px; }
+  /* THE NAME TAKES THE ROOM ITS CARD HAS, AND IS NEVER CUT (round 3 fix,
+     2026-10-10; the owner's item 27: every player's name "accurately
+     displayed"). It used to be capped at 84px, 62px on a four-player card,
+     and ended in an ellipsis past that: "Steel Howitzer (you)" lost its end
+     to one, and on a four-player card nearly every name did.
+     A card is far wider than that cap (311px for a duel on a 667x375 phone,
+     153px for four players), so the cap is gone and the bar gives way first,
+     down to its 24px floor: its flex-shrink is a million against the name's
+     1, so the name's share of the bar's giving way stays under a 64th of a
+     pixel, the unit the layout works in. At a thousand, that share was
+     0.02px on an iPhone 17's four-player card, and a name that fitted to the
+     pixel ("Reckless Ridge 2") gave its last word up to a second line.
+     Only then does the name wrap, onto a second line of the same 10px type,
+     between words, or inside a word only when one word is wider than the
+     card (.pnm, at the foot of this file): "Amber Hammer 444 (you)" sets as
+     "Amber Hammer" over "444 (you)" on a four-player card at 667x375. Its
+     lines are 10px apart, and the name keeps 2px under them, the height of
+     the acting player's underline (the card's inset shadow above), so the
+     underline never runs across a wrapped name's second line. A one-line
+     name is 12px with them, under the 18px of the score and the handle
+     beside it, so the HUD is exactly as tall as it was; it grows by 4px only
+     while a name needs two lines. A card with the report/block handle keeps
+     the handle beside the name, 3px from it, and the name wraps before the
+     handle is pushed off. */
+  .pname, .score-row.n3 .pname, .score-row.n4 .pname { font-size: 10px; }
+  .pscore .pnm { line-height: 10px; padding-bottom: 2px; }
+  .pname.rep, .score-row.n3 .pname.rep, .score-row.n4 .pname.rep { gap: 3px; }
   .pscore .pmb { width: 16px; height: 16px; }
   .pscore .pmb svg { width: 10px; height: 10px; }
-  .hpbar { height: 5px; margin-top: 0; flex: 1 1 34px; min-width: 24px; }
+  .hpbar { height: 5px; margin-top: 0; flex: 1 1000000 34px; min-width: 24px; }
   .turnbox { flex: 0 0 auto; line-height: 1.1; }
   .turnlabel { font-size: 9.5px; margin-top: 0; }
   #dock { padding: 3px 8px calc(3px + env(safe-area-inset-bottom)); gap: 3px; }
@@ -2472,6 +2490,29 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
      block -- which would drop "(you)" half a line in an engine that did. */
   #bay .sqx .sqmn{align-items:center}
   #bay .sqx .sqmt{line-height:calc(20 * var(--u))}
+  /* A NAME TOO LONG FOR ITS ROW WRAPS, IT IS NEVER CUT (round 3 fix,
+     2026-10-10). The server hands out numbered default names once the pairs
+     are held ('Iron Ridge 2', 'Amber Hammer 444', up to 16 letters), and the
+     widest of them measured 88.5 px in this box's 15u Rajdhani at 667x375,
+     where a row with the menu has about 73 px for its name: every one of the
+     80 widest ended in an ellipsis, on the player's own row, a squadmate's and
+     a friend's. The name is the box's 15u floor already, so it cannot be set
+     smaller; it goes on to a second 20u line instead, between words, or inside
+     a word only when one word is wider than the row, and the row grows by 20u
+     a line, as a status line that wraps grows it. So the name and its "(you)"
+     are set as one run of text (the name's line is a block, not a flex row):
+     "(you)" follows the name's last word, on its line while it fits and on the
+     next when it does not, and both are centred on their 20u lines. The
+     line is set in the name's own face and size, so the name sits on it as
+     its own text would (its letters' box in the middle of the 20u), and
+     "(you)" is a 20u box of its own set from the line's top. The lamp stands
+     on the name's first line, centred on it (4.5u above its 11u), as the menu
+     does. A name that fits on one line is drawn exactly where it was. */
+  #bay .sqx .sqm1{align-items:flex-start}
+  #bay .sqx .sqm1 > .pdot{margin-top:calc(4.5 * var(--u))}
+  #bay .sqx .sqmn{display:block;line-height:calc(20 * var(--u));font-family:Rajdhani,system-ui,sans-serif;font-weight:600;font-size:calc(15 * var(--u))}
+  #bay .sqx .sqmt{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
+  #bay .sqx .sqmy{display:inline-block;margin-left:calc(4 * var(--u));line-height:calc(20 * var(--u));vertical-align:top;white-space:nowrap}
   #bay .sqx .sqm2{height:auto;margin-top:calc(2 * var(--u));padding-left:calc(17 * var(--u))}
   #bay .sqx .sqms{flex-wrap:wrap;column-gap:calc(9 * var(--u));row-gap:calc(2 * var(--u));padding:calc(1 * var(--u)) 0}
   #bay .sqx .sqms:empty{display:none}
@@ -2880,9 +2921,17 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
      friends and the "No friends yet" line alike. The count line above the
      rows says how many there are. */
   #bay .frlo{max-height:calc(92 * var(--u))}
+  /* A NAME ON A CARD WRAPS, IT IS NEVER CUT (round 3 fix, 2026-10-10). A
+     request's card carries Accept, Ignore and the menu, and left its name
+     about 65 px at 667x375: a rolled pair as common as "Steel Howitzer" read
+     "STEEL HOWI...", and a numbered default ("Amber Hammer 444") lost half of
+     itself. The name now goes on to a second line, between words, or inside a
+     word only when one word is wider than the card, and the card is at least
+     its 40u, growing by a line only while a name needs two. Every list these
+     cards stand in scrolls on its own, so a taller card pushes nothing off. */
   #bay .pcd{display:flex;align-items:center;gap:calc(8 * var(--u));padding:calc(6 * var(--u)) calc(9 * var(--u));border-radius:calc(5 * var(--u));
-     border:1px solid rgba(140,168,214,.22);background:rgba(16,21,31,.6);margin-top:calc(6 * var(--u));height:calc(40 * var(--u));flex:none}
-  #bay .pcd .sn{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+     border:1px solid rgba(140,168,214,.22);background:rgba(16,21,31,.6);margin-top:calc(6 * var(--u));min-height:calc(40 * var(--u));flex:none}
+  #bay .pcd .sn{white-space:normal;overflow-wrap:anywhere;min-width:0}
   #bay .pcd .sbtn{height:calc(26 * var(--u));padding:0 calc(9 * var(--u));font-size:calc(11.5 * var(--u))}
   /* The presence lamp is IC.dot, DRAWN — never a filled-circle character. */
   #bay .pdot{width:calc(13 * var(--u));height:calc(13 * var(--u));flex:none;color:#6f7fa6}
@@ -2960,9 +3009,15 @@ body.dock-learned #dock.collapsed .dock-tab { animation: dtBeckon 2s ease-in-out
   box-shadow:0 calc(12 * var(--u)) calc(26 * var(--u)) calc(-12 * var(--u)) rgba(255,122,46,.8)}
 #mgone .mgo:hover{filter:brightness(1.08)}
 #mgone .mgo:focus-visible{outline:2px solid #eef3ff;outline-offset:2px}
-/* The in-match card's name is now a row: the text truncates, the menu does not. */
-.pname{display:flex;align-items:center;gap:6px}
-.pnm{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The in-match card's name is now a row: the name and the menu beside it.
+   THE NAME WRAPS, IT IS NEVER CUT (round 3 fix, 2026-10-10): a name too long
+   for its card goes on to a second line, between words, or inside a word only
+   when one word is wider than the card, and nothing clips it, so every letter
+   of every player's name is on the screen, the player's own "(you)" with it.
+   The row is no longer the clip it was for the ellipsis: a line's descenders
+   may stand a pixel below a tight line box (the compact HUD's 10px lines). */
+.pname{display:flex;align-items:center;gap:6px;overflow:visible}
+.pnm{min-width:0;white-space:normal;overflow-wrap:anywhere}
 .pscore .pmb{width:18px;height:18px;border-radius:4px}
 .pscore .pmb svg{width:11px;height:11px}
 /* ---- the privacy policy, inside the game (bay.js docOpen) -----------------

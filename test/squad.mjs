@@ -4781,6 +4781,44 @@ const readyRow = (w) => (sqat(w, 'state').members || []).map((m) => m.ready);
     else fail('(inv-a) the inviter got ' + JSON.stringify(wa.rx));
   }
 
+  // ---- (inv-rn) the inviter is named by the name their socket holds -------
+  // Round 3 fix, 2026-10-10 (item 27: invites name the player right). An
+  // inviter with no chosen callsign plays under the name the server reserved
+  // for them, which their socket's claim was answered (ws.reservedName); the
+  // invite card and its push named them by their profile's copy instead, so a
+  // typed or numbered name read 'No callsign'. Now: the chosen callsign when
+  // there is one, else the socket's reserved name while it meets the
+  // guidelines, else the profile's proof. Read from memory, so a delivered
+  // invite and a dropped one still cost the same store reads.
+  {
+    const run = async (inviter, held, online) => {
+      const st = t6store(ROWS6);
+      await st.addFriendship(inviter, B);
+      const S = mkSocial6(st);
+      const wa = up6(S, inviter);
+      if (held !== undefined) wa.reservedName = held;
+      const wb = online ? up6(S, B) : null;
+      await create6(S, wa);
+      if (wb) clear6(wb);
+      PUSHES.length = 0; DRY6.length = 0; pushAnswer = true; st.calls.length = 0;
+      await S.handle(wa, { type: 'squad', op: 'invite', to: B, id: 'r1' });
+      return { card: wb ? (invited6(wb)[0] || null) : null, push: PUSHES[0] ? PUSHES[0][1] : null, calls: st.calls.slice() };
+    };
+    const card = await run(NN, 'Quiet Dawn', true);
+    const push = await run(NN, 'Iron Ridge 12', false);
+    const chosen = await run(A, 'Something Else', true);
+    const bad = await run(NN, 'x', true);
+    const none = await run(NN, undefined, true);
+    if (card.card && card.card.from.callsign === 'Quiet Dawn' && push.push && push.push.from === 'Iron Ridge 12')
+      ok('(inv-rn) an inviter with no chosen callsign is named on the invite card and its push by the name their socket holds (\'Quiet Dawn\', \'Iron Ridge 12\'), not \'No callsign\'');
+    else fail('(inv-rn) reserved inviter: ' + JSON.stringify({ card: card.card, push: push.push }));
+    if (chosen.card && chosen.card.from.callsign === 'Anvil Six' && bad.card && bad.card.from.callsign === null && none.card && none.card.from.callsign === null)
+      ok('(inv-rn) a chosen callsign stays the inviter\'s name, and a held name the guidelines refuse, or none, leaves the profile\'s proof (null here)');
+    else fail('(inv-rn) chosen / refused / none: ' + JSON.stringify({ chosen: chosen.card, bad: bad.card, none: none.card }));
+    if (same6(card.calls, none.calls)) ok('(inv-rn) and naming the inviter so reads nothing more from the store');
+    else fail('(inv-rn) store calls differ: ' + JSON.stringify({ held: card.calls, none: none.calls }));
+  }
+
   // ---- (inv-b) an offline friend goes to the push seam (task 7 fills it) ---
   {
     const st = t6store(ROWS6);

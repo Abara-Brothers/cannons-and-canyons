@@ -2496,6 +2496,14 @@ function nameClaimed(m) {
   const shown = ($('nameInput').value || '').trim();
   if (m.chosen === true || m.linked === true) { if (shown !== m.name) setLocalName(m.name); }
   else if (shown !== m.name || ownName() !== m.name) setOwnName(m.name);
+  // A MOVE IS NOT THE PLAYER'S CHANGE (round 3 fix, 2026-10-10). The notice
+  // promises "You can change it in Bay controls", and a guest who had changed
+  // their name in the day before the server moved them found Save held for the
+  // rest of that day, as if the server's choice had been theirs. So a guest's
+  // move clears this device's day, and their next change is theirs to make at
+  // once. A signed-in account's day is the server's (callsign_set_at), which a
+  // move never writes.
+  if ((m.moved === 'taken' || m.moved === 'refused') && m.chosen !== true && m.linked !== true) { try { localStorage.removeItem(NAME_AT_KEY); } catch {} }
   if (m.moved === 'taken' || m.moved === 'refused') tellNameMoved(m.moved, m.name);
   // The screens that show the name repaint in place (bay.js render morphs the
   // DOM, so an open Callsign field keeps what the player has typed).
@@ -2506,14 +2514,30 @@ function nameClaimed(m) {
 // the player, and this says it once for a name, however many answers carry
 // it. A name the guidelines now refuse (one typed before a term was added) is
 // said in the same shape, without blaming another player for it. A long
-// toast, held behind the quick doors like every other.
-let nameMovedTold = '';
+// toast.
+// HELD UNTIL THE DOORS HAVE GONE, THE FULL INTRO'S AS WELL AS THE QUICK ONES
+// (round 3 fix, 2026-10-10). The claim that moves a player is answered on the
+// first connect after an update, which is usually a cold start more than ten
+// minutes after the last, so the full intro is playing. showToast holds a
+// toast only behind the quick doors (a boot message is meant to show over the
+// full intro), and this notice, said once and never again, was drawn over the
+// intro and gone before the menu came up. So it waits for cc:doorsgone
+// whichever doors are up, and is then shown on whatever they opened onto.
+// intro.js ends the doors on every path, its 30 s watchdog included, so the
+// notice cannot wait for ever. The newest name is the one said.
+let nameMovedTold = '', nameMovedHeld = null;
 function tellNameMoved(why, name) {
   if (nameMovedTold === name) return;
   nameMovedTold = name;
-  showToast(why === 'taken'
+  const text = why === 'taken'
     ? `Your name was taken, so you're now ${name}. You can change it in Bay controls.`
-    : `Your name could not be used, so you're now ${name}. You can change it in Bay controls.`, true);
+    : `Your name could not be used, so you're now ${name}. You can change it in Bay controls.`;
+  if (window.CC_DOORS_UP === true) {
+    if (nameMovedHeld === null) document.addEventListener('cc:doorsgone', () => { const t = nameMovedHeld; nameMovedHeld = null; if (t) showToast(t, true); }, { once: true });
+    nameMovedHeld = text;
+    return;
+  }
+  showToast(text, true);
 }
 
 // Coming back from the background (app switch, phone lock, tab switch) is the

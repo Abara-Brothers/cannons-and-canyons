@@ -547,6 +547,36 @@ export function createStore({ sbAdmin } = {}) {
     return one(await sbAdmin('GET', `/name_reservations?secret_hash=eq.${enc(h)}&select=${RES_COLS}&limit=1`));
   }
 
+  // THE RESERVED NAMES OF SEVERAL ACCOUNTS AT ONCE (round 3 fix, 2026-10-10):
+  // a Map of account id (lower case) to the name its row holds, for the ones
+  // that hold a row. The friends panel, an add-by-code answer and the blocked
+  // list name an account with no chosen callsign by its reservation
+  // (server/social.js listNames), and a panel is a list of accounts, so it is
+  // one read for the whole list, IDS_PER_CALL ids a request, the way
+  // profilesByIds reads the profiles beside it. An id that is not a uuid is
+  // DROPPED, as profilesByIds drops one: a stale entry must not blank the
+  // panel. The list is `in.(...)` of uuids, which carry no character an
+  // in-list would have to quote. Only user_id and name are selected: the row's
+  // secret hash never leaves the table for this.
+  async function reservedNamesOf(ids) {
+    const out = new Map();
+    const seen = new Set();
+    for (const v of Array.isArray(ids) ? ids : []) {
+      const s = typeof v === 'string' ? v.toLowerCase() : '';
+      if (UUID_RE.test(s)) seen.add(s);
+    }
+    const list = [...seen];
+    for (let i = 0; i < list.length; i += IDS_PER_CALL) {
+      const chunk = list.slice(i, i + IDS_PER_CALL).map((v) => enc(v)).join(',');
+      const rows = await sbAdmin('GET', `/name_reservations?user_id=in.(${chunk})&select=user_id,name`);
+      // Not a list is a failed read, never an empty one: an empty answer would
+      // name every account by its profile's copy instead, without a word.
+      if (!Array.isArray(rows)) throw new Error('sb GET name_reservations: not a list');
+      for (const r of rows) if (r && typeof r.user_id === 'string' && typeof r.name === 'string' && r.name) out.set(r.user_id.toLowerCase(), r.name);
+    }
+    return out;
+  }
+
   // Who holds each of these keys: [{ name_key, user_id }] for the ones held.
   // One request per key and `eq`, never an `in.(...)` list: a skeleton is a
   // compatibility decomposition and can carry '(' ',' and '.' (U+2474 reads
@@ -677,7 +707,7 @@ export function createStore({ sbAdmin } = {}) {
   }
 
   return {
-    reservationKeys, reservationByUser, reservationBySecret, reservationsByKeys,
+    reservationKeys, reservationByUser, reservationBySecret, reservationsByKeys, reservedNamesOf,
     insertReservation, moveReservation, renameReservation, touchReservation,
     deleteReservationOfUser, sweepReservations, pruneReservations,
     ensureFriendCode, profileById, profileByFriendCode, profileByCallsignKey, profilesByIds,

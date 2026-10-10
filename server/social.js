@@ -1192,6 +1192,50 @@ export function createSocial({
     return combineStates(chosen, held);
   };
   const { provenName, rolledName, displayName, seenName, checkPlayerName, typedName, guestName, seatName: seatShown } = createNameProofs({ terms, keyState });
+
+  // A LINKED ACCOUNT IS NAMED BY ITS RESERVATION ON EVERY LIST (round 3 fix,
+  // 2026-10-10; the owner's item 27: the player's name "accurately displayed
+  // across the whole game", friends, search and invites named). An account
+  // with no chosen callsign plays under the name the server reserved for it
+  // (server/reservations.js), and its profile's own copy of a name says
+  // something else: the rolled pair it had before a move, which another player
+  // may hold now, or nothing displayName can vouch for at all (a typed or a
+  // numbered name is no rolled pair), which a friend's panel showed as
+  // 'No callsign'. So a list names each account the way its squad row does
+  // (linkedRowName): its chosen callsign when it has one, else its reserved
+  // name while that still meets the guidelines (the blocklist pass every name
+  // shown here gets), else what the profile proves, as before.
+  //
+  // ONE READ FOR THE WHOLE LIST, and none when no account on it lacks a chosen
+  // callsign, or while the reservations are off (no table yet). A failed read
+  // costs the names only, never the list: every account is then named as it
+  // was before this existed.
+  async function listNames(ids, profiles) {
+    const need = ids.filter((id) => provenName(profiles.get(id)) === null);
+    let held = new Map();
+    if (need.length && reservations.ready === true && typeof store.reservedNamesOf === 'function') {
+      try { held = await store.reservedNamesOf(need); } catch { held = new Map(); }
+    }
+    return (id) => {
+      const p = profiles.get(id);
+      if (provenName(p) !== null) return displayName(p);
+      const n = held instanceof Map ? held.get(String(id).toLowerCase()) : undefined;
+      const v = typeof n === 'string' && n ? checkPlayerName(n) : null;
+      return v && v.ok ? v.name : displayName(p);
+    };
+  }
+  // THE INVITER'S OWN NAME on an invite card and its push: their chosen
+  // callsign when they have one, else the name their socket's claim was
+  // answered (ws.reservedName), the name every match seats them under. Read
+  // from memory, so an invite costs the reads it always has: a read here would
+  // be one more on a delivered invite than on a dropped one, and the two must
+  // cost the same (D-BLOCK-2 E).
+  const inviterName = (ws, self) => {
+    if (provenName(self) !== null) return displayName(self);
+    const n = ws && typeof ws.reservedName === 'string' ? ws.reservedName : '';
+    const v = n ? checkPlayerName(n) : null;
+    return v && v.ok ? v.name : displayName(self);
+  };
   // The index's two hooks, called when a callsign_key write lands. A host with
   // no index (or a malformed one) has nothing to keep current.
   const keyAdded = (key) => { if (key && names && typeof names.add === 'function') names.add(key); };
@@ -3076,7 +3120,7 @@ export function createSocial({
   // invitee's blocks with the log added, falsy when they could not be read.
   // D-BLOCK 4: A BLOCK BETWEEN THE INVITEE AND ANY MEMBER DROPS THE INVITE,
   // SILENTLY, and a read that failed drops it too.
-  const invitedFrame = (sq, self) => ({ type: 'squad', op: 'invited', code: sq.code, from: { callsign: displayName(self) }, size: sq.members.length, max: SQUAD_MAX });
+  const invitedFrame = (sq, self, ws) => ({ type: 'squad', op: 'invited', code: sq.code, from: { callsign: inviterName(ws, self) }, size: sq.members.length, max: SQUAD_MAX });
   const inviteDropped = (sq, theirs) => !theirs || anyRowOf(sq, new Set([...theirs.blocked, ...theirs.blockedBy, ...theirs.doubt]));
 
   // THE DELIVERY TO A FRIEND, for both paths: the frame to every live socket,
@@ -3084,7 +3128,7 @@ export function createSocial({
   // it).
   async function deliverInvite(ws, msg, sq, to, self, theirs, extra) {
     const live = socketsOf(to);
-    const frame = invitedFrame(sq, self);
+    const frame = invitedFrame(sq, self, ws);
     // A DROPPED INVITE: nothing reaches the invitee, and the inviter is
     // answered what this invite would have been answered, at the same point:
     // 'online' for a live socket, and otherwise whatever the push seam says in
@@ -3120,7 +3164,7 @@ export function createSocial({
   // because the friends list beside it has one.
   function inviteStranger(ws, msg, sq, to, self, theirs, extra) {
     if (!inviteDropped(sq, theirs)) {
-      const frame = invitedFrame(sq, self);
+      const frame = invitedFrame(sq, self, ws);
       frame.from.id = wireId(ws.userId);
       for (const w of socketsOf(to)) safeSend(w, frame);
     }
@@ -3196,6 +3240,10 @@ export function createSocial({
   // PostgREST round trips, nine when the sweep runs, and ten the first time an
   // account is given a friend code. Anything sizing a limit against this number
   // must use the round trips, not the method count.
+  //
+  // AND ONE MORE WHEN AN ACCOUNT ON IT HAS NO CHOSEN CALLSIGN (round 3 fix,
+  // 2026-10-10): reservedNamesOf, one read for the whole panel (listNames),
+  // and only while the reservations are on.
   async function friendsSnapshot(userId) {
     const [ids, reqs, blocks, friendCode, self] = await Promise.all([
       store.friendIdsOf(userId),
@@ -3231,7 +3279,10 @@ export function createSocial({
     const outgoing = pending(reqs.outgoing);
     const wanted = [...new Set([...friendIds, ...incoming, ...outgoing, ...blocks.blocked])];
     const names = wanted.length ? await store.profilesByIds(wanted) : new Map();
-    const nameOf = (id) => displayName(names.get(id));
+    // Each account named as its squad row names it (listNames): one read of
+    // the reservations for the whole panel, after the profiles say which
+    // accounts have no chosen callsign.
+    const nameOf = await listNames(wanted, names);
     return {
       type: 'friends',
       friends: friendIds.map((id) => ({ id, callsign: nameOf(id), online: isOnline(id) })),
@@ -3418,7 +3469,10 @@ export function createSocial({
     // pending request to somebody who is already a friend.
     if (rel.incoming) await store.deleteRequest(them.id, ws.userId);
     if (rel.outgoing) await store.deleteRequest(ws.userId, them.id);
-    friendReply(ws, msg, 'add', { ok: true, friend: { id: them.id, callsign: displayName(them), online: isOnline(them.id) } });
+    // Named as the friends panel will name them (listNames): an account with
+    // no chosen callsign by its reservation.
+    const nameOf = await listNames([them.id], new Map([[them.id, them]]));
+    friendReply(ws, msg, 'add', { ok: true, friend: { id: them.id, callsign: nameOf(them.id), online: isOnline(them.id) } });
     await pushBoth(ws.userId, them.id);
   }
 
@@ -3436,7 +3490,10 @@ export function createSocial({
     if (blockedEither(blocks, them.id)) return none();
     // BINDING resolution 19: spec 5.5 draws the found player's tank in their own
     // paint, so the result carries one — checked, never passed through.
-    friendReply(ws, msg, 'search', { results: [{ id: them.id, callsign: displayName(them), skin: skinOf(them) }] });
+    // Named through listNames like every list: a search finds an account by its
+    // chosen callsign, which is then its name, so no reservation is read.
+    const nameOf = await listNames([them.id], new Map([[them.id, them]]));
+    friendReply(ws, msg, 'search', { results: [{ id: them.id, callsign: nameOf(them.id), skin: skinOf(them) }] });
   }
 
   async function friendRequest(ws, msg) {
@@ -3777,16 +3834,20 @@ export function createSocial({
     // unlimited on purpose — a player in trouble must be able to block several
     // people quickly, and design 4.2 rate limits no write here — but this op
     // writes nothing and costs three PostgREST round trips (blockIdsOf's two plus
-    // one profilesByIds), which is the friends frame's shape and is bounded the
-    // way that one is. A list opens; it does not poll.
+    // one profilesByIds; four when a blocked account has no chosen callsign and
+    // its reservation is read, listNames), which is the friends frame's shape
+    // and is bounded the way that one is. A list opens; it does not poll.
     if (!rateOk(ws, 'friends', LIMITS.friends)) return reply(ws, msg, { type: 'block', op: 'list', error: 'slow_down' });
     const { blocked } = await store.blockIdsOf(ws.userId);
     const names = blocked.length ? await store.profilesByIds(blocked) : new Map();
+    // Named as friendsSnapshot's blocked list names them (listNames), so the
+    // two lists never disagree about one account.
+    const nameOf = await listNames(blocked, names);
     // THE ID IS AN UNBLOCK KEY, NOT THE ACCOUNT — see BLOCK_KEY_SECRET. This
     // reply and friendsSnapshot's own blocked array are the two places a
     // stranger's account id used to leave the server, and they are the same
     // shape on purpose so the client renders one card for both kinds of account.
-    reply(ws, msg, { type: 'block', op: 'list', ok: true, blocked: blocked.map((id) => ({ id: blockKey(ws, id), callsign: displayName(names.get(id)) })) });
+    reply(ws, msg, { type: 'block', op: 'list', ok: true, blocked: blocked.map((id) => ({ id: blockKey(ws, id), callsign: nameOf(id) })) });
   }
 
   // WHAT A BLOCK WILL TAKE FROM THE BLOCKED PLAYER'S PANEL (T6-R1-1): true

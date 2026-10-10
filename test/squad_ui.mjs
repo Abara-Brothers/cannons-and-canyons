@@ -29,6 +29,9 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 // The default names (SP's S8 sets every one of them in the home box's rows).
 import { CALL_ADJ, CALL_NOUN, NAME_MAX } from '../public/game-core.js';
+// The server's numbered default names (S8, round 3 fix): its own tiers, so the
+// names measured are exactly the ones it can hand out.
+import { DEFAULT_TIERS, WIDE_DEFAULTS } from '../server/reservations.js';
 
 const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 if (!existsSync(CHROME)) { console.log(`SKIP  squad_ui tests -- no Chrome at ${CHROME}`); process.exit(3); }
@@ -5675,14 +5678,16 @@ if (want('v3')) try {
 //      included, and on one edge in every row with the menu; the menu's tap
 //      target is 34u by 37u less its 1px, inside the row's border and over
 //      nothing drawn;
-//   S4 nothing in it is cut: a name wider than its line ends in an ellipsis
-//      (text-overflow, its overflow hidden), no other word is wider than its
-//      box, the name's line holds its letters' full height, the lamp, name,
-//      (you) and menu are centred on the name's line and the status words
-//      and Invite stand within the second, everything drawn stands inside
-//      the row, and the row inside the list;
+//   S4 nothing in it is cut: a name wider than its line goes on to the next
+//      one (round 3 fix, 2026-10-10: it ended in an ellipsis, and the server's
+//      numbered default names were cut), no other word is wider than its box,
+//      each of the name's lines holds its letters' full height, the lamp and
+//      the menu are centred on the name's first line, each line of the name
+//      and "(you)" on its own 20u line, the status words and Invite stand
+//      within the second line, everything drawn stands inside the row, and
+//      the row inside the list;
 //   S5 it is 48u: 3u, the name's 20u line, 2u, the 20u status line and 3u
-//      -- a status line that wraps grows by 20u a line;
+//      -- a name or a status line that wraps grows it by 20u a line;
 //   S6 at rest the list's foot cuts nothing it draws (bay.js sqRest), moving
 //      up by no more than one line (20u) to do it, and scrolled to its end
 //      the last row stands whole above the fade;
@@ -5695,7 +5700,13 @@ if (want('v3')) try {
 //      cut "Steel Howitzer (you)" to "Steel Howit... (you)" on an iPhone 17.
 //      And every default name (game-core's CALL_ADJ x CALL_NOUN, within
 //      NAME_MAX) is whole on the player's own row, a squadmate's and a
-//      friend's, at each shape, with "(you)" whole beside it.
+//      friend's, at each shape, with "(you)" whole beside it, on one line.
+//      AND THE WHOLE DEFAULT POOL (round 3 fix, 2026-10-10): the server's
+//      numbered defaults (each pair with 2 to 9, and with 10 to 999 where it
+//      fits in 16 letters, server/reservations.js), 1,088,136 names in all,
+//      are measured in the row's own face, and the widest of them by that
+//      measure are set in the rows: every one is whole, on as many lines as
+//      it needs, its "(you)" whole after it.
 // AND AGAIN IN A WIDER FACE: his screen is Safari's engine, whose text need
 // not set to Chrome's widths. S1-S4 and S6 are read once more with the
 // system face (San Francisco on a Mac, as on the iPhone) in the box in place
@@ -5754,8 +5765,11 @@ if (want('sp')) try {
     l.scrollTop = 0;
     const lr = B(l.getBoundingClientRect());
     const rows = [...l.querySelectorAll('.sqm')].filter(vis).map((r) => {
-      const n = r.querySelector('.sqmt'), nb = B(n.getBoundingClientRect()), nt = texts(n)[0], ncs = getComputedStyle(n);
-      const drawn = [{ k: 'name', l: nt.l, r: Math.min(nt.r, nb.r), t: nt.t, b: nt.b }];
+      const n = r.querySelector('.sqmt'), nb = B(n.getBoundingClientRect()), nts = texts(n), nt = nts[0], ncs = getComputedStyle(n);
+      // Every line of the name (round 3 fix: a long name wraps), each its own
+      // box, clipped to the name's box as an ellipsis would clip it.
+      const drawn = nts.map((x) => ({ k: 'name', l: x.l, r: Math.min(x.r, nb.r), t: x.t, b: x.b }));
+      const nmn = B(r.querySelector('.sqmn').getBoundingClientRect());
       const dot = r.querySelector('.pdot'); if (vis(dot)) drawn.push({ k: 'lamp', ...B(dot.getBoundingClientRect()) });
       const y = r.querySelector('.sqmy'); if (vis(y)) drawn.push(...texts(y).map((x) => ({ k: '(you)', ...x })));
       const words = [...r.querySelectorAll('.sql, .sqr, .sqy')].filter(vis);
@@ -5772,8 +5786,16 @@ if (want('sp')) try {
       const rb = B(r.getBoundingClientRect());
       // Each line, and what must stand on it.
       const L1 = B(r.querySelector('.sqm1').getBoundingClientRect()), L2 = B(r.querySelector('.sqm2').getBoundingClientRect());
-      const offLine = [[L1, [dot, n, y, menu], true], [L2, [...words, act], false]].flatMap(([L, es, mid]) => es.filter(vis).map((e) => [e.className, B(e.getBoundingClientRect())])
-        .filter(([, b]) => (mid ? Math.abs(b.t + b.b - L.t - L.b) / 2 > 0.25 : b.t < L.t - 0.25 || b.b > L.b + 0.25)).map(([k]) => k));
+      // The name's line is 20u a line: the lamp and the menu centred on its
+      // first, "(you)" on its last, and each line of the name's letters
+      // standing within a 20u line of its own.
+      const n1 = Math.max(1, Math.round((L1.b - L1.t) / (20 * u)));
+      const lineAt = (k) => ({ t: L1.t + 20 * u * k, b: L1.t + 20 * u * (k + 1) });
+      const mid = (b, L) => Math.abs(b.t + b.b - L.t - L.b) / 2 <= 0.25;
+      const within = (b, L) => b.t >= L.t - 0.25 && b.b <= L.b + 0.25;
+      const offLine = [[lineAt(0), [dot, menu]], [lineAt(n1 - 1), [y]]].flatMap(([L, es]) => es.filter(vis).map((e) => [e.className, B(e.getBoundingClientRect())]).filter(([, b]) => !mid(b, L)).map(([k]) => k))
+        .concat(nts.some((x) => ![...Array(n1).keys()].some((k) => within(x, lineAt(k)))) || new Set(nts.map((x) => Math.round(x.t))).size !== nts.length ? ['sqmt'] : [])
+        .concat([...words, act].filter(vis).map((e) => [e.className, B(e.getBoundingClientRect())]).filter(([, b]) => b.t < L2.t - 0.25 || b.b > L2.b + 0.25).map(([k]) => k));
       // Down each status line, in order: where each word's drawing starts
       // (its tick's mark, or its text) and ends, and its tick's distance from
       // its text.
@@ -5784,11 +5806,15 @@ if (want('sp')) try {
       if (menu) { const mb = B(menu.getBoundingClientRect()), ps = getComputedStyle(menu, '::before'), px = (v) => parseFloat(v) || 0;
         target = { l: mb.l + px(ps.left), r: mb.r - px(ps.right), t: mb.t + px(ps.top), b: mb.b - px(ps.bottom) }; }
       return { name: n.textContent, row: rb, h: rb.b - rb.t, nameLeft: nt.l, second, drawn, menu: menu ? B(menu.getBoundingClientRect()) : null, offLine, marks, target, edge: [L1.r, L2.r],
-        ell: n.scrollWidth > n.clientWidth, ellOk: ncs.textOverflow === 'ellipsis' && ncs.overflowX === 'hidden' && ncs.whiteSpace === 'nowrap',
-        tall: nt.t < nb.t - 0.5 || nt.b > nb.b + 0.5, lines: tops.size, wide };
+        // CUT: an ellipsis (a name box narrower than its text), or a line of
+        // the name standing past the name's line.
+        cut: n.scrollWidth > n.clientWidth + 0.5 || nts.some((x) => x.r > nmn.r + 0.5 || x.l < nmn.l - 0.5),
+        tall: nts.some((x) => x.t < nb.t - 0.5 || x.b > nb.b + 0.5), lines: tops.size, nameLines: n1, wide };
     });
     // AT REST: everything drawn in the list, against the list's foot.
-    const cutAtRest = [...l.querySelectorAll(${JSON.stringify(SP_DRAWN)})].filter(vis).map((e) => ({ k: (e.textContent || e.getAttribute('class') || e.tagName).trim().slice(0, 20), ...B(e.getBoundingClientRect()) }))
+    // Each box as the lines it is drawn on (a wrapped name is two), as sqRest
+    // reads them: a line wholly under the foot is out of view, not cut.
+    const cutAtRest = [...l.querySelectorAll(${JSON.stringify(SP_DRAWN)})].filter(vis).flatMap((e) => [...e.getClientRects()].map((q) => ({ k: (e.textContent || e.getAttribute('class') || e.tagName).trim().slice(0, 20), ...B(q) })))
       .filter((x) => x.t < lr.b - 0.25 && x.b > lr.b + 0.25);
     const rest = parseFloat(document.getElementById('bay').style.getPropertyValue('--sqrest')) || 0;
     // AT THE END: the last row whole above the fade.
@@ -5826,15 +5852,15 @@ if (want('sp')) try {
       const keep = r.menu ? 37 * u : 6 * u + 1;
       if (right > r.row.r - keep + 0.5) say('S3 past the words\' edge', [right, r.row.r - keep]);
       if (r.edge.some((e) => Math.abs(r.row.r - keep - e) > 0.5)) say(r.menu ? 'S8 a row with the menu not keeping 37u for it' : 'S8 a row with no menu keeping ground for one', [r.edge, r.row.r - keep]);
-      if (r.ell && !r.ellOk) say('S4 name cut without an ellipsis', r.ell);
+      if (r.cut) say('S4 name cut', r.name);
       if (r.wide.length) say('S4 wider than its box', r.wide);
       if (r.tall) say('S4 name taller than its line', r.tall);
       if (r.offLine.length) say('S4 off its line', r.offLine);
       const out = r.drawn.filter((d) => d.l < r.row.l - 0.5 || d.r > r.row.r + 0.5 || d.t < r.row.t - 0.5 || d.b > r.row.b + 0.5).map((d) => d.k);
       if (out.length) say('S4 outside the row', out);
       if (r.row.l < g.list.l - 0.5 || r.row.r > g.list.r + 0.5) say('S4 row outside the list', [r.row, g.list]);
-      const want = (28 + 20 * Math.max(1, r.lines)) * u;          // a friend's Invite is the status line's 20u
-      if (!wide && (Math.abs(r.h - want) > 0.6 || r.lines > 2)) say('S5 height', [r.h / u, want / u, r.lines]);
+      const want = (8 + 20 * r.nameLines + 20 * Math.max(1, r.lines)) * u;          // a friend's Invite is the status line's 20u
+      if (!wide && (Math.abs(r.h - want) > 0.6 || r.lines > 2)) say('S5 height', [r.h / u, want / u, r.nameLines, r.lines]);
     }
     if (g.cutAtRest.length) bad.push({ what: 'S6 cut at rest', x: g.cutAtRest });
     if (g.rest > 20 * g.u + 0.25) bad.push({ what: 'S6 moved up more than a line', x: g.rest / g.u });
@@ -5845,32 +5871,70 @@ if (want('sp')) try {
   };
   // S8: EVERY DEFAULT NAME, set in turn in the player's own row (beside its
   // "(you)"), a squadmate's and a friend's, as each row is drawn: how many
-  // end in an ellipsis on each, and on how many "(you)" does not stand whole
-  // on the name's line. The box is drawn afresh after.
+  // are cut on each (an ellipsis, or a line past the name's line), on how many
+  // "(you)" does not stand whole inside the row, and how many need more than
+  // one line. The box is drawn afresh after.
+  // THE PAIRS are every one of the 1,454. THE NUMBERED DEFAULTS (round 3 fix,
+  // 2026-10-10) are server/reservations.js's own tiers, DEFAULT_TIERS[1] and
+  // WIDE_DEFAULTS, 1,086,682 names: each is measured in the row's own face (a
+  // canvas set to the name's computed font), and the SP_TOP widest are set in
+  // the rows, so the widest default the server can hand out is among them.
   const SP_DEFAULTS = CALL_ADJ.flatMap((a) => CALL_NOUN.map((n) => a + ' ' + n)).filter((x) => x.length <= NAME_MAX);
+  const SP_NUMBERED = DEFAULT_TIERS[1];
+  const SP_WIDEPOOL = Array.from({ length: WIDE_DEFAULTS.size }, (_, i) => WIDE_DEFAULTS.at(i));
+  const SP_TOP = 40;
+  // THE POOL IS BUILT IN THE PAGE, by the server's own rule (reservations.js
+  // DEFAULT_TIERS and WIDE_DEFAULTS, from the same word lists), rather than
+  // sent: it is 1,086,682 strings. A hash of it, in the server's order, is
+  // compared with the same hash of the server's tiers here, so the names the
+  // page measures are exactly the names the server can hand out.
+  const SP_HASH = `(list) => { let h = 2166136261; for (const s of list) { for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } h ^= 10; h = Math.imul(h, 16777619) >>> 0; } return h; }`;
+  const spHash = eval(SP_HASH);
+  const SP_POOL_HASH = spHash(SP_NUMBERED.concat(SP_WIDEPOOL));
   const spNames = () => ev(`(() => {
+    if (!window.__spPool) {
+      const pairs = []; for (const nn of CALL_NOUN) for (const a of CALL_ADJ) if (a.length + 1 + nn.length <= NAME_MAX) pairs.push(a + ' ' + nn);
+      const numbered = []; for (const d of ['2', '3', '4', '5', '6', '7', '8', '9']) for (const q of pairs) numbered.push(q + ' ' + d);
+      const wide = [];
+      for (const q of pairs.filter((x) => x.length + 3 <= CALLSIGN_MAX)) for (let i = 10; i < 100; i++) wide.push(q + ' ' + i);
+      for (const q of pairs.filter((x) => x.length + 4 <= CALLSIGN_MAX)) for (let i = 100; i < 1000; i++) wide.push(q + ' ' + i);
+      window.__spPool = { pairs: ${JSON.stringify(SP_DEFAULTS)}, numbered, wide, hash: (${SP_HASH})(numbered.concat(wide)) };
+    }
     Bay.show('home');
     const rows = [...document.querySelectorAll('#bay .sqx .sqb .sqm')], out = {};
     const pick = { own: rows.find((r) => r.querySelector('.sqmy')), squadmate: rows.find((r) => !r.querySelector('.sqmy') && !r.classList.contains('sqfr')),
       friend: rows.find((r) => r.classList.contains('sqfr')) };
+    const pool = window.__spPool;
     for (const [k, r] of Object.entries(pick)) {
       if (!r) { out[k] = null; continue; }
-      const n = r.querySelector('.sqmt'), y = r.querySelector('.sqmy'), line = r.querySelector('.sqm1'), was = n.textContent, cut = [];
-      let youCut = 0;
-      for (const s of ${JSON.stringify(SP_DEFAULTS)}) {
-        n.textContent = s;
-        if (n.scrollWidth > n.clientWidth) cut.push(s);
-        if (y && (y.scrollWidth > y.clientWidth + 0.5 || y.getBoundingClientRect().right > line.getBoundingClientRect().right + 0.5)) youCut++;
-      }
+      const n = r.querySelector('.sqmt'), y = r.querySelector('.sqmy'), nmn = r.querySelector('.sqmn'), was = n.textContent;
+      // The widest of the whole numbered pool in this row's face.
+      const cs = getComputedStyle(n), cv = document.createElement('canvas').getContext('2d');
+      cv.font = cs.fontStyle + ' ' + cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily;
+      const top = [];
+      for (const s of pool.numbered.concat(pool.wide)) { const w = cv.measureText(s).width; if (top.length < ${SP_TOP} || w > top[top.length - 1][1]) { top.push([s, w]); top.sort((a, b) => b[1] - a[1]); if (top.length > ${SP_TOP}) top.length = ${SP_TOP}; } }
+      const judge = (list) => {
+        const cut = [], wrapped = []; let youCut = 0;
+        for (const s of list) {
+          n.textContent = s;
+          const box = nmn.getBoundingClientRect(), row = r.getBoundingClientRect(), g = document.createRange(); g.selectNodeContents(n.firstChild);
+          const lines = [...g.getClientRects()];
+          if (n.scrollWidth > n.clientWidth + 0.5 || lines.some((x) => x.right > box.right + 0.5 || x.left < box.left - 0.5)) cut.push(s);
+          if (new Set(lines.map((x) => Math.round(x.top))).size > 1 || (y && Math.round(y.getBoundingClientRect().top) !== Math.round(lines[0].top))) wrapped.push(s);
+          if (y && (y.scrollWidth > y.clientWidth + 0.5 || y.getBoundingClientRect().right > box.right + 0.5 || y.getBoundingClientRect().bottom > row.bottom)) youCut++;
+        }
+        return { n: list.length, cut: cut.length, ex: cut.slice(0, 3), youCut, wrapped: wrapped.length };
+      };
+      const pairs = judge(pool.pairs), num = judge(top.map((x) => x[0]));
       n.textContent = was;
-      out[k] = { n: ${SP_DEFAULTS.length}, cut: cut.length, ex: cut.slice(0, 3), youCut, howitzer: !cut.includes('Steel Howitzer') };
+      out[k] = { pairs, num, widest: top.slice(0, 2).map((x) => x[0] + '=' + x[1].toFixed(1)), hash: pool.hash };
     }
     Bay.show('home');
     return out;
   })()`);
   const s8 = {};
   const IPHONE17 = ':root{--sa-l:62px;--sa-r:62px;--sa-b:21px;--sa-t:0px}';
-  const spBad = [], spSeen = { rows: 0, wrapped: 0, ellipsis: 0, rested: 0, wideWrapped: 0 };
+  const spBad = [], spSeen = { rows: 0, wrapped: 0, nameWrapped: 0, rested: 0, wideWrapped: 0 };
   // A fresh page at a shape, signed in, with the friends online and no squad.
   const spOpen = async (w, h, css) => {
     await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: true });
@@ -5909,7 +5973,7 @@ if (want('sp')) try {
         for (const b of spJudge(g, wide)) spBad.push({ V, face, squad: name, ...b });
         if (!wide && name === 'four') s8[V] = await spNames();
         spSeen.rows += g.rows.length;
-        spSeen.ellipsis += g.rows.filter((r) => r.ell).length;
+        spSeen.nameWrapped += g.rows.filter((r) => r.nameLines > 1).length;
         if (wide) spSeen.wideWrapped += g.rows.filter((r) => r.lines > 1).length; else spSeen.wrapped += g.rows.filter((r) => r.lines > 1).length;
         if (g.rest > 0) spSeen.rested++;
       }
@@ -5918,11 +5982,15 @@ if (want('sp')) try {
     await ev(`(handle({ type: 'squad', op: 'ended', reason: 'left' }), Bay.show('home'), true)`); await sleep(60);
   }
   // S8, the default names: none is cut on the player's own row, a
-  // squadmate's or a friend's, at any of the three shapes.
+  // squadmate's or a friend's, at any of the three shapes; every pair stands
+  // on one line beside its "(you)", as before; and the widest numbered
+  // defaults are whole, on two lines where they must be.
   const S8K = ['own', 'squadmate', 'friend'];
-  if (SP_DEFAULTS.length > 1400 && Object.keys(s8).length === 3
-    && Object.values(s8).every((o) => S8K.every((k) => !!o[k] && o[k].n === SP_DEFAULTS.length && o[k].cut === 0 && o[k].youCut === 0 && o[k].howitzer)))
-    ok(`S8 each of the ${SP_DEFAULTS.length} default names is whole in the home box on the player's own row (beside "(you)", "Steel Howitzer (you)" among them), a squadmate's and a friend's, at 874x402 with the iPhone's safe areas, 812x375 and 667x375`);
+  const s8ok = (o) => S8K.every((k) => !!o[k] && o[k].pairs.n === SP_DEFAULTS.length && o[k].pairs.cut === 0 && o[k].pairs.youCut === 0 && o[k].pairs.wrapped === 0
+    && o[k].num.n === SP_TOP && o[k].num.cut === 0 && o[k].num.youCut === 0 && o[k].hash === SP_POOL_HASH);
+  const s8wrapped = Object.values(s8).reduce((a, o) => a + S8K.reduce((b, k) => b + ((o[k] && o[k].num.wrapped) || 0), 0), 0);
+  if (SP_DEFAULTS.length > 1400 && SP_NUMBERED.length === SP_DEFAULTS.length * 8 && SP_WIDEPOOL.length > 1000000 && Object.keys(s8).length === 3 && Object.values(s8).every(s8ok) && s8wrapped > 0)
+    ok(`S8 each of the ${SP_DEFAULTS.length} rolled pairs is whole on one line in the home box on the player's own row (beside "(you)", "Steel Howitzer (you)" among them), a squadmate's and a friend's, and of the ${(SP_NUMBERED.length + SP_WIDEPOOL.length).toLocaleString('en')} numbered defaults the server can hand out the ${SP_TOP} widest in each row's face (${s8['667x375'] && s8['667x375'].friend ? s8['667x375'].friend.widest[0] : '?'} at 667x375) are whole too, ${s8wrapped} of their settings on a second line, at 874x402 with the iPhone's safe areas, 812x375 and 667x375`);
   else fail(`S8 default names cut in the home box ${JSON.stringify(s8)}`);
   // ---- S7. THE RULE ITSELF, on a pattern no fixture happens to draw, and
   //      ASKED WHEN IT MUST BE. Two paragraphs are put at the list's foot by
@@ -5984,12 +6052,12 @@ if (want('sp')) try {
     ok(`the list's foot goes up past every line it would cut, a line that a moved foot cuts included, when the frame resizes and when a font arrives, and to the same place from a repaint while scrolled; a line taller than half the list is left cut; and in a portrait window, the page turned, the foot is read on the list's own axis and cuts nothing`);
   else fail(`the foot's rule ${JSON.stringify(s7)}`);
 
-  // The fixtures reach every case the checks are for: 16-letter names cut
-  // with an ellipsis, a status line that wraps (the reconnecting leader, at
-  // every shape), a wider face that wraps more, and a list whose foot sqRest
-  // moved.
-  if (!spBad.length && spSeen.rows >= 100 && spSeen.ellipsis >= 12 && spSeen.wrapped >= 3 && spSeen.wideWrapped > spSeen.wrapped && spSeen.rested >= 3)
-    ok(`the home box's rows, in a squad of one to four and the friends online, at 874x402 with the iPhone's safe areas, 812x375 and 667x375, in Rajdhani and in the wider system face (${spSeen.rows} rows): each second line starts on its name's edge, nothing drawn overlaps, every word ends 6 px clear of the menu, a row keeps ground for the menu only when it has one, nothing is cut, each row is 48u, and at rest the list's foot cuts nothing`);
+  // The fixtures reach every case the checks are for: 16-letter names that
+  // go on to a second line (round 3 fix: they were cut with an ellipsis), a
+  // status line that wraps (the reconnecting leader, at every shape), a wider
+  // face that wraps more, and a list whose foot sqRest moved.
+  if (!spBad.length && spSeen.rows >= 100 && spSeen.nameWrapped >= 12 && spSeen.wrapped >= 3 && spSeen.wideWrapped > spSeen.wrapped && spSeen.rested >= 3)
+    ok(`the home box's rows, in a squad of one to four and the friends online, at 874x402 with the iPhone's safe areas, 812x375 and 667x375, in Rajdhani and in the wider system face (${spSeen.rows} rows): each second line starts on its name's edge, nothing drawn overlaps, every word ends 6 px clear of the menu, a row keeps ground for the menu only when it has one, nothing is cut (the ${spSeen.nameWrapped} rows whose name is too long for one line go on to a second), each row is 48u and 20u more for each line its name or its status words wrap on to, and at rest the list's foot cuts nothing`);
   else fail(`home box rows ${JSON.stringify({ seen: spSeen, bad: spBad.slice(0, 12), more: Math.max(0, spBad.length - 12) })}`);
 } catch (e) {
   fail('squad_ui SP stopped: ' + (e && e.message));

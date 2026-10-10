@@ -684,6 +684,33 @@ function mkSb(routes = []) {
   else fail('(p) prune: ' + JSON.stringify({ pr, pr0, pj: String(pj), calls: hp.calls.map((c) => [c.method, c.path]), c0: hp0.calls.map((c) => c.path) }));
 }
 
+// ---- (q) reservedNamesOf: the reserved names of a whole list (round 3 fix) ---
+// The friends panel names an account with no chosen callsign by its
+// reservation (server/social.js listNames), one read for the whole list: the
+// ids are uuids off the panel's own reads, junk is dropped and a duplicate
+// collapsed as profilesByIds does, IDS_PER_CALL a request, and only user_id and
+// name leave the table (never the secret's hash). The answer is a Map keyed by
+// the id in lower case; a body that is not a list is a failed read, never an
+// empty one.
+{
+  const h = mkSb([[/^GET \/name_reservations\?user_id=in\./, [{ user_id: A.toUpperCase(), name: 'Quiet Dawn' }, { user_id: C, name: 'Iron Ridge 12' }, { user_id: B, name: '' }]]]);
+  const m = await h.store.reservedNamesOf([A, 'not-a-uuid', C, A.toUpperCase(), B]);
+  const want = `/name_reservations?user_id=in.(${A},${C},${B})&select=user_id,name`;
+  const h2 = mkSb();
+  const m2 = await h2.store.reservedNamesOf(['x', 12, null]);
+  const many = Array.from({ length: 120 }, (_, i) => '0000' + String(i).padStart(4, '0') + '-0000-4000-8000-00000000000a');
+  const h3 = mkSb([[/^GET/, []]]);
+  await h3.store.reservedNamesOf(many);
+  const hj = mkSb([[/^GET/, { not: 'a list' }]]);
+  let jt = null;
+  try { await hj.store.reservedNamesOf([A]); } catch (e) { jt = e; }
+  if (h.calls.length === 1 && h.calls[0].method === 'GET' && h.calls[0].path === want && m instanceof Map && m.size === 2
+      && m.get(A) === 'Quiet Dawn' && m.get(C) === 'Iron Ridge 12' && !m.has(B)
+      && m2.size === 0 && h2.calls.length === 0 && h3.calls.length === 2 && jt && /not a list/.test(jt.message))
+    ok('(q) reservedNamesOf: one GET of user_id and name for the listed accounts (junk dropped, a duplicate in any case collapsed), a Map by the id in lower case, an empty name left out, nothing asked for an all-junk list, 120 ids in two calls, and a body that is not a list fails');
+  else fail('(q) reservedNamesOf: ' + JSON.stringify({ calls: h.calls.map((c) => [c.method, c.path]), m: [...(m || [])], m2: m2.size, c2: h2.calls.length, c3: h3.calls.length, jt: String(jt) }));
+}
+
 // ---- (l) the standing guard: nothing raw ever lands in a query value ---------
 {
   // THE CHARACTERS THAT MATTER ARE NOT THE ONES THAT LOOK ALARMING. This check used
